@@ -8,6 +8,7 @@ import { authRouter } from "./routes/auth.js";
 import { apiRouter } from "./routes/api.js";
 import frameworkBuilderRouter from "./routes/framework-builder.js";
 import { startWorker } from "./worker.js";
+import { initializeDatabase } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,11 +50,17 @@ app.get("*", (req, res) => {
 
 // ─── Start Server & Worker ──────────────────────────────────────────────────
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[Server] CompanyIQ v3 running on port ${PORT}`);
-  console.log(`[Server] Environment: ${process.env.NODE_ENV || "development"}`);
+// Initialize database then start server
+initializeDatabase().then(() => {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[Server] CompanyIQ v3 running on port ${PORT}`);
+    console.log(`[Server] Environment: ${process.env.NODE_ENV || "development"}`);
 
-  // Start the embedded worker
-  const workerId = `worker-${crypto.randomUUID().slice(0, 8)}`;
-  startWorker(workerId);
+    // Start the embedded worker
+    const workerId = `worker-${crypto.randomUUID().slice(0, 8)}`;
+    startWorker(workerId);
+  });
+}).catch((err) => {
+  console.error("[Server] Failed to initialize database:", err);
+  process.exit(1);
 });
