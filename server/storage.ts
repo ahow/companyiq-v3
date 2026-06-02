@@ -64,7 +64,23 @@ export async function isWorkspaceMember(workspaceId: number, userId: number) {
 // ─── Company Operations (Workspace-Scoped) ──────────────────────────────────
 
 export async function getCompanies(workspaceId: number) {
-  return db.select().from(schema.companies).where(eq(schema.companies.workspaceId, workspaceId)).orderBy(asc(schema.companies.name));
+  return db.select({
+    id: schema.companies.id,
+    workspaceId: schema.companies.workspaceId,
+    name: schema.companies.name,
+    isin: schema.companies.isin,
+    domain: schema.companies.domain,
+    sector: schema.companies.sector,
+    country: schema.companies.country,
+    ticker: schema.companies.ticker,
+    analysisStatus: schema.companies.analysisStatus,
+    totalScore: schema.companies.totalScore,
+    measuresMetCount: schema.companies.measuresMetCount,
+    measuresTotalCount: schema.companies.measuresTotalCount,
+    summary: schema.companies.summary,
+    createdAt: schema.companies.createdAt,
+    updatedAt: schema.companies.updatedAt,
+  }).from(schema.companies).where(eq(schema.companies.workspaceId, workspaceId)).orderBy(asc(schema.companies.name));
 }
 
 export async function getCompanyById(companyId: number, workspaceId: number) {
@@ -179,7 +195,19 @@ export async function deleteFrameworkMeasures(frameworkId: number) {
 
 export async function getAcceptedDocuments(companyId: number) {
   return db
-    .select()
+    .select({
+      id: schema.documents.id,
+      companyId: schema.documents.companyId,
+      url: schema.documents.url,
+      title: schema.documents.title,
+      type: schema.documents.type,
+      gateVerdict: schema.documents.gateVerdict,
+      gateReason: schema.documents.gateReason,
+      fetchStatus: schema.documents.fetchStatus,
+      fetchFailures: schema.documents.fetchFailures,
+      fetchedAt: schema.documents.fetchedAt,
+      createdAt: schema.documents.createdAt,
+    })
     .from(schema.documents)
     .where(and(eq(schema.documents.companyId, companyId), eq(schema.documents.gateVerdict, "accept")));
 }
