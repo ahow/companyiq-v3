@@ -1,0 +1,286 @@
+import { pgTable, serial, text, integer, boolean, timestamp, real, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
+
+// ─── Users & Workspaces ─────────────────────────────────────────────────────
+
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const workspaces = pgTable("workspaces", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  ownerId: integer("owner_id").references(() => users.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const workspaceMembers = pgTable("workspace_members", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  userId: integer("user_id").references(() => users.id).notNull(),
+  role: text("role").notNull().default("member"), // "owner" | "admin" | "member"
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+}, (table) => ({
+  uniqueMember: uniqueIndex("unique_workspace_member").on(table.workspaceId, table.userId),
+}));
+
+// ─── Companies (Workspace-Scoped) ──────────────────────────────────────────
+
+export const companies = pgTable("companies", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  name: text("name").notNull(),
+  isin: text("isin"),
+  domain: text("domain"),
+  sector: text("sector"),
+  country: text("country"),
+  ticker: text("ticker"),
+  pinnedDocuments: jsonb("pinned_documents").$type<string[]>(),
+  analysisStatus: text("analysis_status").notNull().default("idle"), // idle | fetching | fetched | analyzing | completed | failed
+  totalScore: real("total_score"),
+  measuresMetCount: integer("measures_met_count"),
+  measuresTotalCount: integer("measures_total_count"),
+  summary: text("summary"),
+  discoveryDiagnostics: jsonb("discovery_diagnostics"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  workspaceIdx: index("companies_workspace_idx").on(table.workspaceId),
+  statusIdx: index("companies_status_idx").on(table.workspaceId, table.analysisStatus),
+}));
+
+// ─── Company Lists (Workspace-Scoped) ──────────────────────────────────────
+
+export const companyLists = pgTable("company_lists", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  workspaceIdx: index("lists_workspace_idx").on(table.workspaceId),
+}));
+
+export const companyListMembers = pgTable("company_list_members", {
+  id: serial("id").primaryKey(),
+  listId: integer("list_id").references(() => companyLists.id).notNull(),
+  companyId: integer("company_id").references(() => companies.id).notNull(),
+}, (table) => ({
+  uniqueListMember: uniqueIndex("unique_list_member").on(table.listId, table.companyId),
+}));
+
+// ─── Frameworks (Workspace-Scoped) ─────────────────────────────────────────
+
+export const frameworks = pgTable("frameworks", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  name: text("name").notNull(),
+  topicDescription: text("topic_description"),
+  version: integer("version").notNull().default(1),
+  isActive: boolean("is_active").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  workspaceIdx: index("frameworks_workspace_idx").on(table.workspaceId),
+}));
+
+export const frameworkMeasures = pgTable("framework_measures", {
+  id: serial("id").primaryKey(),
+  frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
+  measureId: text("measure_id").notNull(),
+  category: text("category").notNull(),
+  categoryNumber: integer("category_number").notNull(),
+  title: text("title").notNull(),
+  definition: text("definition"),
+  scoringGuidance: text("scoring_guidance"),
+  evidenceKeywords: jsonb("evidence_keywords").$type<string[]>(),
+  displayOrder: integer("display_order").notNull().default(0),
+}, (table) => ({
+  frameworkIdx: index("measures_framework_idx").on(table.frameworkId),
+}));
+
+// ─── Documents (Company-Level, Reusable Across Frameworks) ─────────────────
+
+export const documents = pgTable("documents", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").references(() => companies.id).notNull(),
+  url: text("url").notNull(),
+  title: text("title"),
+  type: text("type").notNull().default("html"), // html | pdf
+  gateVerdict: text("gate_verdict"), // accept | reject
+  gateReason: text("gate_reason"),
+  fetchStatus: text("fetch_status").notNull().default("pending"), // pending | ok | dead
+  fetchFailures: integer("fetch_failures").notNull().default(0),
+  content: text("content"),
+  fetchedAt: timestamp("fetched_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  companyIdx: index("documents_company_idx").on(table.companyId),
+  companyUrlIdx: uniqueIndex("documents_company_url_idx").on(table.companyId, table.url),
+}));
+
+// ─── Measure Scores (Framework-Specific Results) ───────────────────────────
+
+export const measureScores = pgTable("measure_scores", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").references(() => companies.id).notNull(),
+  frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
+  measureId: text("measure_id").notNull(),
+  category: text("category").notNull(),
+  categoryNumber: integer("category_number").notNull(),
+  title: text("title").notNull(),
+  definition: text("definition"),
+  score: real("score").notNull().default(0),
+  coverage: text("coverage"),
+  confidence: text("confidence").notNull().default("Low"),
+  evidenceSummary: text("evidence_summary"),
+  quotes: jsonb("quotes").$type<Array<{ text: string; source: string; page?: number }>>(),
+  verdict: text("verdict").notNull().default("No"), // Yes | No | Partial
+  verdictNuance: text("verdict_nuance"),
+  displayOrder: integer("display_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  companyFrameworkIdx: index("scores_company_framework_idx").on(table.companyId, table.frameworkId),
+}));
+
+// ─── Batch Runs (Workspace-Scoped) ─────────────────────────────────────────
+
+export const batchRuns = pgTable("batch_runs", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
+  listId: integer("list_id").references(() => companyLists.id),
+  status: text("status").notNull().default("running"), // running | completed | cancelled
+  totalJobs: integer("total_jobs").notNull().default(0),
+  completedJobs: integer("completed_jobs").notNull().default(0),
+  failedJobs: integer("failed_jobs").notNull().default(0),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+}, (table) => ({
+  workspaceIdx: index("batch_workspace_idx").on(table.workspaceId),
+  statusIdx: index("batch_status_idx").on(table.status),
+}));
+
+// ─── Analysis Jobs (Queue) ─────────────────────────────────────────────────
+
+export const analysisJobs = pgTable("analysis_jobs", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  batchId: integer("batch_id").references(() => batchRuns.id).notNull(),
+  companyId: integer("company_id").references(() => companies.id).notNull(),
+  companyName: text("company_name").notNull(),
+  frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
+  status: text("status").notNull().default("pending"), // pending | claimed | completed | failed
+  workerId: text("worker_id"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  claimedAt: timestamp("claimed_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  statusIdx: index("jobs_status_idx").on(table.status),
+  batchIdx: index("jobs_batch_idx").on(table.batchId),
+  workspaceIdx: index("jobs_workspace_idx").on(table.workspaceId),
+}));
+
+// ─── Summary Cache ─────────────────────────────────────────────────────────
+
+export const summaryCache = pgTable("summary_cache", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").references(() => companies.id).notNull(),
+  documentHash: text("document_hash").notNull(),
+  summary: text("summary").notNull(),
+  summarizerModel: text("summarizer_model"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  companyHashIdx: uniqueIndex("summary_company_hash_idx").on(table.companyId, table.documentHash),
+}));
+
+// ─── Terminology Cache ─────────────────────────────────────────────────────
+
+export const terminologyCache = pgTable("terminology_cache", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").references(() => companies.id).notNull(),
+  frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
+  terms: jsonb("terms").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  companyFrameworkIdx: uniqueIndex("terminology_company_framework_idx").on(table.companyId, table.frameworkId),
+}));
+
+// ─── Trusted Sources (Workspace-Scoped) ────────────────────────────────────
+
+export const trustedSources = pgTable("trusted_sources", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  name: text("name").notNull(),
+  domain: text("domain").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  workspaceIdx: index("trusted_workspace_idx").on(table.workspaceId),
+}));
+
+// ─── Workspace Settings ────────────────────────────────────────────────────
+
+export const workspaceSettings = pgTable("workspace_settings", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  key: text("key").notNull(),
+  value: text("value").notNull(),
+}, (table) => ({
+  workspaceKeyIdx: uniqueIndex("settings_workspace_key_idx").on(table.workspaceId, table.key),
+}));
+
+// ─── Processing Errors (for diagnostics) ───────────────────────────────────
+
+export const processingErrors = pgTable("processing_errors", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id),
+  companyId: integer("company_id"),
+  companyName: text("company_name"),
+  stage: text("stage"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// ─── Analysis Results Snapshots ────────────────────────────────────────────
+
+export const analysisResults = pgTable("analysis_results", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  batchId: integer("batch_id").references(() => batchRuns.id).notNull(),
+  frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
+  frameworkName: text("framework_name").notNull(),
+  resultsData: jsonb("results_data").notNull(),
+  companiesCount: integer("companies_count").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  workspaceIdx: index("results_workspace_idx").on(table.workspaceId),
+}));
+
+// ─── Type Exports ──────────────────────────────────────────────────────────
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = typeof users.$inferInsert;
+export type Workspace = typeof workspaces.$inferSelect;
+export type InsertWorkspace = typeof workspaces.$inferInsert;
+export type WorkspaceMember = typeof workspaceMembers.$inferSelect;
+export type Company = typeof companies.$inferSelect;
+export type InsertCompany = typeof companies.$inferInsert;
+export type CompanyList = typeof companyLists.$inferSelect;
+export type Framework = typeof frameworks.$inferSelect;
+export type InsertFramework = typeof frameworks.$inferInsert;
+export type FrameworkMeasure = typeof frameworkMeasures.$inferSelect;
+export type InsertFrameworkMeasure = typeof frameworkMeasures.$inferInsert;
+export type Document = typeof documents.$inferSelect;
+export type MeasureScore = typeof measureScores.$inferSelect;
+export type BatchRun = typeof batchRuns.$inferSelect;
+export type AnalysisJob = typeof analysisJobs.$inferSelect;
+export type TrustedSource = typeof trustedSources.$inferSelect;
+export type WorkspaceSetting = typeof workspaceSettings.$inferSelect;
+export type AnalysisResultSnapshot = typeof analysisResults.$inferSelect;
