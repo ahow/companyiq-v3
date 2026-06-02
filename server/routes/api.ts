@@ -217,8 +217,18 @@ apiRouter.post("/frameworks/:id/measures", async (req: Request, res: Response) =
 
     // Replace all measures
     await storage.deleteFrameworkMeasures(frameworkId);
-    for (const measure of measures) {
-      await storage.createFrameworkMeasure({ ...measure, frameworkId });
+    for (let i = 0; i < measures.length; i++) {
+      const measure = measures[i];
+      const measureId = measure.measureId || `m_${frameworkId}_${i + 1}`;
+      const categoryNumber = measure.categoryNumber || 1;
+      const displayOrder = measure.displayOrder || (i + 1);
+      await storage.createFrameworkMeasure({
+        ...measure,
+        frameworkId,
+        measureId,
+        categoryNumber,
+        displayOrder,
+      });
     }
 
     res.json({ success: true, count: measures.length });
