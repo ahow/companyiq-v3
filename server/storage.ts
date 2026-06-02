@@ -432,3 +432,50 @@ export async function getCompanyTerminology(companyId: number, frameworkId: numb
 export async function upsertCompanyTerminology(data: { companyId: number; frameworkId: number; terms: any; sourceDocCount?: number; status?: string }) {
   return cacheTerminology(data.companyId, data.frameworkId, data.terms);
 }
+
+// ─── List Members ───────────────────────────────────────────────────────────
+export async function getListById(listId: number, workspaceId: number) {
+  const result = await db.execute(sql`
+    SELECT * FROM company_lists WHERE id = ${listId} AND workspace_id = ${workspaceId}
+  `);
+  return result.rows[0] || null;
+}
+
+export async function getListMembers(listId: number, workspaceId: number) {
+  const result = await db.execute(sql`
+    SELECT c.* FROM companies c
+    JOIN company_list_members clm ON clm.company_id = c.id
+    WHERE clm.list_id = ${listId} AND c.workspace_id = ${workspaceId}
+    ORDER BY c.name ASC
+  `);
+  return result.rows;
+}
+
+export async function addListMember(listId: number, companyId: number, workspaceId: number) {
+  await db.execute(sql`
+    INSERT INTO company_list_members (list_id, company_id)
+    VALUES (${listId}, ${companyId})
+    ON CONFLICT DO NOTHING
+  `);
+}
+
+export async function removeListMember(listId: number, companyId: number, workspaceId: number) {
+  await db.execute(sql`
+    DELETE FROM company_list_members WHERE list_id = ${listId} AND company_id = ${companyId}
+  `);
+}
+
+export async function deleteList(listId: number, workspaceId: number) {
+  await db.execute(sql`DELETE FROM company_list_members WHERE list_id = ${listId}`);
+  await db.execute(sql`DELETE FROM company_lists WHERE id = ${listId} AND workspace_id = ${workspaceId}`);
+}
+
+// ─── Framework & Measure Deletion ───────────────────────────────────────────
+export async function deleteFramework(frameworkId: number, workspaceId: number) {
+  await db.execute(sql`DELETE FROM framework_measures WHERE framework_id = ${frameworkId}`);
+  await db.execute(sql`DELETE FROM frameworks WHERE id = ${frameworkId} AND workspace_id = ${workspaceId}`);
+}
+
+export async function deleteFrameworkMeasure(measureId: number, workspaceId: number) {
+  await db.execute(sql`DELETE FROM framework_measures WHERE id = ${measureId}`);
+}

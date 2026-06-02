@@ -418,3 +418,101 @@ apiRouter.delete("/trusted-sources/:id", async (req: Request, res: Response) => 
     res.status(500).json({ error: error.message });
   }
 });
+
+// ─── Single Company Analyze ─────────────────────────────────────────────────
+apiRouter.post("/companies/:id/analyze", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const companyId = parseInt(req.params.id);
+    const company = await storage.getCompanyById(companyId, workspaceId);
+    if (!company) return res.status(404).json({ error: "Company not found" });
+
+    const frameworks = await storage.getFrameworks(workspaceId);
+    const activeFramework = frameworks.find((f: any) => f.isActive);
+    if (!activeFramework) return res.status(400).json({ error: "No active framework" });
+
+    // Create a batch for single company
+    const batch = await storage.createBatchRun(workspaceId, activeFramework.id, 1);
+    const jobs = await storage.createAnalysisJobs(batch.id, [companyId], workspaceId);
+    await addBatchJobs(batch.id, jobs, workspaceId, activeFramework.id);
+
+    res.json({ success: true, batchId: batch.id });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Delete Measure ─────────────────────────────────────────────────────────
+apiRouter.delete("/frameworks/:frameworkId/measures/:measureId", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const measureId = parseInt(req.params.measureId);
+    await storage.deleteFrameworkMeasure(measureId, workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Delete Framework ───────────────────────────────────────────────────────
+apiRouter.delete("/frameworks/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(req.params.id);
+    await storage.deleteFramework(id, workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Get Single List ────────────────────────────────────────────────────────
+apiRouter.get("/lists/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(req.params.id);
+    const list = await storage.getListById(id, workspaceId);
+    if (!list) return res.status(404).json({ error: "List not found" });
+    const members = await storage.getListMembers(id, workspaceId);
+    res.json({ ...list, members });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Delete List ────────────────────────────────────────────────────────────
+apiRouter.delete("/lists/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(req.params.id);
+    await storage.deleteList(id, workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── List Members ───────────────────────────────────────────────────────────
+apiRouter.post("/lists/:id/members", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const listId = parseInt(req.params.id);
+    const { companyId } = req.body;
+    await storage.addListMember(listId, companyId, workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.delete("/lists/:id/members/:companyId", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const listId = parseInt(req.params.id);
+    const companyId = parseInt(req.params.companyId);
+    await storage.removeListMember(listId, companyId, workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});

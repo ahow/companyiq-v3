@@ -23,6 +23,9 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
 }
 
 export const api = {
+  // Raw request helper
+  request,
+
   // Auth
   login: (email: string, password: string) =>
     request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
