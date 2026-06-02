@@ -11,8 +11,6 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
   });
 
   if (res.status === 401) {
-    // Redirect to login
-    window.location.href = "/login";
     throw new Error("Unauthorized");
   }
 
@@ -31,7 +29,14 @@ export const api = {
   signup: (email: string, password: string, name: string) =>
     request("/auth/signup", { method: "POST", body: JSON.stringify({ email, password, name }) }),
   logout: () => request("/auth/logout", { method: "POST" }),
-  getSession: () => request("/auth/me"),
+  getSession: async () => {
+    try {
+      return await request("/auth/me");
+    } catch (e: any) {
+      if (e.message === "Unauthorized") return null;
+      throw e;
+    }
+  },
 
   // Companies
   getCompanies: () => request("/companies"),
