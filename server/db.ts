@@ -26,29 +26,6 @@ export async function initializeDatabase(): Promise<void> {
   console.log("[DB] Initializing database tables...");
 
   try {
-    // Drop all existing tables for fresh schema (remove this block once stable)
-    await db.execute(sql`
-      DROP TABLE IF EXISTS analysis_results CASCADE;
-      DROP TABLE IF EXISTS processing_errors CASCADE;
-      DROP TABLE IF EXISTS workspace_settings CASCADE;
-      DROP TABLE IF EXISTS trusted_sources CASCADE;
-      DROP TABLE IF EXISTS terminology_cache CASCADE;
-      DROP TABLE IF EXISTS summary_cache CASCADE;
-      DROP TABLE IF EXISTS analysis_jobs CASCADE;
-      DROP TABLE IF EXISTS batch_runs CASCADE;
-      DROP TABLE IF EXISTS measure_scores CASCADE;
-      DROP TABLE IF EXISTS documents CASCADE;
-      DROP TABLE IF EXISTS company_list_members CASCADE;
-      DROP TABLE IF EXISTS companies CASCADE;
-      DROP TABLE IF EXISTS company_lists CASCADE;
-      DROP TABLE IF EXISTS framework_measures CASCADE;
-      DROP TABLE IF EXISTS frameworks CASCADE;
-      DROP TABLE IF EXISTS workspace_members CASCADE;
-      DROP TABLE IF EXISTS workspaces CASCADE;
-      DROP TABLE IF EXISTS users CASCADE;
-      DROP TABLE IF EXISTS user_sessions CASCADE;
-    `);
-
     // ─── Users ──────────────────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS users (
