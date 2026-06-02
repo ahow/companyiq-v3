@@ -51,8 +51,8 @@ interface AnalysisSettings {
   scoringMode: string;
 }
 
-async function loadAnalysisSettings(): Promise<AnalysisSettings> {
-  const settings = await storage.getSettings();
+async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
+  const settings = await storage.getSettings(workspaceId || 1);
   return {
     ensembleScoring: settings.ensemble_scoring === "true",
     ensembleIterations: parseInt(settings.ensemble_iterations || "3"),
@@ -392,6 +392,7 @@ async function summarizeDocuments(opts: {
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
 
 export async function analyzeCompanyMeasures(opts: {
+  workspaceId: number;
   companyName: string;
   companyId: number;
   documentTexts: string[];
@@ -399,10 +400,10 @@ export async function analyzeCompanyMeasures(opts: {
   framework: Framework;
   measures: FrameworkMeasure[];
 }): Promise<AnalysisResult> {
-  const { companyName, companyId, documentTexts, documentUrls, framework, measures } = opts;
+  const { workspaceId, companyName, companyId, documentTexts, documentUrls, framework, measures } = opts;
 
   // Load settings fresh for every analysis call
-  const settings = await loadAnalysisSettings();
+  const settings = await loadAnalysisSettings(workspaceId);
 
   console.log(`[${companyName}] Starting analysis: ${measures.length} measures, ${documentTexts.length} documents`);
 

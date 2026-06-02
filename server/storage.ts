@@ -421,3 +421,18 @@ export async function cacheTerminology(companyId: number, frameworkId: number, t
       set: { terms },
     });
 }
+
+// Aliases for terminology-discovery.ts compatibility
+export async function getCompanyTerminology(companyId: number, frameworkId: number) {
+  const terms = await getCachedTerminology(companyId, frameworkId);
+  if (!terms) return null;
+  return { terms };
+}
+
+export async function upsertCompanyTerminology(data: { companyId: number; frameworkId: number; terms: any; sourceDocCount?: number; status?: string }) {
+  return cacheTerminology(data.companyId, data.frameworkId, data.terms);
+}
+
+export async function upsertCompanyTerminology(data: { companyId: number; frameworkId: number; terms: any; status?: string }) {
+  return cacheTerminology(data.companyId, data.frameworkId, data.terms);
+}

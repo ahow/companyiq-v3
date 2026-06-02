@@ -247,6 +247,7 @@ async function runAnalyzePhase(opts: {
 
   // Run the LLM analysis (framework-specific scoring)
   const analysis = await analyzeCompanyMeasures({
+    workspaceId,
     companyName,
     companyId,
     documentTexts,
