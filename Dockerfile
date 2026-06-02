@@ -1,8 +1,7 @@
 FROM node:22-slim
 
-# Install pnpm and chromium dependencies
-RUN npm install -g pnpm && \
-    apt-get update && \
+# Install chromium dependencies for puppeteer
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       chromium \
       fonts-liberation \
@@ -24,18 +23,17 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 WORKDIR /app
 
-# Copy package files and config
-COPY package.json pnpm-lock.yaml* .npmrc ./
+# Copy package files
+COPY package.json ./
 
-# Install dependencies (skip puppeteer download since we use system chromium)
-RUN pnpm config set ignore-scripts false && \
-    PUPPETEER_SKIP_DOWNLOAD=true pnpm install --no-frozen-lockfile
+# Install dependencies using npm (avoids pnpm build script approval issues)
+RUN npm install --legacy-peer-deps
 
 # Copy source
 COPY . .
 
 # Build client
-RUN cd client && ../node_modules/.bin/vite build
+RUN ./node_modules/.bin/vite build --outDir dist/client client
 
 EXPOSE 3000
 
