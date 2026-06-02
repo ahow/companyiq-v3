@@ -432,7 +432,3 @@ export async function getCompanyTerminology(companyId: number, frameworkId: numb
 export async function upsertCompanyTerminology(data: { companyId: number; frameworkId: number; terms: any; sourceDocCount?: number; status?: string }) {
   return cacheTerminology(data.companyId, data.frameworkId, data.terms);
 }
-
-export async function upsertCompanyTerminology(data: { companyId: number; frameworkId: number; terms: any; status?: string }) {
-  return cacheTerminology(data.companyId, data.frameworkId, data.terms);
-}
