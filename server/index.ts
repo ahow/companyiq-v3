@@ -29,15 +29,15 @@ app.set("trust proxy", 1);
 
 // ─── API Routes ─────────────────────────────────────────────────────────────
 
-app.use("/api/auth", authRouter);
-app.use("/api", apiRouter);
-app.use("/api/framework-builder", frameworkBuilderRouter);
-
-// ─── Health Check ───────────────────────────────────────────────────────────
+// ─── Health Check (before auth) ────────────────────────────────────────────
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", version: "3.0.0", timestamp: new Date().toISOString() });
 });
+
+app.use("/api/auth", authRouter);
+app.use("/api", apiRouter);
+app.use("/api/framework-builder", frameworkBuilderRouter);
 
 // ─── Static Files (SPA) ─────────────────────────────────────────────────────
 
