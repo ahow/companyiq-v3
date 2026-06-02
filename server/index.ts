@@ -41,7 +41,7 @@ app.use("/api/framework-builder", frameworkBuilderRouter);
 
 // ─── Static Files (SPA) ─────────────────────────────────────────────────────
 
-const clientDist = path.join(__dirname, "../dist/client");
+const clientDist = path.join(process.cwd(), "dist/client");
 app.use(express.static(clientDist));
 app.get("*", (req, res) => {
   res.sendFile(path.join(clientDist, "index.html"));

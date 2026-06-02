@@ -32,8 +32,8 @@ RUN npm install --legacy-peer-deps
 # Copy source
 COPY . .
 
-# Build client
-RUN ./node_modules/.bin/vite build --outDir dist/client client
+# Build client (run from client dir, vite.config.ts has outDir: ../dist/client)
+RUN cd client && ../node_modules/.bin/vite build
 
 EXPOSE 3000
 
