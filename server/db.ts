@@ -39,9 +39,15 @@ export async function initializeDatabase(): Promise<void> {
       CREATE TABLE IF NOT EXISTS workspaces (
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
+        slug VARCHAR(255) NOT NULL DEFAULT '',
         owner_id INTEGER NOT NULL REFERENCES users(id),
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       )
+    `);
+
+    // Ensure slug column exists (for existing deployments)
+    await db.execute(sql`
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS slug VARCHAR(255) NOT NULL DEFAULT ''
     `);
 
     await db.execute(sql`
