@@ -24,11 +24,12 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json pnpm-lock.yaml* ./
+# Copy package files and config
+COPY package.json pnpm-lock.yaml* .npmrc ./
 
-# Install dependencies
-RUN pnpm install --no-frozen-lockfile
+# Install dependencies (skip puppeteer download since we use system chromium)
+RUN pnpm config set ignore-scripts false && \
+    PUPPETEER_SKIP_DOWNLOAD=true pnpm install --no-frozen-lockfile
 
 # Copy source
 COPY . .
