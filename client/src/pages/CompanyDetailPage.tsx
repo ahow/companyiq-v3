@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState } from "react";
-import { ArrowLeft, Play, Camera, Upload, ExternalLink, FileText } from "lucide-react";
+import { ArrowLeft, Play, Camera, Upload, ExternalLink, FileText, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 
 interface CompanyDetailPageProps {
   companyId: number;
@@ -38,17 +38,7 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
     return "text-red-600";
   };
 
-  const getScoreBadgeColor = (score: number) => {
-    if (score >= 2) return "bg-green-100 text-green-800";
-    if (score >= 1) return "bg-yellow-100 text-yellow-800";
-    return "bg-red-100 text-red-800";
-  };
-
-  const getScoreLabel = (score: number) => {
-    if (score >= 2) return "Full";
-    if (score >= 1) return "Partial";
-    return "None";
-  };
+  // No longer needed - using tick/cross icons instead
 
   // Group scores by category
   const categories: Record<string, any[]> = {};
@@ -100,7 +90,7 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
         <div className="bg-white rounded-lg border p-4">
           <div className="text-sm text-gray-500">Measures Met</div>
           <div className="text-3xl font-bold text-gray-900">
-            {scores ? `${scores.filter((s: any) => s.score >= 2).length} / ${scores.length}` : "-"}
+            {scores ? `${scores.filter((s: any) => s.score > 0).length} / ${scores.length}` : "-"}
           </div>
         </div>
         <div className="bg-white rounded-lg border p-4">
@@ -147,32 +137,48 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                     <h4 className="font-semibold text-gray-800 mb-3 text-sm uppercase tracking-wide border-b pb-2">{category}</h4>
                     <div className="space-y-2">
                       {measures.sort((a: any, b: any) => (a.displayOrder || 0) - (b.displayOrder || 0)).map((m: any) => (
-                        <div key={m.id} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${getScoreBadgeColor(m.score)}`}>
-                            {getScoreLabel(m.score)}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-sm text-gray-900">{m.title}</div>
-                            {m.evidenceSummary && (
-                              <p className="text-xs text-gray-600 mt-1">{m.evidenceSummary}</p>
-                            )}
-                            {m.verdict && (
-                              <p className="text-xs text-gray-500 mt-1 italic">{m.verdict}</p>
-                            )}
-                            {m.quotes && m.quotes.length > 0 && (
-                              <blockquote className="text-xs text-gray-600 mt-1 pl-2 border-l-2 border-gray-300 italic">
-                                "{m.quotes[0].text}"
-                                {m.quotes[0].source && <span className="text-gray-400 ml-1">— {m.quotes[0].source}</span>}
-                              </blockquote>
-                            )}
+                        <div key={m.id} className="px-4 py-3 border-b last:border-b-0">
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                {m.score > 0 ? (
+                                  <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+                                ) : m.verdict === "Partial" ? (
+                                  <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0" />
+                                ) : (
+                                  <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                                )}
+                                <span className="text-sm font-medium text-gray-900">{m.title}</span>
+                              </div>
+                              {m.evidenceSummary && (
+                                <p className="text-xs text-gray-600 mt-2 ml-6 bg-gray-50 p-2 rounded">
+                                  {m.evidenceSummary}
+                                </p>
+                              )}
+                              {m.verdict && m.verdict !== "Yes" && m.verdict !== "No" && (
+                                <p className="text-xs text-gray-500 mt-1 ml-6 italic">{m.verdict}</p>
+                              )}
+                              {m.quotes && m.quotes.length > 0 && (
+                                <div className="ml-6 mt-2 space-y-1">
+                                  {m.quotes.map((q: any, idx: number) => (
+                                    <blockquote key={idx} className="text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic">
+                                      "{q.text}"
+                                      {q.source && <span className="text-gray-400 ml-1">— {q.source}</span>}
+                                    </blockquote>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 ml-4">
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                m.confidence === "High" ? "bg-green-100 text-green-700" :
+                                m.confidence === "Medium" ? "bg-yellow-100 text-yellow-700" :
+                                "bg-gray-100 text-gray-600"
+                              }`}>
+                                {m.confidence}
+                              </span>
+                            </div>
                           </div>
-                          <span className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap ${
-                            m.confidence === "High" ? "bg-green-50 text-green-700" :
-                            m.confidence === "Medium" ? "bg-yellow-50 text-yellow-700" :
-                            "bg-red-50 text-red-700"
-                          }`}>
-                            {m.confidence}
-                          </span>
                         </div>
                       ))}
                     </div>
