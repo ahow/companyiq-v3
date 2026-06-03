@@ -544,6 +544,21 @@ apiRouter.get("/queue/stats", async (req: Request, res: Response) => {
   }
 });
 
+// ─── Environment Check (for debugging) ─────────────────────────────────────
+
+apiRouter.get("/env-check", async (req: Request, res: Response) => {
+  res.json({
+    SERPER_API_KEY: process.env.SERPER_API_KEY ? `set (${process.env.SERPER_API_KEY.slice(0, 8)}...)` : "NOT SET",
+    SERP_API_KEY: process.env.SERP_API_KEY ? `set (${process.env.SERP_API_KEY.slice(0, 8)}...)` : "NOT SET",
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ? "set" : "NOT SET",
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY ? "set" : "NOT SET",
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY ? "set" : "NOT SET",
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ? "set" : "NOT SET",
+    REDIS_URL: process.env.REDIS_URL ? "set" : "NOT SET",
+    DATABASE_URL: process.env.DATABASE_URL ? "set" : "NOT SET",
+  });
+});
+
 // ─── Results ────────────────────────────────────────────────────────────────
 
 apiRouter.get("/results", async (req: Request, res: Response) => {
