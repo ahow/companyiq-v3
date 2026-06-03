@@ -273,7 +273,7 @@ ${fileContext && fileContext.length > 0 ? `\nUPLOADED REFERENCE FILES:\nThe user
 
 // ─── Framework Editor Chat (Edit existing frameworks via AI) ─────────────────
 
-router.post("/edit", async (req: Request, res: Response) => {
+router.post("/edit", requireWorkspace, async (req: Request, res: Response) => {
   try {
     const { messages, frameworkId } = req.body;
     if (!messages || !Array.isArray(messages) || messages.length === 0) {

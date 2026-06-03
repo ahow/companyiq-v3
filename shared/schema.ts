@@ -83,6 +83,7 @@ export const frameworks = pgTable("frameworks", {
   topicDescription: text("topic_description"),
   version: integer("version").notNull().default(1),
   isActive: boolean("is_active").notNull().default(false),
+  trustedSourceIds: jsonb("trusted_source_ids").$type<number[]>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

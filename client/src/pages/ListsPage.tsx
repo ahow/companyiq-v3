@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { useState } from "react";
-import { Plus, Trash2, Upload, Download, Users, X } from "lucide-react";
+import { useState, useRef } from "react";
+import { Plus, Trash2, Upload, Download, Users, X, FileSpreadsheet, Type } from "lucide-react";
 
 export default function ListsPage() {
   const queryClient = useQueryClient();
@@ -11,7 +11,13 @@ export default function ListsPage() {
   const [showAddCompanyModal, setShowAddCompanyModal] = useState(false);
   const [companySearch, setCompanySearch] = useState("");
   const [showImport, setShowImport] = useState(false);
+  const [importMode, setImportMode] = useState<"file" | "paste">("file");
   const [importData, setImportData] = useState("");
+  const [importListName, setImportListName] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<any>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: lists } = useQuery({
     queryKey: ["lists"],
@@ -90,44 +96,78 @@ export default function ListsPage() {
   };
 
   const handleImport = async () => {
-    if (!importData.trim()) return;
-    try {
-      const lines = importData.trim().split("\n").filter((l) => l.trim());
-      const header = lines[0].toLowerCase();
-      const hasHeader = header.includes("name") || header.includes("isin");
-      const dataLines = hasHeader ? lines.slice(1) : lines;
+    if (importMode === "file" && !importFile) {
+      alert("Please select a file to upload.");
+      return;
+    }
+    if (importMode === "paste" && !importData.trim()) {
+      alert("Please paste some company data.");
+      return;
+    }
+    if (!importListName.trim()) {
+      alert("Please enter a list name.");
+      return;
+    }
 
-      const companies = dataLines.map((line) => {
-        const parts = line.split(",").map((p) => p.trim().replace(/^"|"$/g, ""));
-        return { name: parts[0], isin: parts[1] || undefined, sector: parts[2] || undefined, country: parts[3] || undefined };
+    setImporting(true);
+    setImportResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("listName", importListName);
+
+      if (importMode === "file" && importFile) {
+        formData.append("file", importFile);
+      } else if (importMode === "paste") {
+        formData.append("pastedText", importData);
+      }
+
+      const res = await fetch("/api/companies/import", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
       });
 
-      await api.importCompanies({ companies: JSON.stringify(companies), listName: newListName || "Imported List" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
+
+      const result = await res.json();
+      setImportResult(result);
       queryClient.invalidateQueries({ queryKey: ["companies"] });
       queryClient.invalidateQueries({ queryKey: ["lists"] });
-      queryClient.invalidateQueries({ queryKey: ["list", selectedListId] });
-      setShowImport(false);
-      setImportData("");
     } catch (err: any) {
-      alert(err.message);
+      alert(`Import failed: ${err.message}`);
+    } finally {
+      setImporting(false);
     }
   };
 
   const handleExportList = () => {
     if (!listMembers.length) return;
     const csv = [
-      "Name,ISIN,Sector,Score,Status",
+      "Name,ISIN,Sector,Country,Score,Status",
       ...listMembers.map((c: any) =>
-        `"${c.name}","${c.isin || ""}","${c.sector || ""}",${c.totalScore ?? ""},${c.analysisStatus || "pending"}`
+        `"${c.name}","${c.isin || ""}","${c.sector || ""}","${c.country || ""}",${c.total_score ?? c.totalScore ?? ""},${c.analysis_status || c.analysisStatus || "pending"}`
       ),
     ].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${listDetail?.list?.name || "list"}_export.csv`;
+    a.download = `${listDetail?.name || "list"}_export.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const resetImportModal = () => {
+    setShowImport(false);
+    setImportFile(null);
+    setImportData("");
+    setImportListName("");
+    setImportResult(null);
+    setImportMode("file");
   };
 
   return (
@@ -197,7 +237,7 @@ export default function ListsPage() {
             <div className="bg-white rounded-lg border">
               <div className="p-4 border-b flex items-center justify-between">
                 <div>
-                  <h2 className="font-semibold text-gray-900">{listDetail.list?.name}</h2>
+                  <h2 className="font-semibold text-gray-900">{listDetail.name}</h2>
                   <p className="text-xs text-gray-500">{listMembers.length} companies</p>
                 </div>
                 <div className="flex gap-2">
@@ -221,6 +261,7 @@ export default function ListsPage() {
                     <tr className="border-b bg-gray-50">
                       <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Company</th>
                       <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">ISIN</th>
+                      <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Sector</th>
                       <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">Score</th>
                       <th className="text-center px-4 py-2 text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="w-10"></th>
@@ -231,17 +272,18 @@ export default function ListsPage() {
                       <tr key={c.id} className="border-b hover:bg-gray-50">
                         <td className="px-4 py-2 text-sm font-medium text-gray-900">{c.name}</td>
                         <td className="px-4 py-2 text-sm text-gray-500">{c.isin || "-"}</td>
+                        <td className="px-4 py-2 text-sm text-gray-500">{c.sector || "-"}</td>
                         <td className="px-4 py-2 text-center text-sm font-semibold">
-                          {c.totalScore !== null && c.totalScore !== undefined ? `${c.totalScore}%` : "-"}
+                          {c.total_score !== null && c.total_score !== undefined ? `${c.total_score}%` : "-"}
                         </td>
                         <td className="px-4 py-2 text-center">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            c.analysisStatus === "completed" ? "bg-green-100 text-green-700" :
-                            c.analysisStatus === "failed" ? "bg-red-100 text-red-700" :
-                            c.analysisStatus === "analyzing" ? "bg-blue-100 text-blue-700" :
+                            (c.analysis_status || c.analysisStatus) === "completed" ? "bg-green-100 text-green-700" :
+                            (c.analysis_status || c.analysisStatus) === "failed" ? "bg-red-100 text-red-700" :
+                            (c.analysis_status || c.analysisStatus) === "analyzing" ? "bg-blue-100 text-blue-700" :
                             "bg-gray-100 text-gray-600"
                           }`}>
-                            {c.analysisStatus || "pending"}
+                            {c.analysis_status || c.analysisStatus || "pending"}
                           </span>
                         </td>
                         <td className="px-2 py-2">
@@ -259,7 +301,7 @@ export default function ListsPage() {
                 </table>
               ) : (
                 <div className="p-8 text-center text-gray-400 text-sm">
-                  No companies in this list yet. Add companies or import a CSV.
+                  No companies in this list yet. Add companies or import a CSV/XLSX file.
                 </div>
               )}
             </div>
@@ -317,42 +359,154 @@ export default function ListsPage() {
       {/* Import Modal */}
       {showImport && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-[600px] shadow-xl">
+          <div className="bg-white rounded-lg p-6 w-[650px] shadow-xl max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Import Companies (CSV)</h3>
-              <button onClick={() => setShowImport(false)} className="text-gray-400 hover:text-gray-600">
+              <h3 className="text-lg font-semibold">Import Companies</h3>
+              <button onClick={resetImportModal} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-sm text-gray-500 mb-3">
-              Paste CSV data with headers: name, isin, sector, country
-            </p>
-            <input
-              type="text"
-              value={newListName}
-              onChange={(e) => setNewListName(e.target.value)}
-              placeholder="List name for imported companies"
-              className="w-full px-3 py-2 border rounded-lg text-sm mb-3"
-            />
-            <textarea
-              value={importData}
-              onChange={(e) => setImportData(e.target.value)}
-              placeholder={"name,isin,sector,country\nApple Inc,US0378331005,Technology,US\n..."}
-              className="w-full px-3 py-2 border rounded-lg text-sm h-40 font-mono"
-            />
-            <div className="flex justify-end gap-2 mt-4">
+
+            {/* Import Mode Tabs */}
+            <div className="flex border-b mb-4">
               <button
-                onClick={() => setShowImport(false)}
+                onClick={() => setImportMode("file")}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  importMode === "file"
+                    ? "border-blue-600 text-blue-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <FileSpreadsheet className="w-4 h-4" /> Upload File (CSV / XLSX)
+              </button>
+              <button
+                onClick={() => setImportMode("paste")}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  importMode === "paste"
+                    ? "border-blue-600 text-blue-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <Type className="w-4 h-4" /> Paste Text
+              </button>
+            </div>
+
+            {/* List Name */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">List Name</label>
+              <input
+                type="text"
+                value={importListName}
+                onChange={(e) => setImportListName(e.target.value)}
+                placeholder="e.g., FTSE 100, My Portfolio, Q4 Review"
+                className="w-full px-3 py-2 border rounded-lg text-sm"
+              />
+            </div>
+
+            {/* File Upload Mode */}
+            {importMode === "file" && (
+              <div className="space-y-3">
+                <div
+                  className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {importFile ? (
+                    <div>
+                      <FileSpreadsheet className="w-8 h-8 text-green-600 mx-auto mb-2" />
+                      <p className="text-sm font-medium text-gray-900">{importFile.name}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {(importFile.size / 1024).toFixed(1)} KB — Click to change
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                      <p className="text-sm text-gray-600">Click to select a CSV or XLSX file</p>
+                      <p className="text-xs text-gray-400 mt-1">Supports .csv, .xlsx, .xls (up to 50MB)</p>
+                    </div>
+                  )}
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                />
+                <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
+                  <p className="font-medium mb-1">Supported formats:</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    <li>CSV with headers: name, isin, sector, country, domain</li>
+                    <li>Excel (.xlsx) with a header row in the first sheet</li>
+                    <li>MSCI-style exports (LEVEL2 SECTOR NAME, GEOGRAPHIC DESCR., etc.)</li>
+                  </ul>
+                  <p className="mt-2 text-gray-500">Column names are matched flexibly — "Company", "NAME", "company_name" all work.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Paste Text Mode */}
+            {importMode === "paste" && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Paste company names or CSV data
+                  </label>
+                  <textarea
+                    value={importData}
+                    onChange={(e) => setImportData(e.target.value)}
+                    placeholder={"Option 1 — One company per line:\nApple Inc\nMicrosoft Corporation\nAmazon.com Inc\n\nOption 2 — CSV format:\nname,isin,sector,country\nApple Inc,US0378331005,Technology,US\nMicrosoft,US5949181045,Technology,US"}
+                    className="w-full px-3 py-2 border rounded-lg text-sm h-48 font-mono"
+                  />
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
+                  <p className="font-medium mb-1">Accepted formats:</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    <li><strong>Plain list:</strong> One company name per line</li>
+                    <li><strong>CSV data:</strong> Comma-separated with optional headers (name, isin, sector, country, domain)</li>
+                  </ul>
+                  <p className="mt-2 text-gray-500">Existing companies will be skipped (no duplicates) but still added to the list.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Import Result */}
+            {importResult && (
+              <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-sm font-medium text-green-800">Import successful!</p>
+                <p className="text-xs text-green-700 mt-1">
+                  {importResult.imported} new companies imported, {importResult.existing || 0} already existed.
+                  List "{importResult.listName}" created with {importResult.imported + (importResult.existing || 0)} companies.
+                </p>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                onClick={resetImportModal}
                 className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
               >
-                Cancel
+                {importResult ? "Close" : "Cancel"}
               </button>
-              <button
-                onClick={handleImport}
-                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Import
-              </button>
+              {!importResult && (
+                <button
+                  onClick={handleImport}
+                  disabled={importing}
+                  className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {importing ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Importing...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" /> Import
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>

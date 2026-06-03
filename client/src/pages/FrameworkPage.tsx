@@ -1,13 +1,23 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { useState } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, Star } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User } from "lucide-react";
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
 
 export default function FrameworkPage() {
   const queryClient = useQueryClient();
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newName, setNewName] = useState("");
+  const [showAIEditor, setShowAIEditor] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const { data: frameworks } = useQuery({
     queryKey: ["frameworks"],
@@ -100,6 +110,98 @@ export default function FrameworkPage() {
     }
   };
 
+  // AI Editor functions
+  const openAIEditor = () => {
+    setShowAIEditor(true);
+    if (chatMessages.length === 0) {
+      setChatMessages([{
+        role: "assistant",
+        content: `I'm ready to help you edit the **${framework?.name}** framework (${measures.length} measures). You can ask me to:\n\n- Add new measures or categories\n- Remove specific measures\n- Edit measure titles, definitions, or scoring guidance\n- Rename the framework\n- Add or remove trusted sources\n\nWhat would you like to change?`
+      }]);
+    }
+  };
+
+  const sendChatMessage = async () => {
+    if (!chatInput.trim() || chatLoading || !activeFrameworkId) return;
+
+    const userMessage: ChatMessage = { role: "user", content: chatInput.trim() };
+    const newMessages = [...chatMessages, userMessage];
+    setChatMessages(newMessages);
+    setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const response = await api.request("/framework-builder/edit", {
+        method: "POST",
+        body: JSON.stringify({
+          messages: newMessages,
+          frameworkId: activeFrameworkId,
+        }),
+      });
+
+      const assistantMessage: ChatMessage = {
+        role: "assistant",
+        content: response.message,
+      };
+      setChatMessages([...newMessages, assistantMessage]);
+
+      // If changes were made, refresh the framework data
+      if (response.hasChanges) {
+        queryClient.invalidateQueries({ queryKey: ["framework", activeFrameworkId] });
+        queryClient.invalidateQueries({ queryKey: ["frameworks"] });
+      }
+    } catch (err: any) {
+      setChatMessages([
+        ...newMessages,
+        { role: "assistant", content: `Error: ${err.message}. Please try again.` },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, chatLoading]);
+
+  // Reset chat when switching frameworks
+  useEffect(() => {
+    setChatMessages([]);
+    setShowAIEditor(false);
+  }, [activeFrameworkId]);
+
+  // Format chat message content (handle markdown-like formatting)
+  const formatMessage = (content: string) => {
+    // Remove action blocks from display
+    const cleaned = content.replace(/```action[\s\S]*?```/g, "").trim();
+    // Simple markdown rendering
+    return cleaned.split("\n").map((line, i) => {
+      if (line.startsWith("- ")) {
+        return <li key={i} className="ml-4 list-disc">{formatInline(line.slice(2))}</li>;
+      }
+      if (line.startsWith("# ")) {
+        return <h3 key={i} className="font-bold text-base mt-2">{line.slice(2)}</h3>;
+      }
+      if (line.startsWith("## ")) {
+        return <h4 key={i} className="font-semibold text-sm mt-2">{line.slice(3)}</h4>;
+      }
+      if (line.trim() === "") return <br key={i} />;
+      return <p key={i} className="mt-1">{formatInline(line)}</p>;
+    });
+  };
+
+  const formatInline = (text: string) => {
+    // Bold
+    const parts = text.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return <strong key={i}>{part.slice(2, -2)}</strong>;
+      }
+      return part;
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -174,6 +276,12 @@ export default function FrameworkPage() {
                 <p className="text-sm text-gray-600 mt-1">{framework.topicDescription}</p>
               )}
             </div>
+            <button
+              onClick={openAIEditor}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 transition-colors"
+            >
+              <MessageSquare className="w-4 h-4" /> AI Editor
+            </button>
           </div>
           <div className="divide-y">
             {Object.entries(categories).map(([category, catMeasures]) => (
@@ -203,18 +311,29 @@ export default function FrameworkPage() {
                     {catMeasures.sort((a: any, b: any) => (a.displayOrder || 0) - (b.displayOrder || 0)).map((m: any) => (
                       <div key={m.id} className="p-3 bg-gray-50 rounded-lg group flex items-start justify-between">
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium text-sm text-gray-900">{m.title}</div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-400 font-mono">{m.measureId}</span>
+                            <span className="font-medium text-sm text-gray-900">{m.title}</span>
+                          </div>
                           {m.definition && (
                             <p className="text-xs text-gray-600 mt-1">{m.definition}</p>
                           )}
                           {m.scoringGuidance && (
-                            <p className="text-xs text-gray-500 mt-1 italic">Scoring: {m.scoringGuidance}</p>
+                            <p className="text-xs text-gray-500 mt-1 italic">
+                              Scoring: {typeof m.scoringGuidance === 'string' && m.scoringGuidance.startsWith('{')
+                                ? (() => { try { const sg = JSON.parse(m.scoringGuidance); return `Yes: ${sg.yes?.slice(0, 60)}...`; } catch { return m.scoringGuidance.slice(0, 100); } })()
+                                : String(m.scoringGuidance).slice(0, 100)
+                              }
+                            </p>
                           )}
                           {m.evidenceKeywords && m.evidenceKeywords.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1">
-                              {m.evidenceKeywords.map((kw: string, i: number) => (
+                              {m.evidenceKeywords.slice(0, 8).map((kw: string, i: number) => (
                                 <span key={i} className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{kw}</span>
                               ))}
+                              {m.evidenceKeywords.length > 8 && (
+                                <span className="text-[10px] text-gray-400">+{m.evidenceKeywords.length - 8} more</span>
+                              )}
                             </div>
                           )}
                         </div>
@@ -244,6 +363,104 @@ export default function FrameworkPage() {
             >
               <Plus className="w-4 h-4 inline mr-1" /> Add New Category
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* AI Editor Slide-over Panel */}
+      {showAIEditor && framework && (
+        <div className="fixed inset-0 z-50 flex">
+          {/* Backdrop */}
+          <div className="flex-1 bg-black/30" onClick={() => setShowAIEditor(false)} />
+          
+          {/* Panel */}
+          <div className="w-[500px] bg-white shadow-2xl flex flex-col h-full">
+            {/* Header */}
+            <div className="p-4 border-b flex items-center justify-between bg-purple-50">
+              <div>
+                <h3 className="font-semibold text-purple-900 flex items-center gap-2">
+                  <Bot className="w-5 h-5" /> AI Editor
+                </h3>
+                <p className="text-xs text-purple-700 mt-0.5">Editing: {framework.name}</p>
+              </div>
+              <button
+                onClick={() => setShowAIEditor(false)}
+                className="text-gray-500 hover:text-gray-700 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Chat Messages */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : ""}`}>
+                  {msg.role === "assistant" && (
+                    <div className="w-7 h-7 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0">
+                      <Bot className="w-4 h-4 text-purple-600" />
+                    </div>
+                  )}
+                  <div
+                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
+                      msg.role === "user"
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-100 text-gray-800"
+                    }`}
+                  >
+                    {msg.role === "assistant" ? (
+                      <div className="prose prose-sm max-w-none">{formatMessage(msg.content)}</div>
+                    ) : (
+                      msg.content
+                    )}
+                  </div>
+                  {msg.role === "user" && (
+                    <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                      <User className="w-4 h-4 text-blue-600" />
+                    </div>
+                  )}
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="flex gap-3">
+                  <div className="w-7 h-7 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0">
+                    <Bot className="w-4 h-4 text-purple-600" />
+                  </div>
+                  <div className="bg-gray-100 rounded-lg px-3 py-2">
+                    <div className="flex gap-1">
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Chat Input */}
+            <div className="p-4 border-t bg-white">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendChatMessage()}
+                  placeholder="e.g., Remove measure 3.2 and add a new one about..."
+                  className="flex-1 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  disabled={chatLoading}
+                />
+                <button
+                  onClick={sendChatMessage}
+                  disabled={chatLoading || !chatInput.trim()}
+                  className="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-2">
+                Try: "Add a measure about board-level AI oversight" or "Remove measures 1.3 and 2.1"
+              </p>
+            </div>
           </div>
         </div>
       )}

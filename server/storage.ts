@@ -526,3 +526,87 @@ export async function getRecentErrors(workspaceId: number) {
     .orderBy(desc(schema.processingErrors.createdAt))
     .limit(100);
 }
+
+// ─── Company Lookup by Name ────────────────────────────────────────────────
+export async function getCompanyByName(name: string, workspaceId: number) {
+  const [company] = await db
+    .select()
+    .from(schema.companies)
+    .where(and(eq(schema.companies.workspaceId, workspaceId), eq(schema.companies.name, name)))
+    .limit(1);
+  return company || null;
+}
+
+// ─── Framework Editor Operations ───────────────────────────────────────────
+export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[] }>) {
+  await db.update(schema.frameworks).set(updates as any).where(eq(schema.frameworks.id, frameworkId));
+}
+
+export async function deleteMeasure(frameworkId: number, measureId: string) {
+  await db.execute(sql`
+    DELETE FROM framework_measures WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}
+  `);
+}
+
+export async function createMeasure(data: {
+  frameworkId: number;
+  measureId: string;
+  title: string;
+  definition?: string;
+  category: string;
+  categoryNumber: number;
+  displayOrder: number;
+  scoringGuidance?: any;
+  evidenceKeywords?: string[];
+}) {
+  const scoringGuidanceStr = typeof data.scoringGuidance === 'object'
+    ? JSON.stringify(data.scoringGuidance)
+    : data.scoringGuidance || '';
+  await db.insert(schema.frameworkMeasures).values({
+    frameworkId: data.frameworkId,
+    measureId: data.measureId,
+    title: data.title,
+    definition: data.definition || '',
+    category: data.category,
+    categoryNumber: data.categoryNumber,
+    displayOrder: data.displayOrder,
+    scoringGuidance: scoringGuidanceStr,
+    evidenceKeywords: data.evidenceKeywords || [],
+  });
+}
+
+export async function updateMeasure(frameworkId: number, measureId: string, updates: Partial<{ title: string; definition: string; scoringGuidance: any; evidenceKeywords: string[]; category: string }>) {
+  const setObj: any = {};
+  if (updates.title !== undefined) setObj.title = updates.title;
+  if (updates.definition !== undefined) setObj.definition = updates.definition;
+  if (updates.category !== undefined) setObj.category = updates.category;
+  if (updates.evidenceKeywords !== undefined) setObj.evidenceKeywords = updates.evidenceKeywords;
+  if (updates.scoringGuidance !== undefined) {
+    setObj.scoringGuidance = typeof updates.scoringGuidance === 'object'
+      ? JSON.stringify(updates.scoringGuidance)
+      : updates.scoringGuidance;
+  }
+  if (Object.keys(setObj).length > 0) {
+    await db.execute(sql`
+      UPDATE framework_measures SET ${sql.raw(
+        Object.entries(setObj).map(([k, v]) => {
+          const col = k.replace(/([A-Z])/g, '_$1').toLowerCase();
+          return `${col} = '${String(v).replace(/'/g, "''")}'`;
+        }).join(', ')
+      )}
+      WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}
+    `);
+  }
+}
+
+// ─── Trusted Source Creation (for AI editor) ───────────────────────────────
+export async function createTrustedSource(data: { domain: string; description?: string }) {
+  // This is a workspace-less creation for the AI editor; it uses workspace 0 as a global pool
+  // In practice, the AI editor route will pass the workspace context
+  const [source] = await db.insert(schema.trustedSources).values({
+    workspaceId: 0,
+    name: data.description || data.domain,
+    domain: data.domain,
+  }).returning();
+  return source;
+}

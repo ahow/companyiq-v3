@@ -122,36 +122,147 @@ apiRouter.post("/lists/:id/companies", async (req: Request, res: Response) => {
 apiRouter.post("/companies/import", upload.single("file"), async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
-    const { companies: companiesData, listName } = req.body;
+    const listName = req.body.listName || "Imported List";
+    const pastedText = req.body.pastedText;
 
-    let parsed: Array<{ name: string; isin?: string; domain?: string; sector?: string; country?: string; ticker?: string }>;
-
-    if (req.file) {
-      // Parse CSV
-      const content = req.file.buffer.toString("utf-8");
-      const lines = content.split("\n").filter((l) => l.trim());
-      const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
-      parsed = lines.slice(1).map((line) => {
-        const values = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
-        const obj: any = {};
-        headers.forEach((h, i) => { obj[h] = values[i] || undefined; });
-        return obj;
-      });
-    } else if (companiesData) {
-      parsed = JSON.parse(companiesData);
-    } else {
-      return res.status(400).json({ error: "No data provided" });
+    // Helper to find a value from multiple possible column names
+    function findCol(row: any, ...keys: string[]): string | null {
+      for (const key of keys) {
+        if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== "") {
+          return String(row[key]).trim();
+        }
+      }
+      // Also try case-insensitive partial match
+      const rowKeys = Object.keys(row);
+      for (const candidate of keys) {
+        const found = rowKeys.find(k => k.toLowerCase().includes(candidate.toLowerCase()));
+        if (found && row[found] !== undefined && row[found] !== null && String(row[found]).trim() !== "") {
+          return String(row[found]).trim();
+        }
+      }
+      return null;
     }
 
-    // Create companies
+    let rows: any[] = [];
+
+    if (req.file) {
+      const mimeType = req.file.mimetype;
+      const filename = req.file.originalname.toLowerCase();
+
+      if (
+        mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+        mimeType === "application/vnd.ms-excel" ||
+        filename.endsWith(".xlsx") || filename.endsWith(".xls")
+      ) {
+        // Parse Excel file
+        const XLSX = await import("xlsx");
+        const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(sheet);
+      } else {
+        // Parse CSV file
+        const content = req.file.buffer.toString("utf-8");
+        const lines = content.split("\n").filter((l: string) => l.trim());
+        if (lines.length < 2) {
+          return res.status(400).json({ error: "CSV file is empty or has no data rows" });
+        }
+        // Parse CSV with proper quote handling
+        const parseCSVLine = (line: string): string[] => {
+          const result: string[] = [];
+          let current = "";
+          let inQuotes = false;
+          for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') {
+              inQuotes = !inQuotes;
+            } else if (ch === ',' && !inQuotes) {
+              result.push(current.trim());
+              current = "";
+            } else {
+              current += ch;
+            }
+          }
+          result.push(current.trim());
+          return result;
+        };
+        const headers = parseCSVLine(lines[0]).map(h => h.replace(/^"|"$/g, "").trim());
+        for (let i = 1; i < lines.length; i++) {
+          const values = parseCSVLine(lines[i]);
+          const obj: any = {};
+          headers.forEach((h, idx) => { obj[h] = values[idx]?.replace(/^"|"$/g, "") || undefined; });
+          rows.push(obj);
+        }
+      }
+    } else if (pastedText) {
+      // Handle pasted text - could be CSV-like or just company names (one per line)
+      const lines = pastedText.trim().split("\n").filter((l: string) => l.trim());
+      if (lines.length === 0) {
+        return res.status(400).json({ error: "No data provided" });
+      }
+
+      // Detect if first line is a header
+      const firstLine = lines[0].toLowerCase();
+      const hasCommas = lines[0].includes(",");
+      const looksLikeHeader = firstLine.includes("name") || firstLine.includes("isin") || firstLine.includes("company") || firstLine.includes("sector");
+
+      if (hasCommas) {
+        // CSV-like pasted data
+        const startIdx = looksLikeHeader ? 1 : 0;
+        const headers = looksLikeHeader
+          ? lines[0].split(",").map((h: string) => h.trim().replace(/^"|"$/g, ""))
+          : ["name", "isin", "sector", "country", "domain"];
+        for (let i = startIdx; i < lines.length; i++) {
+          const values = lines[i].split(",").map((v: string) => v.trim().replace(/^"|"$/g, ""));
+          const obj: any = {};
+          headers.forEach((h: string, idx: number) => { obj[h] = values[idx] || undefined; });
+          rows.push(obj);
+        }
+      } else {
+        // Plain list of company names (one per line)
+        for (const line of lines) {
+          if (line.trim()) {
+            rows.push({ name: line.trim() });
+          }
+        }
+      }
+    } else if (req.body.companies) {
+      rows = JSON.parse(req.body.companies);
+    } else {
+      return res.status(400).json({ error: "No data provided. Upload a CSV/XLSX file or paste company names." });
+    }
+
+    // Create companies with flexible column matching
     const created: any[] = [];
-    for (const data of parsed) {
-      if (!data.name) continue;
-      const company = await storage.createCompany({ ...data, workspaceId });
+    const skipped: string[] = [];
+    for (const row of rows) {
+      const name = findCol(row, "NAME", "name", "Name", "company", "Company", "COMPANY", "Company Name", "company_name");
+      if (!name) continue;
+
+      // Check for existing company with same name in this workspace
+      const existing = await storage.getCompanyByName(name, workspaceId);
+      if (existing) {
+        skipped.push(name);
+        created.push(existing);
+        continue;
+      }
+
+      const isin = findCol(row, "ISIN", "isin", "Type", "type", "Identifier", "ID");
+      const sector = findCol(row, "LEVEL2 SECTOR NAME", "LEVEL3 SECTOR NAME", "sector", "Sector", "SECTOR", "Industry", "industry");
+      const country = findCol(row, "GEOGRAPHIC DESCR.", "GEOGRAPHIC DESCR", "country", "Country", "COUNTRY", "Geography", "Region");
+      const domain = findCol(row, "domain", "Domain", "DOMAIN", "website", "Website", "URL", "url");
+
+      const company = await storage.createCompany({
+        name,
+        isin: isin || null,
+        sector: sector || null,
+        country: country || null,
+        domain: domain || null,
+        workspaceId,
+      });
       created.push(company);
     }
 
-    // Create list if specified
+    // Create list and add all companies (including existing ones)
     if (listName && created.length > 0) {
       const list = await storage.createCompanyList(workspaceId, listName);
       for (const company of created) {
@@ -159,7 +270,13 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
       }
     }
 
-    res.json({ imported: created.length, companies: created });
+    res.json({
+      imported: created.length - skipped.length,
+      existing: skipped.length,
+      total: rows.length,
+      listName,
+      companies: created,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
