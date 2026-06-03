@@ -112,7 +112,20 @@ export async function deleteCompany(companyId: number, workspaceId: number) {
 // ─── Company List Operations ────────────────────────────────────────────────
 
 export async function getCompanyLists(workspaceId: number) {
-  return db.select().from(schema.companyLists).where(eq(schema.companyLists.workspaceId, workspaceId)).orderBy(desc(schema.companyLists.createdAt));
+  const lists = await db.select().from(schema.companyLists).where(eq(schema.companyLists.workspaceId, workspaceId)).orderBy(desc(schema.companyLists.createdAt));
+  
+  // Add memberCount for each list
+  const listsWithCounts = await Promise.all(
+    lists.map(async (list) => {
+      const [result] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.companyListMembers)
+        .where(eq(schema.companyListMembers.listId, list.id));
+      return { ...list, memberCount: result?.count || 0 };
+    })
+  );
+  
+  return listsWithCounts;
 }
 
 export async function createCompanyList(workspaceId: number, name: string, description?: string) {
