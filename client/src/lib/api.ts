@@ -47,6 +47,9 @@ export const api = {
   createCompany: (data: any) => request("/companies", { method: "POST", body: JSON.stringify(data) }),
   updateCompany: (id: number, data: any) => request(`/companies/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteCompany: (id: number) => request(`/companies/${id}`, { method: "DELETE" }),
+  resetCompany: (id: number) => request(`/companies/${id}/reset`, { method: "POST" }),
+  resetList: (listId: number) => request(`/lists/${listId}/reset`, { method: "POST" }),
+  resetAll: () => request("/companies/reset-all", { method: "POST" }),
   importCompanies: (data: any) => request("/companies/import", { method: "POST", body: JSON.stringify(data) }),
 
   // Lists
