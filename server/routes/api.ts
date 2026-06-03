@@ -516,3 +516,24 @@ apiRouter.delete("/lists/:id/members/:companyId", async (req: Request, res: Resp
     res.status(500).json({ error: error.message });
   }
 });
+
+// ─── Diagnostics ───────────────────────────────────────────────────────────
+apiRouter.get("/batch/runs", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const runs = await storage.getBatchRuns(workspaceId);
+    res.json(runs);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.get("/diagnostics/recent-errors", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const errors = await storage.getRecentErrors(workspaceId);
+    res.json(errors);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});

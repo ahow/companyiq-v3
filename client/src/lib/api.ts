@@ -82,4 +82,8 @@ export const api = {
 
   // Queue
   getQueueStats: () => request("/queue/stats"),
+
+  // Diagnostics
+  getBatchRuns: () => request("/batch/runs"),
+  getRecentErrors: () => request("/diagnostics/recent-errors"),
 };

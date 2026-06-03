@@ -1,5 +1,5 @@
 import { useAuth } from "../App";
-import { BarChart3, List, FileText, Sparkles, Settings, LogOut, FlaskConical } from "lucide-react";
+import { BarChart3, List, FileText, Sparkles, Settings, LogOut, FlaskConical, Activity, BookOpen } from "lucide-react";
 
 interface NavbarProps {
   currentPage: string;
@@ -15,7 +15,9 @@ export default function Navbar({ currentPage, onNavigate }: NavbarProps) {
     { id: "framework", label: "Framework", icon: FileText },
     { id: "ai-builder", label: "AI Builder", icon: Sparkles },
     { id: "results", label: "Results", icon: FlaskConical },
+    { id: "diagnostics", label: "Diagnostics", icon: Activity },
     { id: "settings", label: "Settings", icon: Settings },
+    { id: "guide", label: "Guide", icon: BookOpen },
   ];
 
   return (

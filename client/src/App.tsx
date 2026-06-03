@@ -9,6 +9,8 @@ import ListsPage from "./pages/ListsPage";
 import ResultsPage from "./pages/ResultsPage";
 import SettingsPage from "./pages/SettingsPage";
 import AIBuilderPage from "./pages/AIBuilderPage";
+import DiagnosticsPage from "./pages/DiagnosticsPage";
+import GuidePage from "./pages/GuidePage";
 import Navbar from "./components/Navbar";
 
 interface User {
@@ -40,7 +42,9 @@ type Page =
   | "lists"
   | "results"
   | "settings"
-  | "ai-builder";
+  | "ai-builder"
+  | "diagnostics"
+  | "guide";
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -99,6 +103,8 @@ export default function App() {
           {page === "results" && <ResultsPage />}
           {page === "settings" && <SettingsPage />}
           {page === "ai-builder" && <AIBuilderPage />}
+          {page === "diagnostics" && <DiagnosticsPage />}
+          {page === "guide" && <GuidePage />}
         </main>
       </div>
     </AuthContext.Provider>

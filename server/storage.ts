@@ -507,3 +507,22 @@ export async function deleteFramework(frameworkId: number, workspaceId: number) 
 export async function deleteFrameworkMeasure(measureId: number, workspaceId: number) {
   await db.execute(sql`DELETE FROM framework_measures WHERE id = ${measureId}`);
 }
+
+// ─── Diagnostics Queries ───────────────────────────────────────────────────
+export async function getBatchRuns(workspaceId: number) {
+  return db
+    .select()
+    .from(schema.batchRuns)
+    .where(eq(schema.batchRuns.workspaceId, workspaceId))
+    .orderBy(desc(schema.batchRuns.startedAt))
+    .limit(50);
+}
+
+export async function getRecentErrors(workspaceId: number) {
+  return db
+    .select()
+    .from(schema.processingErrors)
+    .where(eq(schema.processingErrors.workspaceId, workspaceId))
+    .orderBy(desc(schema.processingErrors.createdAt))
+    .limit(100);
+}
