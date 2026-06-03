@@ -383,8 +383,8 @@ export async function getTrustedSources(workspaceId: number) {
   return db.select().from(schema.trustedSources).where(eq(schema.trustedSources.workspaceId, workspaceId));
 }
 
-export async function addTrustedSource(workspaceId: number, name: string, domain: string) {
-  const [source] = await db.insert(schema.trustedSources).values({ workspaceId, name, domain }).returning();
+export async function addTrustedSource(workspaceId: number, name: string, domain: string, description?: string | null) {
+  const [source] = await db.insert(schema.trustedSources).values({ workspaceId, name, domain, description: description || null }).returning();
   return source;
 }
 
@@ -538,7 +538,7 @@ export async function getCompanyByName(name: string, workspaceId: number) {
 }
 
 // ─── Framework Editor Operations ───────────────────────────────────────────
-export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[] }>) {
+export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[] }>) {
   await db.update(schema.frameworks).set(updates as any).where(eq(schema.frameworks.id, frameworkId));
 }
 
@@ -600,13 +600,12 @@ export async function updateMeasure(frameworkId: number, measureId: string, upda
 }
 
 // ─── Trusted Source Creation (for AI editor) ───────────────────────────────
-export async function createTrustedSource(data: { domain: string; description?: string }) {
-  // This is a workspace-less creation for the AI editor; it uses workspace 0 as a global pool
-  // In practice, the AI editor route will pass the workspace context
+export async function createTrustedSource(data: { domain: string; description?: string; workspaceId?: number }) {
   const [source] = await db.insert(schema.trustedSources).values({
-    workspaceId: 0,
+    workspaceId: data.workspaceId || 0,
     name: data.description || data.domain,
     domain: data.domain,
+    description: data.description || null,
   }).returning();
   return source;
 }

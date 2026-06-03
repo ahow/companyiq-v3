@@ -354,6 +354,43 @@ apiRouter.post("/frameworks/:id/measures", async (req: Request, res: Response) =
   }
 });
 
+apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const frameworkId = parseInt(req.params.id);
+    const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+    if (!framework) return res.status(404).json({ error: "Framework not found" });
+
+    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds"];
+    const updates: Record<string, any> = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await storage.updateFramework(frameworkId, updates as any);
+    }
+
+    const updated = await storage.getFrameworkById(frameworkId, workspaceId);
+    res.json(updated);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.delete("/frameworks/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const frameworkId = parseInt(req.params.id);
+    await storage.deleteFramework(frameworkId, workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Batch Analysis ─────────────────────────────────────────────────────────
 
 apiRouter.post("/analyze", async (req: Request, res: Response) => {

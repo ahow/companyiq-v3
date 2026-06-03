@@ -75,8 +75,12 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
-    // Add trusted_source_ids column if it doesn't exist
+    // Add framework discovery configuration columns
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS trusted_source_ids JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS search_templates JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS negative_keywords JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS negative_domains JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS known_disclosure_urls JSONB`);
 
     // ─── Framework Measures ─────────────────────────────────────────────────
     await db.execute(sql`
@@ -246,9 +250,13 @@ export async function initializeDatabase(): Promise<void> {
         workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
         name TEXT NOT NULL,
         domain TEXT NOT NULL,
+        description TEXT,
+        is_active BOOLEAN NOT NULL DEFAULT true,
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       )
     `);
+    await db.execute(sql`ALTER TABLE trusted_sources ADD COLUMN IF NOT EXISTS description TEXT`);
+    await db.execute(sql`ALTER TABLE trusted_sources ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true`);
 
     // ─── Workspace Settings ─────────────────────────────────────────────────
     await db.execute(sql`

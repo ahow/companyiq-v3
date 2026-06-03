@@ -115,7 +115,21 @@ Follow this conversation flow (adapt as needed based on user responses):
 
 2. ASK ABOUT SIZE: Early in the conversation, ask the user approximately how many measures (questions) they want in the framework. Explain that more measures = more comprehensive but slower analysis, and suggest a range based on the topic complexity (e.g., "For this topic, I'd suggest 20-35 measures — enough to be thorough without being redundant. How many would you like?").
 
-3. PROPOSE CATEGORY STRUCTURE: Once you understand the topic and desired size, propose a category structure BEFORE generating the full framework. Present it as a clear outline, e.g.:
+3. ASK ABOUT DOCUMENT SOURCES AND DOMAINS: This is a CRITICAL step. You MUST explicitly ask the user:
+   - "What types of documents should the system look for?" (e.g., sustainability reports, annual reports, policy documents, regulatory filings, voluntary disclosures)
+   - "Are there specific websites or domains that are particularly relevant for this topic?" (e.g., CDP for climate, UNPRI for responsible investment, specific regulators)
+   - "Are there any domains or sources that should be EXCLUDED or deprioritized?" (e.g., news sites, job boards, marketing pages)
+   - "Are there any specific known disclosure URLs you'd like to always include?"
+   
+   Suggest relevant sources based on the topic. For example:
+   - Climate/ESG: CDP, TNFD, SBTi, TCFD, company sustainability reports
+   - AI governance: Company AI principles pages, OECD AI Policy Observatory, IEEE standards
+   - Financial regulation: SEC EDGAR, FCA, ESMA, national regulators
+   - Human rights: UN Guiding Principles Reporting Framework, Modern Slavery registries
+   
+   Present your suggestions as a concrete list and ask the user to confirm, add, or remove sources.
+
+4. PROPOSE CATEGORY STRUCTURE: Once you understand the topic, desired size, and document sources, propose a category structure BEFORE generating the full framework. Present it as a clear outline, e.g.:
    "Here's my proposed structure:
    - Category A (6 measures) — covering X, Y, Z
    - Category B (5 measures) — covering P, Q, R
@@ -123,11 +137,15 @@ Follow this conversation flow (adapt as needed based on user responses):
    - Category D (5 measures) — covering S, T, U
    Total: ~20 measures
    
-   Would you like to adjust any categories, add/remove topics, or change the number of measures?"
+   Document sources: [list the agreed sources]
+   Search templates: [list the search queries that will be used]
+   Excluded domains: [list any excluded domains]
+   
+   Would you like to adjust any categories, sources, or change the number of measures?"
 
-4. REFINE: Let the user approve, modify, or reject the structure. They may want to add categories, merge categories, change measure counts, or adjust scope.
+5. REFINE: Let the user approve, modify, or reject the structure. They may want to add categories, merge categories, change measure counts, add/remove sources, or adjust scope.
 
-5. GENERATE: Only generate the full framework JSON once the user approves the structure (or says "go ahead", "looks good", "generate it", etc.).
+6. GENERATE: Only generate the full framework JSON once the user approves the structure (or says "go ahead", "looks good", "generate it", etc.).
 
 ADDITIONAL GUIDELINES:
 - Make PROACTIVE SUGGESTIONS on topics, categories, and specific measures
@@ -201,7 +219,8 @@ WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON bloc
 \`\`\`
 
 IMPORTANT RULES:
-- Do NOT generate the framework JSON until you have (a) asked the user how many measures they want, (b) proposed a category structure, and (c) received approval or a "go ahead" from the user
+- Do NOT generate the framework JSON until you have (a) asked the user how many measures they want, (b) discussed document sources and domains with the user, (c) proposed a category structure including the agreed sources and search templates, and (d) received approval or a "go ahead" from the user
+- You MUST ask about document sources and domains BEFORE proposing the category structure. This is non-negotiable.
 - When you DO generate it, you MUST include the complete JSON block in the SAME response. NEVER say "hold on" or "please wait" — you cannot send follow-up messages. Everything must be in one response.
 - When you DO generate it, include it in your message along with an explanation of what you've created and invite the user to review/refine
 - CRITICAL: If you decide to generate the framework, you MUST output the full \`\`\`json block in this response. Do not defer it to a later message — there is no later message.
@@ -331,7 +350,18 @@ You can perform the following ACTIONS by including a JSON action block in your r
 {"type": "remove_sources", "domains": ["cdp.net"]}
 \`\`\`
 
+7. UPDATE DISCOVERY SETTINGS (search templates, negative keywords, negative domains, known URLs):
+\`\`\`action
+{"type": "update_discovery", "settings": {"searchTemplates": ["{company} sustainability report"], "negativeKeywords": ["job posting"], "negativeDomains": ["linkedin.com"], "knownDisclosureUrls": ["https://example.com/disclosures"]}}
+\`\`\`
+Note: Only include the fields you want to change. Arrays will REPLACE existing values (not append).
+
 Current trusted sources for this framework: ${framework.trustedSourceIds ? `IDs: ${JSON.stringify(framework.trustedSourceIds)}` : "None configured"}
+Current discovery settings:
+- Search templates: ${JSON.stringify((framework as any).searchTemplates || [])}
+- Negative keywords: ${JSON.stringify((framework as any).negativeKeywords || [])}
+- Negative domains: ${JSON.stringify((framework as any).negativeDomains || [])}
+- Known disclosure URLs: ${JSON.stringify((framework as any).knownDisclosureUrls || [])}
 
 IMPORTANT RULES:
 - Always confirm what you're about to do before including the action block
@@ -436,6 +466,16 @@ IMPORTANT RULES:
           const newIds = currentIds.filter((id: number) => !removeIds.includes(id));
           await storage.updateFramework(frameworkId, { trustedSourceIds: newIds });
           executedActions.push(`Removed ${action.domains.length} trusted sources from framework`);
+        } else if (action.type === "update_discovery" && action.settings) {
+          const discoveryUpdates: any = {};
+          if (action.settings.searchTemplates) discoveryUpdates.searchTemplates = action.settings.searchTemplates;
+          if (action.settings.negativeKeywords) discoveryUpdates.negativeKeywords = action.settings.negativeKeywords;
+          if (action.settings.negativeDomains) discoveryUpdates.negativeDomains = action.settings.negativeDomains;
+          if (action.settings.knownDisclosureUrls) discoveryUpdates.knownDisclosureUrls = action.settings.knownDisclosureUrls;
+          if (Object.keys(discoveryUpdates).length > 0) {
+            await storage.updateFramework(frameworkId, discoveryUpdates);
+            executedActions.push(`Updated discovery settings: ${Object.keys(discoveryUpdates).join(", ")}`);
+          }
         }
       } catch (err: any) {
         executedActions.push(`Error: ${err.message}`);
@@ -483,12 +523,16 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid framework data" });
     }
 
-    // Create the framework
+    // Create the framework with discovery configuration
     const created = await storage.createFramework({
       workspaceId,
       name: framework.name,
       topicDescription: framework.description || framework.topicDescription || "",
       isActive: false,
+      searchTemplates: framework.searchTemplates || null,
+      negativeKeywords: framework.negativeKeywords || null,
+      negativeDomains: framework.negativeDomains || null,
+      knownDisclosureUrls: framework.knownDisclosureUrls || null,
     });
 
     // Create measures from categories
@@ -515,12 +559,30 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
     // Activate the new framework
     await storage.setActiveFramework(created.id, workspaceId);
 
-    // Save trusted sources if provided
+    // Save trusted sources if provided and link them to the framework
+    const trustedSourceIds: number[] = [];
     if (framework.trustedSources && Array.isArray(framework.trustedSources)) {
+      const existingSources = await storage.getTrustedSources(workspaceId);
+      const existingDomains = new Map(existingSources.map((s: any) => [s.domain.toLowerCase().replace(/^www\./, ''), s.id]));
+
       for (const source of framework.trustedSources) {
         if (source.name && source.domain) {
-          await storage.addTrustedSource(workspaceId, source.name, source.domain);
+          const domain = source.domain.toLowerCase().replace(/^www\./, '');
+          let sourceId: number;
+          if (existingDomains.has(domain)) {
+            sourceId = existingDomains.get(domain)!;
+          } else {
+            const newSource = await storage.addTrustedSource(workspaceId, source.name, domain, source.reason || source.description || null);
+            sourceId = newSource.id;
+            existingDomains.set(domain, sourceId);
+          }
+          trustedSourceIds.push(sourceId);
         }
+      }
+
+      // Link trusted sources to the framework
+      if (trustedSourceIds.length > 0) {
+        await storage.updateFramework(created.id, { trustedSourceIds });
       }
     }
 

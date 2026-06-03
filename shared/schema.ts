@@ -84,6 +84,10 @@ export const frameworks = pgTable("frameworks", {
   version: integer("version").notNull().default(1),
   isActive: boolean("is_active").notNull().default(false),
   trustedSourceIds: jsonb("trusted_source_ids").$type<number[]>(),
+  searchTemplates: jsonb("search_templates").$type<string[]>(),
+  negativeKeywords: jsonb("negative_keywords").$type<string[]>(),
+  negativeDomains: jsonb("negative_domains").$type<string[]>(),
+  knownDisclosureUrls: jsonb("known_disclosure_urls").$type<string[]>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -221,6 +225,8 @@ export const trustedSources = pgTable("trusted_sources", {
   workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
   name: text("name").notNull(),
   domain: text("domain").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   workspaceIdx: index("trusted_workspace_idx").on(table.workspaceId),

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState, useRef, useEffect } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User, Settings, Globe, Search, Ban, Link2 } from "lucide-react";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -14,14 +14,27 @@ export default function FrameworkPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [showAIEditor, setShowAIEditor] = useState(false);
+  const [showDiscoverySettings, setShowDiscoverySettings] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Discovery settings local state
+  const [searchTemplatesText, setSearchTemplatesText] = useState("");
+  const [negativeKeywordsText, setNegativeKeywordsText] = useState("");
+  const [negativeDomainsText, setNegativeDomainsText] = useState("");
+  const [knownDisclosureUrlsText, setKnownDisclosureUrlsText] = useState("");
+  const [discoverySaving, setDiscoverySaving] = useState(false);
+
   const { data: frameworks } = useQuery({
     queryKey: ["frameworks"],
     queryFn: api.getFrameworks,
+  });
+
+  const { data: trustedSources } = useQuery({
+    queryKey: ["trustedSources"],
+    queryFn: api.getTrustedSources,
   });
 
   const [selectedFrameworkId, setSelectedFrameworkId] = useState<number | null>(null);
@@ -40,6 +53,16 @@ export default function FrameworkPage() {
 
   const framework = frameworkDetail?.framework;
   const measures = frameworkDetail?.measures || [];
+
+  // Sync discovery settings when framework changes
+  useEffect(() => {
+    if (framework) {
+      setSearchTemplatesText((framework.searchTemplates || []).join("\n"));
+      setNegativeKeywordsText((framework.negativeKeywords || []).join("\n"));
+      setNegativeDomainsText((framework.negativeDomains || []).join("\n"));
+      setKnownDisclosureUrlsText((framework.knownDisclosureUrls || []).join("\n"));
+    }
+  }, [framework?.id, framework?.searchTemplates, framework?.negativeKeywords, framework?.negativeDomains, framework?.knownDisclosureUrls]);
 
   // Group measures by category
   const categories: Record<string, any[]> = {};
@@ -71,7 +94,7 @@ export default function FrameworkPage() {
   const handleDeleteFramework = async (id: number) => {
     if (!confirm("Delete this framework? This cannot be undone.")) return;
     try {
-      await api.request(`/frameworks/${id}`, { method: "DELETE" });
+      await api.deleteFramework(id);
       queryClient.invalidateQueries({ queryKey: ["frameworks"] });
       if (selectedFrameworkId === id) setSelectedFrameworkId(null);
     } catch (err: any) {
@@ -110,13 +133,51 @@ export default function FrameworkPage() {
     }
   };
 
+  // Save discovery settings
+  const handleSaveDiscoverySettings = async () => {
+    if (!activeFrameworkId) return;
+    setDiscoverySaving(true);
+    try {
+      const parseLines = (text: string) => text.split("\n").map(l => l.trim()).filter(Boolean);
+      await api.updateFramework(activeFrameworkId, {
+        searchTemplates: parseLines(searchTemplatesText),
+        negativeKeywords: parseLines(negativeKeywordsText),
+        negativeDomains: parseLines(negativeDomainsText),
+        knownDisclosureUrls: parseLines(knownDisclosureUrlsText),
+      });
+      queryClient.invalidateQueries({ queryKey: ["framework", activeFrameworkId] });
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setDiscoverySaving(false);
+    }
+  };
+
+  // Link/unlink trusted source to framework
+  const handleToggleTrustedSource = async (sourceId: number) => {
+    if (!activeFrameworkId || !framework) return;
+    const currentIds: number[] = (framework.trustedSourceIds as number[]) || [];
+    let newIds: number[];
+    if (currentIds.includes(sourceId)) {
+      newIds = currentIds.filter((id: number) => id !== sourceId);
+    } else {
+      newIds = [...currentIds, sourceId];
+    }
+    try {
+      await api.updateFramework(activeFrameworkId, { trustedSourceIds: newIds });
+      queryClient.invalidateQueries({ queryKey: ["framework", activeFrameworkId] });
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
   // AI Editor functions
   const openAIEditor = () => {
     setShowAIEditor(true);
     if (chatMessages.length === 0) {
       setChatMessages([{
         role: "assistant",
-        content: `I'm ready to help you edit the **${framework?.name}** framework (${measures.length} measures). You can ask me to:\n\n- Add new measures or categories\n- Remove specific measures\n- Edit measure titles, definitions, or scoring guidance\n- Rename the framework\n- Add or remove trusted sources\n\nWhat would you like to change?`
+        content: `I'm ready to help you edit the **${framework?.name}** framework (${measures.length} measures). You can ask me to:\n\n- Add new measures or categories\n- Remove specific measures\n- Edit measure titles, definitions, or scoring guidance\n- Rename the framework\n- Add or remove trusted sources\n- Configure search templates and negative keywords\n\nWhat would you like to change?`
       }]);
     }
   };
@@ -145,7 +206,6 @@ export default function FrameworkPage() {
       };
       setChatMessages([...newMessages, assistantMessage]);
 
-      // If changes were made, refresh the framework data
       if (response.hasChanges) {
         queryClient.invalidateQueries({ queryKey: ["framework", activeFrameworkId] });
         queryClient.invalidateQueries({ queryKey: ["frameworks"] });
@@ -171,11 +231,9 @@ export default function FrameworkPage() {
     setShowAIEditor(false);
   }, [activeFrameworkId]);
 
-  // Format chat message content (handle markdown-like formatting)
+  // Format chat message content
   const formatMessage = (content: string) => {
-    // Remove action blocks from display
     const cleaned = content.replace(/```action[\s\S]*?```/g, "").trim();
-    // Simple markdown rendering
     return cleaned.split("\n").map((line, i) => {
       if (line.startsWith("- ")) {
         return <li key={i} className="ml-4 list-disc">{formatInline(line.slice(2))}</li>;
@@ -192,7 +250,6 @@ export default function FrameworkPage() {
   };
 
   const formatInline = (text: string) => {
-    // Bold
     const parts = text.split(/(\*\*.*?\*\*)/g);
     return parts.map((part, i) => {
       if (part.startsWith("**") && part.endsWith("**")) {
@@ -201,6 +258,8 @@ export default function FrameworkPage() {
       return part;
     });
   };
+
+  const linkedSourceIds: number[] = (framework?.trustedSourceIds as number[]) || [];
 
   return (
     <div className="space-y-6">
@@ -276,13 +335,161 @@ export default function FrameworkPage() {
                 <p className="text-sm text-gray-600 mt-1">{framework.topicDescription}</p>
               )}
             </div>
-            <button
-              onClick={openAIEditor}
-              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 transition-colors"
-            >
-              <MessageSquare className="w-4 h-4" /> AI Editor
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowDiscoverySettings(!showDiscoverySettings)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                  showDiscoverySettings
+                    ? "bg-amber-100 text-amber-800 hover:bg-amber-200"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                <Settings className="w-4 h-4" /> Discovery Settings
+              </button>
+              <button
+                onClick={openAIEditor}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 transition-colors"
+              >
+                <MessageSquare className="w-4 h-4" /> AI Editor
+              </button>
+            </div>
           </div>
+
+          {/* Discovery Settings Panel */}
+          {showDiscoverySettings && (
+            <div className="p-4 border-b bg-amber-50/50 space-y-5">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+                  <Search className="w-4 h-4" /> Document Discovery Configuration
+                </h3>
+                <button
+                  onClick={handleSaveDiscoverySettings}
+                  disabled={discoverySaving}
+                  className="px-4 py-1.5 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {discoverySaving ? "Saving..." : "Save Settings"}
+                </button>
+              </div>
+              <p className="text-xs text-gray-600">
+                Configure how the system discovers and filters documents during analysis. These settings control what gets searched, what gets excluded, and which sources are prioritised.
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Search Templates */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                    <Search className="w-3.5 h-3.5 text-blue-500" /> Search Templates
+                  </label>
+                  <p className="text-[11px] text-gray-500 mb-1">
+                    Custom search queries used during discovery. Use <code className="bg-gray-100 px-1 rounded">{"{company}"}</code> as a placeholder for the company name. One per line.
+                  </p>
+                  <textarea
+                    value={searchTemplatesText}
+                    onChange={(e) => setSearchTemplatesText(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono resize-y"
+                    placeholder={`{company} sustainability report 2024\n{company} ESG disclosure\n{company} climate risk TCFD`}
+                  />
+                </div>
+
+                {/* Negative Keywords */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                    <Ban className="w-3.5 h-3.5 text-red-500" /> Negative Keywords
+                  </label>
+                  <p className="text-[11px] text-gray-500 mb-1">
+                    Documents containing these terms in their title/URL will be penalised or excluded. One per line.
+                  </p>
+                  <textarea
+                    value={negativeKeywordsText}
+                    onChange={(e) => setNegativeKeywordsText(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono resize-y"
+                    placeholder={`job posting\ncareers\nmarketing brochure\npress release`}
+                  />
+                </div>
+
+                {/* Negative Domains */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                    <Globe className="w-3.5 h-3.5 text-red-500" /> Negative Domains
+                  </label>
+                  <p className="text-[11px] text-gray-500 mb-1">
+                    Domains to exclude from results. Documents from these sites will be demoted or rejected. One per line.
+                  </p>
+                  <textarea
+                    value={negativeDomainsText}
+                    onChange={(e) => setNegativeDomainsText(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono resize-y"
+                    placeholder={`linkedin.com\nglassdoor.com\nindeed.com\nfacebook.com`}
+                  />
+                </div>
+
+                {/* Known Disclosure URLs */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                    <Link2 className="w-3.5 h-3.5 text-green-500" /> Known Disclosure URLs
+                  </label>
+                  <p className="text-[11px] text-gray-500 mb-1">
+                    Specific URLs that are always included in analysis (e.g., industry databases, regulatory filings). One per line.
+                  </p>
+                  <textarea
+                    value={knownDisclosureUrlsText}
+                    onChange={(e) => setKnownDisclosureUrlsText(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono resize-y"
+                    placeholder={`https://www.cdp.net/en/responses\nhttps://sciencebasedtargets.org/companies-taking-action`}
+                  />
+                </div>
+              </div>
+
+              {/* Trusted Sources linked to this framework */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
+                  <Globe className="w-3.5 h-3.5 text-blue-500" /> Linked Trusted Sources
+                </label>
+                <p className="text-[11px] text-gray-500 mb-2">
+                  Select which trusted sources should be specifically searched for this framework. During discovery, the system will run <code className="bg-gray-100 px-1 rounded">site:domain.com "Company Name"</code> for each linked source.
+                </p>
+                {trustedSources && trustedSources.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {trustedSources.map((source: any) => {
+                      const isLinked = linkedSourceIds.includes(source.id);
+                      return (
+                        <div
+                          key={source.id}
+                          onClick={() => handleToggleTrustedSource(source.id)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                            isLinked
+                              ? "bg-blue-50 border-blue-300 text-blue-800"
+                              : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isLinked}
+                            readOnly
+                            className="w-3.5 h-3.5 rounded text-blue-600"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium truncate">{source.name}</div>
+                            <div className="text-[10px] text-gray-500 truncate">{source.domain}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">
+                    No trusted sources configured. Add them in Settings &gt; Trusted Sources.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Measures by Category */}
           <div className="divide-y">
             {Object.entries(categories).map(([category, catMeasures]) => (
               <div key={category}>
@@ -458,7 +665,7 @@ export default function FrameworkPage() {
                 </button>
               </div>
               <p className="text-[10px] text-gray-400 mt-2">
-                Try: "Add a measure about board-level AI oversight" or "Remove measures 1.3 and 2.1"
+                Try: "Add a measure about board-level AI oversight" or "Add cdp.net as a trusted source"
               </p>
             </div>
           </div>

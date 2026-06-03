@@ -59,6 +59,8 @@ export const api = {
   getFrameworks: () => request("/frameworks"),
   getFramework: (id: number) => request(`/frameworks/${id}`),
   createFramework: (data: any) => request("/frameworks", { method: "POST", body: JSON.stringify(data) }),
+  updateFramework: (id: number, data: any) => request(`/frameworks/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteFramework: (id: number) => request(`/frameworks/${id}`, { method: "DELETE" }),
   activateFramework: (id: number) => request(`/frameworks/${id}/activate`, { method: "POST" }),
   setMeasures: (frameworkId: number, measures: any[]) => request(`/frameworks/${frameworkId}/measures`, { method: "POST", body: JSON.stringify({ measures }) }),
 
