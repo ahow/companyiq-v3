@@ -9,6 +9,7 @@ import { apiRouter } from "./routes/api.js";
 import frameworkBuilderRouter from "./routes/framework-builder.js";
 import { startWorker } from "./worker.js";
 import { initializeDatabase } from "./db.js";
+import { cleanupOnStartup } from "./startup-cleanup.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,7 +52,11 @@ app.get("*", (req, res) => {
 // ─── Start Server & Worker ──────────────────────────────────────────────────
 
 // Initialize database then start server
-initializeDatabase().then(() => {
+initializeDatabase().then(async () => {
+  // Clean up stale jobs from previous server sessions
+  // This ensures analysis only runs when explicitly triggered by the user
+  await cleanupOnStartup();
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Server] CompanyIQ v3 running on port ${PORT}`);
     console.log(`[Server] Environment: ${process.env.NODE_ENV || "development"}`);
