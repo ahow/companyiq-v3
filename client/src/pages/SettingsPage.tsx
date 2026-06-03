@@ -93,7 +93,7 @@ export default function SettingsPage() {
               API keys are configured as environment variables on the server.
             </p>
             <div className="space-y-2">
-              {["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "SERP_API_KEY", "GEMINI_API_KEY"].map((key) => (
+              {["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "SERPER_API_KEY", "GEMINI_API_KEY"].map((key) => (
                 <div key={key} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
                   <Key className="w-4 h-4 text-gray-400" />
                   <span className="text-sm font-mono text-gray-700">{key}</span>

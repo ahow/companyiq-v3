@@ -7,16 +7,17 @@ const MAX_DOCS_RETURNED = 60;
 const PRE_GATE_CAP = 120;
 const SEARCH_TIMEOUT = 15000;
 
-// ─── SerpAPI Key ────────────────────────────────────────────────────────────
+// ─── Search API Keys ────────────────────────────────────────────────────────
 
-function getSerpApiKey(): string {
-  // Support SERP_API_KEY (SerpAPI) or SERPER_API_KEY (Serper.dev) or fallback
-  const key = process.env.SERP_API_KEY || process.env.SERPER_API_KEY;
-  if (!key) throw new Error("No SERP_API_KEY or SERPER_API_KEY configured");
-  return key;
+function getSerperApiKey(): string | null {
+  return process.env.SERPER_API_KEY || null;
 }
 
-// ─── Search Provider ────────────────────────────────────────────────────────
+function getSerpApiKey(): string | null {
+  return process.env.SERP_API_KEY || null;
+}
+
+// ─── Search Provider (Serper.dev primary, SerpAPI fallback) ─────────────────
 
 interface SearchResult {
   title: string;
@@ -25,36 +26,90 @@ interface SearchResult {
   position?: number;
 }
 
+async function webSearchSerper(
+  query: string,
+  apiKey: string,
+  opts: { num?: number; tbs?: string } = {}
+): Promise<SearchResult[]> {
+  const body: any = {
+    q: query,
+    num: opts.num || 10,
+  };
+  // Map tbs (time-based search) to Serper's tbs parameter
+  if (opts.tbs) body.tbs = opts.tbs;
+
+  const response = await axios.post("https://google.serper.dev/search", body, {
+    headers: {
+      "X-API-KEY": apiKey,
+      "Content-Type": "application/json",
+    },
+    timeout: SEARCH_TIMEOUT,
+  });
+
+  const organic = response.data.organic || [];
+  return organic.map((r: any, idx: number) => ({
+    title: r.title || "",
+    link: r.link || "",
+    snippet: r.snippet || "",
+    position: r.position || idx + 1,
+  }));
+}
+
+async function webSearchSerpApi(
+  query: string,
+  apiKey: string,
+  opts: { num?: number; tbs?: string } = {}
+): Promise<SearchResult[]> {
+  const params: any = {
+    q: query,
+    api_key: apiKey,
+    engine: "google",
+    num: opts.num || 10,
+  };
+  if (opts.tbs) params.tbs = opts.tbs;
+
+  const response = await axios.get("https://serpapi.com/search.json", {
+    params,
+    timeout: SEARCH_TIMEOUT,
+  });
+
+  const organic = response.data.organic_results || [];
+  return organic.map((r: any, idx: number) => ({
+    title: r.title || "",
+    link: r.link || "",
+    snippet: r.snippet || "",
+    position: r.position || idx + 1,
+  }));
+}
+
 async function webSearch(
   query: string,
   opts: { num?: number; tbs?: string } = {}
 ): Promise<SearchResult[]> {
-  try {
-    const apiKey = getSerpApiKey();
-    const params: any = {
-      q: query,
-      api_key: apiKey,
-      engine: "google",
-      num: opts.num || 10,
-    };
-    if (opts.tbs) params.tbs = opts.tbs;
+  // Try Serper.dev first (cheaper, faster), fall back to SerpAPI
+  const serperKey = getSerperApiKey();
+  const serpApiKey = getSerpApiKey();
 
-    const response = await axios.get("https://serpapi.com/search.json", {
-      params,
-      timeout: SEARCH_TIMEOUT,
-    });
-
-    const organic = response.data.organic_results || [];
-    return organic.map((r: any, idx: number) => ({
-      title: r.title || "",
-      link: r.link || "",
-      snippet: r.snippet || "",
-      position: r.position || idx + 1,
-    }));
-  } catch (error: any) {
-    console.warn(`[Discovery] Search failed for "${query}": ${error.message}`);
-    return [];
+  if (serperKey) {
+    try {
+      return await webSearchSerper(query, serperKey, opts);
+    } catch (error: any) {
+      console.warn(`[Discovery] Serper.dev failed for "${query}": ${error.message}`);
+      // Fall through to SerpAPI
+    }
   }
+
+  if (serpApiKey) {
+    try {
+      return await webSearchSerpApi(query, serpApiKey, opts);
+    } catch (error: any) {
+      console.warn(`[Discovery] SerpAPI failed for "${query}": ${error.message}`);
+      return [];
+    }
+  }
+
+  console.error("[Discovery] No search API key configured (SERPER_API_KEY or SERP_API_KEY)");
+  return [];
 }
 
 // ─── Query Construction ──────────────────────────────────────────────────────
