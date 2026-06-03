@@ -75,6 +75,9 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // Add trusted_source_ids column if it doesn't exist
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS trusted_source_ids JSONB`);
+
     // ─── Framework Measures ─────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS framework_measures (
