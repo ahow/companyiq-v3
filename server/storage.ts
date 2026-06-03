@@ -273,6 +273,66 @@ export async function clearMeasureScores(companyId: number) {
   await db.delete(schema.measureScores).where(eq(schema.measureScores.companyId, companyId));
 }
 
+// Bulk reset all companies in a workspace (efficient single SQL statements)
+export async function resetAllCompanies(workspaceId: number): Promise<number> {
+  // Delete all measure scores for companies in this workspace
+  await db.execute(sql`
+    DELETE FROM measure_scores WHERE company_id IN (
+      SELECT id FROM companies WHERE workspace_id = ${workspaceId}
+    )
+  `);
+  // Reset all companies in one UPDATE
+  const result = await db.execute(sql`
+    UPDATE companies SET
+      analysis_status = 'idle',
+      total_score = NULL,
+      summary = NULL,
+      measures_met_count = NULL,
+      measures_total_count = NULL,
+      updated_at = NOW()
+    WHERE workspace_id = ${workspaceId} AND analysis_status != 'idle'
+  `);
+  // Also reset idle ones that might have stale scores
+  await db.execute(sql`
+    UPDATE companies SET
+      total_score = NULL,
+      summary = NULL,
+      measures_met_count = NULL,
+      measures_total_count = NULL,
+      updated_at = NOW()
+    WHERE workspace_id = ${workspaceId} AND total_score IS NOT NULL
+  `);
+  // Return count of all companies in workspace
+  const countResult = await db.execute(sql`SELECT COUNT(*) as cnt FROM companies WHERE workspace_id = ${workspaceId}`);
+  return (countResult.rows[0] as any)?.cnt || 0;
+}
+
+// Bulk reset all companies in a specific list
+export async function resetListCompanies(listId: number, workspaceId: number): Promise<number> {
+  // Delete measure scores for companies in this list
+  await db.execute(sql`
+    DELETE FROM measure_scores WHERE company_id IN (
+      SELECT company_id FROM company_list_members WHERE list_id = ${listId}
+    )
+  `);
+  // Reset companies in this list
+  await db.execute(sql`
+    UPDATE companies SET
+      analysis_status = 'idle',
+      total_score = NULL,
+      summary = NULL,
+      measures_met_count = NULL,
+      measures_total_count = NULL,
+      updated_at = NOW()
+    WHERE id IN (
+      SELECT company_id FROM company_list_members WHERE list_id = ${listId}
+    ) AND workspace_id = ${workspaceId}
+  `);
+  // Return count of members in the list
+  const countResult = await db.execute(sql`SELECT COUNT(*) as cnt FROM company_list_members WHERE list_id = ${listId}`);
+  return (countResult.rows[0] as any)?.cnt || 0;
+}
+
 // ─── Batch Run Operations (Workspace-Scoped) ────────────────────────────────
 
 export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number) {

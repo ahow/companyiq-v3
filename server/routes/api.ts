@@ -97,13 +97,7 @@ apiRouter.post("/lists/:id/reset", async (req: Request, res: Response) => {
     const listId = parseInt(req.params.id);
     const list = await storage.getListById(listId, workspaceId);
     if (!list) return res.status(404).json({ error: "List not found" });
-    const members = await storage.getListMembers(listId, workspaceId);
-    let resetCount = 0;
-    for (const member of members) {
-      await storage.clearMeasureScores(member.id as number);
-      await storage.updateCompany(member.id as number, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
-      resetCount++;
-    }
+    const resetCount = await storage.resetListCompanies(listId, workspaceId);
     res.json({ success: true, resetCount, listName: list.name });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -114,13 +108,7 @@ apiRouter.post("/lists/:id/reset", async (req: Request, res: Response) => {
 apiRouter.post("/companies/reset-all", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
-    const companies = await storage.getCompanies(workspaceId);
-    let resetCount = 0;
-    for (const c of companies) {
-      await storage.clearMeasureScores(c.id);
-      await storage.updateCompany(c.id, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
-      resetCount++;
-    }
+    const resetCount = await storage.resetAllCompanies(workspaceId);
     res.json({ success: true, resetCount });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
