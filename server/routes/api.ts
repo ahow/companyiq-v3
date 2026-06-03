@@ -638,10 +638,31 @@ apiRouter.post("/companies/:id/analyze", async (req: Request, res: Response) => 
     const activeFramework = frameworks.find((f: any) => f.isActive);
     if (!activeFramework) return res.status(400).json({ error: "No active framework" });
 
+    // Reset company status
+    await storage.updateCompany(company.id, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
+
     // Create a batch for single company
     const batch = await storage.createBatchRun(workspaceId, activeFramework.id, 1);
-    const jobs = await storage.createAnalysisJobs(batch.id, [companyId], workspaceId);
-    await addBatchJobs(batch.id, jobs, workspaceId, activeFramework.id);
+
+    // Create jobs in DB (same pattern as batch analyze)
+    const jobsData = [{
+      workspaceId,
+      batchId: batch.id,
+      companyId: company.id,
+      companyName: company.name,
+      frameworkId: activeFramework.id,
+    }];
+    const dbJobs = await storage.createAnalysisJobs(jobsData);
+
+    // Add to BullMQ queue
+    const queueJobs = dbJobs.map((j) => ({
+      jobId: j.id,
+      companyId: j.companyId,
+      frameworkId: j.frameworkId,
+      batchId: batch.id,
+      workspaceId,
+    }));
+    await addBatchJobs(queueJobs, workspaceId, batch.id);
 
     res.json({ success: true, batchId: batch.id });
   } catch (error: any) {
