@@ -314,9 +314,96 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`CREATE INDEX IF NOT EXISTS trusted_workspace_idx ON trusted_sources(workspace_id)`);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS results_workspace_idx ON analysis_results(workspace_id)`);
 
+    // ─── Excluded Sources ────────────────────────────────────────────────────
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS excluded_sources (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+        domain TEXT NOT NULL,
+        reason TEXT,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS excluded_workspace_idx ON excluded_sources(workspace_id)`);
+
+    // ─── Seed Default Settings for All Workspaces ──────────────────────────
+    await seedDefaultSettings();
+
     console.log("[DB] All tables created successfully");
   } catch (error) {
     console.error("[DB] Migration error:", error);
     throw error;
   }
+}
+
+/**
+ * Seed default ensemble scoring settings and trusted sources for all workspaces.
+ * Uses INSERT ... ON CONFLICT DO NOTHING so it's idempotent.
+ */
+async function seedDefaultSettings(): Promise<void> {
+  // Get all workspace IDs
+  const workspaces = await db.execute(sql`SELECT id FROM workspaces`);
+  if (!workspaces.rows || workspaces.rows.length === 0) return;
+
+  const defaultSettings: Record<string, string> = {
+    ensemble_scoring: "true",
+    ensemble_iterations: "3",
+    pipeline_llm_1: "deepseek",
+    pipeline_llm_2: "claude",
+    pipeline_llm_3: "gemini",
+    scoring_provider: "deepseek",
+    use_bm25_retrieval: "true",
+    terminology_discovery_enabled: "true",
+    scoring_mode: "binary",
+  };
+
+  const defaultTrustedSources = [
+    { name: "Banking on Climate Chaos", domain: "bankingonclimatechaos.org", description: "Banks' fossil fuel financing activities" },
+    { name: "CDP", domain: "cdp.net", description: "CDP climate and environmental disclosures" },
+    { name: "Coal Policy Tool", domain: "coalpolicytool.org", description: "Banks' coal financing policies" },
+    { name: "GRI", domain: "globalreporting.org", description: "GRI sustainability reporting standards" },
+    { name: "Net Zero Asset Managers", domain: "netzeroassetmanagers.org", description: "Asset managers' net-zero progress" },
+    { name: "NIST", domain: "nist.gov", description: "NIST AI Risk Management Framework" },
+    { name: "OECD", domain: "oecd.org", description: "OECD AI principles and policy observatory" },
+    { name: "Oil & Gas Policy Tracker", domain: "oilgaspolicytracker.org", description: "Banks' oil and gas financing policies" },
+    { name: "Partnership on AI", domain: "partnershiponai.org", description: "Partnership on AI research and guidelines" },
+    { name: "Responsible AI Institute", domain: "responsibleai.org", description: "Responsible AI certifications" },
+    { name: "SBTi", domain: "sciencebasedtargets.org", description: "Science-based emissions reduction targets" },
+    { name: "US SEC", domain: "sec.gov", description: "US SEC filings - 10-K, DEF14A, proxy statements" },
+    { name: "TCFD Hub", domain: "tcfdhub.org", description: "TCFD-related disclosures and guidance" },
+    { name: "UNEP FI", domain: "unepfi.org", description: "Net Zero Banking Alliance materials" },
+    { name: "UN Global Compact", domain: "unglobalcompact.org", description: "UN Global Compact sustainability reports" },
+    { name: "Company Reports", domain: "company.com", description: "Company sustainability reports" },
+  ];
+
+  for (const row of workspaces.rows as any[]) {
+    const workspaceId = row.id;
+
+    // Seed settings (only if not already set)
+    for (const [key, value] of Object.entries(defaultSettings)) {
+      await db.execute(sql`
+        INSERT INTO workspace_settings (workspace_id, key, value)
+        VALUES (${workspaceId}, ${key}, ${value})
+        ON CONFLICT (workspace_id, key) DO NOTHING
+      `);
+    }
+
+    // Seed trusted sources (only if workspace has none)
+    const existingSources = await db.execute(
+      sql`SELECT COUNT(*) as cnt FROM trusted_sources WHERE workspace_id = ${workspaceId}`
+    );
+    const count = parseInt((existingSources.rows[0] as any).cnt || "0");
+    if (count === 0) {
+      for (const source of defaultTrustedSources) {
+        await db.execute(sql`
+          INSERT INTO trusted_sources (workspace_id, name, domain, description, is_active)
+          VALUES (${workspaceId}, ${source.name}, ${source.domain}, ${source.description}, true)
+        `);
+      }
+      console.log(`[DB] Seeded ${defaultTrustedSources.length} trusted sources for workspace ${workspaceId}`);
+    }
+  }
+
+  console.log("[DB] Default settings seeded for all workspaces");
 }

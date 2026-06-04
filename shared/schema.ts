@@ -232,6 +232,19 @@ export const trustedSources = pgTable("trusted_sources", {
   workspaceIdx: index("trusted_workspace_idx").on(table.workspaceId),
 }));
 
+// ─── Excluded Sources (Workspace-Scoped) ─────────────────────────────────
+
+export const excludedSources = pgTable("excluded_sources", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  domain: text("domain").notNull(),
+  reason: text("reason"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  workspaceIdx: index("excluded_workspace_idx").on(table.workspaceId),
+}));
+
 // ─── Workspace Settings ────────────────────────────────────────────────────
 
 export const workspaceSettings = pgTable("workspace_settings", {
@@ -292,3 +305,4 @@ export type AnalysisJob = typeof analysisJobs.$inferSelect;
 export type TrustedSource = typeof trustedSources.$inferSelect;
 export type WorkspaceSetting = typeof workspaceSettings.$inferSelect;
 export type AnalysisResultSnapshot = typeof analysisResults.$inferSelect;
+export type ExcludedSource = typeof excludedSources.$inferSelect;

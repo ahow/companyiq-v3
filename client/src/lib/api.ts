@@ -82,8 +82,18 @@ export const api = {
 
   // Trusted Sources
   getTrustedSources: () => request("/trusted-sources"),
-  addTrustedSource: (name: string, domain: string) => request("/trusted-sources", { method: "POST", body: JSON.stringify({ name, domain }) }),
+  addTrustedSource: (name: string, domain: string, description?: string) => request("/trusted-sources", { method: "POST", body: JSON.stringify({ name, domain, description }) }),
+  updateTrustedSource: (id: number, data: any) => request(`/trusted-sources/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteTrustedSource: (id: number) => request(`/trusted-sources/${id}`, { method: "DELETE" }),
+
+  // Excluded Sources
+  getExcludedSources: () => request("/excluded-sources"),
+  addExcludedSource: (domain: string, reason?: string) => request("/excluded-sources", { method: "POST", body: JSON.stringify({ domain, reason }) }),
+  updateExcludedSource: (id: number, data: any) => request(`/excluded-sources/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteExcludedSource: (id: number) => request(`/excluded-sources/${id}`, { method: "DELETE" }),
+
+  // Results (delete)
+  deleteResult: (id: number) => request(`/results/${id}`, { method: "DELETE" }),
 
   // Queue
   getQueueStats: () => request("/queue/stats"),

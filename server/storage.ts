@@ -461,8 +461,31 @@ export async function addTrustedSource(workspaceId: number, name: string, domain
   return source;
 }
 
+export async function updateTrustedSource(id: number, workspaceId: number, updates: { name?: string; domain?: string; description?: string | null; isActive?: boolean }) {
+  await db.update(schema.trustedSources).set(updates as any).where(and(eq(schema.trustedSources.id, id), eq(schema.trustedSources.workspaceId, workspaceId)));
+}
+
 export async function deleteTrustedSource(id: number, workspaceId: number) {
   await db.delete(schema.trustedSources).where(and(eq(schema.trustedSources.id, id), eq(schema.trustedSources.workspaceId, workspaceId)));
+}
+
+// ─── Excluded Sources ────────────────────────────────────────────────────────────
+
+export async function getExcludedSources(workspaceId: number) {
+  return db.select().from(schema.excludedSources).where(eq(schema.excludedSources.workspaceId, workspaceId));
+}
+
+export async function addExcludedSource(workspaceId: number, domain: string, reason?: string | null) {
+  const [source] = await db.insert(schema.excludedSources).values({ workspaceId, domain, reason: reason || null }).returning();
+  return source;
+}
+
+export async function updateExcludedSource(id: number, workspaceId: number, updates: { domain?: string; reason?: string | null; isActive?: boolean }) {
+  await db.update(schema.excludedSources).set(updates as any).where(and(eq(schema.excludedSources.id, id), eq(schema.excludedSources.workspaceId, workspaceId)));
+}
+
+export async function deleteExcludedSource(id: number, workspaceId: number) {
+  await db.delete(schema.excludedSources).where(and(eq(schema.excludedSources.id, id), eq(schema.excludedSources.workspaceId, workspaceId)));
 }
 
 // ─── Workspace Settings ─────────────────────────────────────────────────────

@@ -647,10 +647,62 @@ apiRouter.post("/trusted-sources", async (req: Request, res: Response) => {
   }
 });
 
+apiRouter.patch("/trusted-sources/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    await storage.updateTrustedSource(parseInt(req.params.id), workspaceId, req.body);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 apiRouter.delete("/trusted-sources/:id", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
     await storage.deleteTrustedSource(parseInt(req.params.id), workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Excluded Sources ───────────────────────────────────────────────────────────
+
+apiRouter.get("/excluded-sources", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const sources = await storage.getExcludedSources(workspaceId);
+    res.json(sources);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/excluded-sources", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const source = await storage.addExcludedSource(workspaceId, req.body.domain, req.body.reason);
+    res.json(source);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.patch("/excluded-sources/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    await storage.updateExcludedSource(parseInt(req.params.id), workspaceId, req.body);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.delete("/excluded-sources/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    await storage.deleteExcludedSource(parseInt(req.params.id), workspaceId);
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
