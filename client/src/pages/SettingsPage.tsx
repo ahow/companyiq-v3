@@ -180,6 +180,63 @@ function PipelineSettings() {
       <div className="bg-white rounded-lg border p-6">
         <h2 className="font-semibold text-gray-900 mb-4">Discovery & Retrieval</h2>
         <div className="space-y-4">
+          {/* Search Depth */}
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div>
+              <div className="font-medium text-gray-900">Search Depth</div>
+              <div className="text-sm text-gray-500">Number of results per search query (higher = more documents found, slower)</div>
+            </div>
+            <select
+              value={settings?.search_depth || "10"}
+              onChange={(e) => updateSetting("search_depth", e.target.value)}
+              className="px-3 py-1.5 border rounded-lg text-sm"
+            >
+              <option value="5">5 (fast)</option>
+              <option value="10">10 (standard)</option>
+              <option value="15">15</option>
+              <option value="20">20 (thorough)</option>
+              <option value="30">30 (comprehensive)</option>
+            </select>
+          </div>
+
+          {/* Query Variants */}
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div>
+              <div className="font-medium text-gray-900">Discovery Query Variants</div>
+              <div className="text-sm text-gray-500">Number of LLM-generated alternative search queries per company (improves coverage)</div>
+            </div>
+            <select
+              value={settings?.discovery_query_variants || "3"}
+              onChange={(e) => updateSetting("discovery_query_variants", e.target.value)}
+              className="px-3 py-1.5 border rounded-lg text-sm"
+            >
+              <option value="0">Disabled</option>
+              <option value="2">2 variants</option>
+              <option value="3">3 variants</option>
+              <option value="5">5 variants</option>
+              <option value="8">8 variants (slow)</option>
+            </select>
+          </div>
+
+          {/* Auto-Pin Sources */}
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div>
+              <div className="font-medium text-gray-900">Auto-Pin Evidence Sources</div>
+              <div className="text-sm text-gray-500">Automatically pin URLs that provide evidence, ensuring they are always re-checked in future runs</div>
+            </div>
+            <button
+              onClick={() => toggleSetting("auto_pin_sources", settings?.auto_pin_sources || "false")}
+              className="flex items-center"
+            >
+              {settings?.auto_pin_sources === "true" ? (
+                <ToggleRight className="w-8 h-8 text-green-600" />
+              ) : (
+                <ToggleLeft className="w-8 h-8 text-gray-400" />
+              )}
+            </button>
+          </div>
+
+          {/* BM25 Retrieval */}
           <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
             <div>
               <div className="font-medium text-gray-900">BM25 Passage Retrieval</div>
@@ -197,6 +254,7 @@ function PipelineSettings() {
             </button>
           </div>
 
+          {/* Terminology Discovery */}
           <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
             <div>
               <div className="font-medium text-gray-900">Terminology Discovery</div>

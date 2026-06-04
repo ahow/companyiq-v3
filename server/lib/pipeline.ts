@@ -62,9 +62,14 @@ async function runFetchPhase(opts: {
   // Update status to fetching
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "fetching" });
 
-  // Step 1: Clear stale discovery cache (non-uploaded docs)
+  // Step 1: Clear only PENDING (never-fetched) documents from previous runs.
+  // Previously fetched documents (fetchStatus: "ok") are KEPT for reuse.
   await storage.clearDiscoveredDocuments(companyId);
-  console.log(`[${companyName}] Cleared stale discovery cache`);
+  console.log(`[${companyName}] Cleared stale pending documents (cached docs preserved)`);
+
+  // Count cached documents that already have content
+  const cachedDocs = await storage.getFetchedDocuments(companyId);
+  console.log(`[${companyName}] ${cachedDocs.length} cached documents available from previous runs`);
 
   if (cancelCheck?.()) {
     await storage.updateCompany(companyId, workspaceId, { analysisStatus: "idle" });
@@ -73,6 +78,11 @@ async function runFetchPhase(opts: {
 
   // Step 2: Run discovery (web search + relevance gate)
   const trustedSources = await storage.getTrustedSources(workspaceId);
+  const settings = await storage.getSettings(workspaceId);
+  const searchDepth = parseInt(settings.search_depth || "10");
+  const queryVariants = parseInt(settings.discovery_query_variants || "3");
+  console.log(`[${companyName}] Using search depth: ${searchDepth}, query variants: ${queryVariants}`);
+
   const discoveryResult: DiscoveryResult = await searchCompanyDocuments({
     companyName,
     companyId,
@@ -83,6 +93,8 @@ async function runFetchPhase(opts: {
     pinnedUrls: (company.pinnedDocuments as string[]) || undefined,
     framework,
     trustedSources,
+    searchDepth,
+    queryVariants,
   });
 
   console.log(`[${companyName}] Discovery found ${discoveryResult.documents.length} accepted documents`);
@@ -304,6 +316,38 @@ async function runAnalyzePhase(opts: {
   });
 
   console.log(`[${companyName}] Analysis complete: ${analysis.scorePercentage}% (${analysis.totalScore}/${measures.length} measures met)`);
+
+  // ─── Auto-Pin Sources ──────────────────────────────────────────────────────
+  // When analysis finds evidence, auto-pin those source URLs so they're always
+  // re-checked in future runs (ensures consistency across iterations).
+  try {
+    const autoPinSettings = await storage.getSettings(workspaceId);
+    if (autoPinSettings.auto_pin_sources === "true") {
+      const existingPins = new Set<string>((company.pinnedDocuments as string[]) || []);
+      const newPins: string[] = [];
+
+      for (const cat of analysis.categories) {
+        for (const m of cat.measures) {
+          if (m.verdict === "Yes" || m.verdict === "Partial") {
+            for (const quote of m.quotes) {
+              if (quote.source && quote.source.startsWith("http") && !existingPins.has(quote.source)) {
+                existingPins.add(quote.source);
+                newPins.push(quote.source);
+              }
+            }
+          }
+        }
+      }
+
+      if (newPins.length > 0) {
+        const allPins = [...((company.pinnedDocuments as string[]) || []), ...newPins];
+        await storage.updateCompany(companyId, workspaceId, { pinnedDocuments: allPins });
+        console.log(`[${companyName}] Auto-pinned ${newPins.length} evidence sources (total: ${allPins.length})`);
+      }
+    }
+  } catch (pinError: any) {
+    console.warn(`[${companyName}] Auto-pin failed (non-fatal): ${pinError.message}`);
+  }
 
   return analysis;
 }

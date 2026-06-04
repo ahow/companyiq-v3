@@ -112,6 +112,43 @@ async function webSearch(
   return [];
 }
 
+// ─── Query Variant Generation ───────────────────────────────────────────────
+
+async function generateQueryVariants(
+  companyName: string,
+  baseQueries: string[],
+  numVariants: number,
+  framework: Framework
+): Promise<string[]> {
+  if (numVariants <= 0) return [];
+
+  try {
+    const { text } = await completeWithFallback("deepseek", {
+      system: `You generate search query variants for corporate document discovery. Given base search queries about a company, generate alternative phrasings that would find the same or similar documents but using different keywords, synonyms, or angles. Focus on finding sustainability reports, ESG disclosures, policy documents, and governance materials.`,
+      prompt: `Company: ${companyName}
+Topic: ${framework.topicDescription || framework.name}
+
+Base queries:
+${baseQueries.slice(0, 4).map((q, i) => `${i + 1}. ${q}`).join("\n")}
+
+Generate ${numVariants} alternative search queries that would find similar corporate disclosure documents using different keywords or phrasings. Return ONLY a JSON array of strings.
+
+Example: ["HSBC climate risk disclosure 2024", "HSBC net zero transition plan", "HSBC financed emissions report"]`,
+      json: true,
+      maxTokens: 500,
+    });
+
+    const variants = JSON.parse(text);
+    if (Array.isArray(variants)) {
+      return variants.slice(0, numVariants * 2); // Allow up to 2x variants
+    }
+    return [];
+  } catch (error: any) {
+    console.warn(`[Discovery] Query variant generation failed: ${error.message}`);
+    return [];
+  }
+}
+
 // ─── Query Construction ──────────────────────────────────────────────────────
 
 interface DiscoveryCandidate {
@@ -406,8 +443,12 @@ export async function searchCompanyDocuments(opts: {
   pinnedUrls?: string[];
   framework: Framework;
   trustedSources: TrustedSource[];
+  searchDepth?: number; // Number of results per query (default: 10)
+  queryVariants?: number; // Number of LLM-generated query variants (default: 3)
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
+  const searchDepth = opts.searchDepth || 10;
+  const queryVariants = opts.queryVariants ?? 3;
   const allCandidates: DiscoveryCandidate[] = [];
   const seenUrls = new Set<string>();
   const laneCounts: Record<string, number> = {};
@@ -447,12 +488,12 @@ export async function searchCompanyDocuments(opts: {
   console.log(`[${companyName}] Running general search lane`);
   const generalQueries = buildGeneralQueries(companyName, framework);
   for (const query of generalQueries) {
-    const results = await webSearch(query, { num: 10, tbs: "qdr:y2" });
+    const results = await webSearch(query, { num: searchDepth, tbs: "qdr:y2" });
     for (const r of results) addCandidate(r, "general");
 
     // If too few results with recency filter, retry without
     if (results.length < 3) {
-      const unfiltered = await webSearch(query, { num: 10 });
+      const unfiltered = await webSearch(query, { num: searchDepth });
       for (const r of unfiltered) addCandidate(r, "general-unfiltered");
     }
   }
@@ -462,7 +503,7 @@ export async function searchCompanyDocuments(opts: {
     console.log(`[${companyName}] Running domain-anchored search lane`);
     const domainQueries = buildDomainQueries(companyName, companyDomain, framework);
     for (const query of domainQueries) {
-      const results = await webSearch(query, { num: 10 });
+      const results = await webSearch(query, { num: searchDepth });
       for (const r of results) addCandidate(r, "domain");
     }
   }
@@ -480,7 +521,7 @@ export async function searchCompanyDocuments(opts: {
     const tsQueries = buildTrustedSourceQueries(companyName, effectiveSources);
     // Allow up to 15 trusted source queries per company (increased from 5)
     for (const query of tsQueries.slice(0, 15)) {
-      const results = await webSearch(query, { num: 5 });
+      const results = await webSearch(query, { num: Math.max(5, searchDepth) });
       for (const r of results) addCandidate(r, "trusted");
     }
   }
@@ -490,7 +531,7 @@ export async function searchCompanyDocuments(opts: {
   if (cjkQueries.length > 0) {
     console.log(`[${companyName}] Running CJK search lane`);
     for (const query of cjkQueries) {
-      const results = await webSearch(query, { num: 10 });
+      const results = await webSearch(query, { num: searchDepth });
       for (const r of results) addCandidate(r, "cjk");
     }
   }
@@ -508,6 +549,20 @@ export async function searchCompanyDocuments(opts: {
           priority: -50,
         });
         laneCounts["known"] = (laneCounts["known"] || 0) + 1;
+      }
+    }
+  }
+
+  // Lane 6: Auto-generated query variants (LLM-generated alternative phrasings)
+  const numVariants = queryVariants;
+  if (numVariants > 0) {
+    console.log(`[${companyName}] Generating ${numVariants} query variants for broader discovery`);
+    const variantQueries = await generateQueryVariants(companyName, generalQueries, numVariants, framework);
+    if (variantQueries.length > 0) {
+      console.log(`[${companyName}] Running ${variantQueries.length} variant queries`);
+      for (const query of variantQueries) {
+        const results = await webSearch(query, { num: searchDepth });
+        for (const r of results) addCandidate(r, "variant");
       }
     }
   }

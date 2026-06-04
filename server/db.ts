@@ -356,6 +356,9 @@ async function seedDefaultSettings(): Promise<void> {
     use_bm25_retrieval: "true",
     terminology_discovery_enabled: "true",
     scoring_mode: "binary",
+    search_depth: "20",
+    discovery_query_variants: "3",
+    auto_pin_sources: "true",
   };
 
   const defaultTrustedSources = [
