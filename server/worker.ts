@@ -12,6 +12,7 @@ import { Worker, Job } from "bullmq";
 import { getRedisConnection } from "./redis.js";
 import { runAnalysisPipeline, type PipelineResult } from "./lib/pipeline.js";
 import * as storage from "./storage.js";
+import crypto from "crypto";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "5", 10);
@@ -100,39 +101,11 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
       // Save results after a delay to ensure all in-flight jobs finish persisting
       setTimeout(async () => {
         try {
-          // Build results from company data
-          const companies = await storage.getCompanies(workspaceId);
-          const completedCompanies = companies.filter((c: any) => c.analysisStatus === "completed");
-          const framework = await storage.getFrameworkById(frameworkId, workspaceId);
-          // Get list name from batch
-          let listName: string | undefined;
-          if (batchRow.list_id) {
-            const list = await storage.getListById(Number(batchRow.list_id), workspaceId);
-            listName = list?.name;
-          }
-          const resultsData = completedCompanies.map((c: any) => ({
-            company: c.name,
-            isin: c.isin,
-            sector: c.sector,
-            country: c.country,
-            totalScore: c.totalScore,
-            measuresMetCount: c.measuresMetCount,
-            measuresTotalCount: c.measuresTotalCount,
-          }));
-          await storage.saveAnalysisResults({
-            workspaceId,
-            batchId,
-            frameworkId,
-            frameworkName: framework?.name || "Unknown",
-            listName,
-            resultsData,
-            companiesCount: completedCompanies.length,
-          });
-          console.log(`[Worker] Results saved for batch ${batchId}`);
+          await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
         } catch (err: any) {
           console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
         }
-      }, 180000); // 3 minute delay
+      }, 60000); // 1 minute delay for in-flight jobs to finish persisting
     }
 
     return result;
@@ -141,6 +114,96 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
     await storage.failJob(jobId, error.message);
     await storage.incrementBatchFailed(batchId);
     return { success: false, error: error.message, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+  }
+}
+
+// ─── Batch Results Saving ───────────────────────────────────────────────────
+
+// Guard against concurrent saves for the same batch
+const savingBatches = new Set<number>();
+
+async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number, workspaceId: number, listId?: number): Promise<void> {
+  // Prevent duplicate saves
+  if (savingBatches.has(batchId)) {
+    console.log(`[Worker] Skipping duplicate save for batch ${batchId}`);
+    return;
+  }
+  savingBatches.add(batchId);
+
+  try {
+    const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+    if (!framework) return;
+
+    // Get companies from this specific batch's jobs
+    const { db } = await import("./db.js");
+    const { sql } = await import("drizzle-orm");
+    const jobsResult = await db.execute(sql`
+      SELECT company_id, company_name FROM analysis_jobs
+      WHERE batch_id = ${batchId}
+    `);
+
+    if (jobsResult.rows.length === 0) return;
+
+    // Gather results for each company that was successfully analyzed
+    const resultsData: any[] = [];
+    for (const row of jobsResult.rows as any[]) {
+      const company = await storage.getCompanyById(row.company_id, workspaceId);
+      if (!company) continue;
+      if (company.analysisStatus !== "completed") continue;
+
+      const scores = await storage.getMeasureScores(company.id, frameworkId);
+      resultsData.push({
+        companyId: company.id,
+        companyName: company.name,
+        isin: company.isin || undefined,
+        sector: company.sector || undefined,
+        country: company.country || undefined,
+        totalScore: company.totalScore || 0,
+        measuresMetCount: company.measuresMetCount || 0,
+        measuresTotalCount: company.measuresTotalCount || 0,
+        summary: company.summary || undefined,
+        measureScores: scores.map(s => ({
+          measureId: s.measureId,
+          title: s.title || "",
+          category: s.category || "",
+          score: s.score,
+          verdict: s.verdict || undefined,
+          evidenceSummary: s.evidenceSummary || undefined,
+        })),
+      });
+    }
+
+    if (resultsData.length === 0) return;
+
+    // Get list name
+    let listName: string | undefined;
+    if (listId) {
+      const list = await storage.getListById(listId, workspaceId);
+      listName = list?.name;
+    }
+
+    // Calculate average score
+    const avgScore = Math.round(
+      resultsData.reduce((sum, r) => sum + r.totalScore, 0) / resultsData.length
+    );
+
+    const shareToken = crypto.randomUUID();
+
+    await storage.saveAnalysisResults({
+      workspaceId,
+      batchId,
+      frameworkId,
+      frameworkName: framework.name,
+      listName,
+      resultsData,
+      companiesCount: resultsData.length,
+      averageScore: avgScore,
+      shareToken,
+    });
+
+    console.log(`[Worker] Saved analysis results for batch ${batchId} (${resultsData.length} companies, avg ${avgScore}%)`);
+  } catch (error: any) {
+    console.error(`[Worker] Failed to save analysis results for batch ${batchId}: ${error.message}`);
   }
 }
 

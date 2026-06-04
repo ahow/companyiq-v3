@@ -517,7 +517,7 @@ export async function logProcessingError(data: { workspaceId?: number; companyId
 
 // ─── Analysis Results ───────────────────────────────────────────────────────
 
-export async function saveAnalysisResults(data: { workspaceId: number; batchId: number; frameworkId: number; frameworkName: string; listName?: string; resultsData: any; companiesCount: number }) {
+export async function saveAnalysisResults(data: { workspaceId: number; batchId: number; frameworkId: number; frameworkName: string; listName?: string; resultsData: any; companiesCount: number; averageScore?: number; shareToken?: string }) {
   const [result] = await db.insert(schema.analysisResults).values(data).returning();
   return result;
 }

@@ -297,6 +297,8 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
     await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS list_name TEXT`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS average_score INTEGER`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS share_token TEXT`);
 
     // ─── Indexes ────────────────────────────────────────────────────────────
     await db.execute(sql`CREATE INDEX IF NOT EXISTS companies_workspace_idx ON companies(workspace_id)`);

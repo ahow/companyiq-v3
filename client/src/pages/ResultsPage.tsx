@@ -87,6 +87,9 @@ export default function ResultsPage() {
   };
 
   const getAvgScore = (result: any) => {
+    // Prefer the stored averageScore from the database
+    if (result.averageScore !== null && result.averageScore !== undefined) return result.averageScore;
+    // Fallback: calculate from results data
     const rows = result.resultsData || [];
     if (rows.length === 0) return 0;
     const scores = rows

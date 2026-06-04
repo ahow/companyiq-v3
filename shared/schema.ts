@@ -279,6 +279,8 @@ export const analysisResults = pgTable("analysis_results", {
   listName: text("list_name"),
   resultsData: jsonb("results_data").notNull(),
   companiesCount: integer("companies_count").notNull(),
+  averageScore: integer("average_score"),
+  shareToken: text("share_token"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   workspaceIdx: index("results_workspace_idx").on(table.workspaceId),

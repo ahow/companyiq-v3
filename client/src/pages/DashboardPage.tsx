@@ -225,15 +225,15 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-lg border p-4">
           <p className="text-sm text-gray-500">Total Companies</p>
-          <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
+          <p className="text-2xl font-bold text-gray-900">{selectedList ? listFilteredCompanies.length : stats.total}</p>
         </div>
         <div className="bg-white rounded-lg border p-4">
           <p className="text-sm text-gray-500">Analyzed</p>
-          <p className="text-2xl font-bold text-green-600">{stats.completed}</p>
+          <p className="text-2xl font-bold text-green-600">{selectedList ? listFilteredCompanies.filter((c: any) => c.analysisStatus === "completed").length : stats.completed}</p>
         </div>
         <div className="bg-white rounded-lg border p-4">
           <p className="text-sm text-gray-500">Average Score</p>
-          <p className="text-2xl font-bold text-blue-600">{stats.avgScore}%</p>
+          <p className="text-2xl font-bold text-blue-600">{(() => { const scored = (selectedList ? listFilteredCompanies : companies).filter((c: any) => c.analysisStatus === "completed" && c.totalScore !== null); return scored.length > 0 ? Math.round(scored.reduce((sum: number, c: any) => sum + c.totalScore, 0) / scored.length) : 0; })()}%</p>
         </div>
         <div className="bg-white rounded-lg border p-4">
           <p className="text-sm text-gray-500">Batch Status</p>
@@ -376,7 +376,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
             </div>
             <BarChart3 className="w-5 h-5 text-gray-400" />
           </div>
-          <p className="text-xs text-gray-400 mb-4">{scoreDistribution.total} of {stats.total} companies scored</p>
+          <p className="text-xs text-gray-400 mb-4">{scoreDistribution.total} of {selectedList ? listFilteredCompanies.length : stats.total} companies scored</p>
           <div className="flex items-end gap-1" style={{ height: "160px" }}>
             {scoreDistribution.buckets.map((bucket) => (
               <div key={bucket.label} className="flex-1 flex flex-col items-center justify-end h-full">
