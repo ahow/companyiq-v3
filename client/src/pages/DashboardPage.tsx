@@ -37,6 +37,13 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     queryFn: api.getLists,
   });
 
+  // Fetch list members when a specific list is selected
+  const { data: listCompanies } = useQuery({
+    queryKey: ["listCompanies", selectedList],
+    queryFn: () => api.getListCompanies(selectedList!),
+    enabled: !!selectedList,
+  });
+
   const { data: frameworks = [] } = useQuery({
     queryKey: ["frameworks"],
     queryFn: api.getFrameworks,
@@ -45,15 +52,23 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const companies = companiesData?.companies || [];
   const stats = companiesData?.stats || { total: 0, completed: 0, avgScore: 0 };
 
-  const filteredCompanies = companies.filter((c: any) =>
+  // First filter by selected list, then by search
+  const listFilteredCompanies = useMemo(() => {
+    if (!selectedList) return companies;
+    if (!listCompanies) return [];
+    const listCompanyIds = new Set(listCompanies.map((c: any) => c.id));
+    return companies.filter((c: any) => listCompanyIds.has(c.id));
+  }, [companies, selectedList, listCompanies]);
+
+  const filteredCompanies = listFilteredCompanies.filter((c: any) =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
     (c.sector || "").toLowerCase().includes(search.toLowerCase()) ||
     (c.country || "").toLowerCase().includes(search.toLowerCase())
   );
 
-  // Score distribution
+  // Score distribution (based on list-filtered companies)
   const scoreDistribution = useMemo(() => {
-    const completedCompanies = companies.filter((c: any) => c.analysisStatus === "completed" && c.totalScore !== null);
+    const completedCompanies = listFilteredCompanies.filter((c: any) => c.analysisStatus === "completed" && c.totalScore !== null);
     const buckets = [
       { label: "0-10%", min: 0, max: 10, count: 0 },
       { label: "11-20%", min: 11, max: 20, count: 0 },
@@ -72,7 +87,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
       if (bucket) bucket.count++;
     });
     return { buckets, total: completedCompanies.length };
-  }, [companies]);
+  }, [listFilteredCompanies]);
 
   const maxBucketCount = Math.max(...scoreDistribution.buckets.map((b) => b.count), 1);
 
@@ -362,15 +377,14 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
             <BarChart3 className="w-5 h-5 text-gray-400" />
           </div>
           <p className="text-xs text-gray-400 mb-4">{scoreDistribution.total} of {stats.total} companies scored</p>
-          <div className="flex items-end gap-1 h-32">
+          <div className="flex items-end gap-1" style={{ height: "160px" }}>
             {scoreDistribution.buckets.map((bucket) => (
-              <div key={bucket.label} className="flex-1 flex flex-col items-center">
+              <div key={bucket.label} className="flex-1 flex flex-col items-center justify-end h-full">
                 <span className="text-xs text-gray-600 mb-1">{bucket.count > 0 ? bucket.count : ""}</span>
                 <div
                   className="w-full bg-blue-500 rounded-t transition-all"
                   style={{
-                    height: `${bucket.count > 0 ? (bucket.count / maxBucketCount) * 100 : 0}%`,
-                    minHeight: bucket.count > 0 ? "4px" : "0",
+                    height: bucket.count > 0 ? `${Math.max((bucket.count / maxBucketCount) * 100, 3)}%` : "0%",
                   }}
                 />
               </div>

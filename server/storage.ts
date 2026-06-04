@@ -494,13 +494,17 @@ export async function logProcessingError(data: { workspaceId?: number; companyId
 
 // ─── Analysis Results ───────────────────────────────────────────────────────
 
-export async function saveAnalysisResults(data: { workspaceId: number; batchId: number; frameworkId: number; frameworkName: string; resultsData: any; companiesCount: number }) {
+export async function saveAnalysisResults(data: { workspaceId: number; batchId: number; frameworkId: number; frameworkName: string; listName?: string; resultsData: any; companiesCount: number }) {
   const [result] = await db.insert(schema.analysisResults).values(data).returning();
   return result;
 }
 
 export async function getAnalysisResults(workspaceId: number) {
   return db.select().from(schema.analysisResults).where(eq(schema.analysisResults.workspaceId, workspaceId)).orderBy(desc(schema.analysisResults.createdAt));
+}
+
+export async function deleteAnalysisResult(id: number, workspaceId: number) {
+  await db.delete(schema.analysisResults).where(and(eq(schema.analysisResults.id, id), eq(schema.analysisResults.workspaceId, workspaceId)));
 }
 
 // ─── Terminology Cache ──────────────────────────────────────────────────────

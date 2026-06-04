@@ -104,6 +104,12 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
           const companies = await storage.getCompanies(workspaceId);
           const completedCompanies = companies.filter((c: any) => c.analysisStatus === "completed");
           const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+          // Get list name from batch
+          let listName: string | undefined;
+          if (batchRow.list_id) {
+            const list = await storage.getListById(Number(batchRow.list_id), workspaceId);
+            listName = list?.name;
+          }
           const resultsData = completedCompanies.map((c: any) => ({
             company: c.name,
             isin: c.isin,
@@ -118,6 +124,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
             batchId,
             frameworkId,
             frameworkName: framework?.name || "Unknown",
+            listName,
             resultsData,
             companiesCount: completedCompanies.length,
           });

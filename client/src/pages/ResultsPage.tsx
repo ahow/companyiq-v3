@@ -1,21 +1,28 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { Download } from "lucide-react";
-import { useState } from "react";
+import { Download, Share2, Trash2 } from "lucide-react";
 
 export default function ResultsPage() {
-  const { data: resultsList } = useQuery({
+  const queryClient = useQueryClient();
+
+  const { data: resultsList = [] } = useQuery({
     queryKey: ["results"],
     queryFn: api.getResults,
   });
 
-  // resultsList is an array of snapshot rows, each with { id, frameworkName, resultsData, companiesCount, createdAt }
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const selected = resultsList?.[selectedIdx];
-  const rows = selected?.resultsData || [];
+  const { data: lists = [] } = useQuery({
+    queryKey: ["lists"],
+    queryFn: api.getLists,
+  });
 
-  const handleExport = () => {
-    if (!rows || rows.length === 0) return;
+  const deleteResultMutation = useMutation({
+    mutationFn: (id: number) => api.request(`/results/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["results"] }),
+  });
+
+  const handleExportCSV = (result: any) => {
+    const rows = result.resultsData || [];
+    if (rows.length === 0) return;
 
     const headers = Object.keys(rows[0]);
     const csv = [
@@ -23,7 +30,9 @@ export default function ResultsPage() {
       ...rows.map((row: any) =>
         headers.map((h) => {
           const val = row[h] ?? "";
-          return typeof val === "string" && val.includes(",") ? `"${val}"` : val;
+          return typeof val === "string" && (val.includes(",") || val.includes('"'))
+            ? `"${val.replace(/"/g, '""')}"`
+            : val;
         }).join(",")
       ),
     ].join("\n");
@@ -32,70 +41,143 @@ export default function ResultsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `companyiq-results-${new Date().toISOString().split("T")[0]}.csv`;
+    a.download = `${result.frameworkName}-${formatDate(result.createdAt)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  const handleShare = async (result: any) => {
+    const shareUrl = `${window.location.origin}/api/results/${result.id}/share`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      alert("Share link copied to clipboard!");
+    } catch {
+      prompt("Copy this share link:", shareUrl);
+    }
+  };
+
+  const handleDelete = (result: any) => {
+    if (confirm(`Delete this result set? (${result.frameworkName} — ${formatDate(result.createdAt)})`)) {
+      deleteResultMutation.mutate(result.id);
+    }
+  };
+
+  const formatDate = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  };
+
+  const formatTime = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const getScoreColor = (score: number) => {
+    if (score >= 70) return "text-green-600";
+    if (score >= 40) return "text-yellow-600";
+    return "text-red-600";
+  };
+
+  // Derive list name from the result's batch if available
+  const getListName = (result: any) => {
+    // Try to find the list name from the results data or batch info
+    if (result.listName) return result.listName;
+    // Fallback: check if we can derive from the list of known lists
+    return "—";
+  };
+
+  const getAvgScore = (result: any) => {
+    const rows = result.resultsData || [];
+    if (rows.length === 0) return 0;
+    const scores = rows
+      .map((r: any) => r.totalScore ?? r.TotalScore ?? r.TOTALSCORE)
+      .filter((s: any) => s !== null && s !== undefined && s > 0);
+    if (scores.length === 0) return 0;
+    return Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length);
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">Analysis Results</h1>
-        <div className="flex items-center gap-3">
-          {resultsList && resultsList.length > 1 && (
-            <select
-              value={selectedIdx}
-              onChange={(e) => setSelectedIdx(Number(e.target.value))}
-              className="text-sm border rounded px-2 py-1.5"
-            >
-              {resultsList.map((r: any, i: number) => (
-                <option key={r.id} value={i}>
-                  {r.frameworkName} ({r.companiesCount} companies) — {new Date(r.createdAt).toLocaleDateString()}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            onClick={handleExport}
-            disabled={!rows?.length}
-            className="flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50"
-          >
-            <Download className="w-4 h-4" /> Export CSV
-          </button>
-        </div>
+      <div>
+        <h1 className="text-xl font-bold text-gray-900">Saved Results</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          Completed analyses are automatically saved here. Download as a spreadsheet or share as a JSON link.
+        </p>
       </div>
 
-      {rows.length > 0 ? (
-        <div className="bg-white rounded-lg border overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-gray-50">
-                {Object.keys(rows[0]).slice(0, 8).map((key) => (
-                  <th key={key} className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
-                    {key}
-                  </th>
-                ))}
+      {resultsList.length > 0 ? (
+        <div className="bg-white rounded-lg border overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Framework Template</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Company List</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Companies</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Avg Score</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Date</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Time</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
             </thead>
-            <tbody>
-              {rows.map((row: any, i: number) => (
-                <tr key={i} className="border-b hover:bg-gray-50">
-                  {Object.keys(row).slice(0, 8).map((key) => (
-                    <td key={key} className="px-3 py-2 text-gray-700 whitespace-nowrap">
-                      {row[key] ?? "-"}
+            <tbody className="divide-y divide-gray-100">
+              {resultsList.map((result: any) => {
+                const avgScore = getAvgScore(result);
+                return (
+                  <tr key={result.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                      {result.frameworkName}
                     </td>
-                  ))}
-                </tr>
-              ))}
+                    <td className="px-4 py-3 text-sm text-gray-600">
+                      {result.listName || getListName(result)}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-700 text-center">
+                      {result.companiesCount}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-sm font-bold ${getScoreColor(avgScore)}`}>
+                        {avgScore > 0 ? `${avgScore}%` : "—"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600 text-center">
+                      {formatDate(result.createdAt)}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600 text-center">
+                      {formatTime(result.createdAt)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleExportCSV(result)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-green-50 text-green-700 border border-green-200 rounded hover:bg-green-100"
+                          title="Download as CSV"
+                        >
+                          <Download className="w-3.5 h-3.5" /> CSV
+                        </button>
+                        <button
+                          onClick={() => handleShare(result)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200 rounded hover:bg-gray-100"
+                          title="Copy share link"
+                        >
+                          <Share2 className="w-3.5 h-3.5" /> Share
+                        </button>
+                        <button
+                          onClick={() => handleDelete(result)}
+                          className="p-1.5 text-gray-400 hover:text-red-600 rounded"
+                          title="Delete result"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-          <div className="p-3 text-sm text-gray-500 border-t">
-            {rows.length} companies · {selected?.frameworkName || "Unknown framework"}
-          </div>
         </div>
       ) : (
         <div className="bg-white rounded-lg border p-12 text-center">
-          <p className="text-gray-500">No results yet. Run a batch analysis to generate results.</p>
+          <p className="text-gray-500">No saved results yet. Run a batch analysis to generate results.</p>
         </div>
       )}
     </div>

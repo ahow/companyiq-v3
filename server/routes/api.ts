@@ -571,6 +571,37 @@ apiRouter.get("/results", async (req: Request, res: Response) => {
   }
 });
 
+apiRouter.delete("/results/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(req.params.id);
+    await storage.deleteAnalysisResult(id, workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.get("/results/:id/share", async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    // Public share endpoint - returns the results data as JSON
+    const { db } = await import("./db.js");
+    const { sql } = await import("drizzle-orm");
+    const [result] = await db.execute(sql`SELECT * FROM analysis_results WHERE id = ${id}`).then(r => r.rows) as any[];
+    if (!result) return res.status(404).json({ error: "Result not found" });
+    res.json({
+      frameworkName: result.framework_name,
+      listName: result.list_name,
+      companiesCount: result.companies_count,
+      createdAt: result.created_at,
+      results: result.results_data,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Settings ───────────────────────────────────────────────────────────────
 
 apiRouter.get("/settings", async (req: Request, res: Response) => {

@@ -290,11 +290,13 @@ export async function initializeDatabase(): Promise<void> {
         batch_id INTEGER NOT NULL REFERENCES batch_runs(id),
         framework_id INTEGER NOT NULL REFERENCES frameworks(id),
         framework_name TEXT NOT NULL,
+        list_name TEXT,
         results_data JSONB NOT NULL,
         companies_count INTEGER NOT NULL,
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       )
     `);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS list_name TEXT`);
 
     // ─── Indexes ────────────────────────────────────────────────────────────
     await db.execute(sql`CREATE INDEX IF NOT EXISTS companies_workspace_idx ON companies(workspace_id)`);

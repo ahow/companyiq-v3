@@ -263,6 +263,7 @@ export const analysisResults = pgTable("analysis_results", {
   batchId: integer("batch_id").references(() => batchRuns.id).notNull(),
   frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
   frameworkName: text("framework_name").notNull(),
+  listName: text("list_name"),
   resultsData: jsonb("results_data").notNull(),
   companiesCount: integer("companies_count").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
