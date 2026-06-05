@@ -24,17 +24,55 @@ export default function ResultsPage() {
     const rows = result.resultsData || [];
     if (rows.length === 0) return;
 
-    const headers = Object.keys(rows[0]);
+    // Get all unique measure titles from the first row that has measureScores
+    const measureTitles: string[] = [];
+    for (const row of rows) {
+      if (row.measureScores && Array.isArray(row.measureScores) && row.measureScores.length > 0) {
+        row.measureScores.forEach((ms: any) => {
+          if (ms.title && !measureTitles.includes(ms.title)) {
+            measureTitles.push(ms.title);
+          }
+        });
+        break;
+      }
+    }
+
+    // Build headers: company info + each measure as a column
+    const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total"];
+    const headers = [...baseHeaders, ...measureTitles];
+
+    // Build rows
+    const csvRows = rows.map((row: any) => {
+      const baseValues = [
+        row.companyName || "",
+        row.isin || "",
+        row.sector || "",
+        row.country || "",
+        row.totalScore ?? 0,
+        row.measuresMetCount ?? "",
+        row.measuresTotalCount ?? "",
+      ];
+
+      // Map each measure title to its verdict
+      const measureValues = measureTitles.map((title) => {
+        const ms = (row.measureScores || []).find((m: any) => m.title === title);
+        return ms ? (ms.verdict || (ms.score > 0 ? "Yes" : "No")) : "";
+      });
+
+      return [...baseValues, ...measureValues];
+    });
+
+    // Escape and format CSV
+    const escapeCSV = (val: any) => {
+      const str = String(val ?? "");
+      return str.includes(",") || str.includes('"') || str.includes("\n")
+        ? `"${str.replace(/"/g, '""')}"`
+        : str;
+    };
+
     const csv = [
-      headers.join(","),
-      ...rows.map((row: any) =>
-        headers.map((h) => {
-          const val = row[h] ?? "";
-          return typeof val === "string" && (val.includes(",") || val.includes('"'))
-            ? `"${val.replace(/"/g, '""')}"`
-            : val;
-        }).join(",")
-      ),
+      headers.map(escapeCSV).join(","),
+      ...csvRows.map((row: any[]) => row.map(escapeCSV).join(",")),
     ].join("\n");
 
     const blob = new Blob([csv], { type: "text/csv" });

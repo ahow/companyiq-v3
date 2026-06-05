@@ -37,6 +37,28 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", version: "3.0.0", timestamp: new Date().toISOString() });
 });
 
+// ─── Public Share Endpoint (no auth required) ──────────────────────────────
+app.get("/api/results/:id/share", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { db } = await import("./db.js");
+    const { sql } = await import("drizzle-orm");
+    const result = await db.execute(sql`SELECT * FROM analysis_results WHERE id = ${id}`);
+    const row = (result.rows as any[])?.[0];
+    if (!row) return res.status(404).json({ error: "Result not found" });
+    res.json({
+      frameworkName: row.framework_name,
+      listName: row.list_name,
+      companiesCount: row.companies_count,
+      averageScore: row.average_score,
+      createdAt: row.created_at,
+      results: row.results_data,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.use("/api/auth", authRouter);
 app.use("/api", apiRouter);
 app.use("/api/framework-builder", frameworkBuilderRouter);
