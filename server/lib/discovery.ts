@@ -172,6 +172,52 @@ function buildGeneralQueries(companyName: string, framework: Framework): string[
   return templates.map((t) => t.replace(/\{company\}/g, companyName));
 }
 
+/**
+ * Multi-Document Sourcing Expansion
+ * 
+ * Generates additional search queries targeting three distinct document classes
+ * beyond the main sustainability/climate report:
+ * 1. Specialized Policies: Environmental & Social Risk frameworks, coal policies,
+ *    fossil fuel exclusion policies, sector-specific policies
+ * 2. Ancillary Disclosures: Sustainable finance frameworks, investor presentations,
+ *    press releases announcing targets, transition plans
+ * 3. Regulatory Filings: TCFD reports, CDP responses, transition plan disclosures
+ * 
+ * This addresses the systematic sourcing gap where evidence is scattered across
+ * multiple documents (e.g., coal exclusion in E&S policy, sustainable finance
+ * targets in investor presentations, not in the main climate report).
+ */
+function buildMultiDocumentQueries(companyName: string, framework: Framework): string[] {
+  const queries: string[] = [];
+
+  // Class 1: Specialized Policy Documents
+  queries.push(
+    `"${companyName}" environmental social policy framework`,
+    `"${companyName}" fossil fuel policy OR coal policy`,
+    `"${companyName}" sector exclusion policy`,
+    `"${companyName}" environmental and social risk framework`,
+    `"${companyName}" responsible lending policy`,
+  );
+
+  // Class 2: Ancillary Disclosures & Announcements
+  queries.push(
+    `"${companyName}" sustainable finance target OR green bond framework`,
+    `"${companyName}" transition plan OR climate transition`,
+    `"${companyName}" 2030 target announcement OR interim target`,
+    `"${companyName}" financed emissions target OR net zero commitment`,
+    `"${companyName}" investor presentation climate`,
+  );
+
+  // Class 3: Regulatory & Voluntary Framework Filings
+  queries.push(
+    `"${companyName}" TCFD report OR climate-related financial disclosures`,
+    `"${companyName}" CDP climate response OR CDP submission`,
+    `"${companyName}" NZBA progress report OR net-zero banking`,
+  );
+
+  return queries;
+}
+
 function buildDomainQueries(companyName: string, domain: string, framework: Framework): string[] {
   const baseQueries = [
     `site:${domain} sustainability report`,
@@ -565,6 +611,16 @@ export async function searchCompanyDocuments(opts: {
         for (const r of results) addCandidate(r, "variant");
       }
     }
+  }
+
+  // Lane 7: Multi-Document Sourcing Expansion
+  // Targets specialized policy documents, ancillary disclosures, and regulatory filings
+  // that are often separate from the main sustainability/climate report.
+  console.log(`[${companyName}] Running multi-document sourcing expansion lane`);
+  const multiDocQueries = buildMultiDocumentQueries(companyName, framework);
+  for (const query of multiDocQueries) {
+    const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+    for (const r of results) addCandidate(r, "multi-doc");
   }
 
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);

@@ -25,6 +25,7 @@ import * as storage from "../storage.js";
 import { searchCompanyDocuments, type DiscoveryResult } from "./discovery.js";
 import { processDocument, inferDocumentType } from "./processor.js";
 import { analyzeCompanyMeasures, type AnalysisResult } from "./analyzer.js";
+import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 export interface PipelineOptions {
@@ -257,6 +258,28 @@ async function runAnalyzePhase(opts: {
     }
   }
 
+  // ─── Temporal Validation Step ──────────────────────────────────────────────
+  // Check for policy withdrawals, target rollbacks, or material changes that
+  // would affect the currency of the evidence.
+  let temporalContext: TemporalContext | undefined;
+  try {
+    temporalContext = await runTemporalValidation({
+      companyName,
+      companyId,
+      framework,
+      documentTexts,
+      documentUrls,
+    });
+    if (temporalContext && temporalContext.withdrawals.length > 0) {
+      console.log(`[${companyName}] Temporal validation found ${temporalContext.withdrawals.length} policy withdrawals/changes`);
+      for (const w of temporalContext.withdrawals) {
+        console.log(`  - ${w.description} (detected: ${w.detectedDate || 'unknown'})`);
+      }
+    }
+  } catch (tvError: any) {
+    console.warn(`[${companyName}] Temporal validation failed (non-fatal): ${tvError.message}`);
+  }
+
   // Run the LLM analysis (framework-specific scoring)
   const analysis = await analyzeCompanyMeasures({
     workspaceId,
@@ -266,6 +289,7 @@ async function runAnalyzePhase(opts: {
     documentUrls,
     framework,
     measures,
+    temporalContext,
   });
 
   // ─── 0%-GUARD: Only persist if analysis produced meaningful results ──────

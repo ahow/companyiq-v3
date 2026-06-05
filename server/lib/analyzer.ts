@@ -77,8 +77,9 @@ function buildBinaryScoringPrompt(opts: {
   evidenceText: string;
   terminology?: TerminologyMap;
   topicDescription: string;
+  temporalWarning?: string | null;
 }): { system: string; prompt: string } {
-  const { companyName, measure, evidenceText, terminology, topicDescription } = opts;
+  const { companyName, measure, evidenceText, terminology, topicDescription, temporalWarning } = opts;
 
   let terminologyBlock = "";
   if (terminology && flattenTerms(terminology).length > 0) {
@@ -106,15 +107,49 @@ CONFIDENCE LEVELS:
 - Medium: Evidence is ambiguous or indirect
 - Low: Document corpus may be incomplete or in a language not fully analyzed
 
+CRITICAL ANTI-INFERENCE RULES:
+1. You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided.
+2. DO NOT infer that a company has a specific target or policy because they are a member of an alliance or initiative (e.g., NZBA, SBTi, Climate Action 100+). Alliance membership alone does not constitute evidence of a specific company-level commitment.
+3. DO NOT infer that a policy applies to all sectors or all activities if the text only names specific sectors. If a measure asks about "oil and gas" but the evidence only mentions "energy", you must evaluate whether the evidence explicitly confirms oil and gas is included.
+4. DO NOT conflate different types of financing activity. "Financed emissions" (balance-sheet lending, PCAF Part A) is distinct from "facilitated emissions" (capital markets underwriting, PCAF Part B). Score each strictly according to what the measure asks for.
+5. DO NOT conflate absolute emissions targets (measured in MtCO2e or % absolute reduction) with emissions intensity targets (measured in gCO2e/kWh, kgCO2e/$M invested). If the measure asks for an absolute target, an intensity-only target does not satisfy it.
+6. If the evidence does not contain an explicit, direct statement satisfying the measure, you MUST score it 0 (No or Partial), even if you believe the company likely has such a policy based on other context.
+7. Pay careful attention to the TEMPORAL VALIDITY of evidence. If the evidence indicates a policy or target has been withdrawn, discontinued, or superseded, score based on the current state, not the historical commitment.
+
 CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
 ${terminologyBlock}`;
 
-  const scoringGuidance = measure.scoringGuidance
-    ? `\nScoring guidance:\n- Yes: ${measure.scoringGuidance.yes || "Clear evidence present"}\n- No: ${measure.scoringGuidance.no || "No evidence found"}\n- Partial: ${measure.scoringGuidance.partial || "Some evidence but incomplete"}`
-    : "";
+  let scoringGuidance = "";
+  if (measure.scoringGuidance) {
+    // scoringGuidance is stored as text in DB — it may be a JSON string or plain text
+    let sg: any;
+    try {
+      sg = typeof measure.scoringGuidance === "string" 
+        ? JSON.parse(measure.scoringGuidance) 
+        : measure.scoringGuidance;
+    } catch {
+      // If it's not valid JSON, treat as plain text guidance
+      sg = { yes: measure.scoringGuidance, no: "", partial: "" };
+    }
+    scoringGuidance = `\nScoring guidance:\n- Yes: ${sg.yes || "Clear evidence present"}\n- No: ${sg.no || "No evidence found"}\n- Partial: ${sg.partial || "Some evidence but incomplete"}`;
+    // Add explicit exclusions if present in the template
+    if (sg.explicit_exclusions && Array.isArray(sg.explicit_exclusions) && sg.explicit_exclusions.length > 0) {
+      scoringGuidance += `\n\nEXPLICIT EXCLUSIONS (do NOT score Yes if only this evidence exists):\n${sg.explicit_exclusions.map((e: string) => `- ${e}`).join("\n")}`;
+    }
+    // Add required evidence type if present
+    if (sg.required_evidence_type) {
+      scoringGuidance += `\n\nREQUIRED EVIDENCE TYPE: ${sg.required_evidence_type}`;
+    }
+    // Add temporal note if present
+    if (sg.temporal_note) {
+      scoringGuidance += `\n\nTEMPORAL NOTE: ${sg.temporal_note}`;
+    }
+  }
+
+  const temporalBlock = temporalWarning ? `\n${temporalWarning}\n` : "";
 
   const prompt = `Company: ${companyName}
-
+${temporalBlock}
 MEASURE TO EVALUATE:
 Title: ${measure.title}
 Definition: ${measure.definition || measure.title}
@@ -399,8 +434,9 @@ export async function analyzeCompanyMeasures(opts: {
   documentUrls: string[];
   framework: Framework;
   measures: FrameworkMeasure[];
+  temporalContext?: { withdrawals: Array<{ type: string; description: string; affectedTopics: string[]; detectedDate: string | null; confidence: string }>; temporalWarning: string | null };
 }): Promise<AnalysisResult> {
-  const { workspaceId, companyName, companyId, documentTexts, documentUrls, framework, measures } = opts;
+  const { workspaceId, companyName, companyId, documentTexts, documentUrls, framework, measures, temporalContext } = opts;
 
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
@@ -486,6 +522,9 @@ export async function analyzeCompanyMeasures(opts: {
 
       let measureResult: MeasureResult;
 
+      // Get temporal warning if available
+      const tw = temporalContext?.temporalWarning || null;
+
       if (settings.ensembleScoring) {
         // Ensemble: run multiple passes
         measureResult = await scoreWithEnsemble({
@@ -495,6 +534,7 @@ export async function analyzeCompanyMeasures(opts: {
           terminology,
           topicDescription: framework.topicDescription || framework.name,
           settings,
+          temporalWarning: tw,
         });
       } else {
         // Single pass
@@ -505,6 +545,7 @@ export async function analyzeCompanyMeasures(opts: {
           terminology,
           topicDescription: framework.topicDescription || framework.name,
           provider: scoringProvider,
+          temporalWarning: tw,
         });
       }
 
@@ -574,8 +615,9 @@ async function scoreSingleMeasure(opts: {
   terminology?: TerminologyMap;
   topicDescription: string;
   provider: string;
+  temporalWarning?: string | null;
 }): Promise<MeasureResult> {
-  const { companyName, measure, evidenceText, terminology, topicDescription, provider } = opts;
+  const { companyName, measure, evidenceText, terminology, topicDescription, provider, temporalWarning } = opts;
 
   const { system, prompt } = buildBinaryScoringPrompt({
     companyName,
@@ -583,6 +625,7 @@ async function scoreSingleMeasure(opts: {
     evidenceText,
     terminology,
     topicDescription,
+    temporalWarning,
   });
 
   try {
@@ -639,8 +682,9 @@ async function scoreWithEnsemble(opts: {
   terminology?: TerminologyMap;
   topicDescription: string;
   settings: AnalysisSettings;
+  temporalWarning?: string | null;
 }): Promise<MeasureResult> {
-  const { companyName, measure, evidenceText, terminology, topicDescription, settings } = opts;
+  const { companyName, measure, evidenceText, terminology, topicDescription, settings, temporalWarning } = opts;
 
   const providers = [settings.pipelineLlm1, settings.pipelineLlm2, settings.pipelineLlm3];
   const iterations = Math.min(settings.ensembleIterations, providers.length);
@@ -656,6 +700,7 @@ async function scoreWithEnsemble(opts: {
       terminology,
       topicDescription,
       provider,
+      temporalWarning,
     });
     results.push(result);
   }
