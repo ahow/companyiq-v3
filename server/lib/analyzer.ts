@@ -473,8 +473,9 @@ export async function analyzeCompanyMeasures(opts: {
       }));
     }
 
-    // Score each measure
-    for (const measure of categoryMeasures) {
+    // Score measures in parallel (batch of 5 concurrent)
+    const MEASURE_CONCURRENCY = 5;
+    const scoreMeasure = async (measure: FrameworkMeasure): Promise<MeasureResult> => {
       const evidencePack = evidencePacks.find((e) => e.measureId === measure.measureId);
       const evidenceText = evidencePack?.text || "";
 
@@ -528,7 +529,14 @@ export async function analyzeCompanyMeasures(opts: {
         primaryProvider: scoringProvider,
       });
 
-      allResults.push(measureResult);
+      return measureResult;
+    };
+
+    // Process measures in concurrent batches
+    for (let i = 0; i < categoryMeasures.length; i += MEASURE_CONCURRENCY) {
+      const batch = categoryMeasures.slice(i, i + MEASURE_CONCURRENCY);
+      const batchResults = await Promise.all(batch.map(scoreMeasure));
+      allResults.push(...batchResults);
     }
   }
 

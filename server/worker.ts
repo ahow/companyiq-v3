@@ -15,7 +15,7 @@ import * as storage from "./storage.js";
 import crypto from "crypto";
 
 const QUEUE_NAME = "analysis";
-const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "5", 10);
+const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
 const JOB_TIMEOUT = parseInt(process.env.JOB_TIMEOUT_MS || "600000", 10); // 10 min default
 
 // Track cancelled batches
@@ -220,10 +220,6 @@ export function startWorker(workerId?: string): Worker {
     {
       connection,
       concurrency: MAX_CONCURRENT,
-      limiter: {
-        max: MAX_CONCURRENT,
-        duration: 1000,
-      },
       settings: {
         stalledInterval: JOB_TIMEOUT,
       },
