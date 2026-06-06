@@ -189,33 +189,38 @@ function buildGeneralQueries(companyName: string, framework: Framework): string[
  */
 function buildMultiDocumentQueries(companyName: string, framework: Framework): string[] {
   const queries: string[] = [];
+  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
 
-  // Class 1: Specialized Policy Documents
-  queries.push(
-    `"${companyName}" environmental social policy framework`,
-    `"${companyName}" fossil fuel policy OR coal policy`,
-    `"${companyName}" sector exclusion policy`,
-    `"${companyName}" environmental and social risk framework`,
-    `"${companyName}" responsible lending policy`,
-  );
+  // Only run topic-relevant queries to avoid unnecessary memory/API usage
+  const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
+  const isESGBroad = /esg|sustainability|environmental|social|governance/i.test(topic);
 
-  // Class 2: Ancillary Disclosures & Announcements
-  queries.push(
-    `"${companyName}" sustainable finance target OR green bond framework`,
-    `"${companyName}" transition plan OR climate transition`,
-    `"${companyName}" 2030 target announcement OR interim target`,
-    `"${companyName}" financed emissions target OR net zero commitment`,
-    `"${companyName}" investor presentation climate`,
-  );
+  if (isClimateRelated) {
+    // Climate-specific specialized documents (most impactful for sourcing gaps)
+    queries.push(
+      `"${companyName}" environmental social risk framework OR fossil fuel policy`,
+      `"${companyName}" transition plan OR financed emissions target`,
+      `"${companyName}" TCFD report OR CDP climate response`,
+    );
+  }
 
-  // Class 3: Regulatory & Voluntary Framework Filings
-  queries.push(
-    `"${companyName}" TCFD report OR climate-related financial disclosures`,
-    `"${companyName}" CDP climate response OR CDP submission`,
-    `"${companyName}" NZBA progress report OR net-zero banking`,
-  );
+  if (isESGBroad || isClimateRelated) {
+    // Broader ESG policy documents
+    queries.push(
+      `"${companyName}" sustainable finance framework OR green bond framework`,
+      `"${companyName}" sustainability report 2024 OR sustainability report 2023`,
+    );
+  }
 
-  return queries;
+  // Always include one general policy search (lightweight)
+  if (queries.length === 0) {
+    queries.push(
+      `"${companyName}" corporate policy framework ${topic.split(/\s+/).slice(0, 3).join(" ")}`,
+    );
+  }
+
+  // Cap at 5 queries max to control memory and API cost
+  return queries.slice(0, 5);
 }
 
 function buildDomainQueries(companyName: string, domain: string, framework: Framework): string[] {

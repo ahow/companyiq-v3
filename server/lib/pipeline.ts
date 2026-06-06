@@ -249,12 +249,26 @@ async function runAnalyzePhase(opts: {
   }
 
   // Build document texts (from stored content)
+  // Memory guard: cap total text at 500KB to prevent OOM with high concurrency
+  const MAX_TOTAL_TEXT_BYTES = 500_000;
   const documentTexts: string[] = [];
   const documentUrls: string[] = [];
+  let totalTextSize = 0;
   for (const doc of fetchedDocs) {
     if (doc.content) {
+      if (totalTextSize + doc.content.length > MAX_TOTAL_TEXT_BYTES) {
+        // Truncate this document to fit within budget
+        const remaining = MAX_TOTAL_TEXT_BYTES - totalTextSize;
+        if (remaining > 1000) {
+          documentTexts.push(doc.content.slice(0, remaining));
+          documentUrls.push(doc.url);
+        }
+        console.log(`[${companyName}] Memory guard: capped document text at ${MAX_TOTAL_TEXT_BYTES} bytes (${documentTexts.length} docs included)`);
+        break;
+      }
       documentTexts.push(doc.content);
       documentUrls.push(doc.url);
+      totalTextSize += doc.content.length;
     }
   }
 
