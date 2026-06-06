@@ -61,7 +61,7 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     pipelineLlm3: settings.pipeline_llm_3 || "gemini",
     scoringProvider: settings.scoring_provider || "deepseek",
     useBm25Retrieval: settings.use_bm25_retrieval !== "false",
-    bm25SkipSummarizationBelowChars: parseInt(settings.bm25_skip_summarization_below_chars || "400000"),
+    bm25SkipSummarizationBelowChars: parseInt(settings.bm25_skip_summarization_below_chars || "600000"),
     terminologyDiscoveryEnabled: settings.terminology_discovery_enabled !== "false",
     twoPromptExtractionEnabled: settings.two_prompt_extraction_enabled === "true",
     crossVerifyEnabled: settings.cross_verify_enabled === "true",
@@ -509,8 +509,8 @@ export async function analyzeCompanyMeasures(opts: {
       }));
     }
 
-    // Score measures in parallel (batch of 3 concurrent to control memory)
-    const MEASURE_CONCURRENCY = 3;
+    // Score measures in parallel (batch of 5 concurrent)
+    const MEASURE_CONCURRENCY = 5;
     const scoreMeasure = async (measure: FrameworkMeasure): Promise<MeasureResult> => {
       const evidencePack = evidencePacks.find((e) => e.measureId === measure.measureId);
       const evidenceText = evidencePack?.text || "";
