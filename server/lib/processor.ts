@@ -213,9 +213,22 @@ export async function processDocument(
           content = extractTextFromHtml(data);
         }
       } catch (httpError: any) {
-        // HTTP fetch failed (likely WAF/403/timeout) — try browser fallback
-        console.log(`[Processor] HTTP fetch failed for ${url} (${httpError.message}), trying browser fallback...`);
-        content = await fetchWithBrowser(url);
+        // Determine if browser fallback would be useful
+        const statusCode = httpError.response?.status;
+        const isPaywall = statusCode === 401;
+        const isCdnBlock = statusCode === 403 && /\.(pdf|xlsx|docx|csv|zip)($|\?)/i.test(url);
+
+        if (isPaywall) {
+          // 401 = paywall (WSJ, Reuters, FT) — browser won't have credentials either
+          console.log(`[Processor] HTTP fetch failed for ${url} (401 Unauthorized/paywall), skipping browser fallback`);
+        } else if (isCdnBlock) {
+          // 403 on a direct file/PDF link = CDN block — browser can't bypass
+          console.log(`[Processor] HTTP fetch failed for ${url} (403 on direct file), skipping browser fallback`);
+        } else {
+          // Timeout, 5xx, 403 on HTML page, network error — browser fallback is valuable
+          console.log(`[Processor] HTTP fetch failed for ${url} (${httpError.message}), trying browser fallback...`);
+          content = await fetchWithBrowser(url);
+        }
       }
     }
 
@@ -226,15 +239,24 @@ export async function processDocument(
     return content;
   } catch (error: any) {
     console.warn(`[Processor] Failed to process ${url}: ${error.message}`);
-    // Final fallback: try browser for any remaining failures
-    try {
-      const browserContent = await fetchWithBrowser(url);
-      if (browserContent) {
-        setCachedContent(url, browserContent);
-        return browserContent;
+    // Final fallback: try browser only if not a known-dead pattern
+    const statusCode = error.response?.status;
+    const isPaywall = statusCode === 401;
+    const isCdnBlock = statusCode === 403 && /\.(pdf|xlsx|docx|csv|zip)($|\?)/i.test(url);
+
+    if (!isPaywall && !isCdnBlock) {
+      try {
+        console.log(`[Processor] Final browser fallback for ${url}`);
+        const browserContent = await fetchWithBrowser(url);
+        if (browserContent) {
+          setCachedContent(url, browserContent);
+          return browserContent;
+        }
+      } catch (e) {
+        // Ignore
       }
-    } catch (e) {
-      // Ignore
+    } else {
+      console.log(`[Processor] Skipping final browser fallback for ${url} (${isPaywall ? '401 paywall' : '403 CDN block'})`);
     }
     return "";
   }
