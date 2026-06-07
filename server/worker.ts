@@ -87,25 +87,36 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
       console.warn(`[Worker] Job ${jobId} failed: ${result.error}`);
     }
 
-    // Check if batch is complete
-    // Increment the appropriate counter and then check totals
+    // Check if batch is complete — use atomic increment + check to avoid race conditions
     if (result.success) {
-      await storage.incrementBatchCompleted(batchId);
-    }
-    const { db } = await import("./db.js");
-    const { sql } = await import("drizzle-orm");
-    const [batchRow] = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`).then(r => r.rows) as any[];
-    if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
-      console.log(`[Worker] Batch ${batchId} complete: ${batchRow.completed_jobs} completed, ${batchRow.failed_jobs} failed`);
-      await storage.completeBatchRun(batchId);
-      // Save results after a delay to ensure all in-flight jobs finish persisting
-      setTimeout(async () => {
-        try {
-          await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
-        } catch (err: any) {
-          console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
-        }
-      }, 60000); // 1 minute delay for in-flight jobs to finish persisting
+      const batchRow = await storage.incrementBatchCompleted(batchId) as any;
+      if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
+        console.log(`[Worker] Batch ${batchId} complete: ${batchRow.completed_jobs} completed, ${batchRow.failed_jobs} failed`);
+        await storage.completeBatchRun(batchId);
+        setTimeout(async () => {
+          try {
+            await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
+          } catch (err: any) {
+            console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
+          }
+        }, 60000);
+      }
+    } else if (result.error !== "Cancelled") {
+      // For failed jobs, incrementBatchFailed was already called above — check completion
+      const { db } = await import("./db.js");
+      const { sql } = await import("drizzle-orm");
+      const [batchRow] = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`).then(r => r.rows) as any[];
+      if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
+        console.log(`[Worker] Batch ${batchId} complete: ${batchRow.completed_jobs} completed, ${batchRow.failed_jobs} failed`);
+        await storage.completeBatchRun(batchId);
+        setTimeout(async () => {
+          try {
+            await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
+          } catch (err: any) {
+            console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
+          }
+        }, 60000);
+      }
     }
 
     return result;
