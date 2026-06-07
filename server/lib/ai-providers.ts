@@ -70,7 +70,8 @@ class OpenAICompatibleProvider implements AIProvider {
   name: string;
   model: string;
   family: string;
-  private apiKey: string | undefined;
+  private apiKeys: string[];
+  private currentKeyIndex: number = 0;
   private baseUrl: string;
   private seed: number | undefined;
   private maxOutputTokens: number;
@@ -87,14 +88,23 @@ class OpenAICompatibleProvider implements AIProvider {
     this.name = config.name;
     this.model = config.model;
     this.family = config.family;
-    this.apiKey = process.env[config.apiKeyEnv];
+    // Support comma-separated keys for rotation (e.g., DEEPSEEK_API_KEY="key1,key2,key3")
+    const rawKey = process.env[config.apiKeyEnv] || "";
+    this.apiKeys = rawKey.split(",").map(k => k.trim()).filter(k => k.length > 0);
     this.baseUrl = config.baseUrl;
     this.seed = config.seed;
     this.maxOutputTokens = config.maxOutputTokens ?? 8192;
   }
 
+  private getNextKey(): string {
+    if (this.apiKeys.length === 0) throw new Error(`${this.name} not configured`);
+    const key = this.apiKeys[this.currentKeyIndex % this.apiKeys.length];
+    this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
+    return key;
+  }
+
   isAvailable(): boolean {
-    return !!this.apiKey;
+    return this.apiKeys.length > 0;
   }
 
   async complete(opts: {
@@ -104,7 +114,7 @@ class OpenAICompatibleProvider implements AIProvider {
     json?: boolean;
     temperature?: number;
   }): Promise<string> {
-    if (!this.apiKey) throw new Error(`${this.name} not configured`);
+    const apiKey = this.getNextKey();
 
     const body: any = {
       model: this.model,
@@ -124,7 +134,7 @@ class OpenAICompatibleProvider implements AIProvider {
       body,
       {
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         timeout: 120000,
