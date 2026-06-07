@@ -249,6 +249,51 @@ export function startWorker(workerId?: string): Worker {
     console.error(`[Worker] Worker error: ${error.message}`);
   });
 
+  worker.on("stalled", (jobId) => {
+    console.warn(`[Worker] Job ${jobId} stalled — will be retried`);
+  });
+
+  // Health check: detect if worker becomes disconnected from Redis
+  // BullMQ workers can silently lose their Redis connection while the Express
+  // server continues responding to HTTP requests.
+  let lastActivityTimestamp = Date.now();
+  const HEALTH_CHECK_INTERVAL = 60_000; // Check every 60 seconds
+  const MAX_IDLE_TIME = 180_000; // 3 minutes without activity = likely disconnected
+
+  worker.on("active", () => { lastActivityTimestamp = Date.now(); });
+  worker.on("completed", () => { lastActivityTimestamp = Date.now(); });
+  worker.on("failed", () => { lastActivityTimestamp = Date.now(); });
+
+  const healthCheckInterval = setInterval(async () => {
+    if (!worker) { clearInterval(healthCheckInterval); return; }
+    try {
+      // Check if there are waiting jobs but worker hasn't been active
+      const queue = (await import("./queue.js")).getQueue();
+      const waitingCount = await queue.getWaitingCount();
+      const timeSinceActivity = Date.now() - lastActivityTimestamp;
+
+      if (waitingCount > 0 && timeSinceActivity > MAX_IDLE_TIME) {
+        console.error(`[Worker] HEALTH CHECK FAILED: ${waitingCount} jobs waiting but no activity for ${Math.round(timeSinceActivity / 1000)}s — restarting worker`);
+        // Close and restart the worker
+        try {
+          await worker.close();
+        } catch (e) { /* ignore close errors */ }
+        worker = null;
+        // Restart after a brief pause
+        setTimeout(() => {
+          console.log("[Worker] Restarting after health check failure...");
+          startWorker(workerId);
+        }, 2000);
+        clearInterval(healthCheckInterval);
+      } else if (waitingCount > 0) {
+        // Jobs are waiting but we've been active recently — normal
+        console.log(`[Worker] Health OK: ${waitingCount} jobs waiting, last active ${Math.round(timeSinceActivity / 1000)}s ago`);
+      }
+    } catch (err: any) {
+      console.warn(`[Worker] Health check error (non-fatal): ${err.message}`);
+    }
+  }, HEALTH_CHECK_INTERVAL);
+
   console.log(`[Worker] Started with concurrency=${MAX_CONCURRENT}, timeout=${JOB_TIMEOUT}ms`);
   return worker;
 }
