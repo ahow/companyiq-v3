@@ -37,9 +37,16 @@ export default function ResultsPage() {
       }
     }
 
-    // Build headers: company info + each measure as a column
+    // Build headers: company info + each measure (verdict + rationale + sources) + source documents
     const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total"];
-    const headers = [...baseHeaders, ...measureTitles];
+    // For each measure, add three columns: Verdict, Rationale, Sources
+    const measureHeaders: string[] = [];
+    for (const title of measureTitles) {
+      measureHeaders.push(`${title} - Verdict`);
+      measureHeaders.push(`${title} - Rationale`);
+      measureHeaders.push(`${title} - Sources`);
+    }
+    const headers = [...baseHeaders, ...measureHeaders, "Source Documents"];
 
     // Build rows
     const csvRows = rows.map((row: any) => {
@@ -53,13 +60,37 @@ export default function ResultsPage() {
         row.measuresTotalCount ?? "",
       ];
 
-      // Map each measure title to its verdict
-      const measureValues = measureTitles.map((title) => {
+      // Map each measure title to verdict + rationale + sources
+      const measureValues: string[] = [];
+      for (const title of measureTitles) {
         const ms = (row.measureScores || []).find((m: any) => m.title === title);
-        return ms ? (ms.verdict || (ms.score > 0 ? "Yes" : "No")) : "";
-      });
+        if (ms) {
+          // Verdict
+          measureValues.push(ms.verdict || (ms.score > 0 ? "Yes" : "No"));
+          // Rationale: combine evidenceSummary and quotes
+          const quotes = (ms.quotes || []).map((q: any) => q.text).filter(Boolean);
+          const rationale = quotes.length > 0 
+            ? quotes.join(" | ") 
+            : (ms.evidenceSummary || "");
+          measureValues.push(rationale);
+          // Sources: URLs from quotes
+          const sources = (ms.quotes || [])
+            .map((q: any) => q.source)
+            .filter((s: string) => s && s.startsWith("http"));
+          const uniqueSources = [...new Set(sources)];
+          measureValues.push(uniqueSources.join(" ; "));
+        } else {
+          measureValues.push("", "", "");
+        }
+      }
 
-      return [...baseValues, ...measureValues];
+      // Source documents used for this company
+      const sourceDocs = (row.sourceDocuments || [])
+        .map((d: any) => d.url || d.title || "")
+        .filter(Boolean)
+        .join(" ; ");
+
+      return [...baseValues, ...measureValues, sourceDocs];
     });
 
     // Escape and format CSV

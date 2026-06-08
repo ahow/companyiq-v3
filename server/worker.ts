@@ -163,6 +163,9 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       if (company.analysisStatus !== "completed") continue;
 
       const scores = await storage.getMeasureScores(company.id, frameworkId);
+      // Get source documents used in analysis
+      const docs = await storage.getFetchedDocuments(company.id);
+      const sourceDocuments = docs.map(d => ({ url: d.url, title: d.title || d.url }));
       resultsData.push({
         companyId: company.id,
         companyName: company.name,
@@ -173,6 +176,7 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         measuresMetCount: company.measuresMetCount || 0,
         measuresTotalCount: company.measuresTotalCount || 0,
         summary: company.summary || undefined,
+        sourceDocuments,
         measureScores: scores.map(s => ({
           measureId: s.measureId,
           title: s.title || "",
@@ -180,17 +184,42 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
           score: s.score,
           verdict: s.verdict || undefined,
           evidenceSummary: s.evidenceSummary || undefined,
+          quotes: s.quotes || [],
         })),
       });
     }
 
     if (resultsData.length === 0) return;
-
     // Get list name
     let listName: string | undefined;
     if (listId) {
       const list = await storage.getListById(listId, workspaceId);
       listName = list?.name;
+    }
+    // Fallback: if no listId stored, try to infer from company membership
+    if (!listName) {
+      try {
+        const { db } = await import("./db.js");
+        const { sql } = await import("drizzle-orm");
+        const companyIds = resultsData.map(r => r.companyId);
+        // Find lists where ALL companies in this batch are members
+        const listResult = await db.execute(sql`
+          SELECT cl.id, cl.name, COUNT(clm.company_id) as match_count
+          FROM company_lists cl
+          JOIN company_list_members clm ON clm.list_id = cl.id
+          WHERE cl.workspace_id = ${workspaceId}
+            AND clm.company_id = ANY(ARRAY[${sql.raw(companyIds.join(","))}]::int[])
+          GROUP BY cl.id, cl.name
+          HAVING COUNT(clm.company_id) = ${companyIds.length}
+          ORDER BY cl.id DESC
+          LIMIT 1
+        `);
+        if (listResult.rows.length > 0) {
+          listName = (listResult.rows[0] as any).name;
+        }
+      } catch (err) {
+        // Non-critical fallback, ignore errors
+      }
     }
 
     // Calculate average score
