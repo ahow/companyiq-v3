@@ -251,10 +251,12 @@ async function runAnalyzePhase(opts: {
   // Build document texts (from stored content)
   const documentTexts: string[] = [];
   const documentUrls: string[] = [];
+  const documentTitles: string[] = [];
   for (const doc of fetchedDocs) {
     if (doc.content) {
       documentTexts.push(doc.content);
       documentUrls.push(doc.url);
+      documentTitles.push(doc.title || doc.url);
     }
   }
 
@@ -287,6 +289,7 @@ async function runAnalyzePhase(opts: {
     companyId,
     documentTexts,
     documentUrls,
+    documentTitles,
     framework,
     measures,
     temporalContext,

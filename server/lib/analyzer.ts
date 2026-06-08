@@ -117,6 +117,7 @@ CRITICAL ANTI-INFERENCE RULES:
 7. Pay careful attention to the TEMPORAL VALIDITY of evidence. If the evidence indicates a policy or target has been withdrawn, discontinued, or superseded, score based on the current state, not the historical commitment.
 
 CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
+CRITICAL: For the "source" field in quotes, you MUST use the EXACT document title as it appears in the "--- DOCUMENT: <title> [<url>] ---" headers in the evidence text. Use the title portion (before the [url]), not an invented or paraphrased name.
 ${terminologyBlock}`;
 
   let scoringGuidance = "";
@@ -164,7 +165,7 @@ Evaluate this measure and return a JSON object with exactly these fields:
   "verdict": "Yes" | "No" | "Partial",
   "confidence": "High" | "Medium" | "Low",
   "evidenceSummary": "One paragraph explaining your assessment",
-  "quotes": [{"text": "verbatim quote from evidence", "source": "document URL or title"}],
+  "quotes": [{"text": "verbatim quote from evidence", "source": "exact document title from --- DOCUMENT: <title> [url] --- header"}],
   "verdictNuance": "optional caveats or notes" or null
 }`;
 
@@ -311,9 +312,10 @@ async function summarizeDocuments(opts: {
   companyId: number;
   documentTexts: string[];
   documentUrls: string[];
+  documentTitles?: string[];
   topicDescription: string;
 }): Promise<{ text: string; model: string }> {
-  const { companyName, companyId, documentTexts, documentUrls, topicDescription } = opts;
+  const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription } = opts;
 
   // Check summary cache
   const docHash = generateDocumentHash(documentUrls);
@@ -368,7 +370,8 @@ async function summarizeDocuments(opts: {
   for (const entry of docEntries) {
     const isProxy = /proxy|def.?14a|annual.?report|20-f|40-f/i.test(entry.url);
     const cap = isProxy ? RAW_PASS_CAP_PROXY : RAW_PASS_CAP_DEFAULT;
-    combined += `\n\n--- DOCUMENT: ${entry.url} ---\n\n` + entry.text.slice(0, cap);
+    const docTitle = documentTitles?.[entry.idx] || entry.url;
+    combined += `\n\n--- DOCUMENT: ${docTitle} [${entry.url}] ---\n\n` + entry.text.slice(0, cap);
   }
 
   // If total is small enough, skip summarization and use BM25 directly
@@ -432,11 +435,12 @@ export async function analyzeCompanyMeasures(opts: {
   companyId: number;
   documentTexts: string[];
   documentUrls: string[];
+  documentTitles?: string[];
   framework: Framework;
   measures: FrameworkMeasure[];
   temporalContext?: { withdrawals: Array<{ type: string; description: string; affectedTopics: string[]; detectedDate: string | null; confidence: string }>; temporalWarning: string | null };
 }): Promise<AnalysisResult> {
-  const { workspaceId, companyName, companyId, documentTexts, documentUrls, framework, measures, temporalContext } = opts;
+  const { workspaceId, companyName, companyId, documentTexts, documentUrls, documentTitles, framework, measures, temporalContext } = opts;
 
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
@@ -461,8 +465,12 @@ export async function analyzeCompanyMeasures(opts: {
   let summarizerModel: string;
 
   if (settings.useBm25Retrieval && totalChars <= settings.bm25SkipSummarizationBelowChars) {
-    // BM25-skip path: use raw text directly
-    combinedText = documentTexts.join("\n\n");
+    // BM25-skip path: use raw text directly with document title headers
+    combinedText = documentTexts.map((text, idx) => {
+      const title = documentTitles?.[idx] || documentUrls[idx] || `Document ${idx + 1}`;
+      const url = documentUrls[idx] || "";
+      return `\n\n--- DOCUMENT: ${title} [${url}] ---\n\n${text}`;
+    }).join("");
     summarizerModel = "bm25-direct";
     console.log(`[${companyName}] BM25-skip path (${totalChars} chars < ${settings.bm25SkipSummarizationBelowChars})`);
   } else {
@@ -471,6 +479,7 @@ export async function analyzeCompanyMeasures(opts: {
       companyId,
       documentTexts,
       documentUrls,
+      documentTitles,
       topicDescription: framework.topicDescription || framework.name,
     });
     combinedText = result.text;
