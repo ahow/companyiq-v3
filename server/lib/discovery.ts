@@ -123,17 +123,18 @@ async function generateQueryVariants(
   if (numVariants <= 0) return [];
 
   try {
+    const topicDesc = framework.topicDescription || framework.name;
     const { text } = await completeWithFallback("deepseek", {
-      system: `You generate search query variants for corporate document discovery. Given base search queries about a company, generate alternative phrasings that would find the same or similar documents but using different keywords, synonyms, or angles. Focus on finding sustainability reports, ESG disclosures, policy documents, and governance materials.`,
+      system: `You generate search query variants for corporate document discovery. Given base search queries about a company, generate alternative phrasings that would find the same or similar documents but using different keywords, synonyms, or angles. Focus on finding documents relevant to: ${topicDesc}. Generate queries that target the specific topic — do NOT default to generic sustainability/ESG queries unless the topic is explicitly about sustainability.`,
       prompt: `Company: ${companyName}
-Topic: ${framework.topicDescription || framework.name}
+Topic: ${topicDesc}
 
 Base queries:
 ${baseQueries.slice(0, 4).map((q, i) => `${i + 1}. ${q}`).join("\n")}
 
-Generate ${numVariants} alternative search queries that would find similar corporate disclosure documents using different keywords or phrasings. Return ONLY a JSON array of strings.
+Generate ${numVariants} alternative search queries that would find corporate disclosure documents relevant to the topic described above. Use different keywords, synonyms, or angles specific to that topic. Return ONLY a JSON array of strings.
 
-Example: ["HSBC climate risk disclosure 2024", "HSBC net zero transition plan", "HSBC financed emissions report"]`,
+IMPORTANT: The queries MUST be relevant to the topic "${framework.name}". Do NOT generate generic sustainability/ESG queries unless that IS the topic.`,
       json: true,
       maxTokens: 500,
     });
@@ -161,15 +162,46 @@ interface DiscoveryCandidate {
 
 function buildGeneralQueries(companyName: string, framework: Framework): string[] {
   const topic = framework.topicDescription || framework.name;
-  const templates = framework.searchTemplates || [
-    `"${companyName}" sustainability report`,
-    `"${companyName}" ESG report`,
-    `"${companyName}" corporate responsibility report`,
-    `"${companyName}" annual report governance`,
-    `"${companyName}" ${topic}`,
-    `"${companyName}" policy framework`,
-  ];
-  return templates.map((t) => t.replace(/\{company\}/g, companyName));
+  const frameworkName = (framework.name || "").toLowerCase();
+  
+  // If framework has explicit search templates, use them
+  if (framework.searchTemplates && framework.searchTemplates.length > 0) {
+    return framework.searchTemplates.map((t) => t.replace(/\{company\}/g, companyName));
+  }
+  
+  // Otherwise generate topic-aware fallback queries
+  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+  const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
+  
+  if (isAIRelated) {
+    return [
+      `"${companyName}" AI strategy`,
+      `"${companyName}" artificial intelligence governance`,
+      `"${companyName}" responsible AI`,
+      `"${companyName}" AI policy`,
+      `"${companyName}" AI annual report`,
+      `"${companyName}" machine learning governance`,
+    ];
+  } else if (isClimateRelated) {
+    return [
+      `"${companyName}" sustainability report`,
+      `"${companyName}" climate report`,
+      `"${companyName}" TCFD report`,
+      `"${companyName}" net zero target`,
+      `"${companyName}" transition plan`,
+      `"${companyName}" emissions report`,
+    ];
+  } else {
+    // Generic fallback using topic words
+    return [
+      `"${companyName}" ${topic}`,
+      `"${companyName}" annual report`,
+      `"${companyName}" governance`,
+      `"${companyName}" policy framework`,
+      `"${companyName}" corporate responsibility report`,
+      `"${companyName}" ESG report`,
+    ];
+  }
 }
 
 /**
@@ -230,43 +262,111 @@ function buildMultiDocumentQueries(companyName: string, framework: Framework): s
       `"${companyName}" CDP response OR sustainability disclosure`,
     );
   } else {
-    // General topic: search for policy documents related to the framework topic
-    const topicWords = topic.split(/\s+/).slice(0, 4).join(" ");
-    queries.push(
-      `"${companyName}" ${topicWords} policy OR framework`,
-      `"${companyName}" ${topicWords} report OR disclosure`,
-      `"${companyName}" ${topicWords} governance OR strategy`,
-    );
+    // Topic-aware multi-document expansion for non-climate/ESG topics
+    // Extract meaningful topic keywords for search
+    const topicWords = topic.split(/\s+/).filter(w => w.length > 3).slice(0, 5).join(" ");
+    const frameworkName = (framework.name || "").toLowerCase();
+
+    // AI/Technology-specific queries
+    const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+    if (isAIRelated) {
+      // Class 1: AI Policy & Governance Documents
+      queries.push(
+        `"${companyName}" responsible AI policy OR AI ethics policy`,
+        `"${companyName}" AI governance framework OR AI principles`,
+        `"${companyName}" artificial intelligence strategy OR AI roadmap`,
+        `"${companyName}" AI risk management OR AI risk framework`,
+        `"${companyName}" AI transparency report OR algorithmic accountability`,
+      );
+      // Class 2: AI Deployment & Use Cases
+      queries.push(
+        `"${companyName}" AI use cases OR machine learning deployment`,
+        `"${companyName}" generative AI OR large language model`,
+        `"${companyName}" AI investment OR AI budget OR AI spending`,
+        `"${companyName}" AI partnership OR AI collaboration`,
+      );
+      // Class 3: AI Governance & Oversight
+      queries.push(
+        `"${companyName}" AI board oversight OR AI committee`,
+        `"${companyName}" chief AI officer OR head of AI`,
+        `"${companyName}" AI bias OR AI fairness OR AI audit`,
+        `"${companyName}" EU AI Act compliance OR AI regulation`,
+      );
+    } else {
+      // Generic topic-aware queries
+      queries.push(
+        `"${companyName}" ${topicWords} policy OR framework`,
+        `"${companyName}" ${topicWords} report OR disclosure`,
+        `"${companyName}" ${topicWords} governance OR strategy`,
+        `"${companyName}" ${topicWords} annual report`,
+        `"${companyName}" ${topicWords} risk management`,
+      );
+    }
   }
 
   return queries;
 }
 
 function buildDomainQueries(companyName: string, domain: string, framework: Framework): string[] {
+  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+  const frameworkName = (framework.name || "").toLowerCase();
+
+  // Always include generic corporate disclosure queries
   const baseQueries = [
-    `site:${domain} sustainability report`,
-    `site:${domain} governance`,
-    `site:${domain} ESG`,
     `site:${domain} annual report`,
+    `site:${domain} governance`,
     `site:${domain} policy`,
     `site:${domain}/investors`,
   ];
 
-  // AI-specific domain queries to find AI governance disclosures
-  const aiQueries = [
-    `site:${domain} responsible AI`,
-    `site:${domain} AI policy`,
-    `site:${domain} artificial intelligence`,
-    `site:${domain} AI ethics`,
-    `site:${domain} AI governance`,
-    `site:${domain} AI principles`,
-    `site:${domain} machine learning`,
-    `site:${domain} AI risk`,
-    `site:${domain} AI transparency`,
-    `site:${domain} data privacy AI`,
-  ];
+  // Topic-specific domain queries
+  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+  const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
+  const isESGBroad = /esg|sustainability|environmental|social/i.test(topic);
 
-  return [...baseQueries, ...aiQueries];
+  if (isAIRelated) {
+    baseQueries.push(
+      `site:${domain} responsible AI`,
+      `site:${domain} AI policy`,
+      `site:${domain} artificial intelligence`,
+      `site:${domain} AI ethics`,
+      `site:${domain} AI governance`,
+      `site:${domain} AI principles`,
+      `site:${domain} machine learning`,
+      `site:${domain} AI risk`,
+      `site:${domain} AI transparency`,
+      `site:${domain} data privacy AI`,
+      `site:${domain} AI strategy`,
+      `site:${domain} generative AI`,
+    );
+  } else if (isClimateRelated) {
+    baseQueries.push(
+      `site:${domain} sustainability report`,
+      `site:${domain} ESG`,
+      `site:${domain} climate report`,
+      `site:${domain} TCFD`,
+      `site:${domain} net zero`,
+      `site:${domain} emissions`,
+      `site:${domain} transition plan`,
+    );
+  } else if (isESGBroad) {
+    baseQueries.push(
+      `site:${domain} sustainability report`,
+      `site:${domain} ESG`,
+      `site:${domain} corporate responsibility`,
+      `site:${domain} sustainability`,
+    );
+  } else {
+    // Generic topic-aware queries
+    const topicWords = topic.split(/\s+/).filter(w => w.length > 3).slice(0, 3).join(" ");
+    baseQueries.push(
+      `site:${domain} ${topicWords}`,
+      `site:${domain} sustainability report`,
+      `site:${domain} ESG`,
+    );
+  }
+
+  return baseQueries;
 }
 
 function buildTrustedSourceQueries(companyName: string, sources: TrustedSource[]): string[] {

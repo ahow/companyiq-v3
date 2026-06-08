@@ -450,7 +450,7 @@ export default function FrameworkPage() {
                   <Globe className="w-3.5 h-3.5 text-blue-500" /> Linked Trusted Sources
                 </label>
                 <p className="text-[11px] text-gray-500 mb-2">
-                  Select which trusted sources should be specifically searched for this framework. During discovery, the system will run <code className="bg-gray-100 px-1 rounded">site:domain.com "Company Name"</code> for each linked source.
+                  Select <strong>only topic-relevant</strong> trusted sources for this framework. Only link sources where searching the domain would plausibly return documents with evidence for this framework's measures. Generic filing repositories (SEC, Companies House) are always useful. Topic-specific sources (e.g., CDP for climate, OECD AI for AI governance) should only be linked when relevant to this framework's topic.
                 </p>
                 {trustedSources && trustedSources.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">

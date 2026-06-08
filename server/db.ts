@@ -364,22 +364,33 @@ async function seedDefaultSettings(): Promise<void> {
   };
 
   const defaultTrustedSources = [
-    { name: "Banking on Climate Chaos", domain: "bankingonclimatechaos.org", description: "Banks' fossil fuel financing activities" },
-    { name: "CDP", domain: "cdp.net", description: "CDP climate and environmental disclosures" },
-    { name: "Coal Policy Tool", domain: "coalpolicytool.org", description: "Banks' coal financing policies" },
-    { name: "GRI", domain: "globalreporting.org", description: "GRI sustainability reporting standards" },
-    { name: "Net Zero Asset Managers", domain: "netzeroassetmanagers.org", description: "Asset managers' net-zero progress" },
-    { name: "NIST", domain: "nist.gov", description: "NIST AI Risk Management Framework" },
-    { name: "OECD", domain: "oecd.org", description: "OECD AI principles and policy observatory" },
-    { name: "Oil & Gas Policy Tracker", domain: "oilgaspolicytracker.org", description: "Banks' oil and gas financing policies" },
-    { name: "Partnership on AI", domain: "partnershiponai.org", description: "Partnership on AI research and guidelines" },
-    { name: "Responsible AI Institute", domain: "responsibleai.org", description: "Responsible AI certifications" },
-    { name: "SBTi", domain: "sciencebasedtargets.org", description: "Science-based emissions reduction targets" },
+    // Generic filing repositories (relevant to ALL frameworks)
     { name: "US SEC", domain: "sec.gov", description: "US SEC filings - 10-K, DEF14A, proxy statements" },
-    { name: "TCFD Hub", domain: "tcfdhub.org", description: "TCFD-related disclosures and guidance" },
+    { name: "UK Companies House", domain: "find-and-update.company-information.service.gov.uk", description: "UK annual reports and accounts" },
+    // AI Governance & Technology
+    { name: "NIST", domain: "nist.gov", description: "NIST AI Risk Management Framework and standards" },
+    { name: "OECD AI", domain: "oecd.ai", description: "OECD AI Policy Observatory - principles, country policies, company commitments" },
+    { name: "Partnership on AI", domain: "partnershiponai.org", description: "Multi-stakeholder AI governance research and guidelines" },
+    { name: "Responsible AI Institute", domain: "responsibleai.org", description: "Responsible AI certifications and assessments" },
+    { name: "Evident AI Index", domain: "evidentinsights.com", description: "AI maturity benchmarking for financial institutions" },
+    { name: "World Economic Forum", domain: "weforum.org", description: "AI governance frameworks and corporate pledges" },
+    { name: "EU AI Act", domain: "artificialintelligenceact.eu", description: "EU AI Act compliance and high-risk AI systems registry" },
+    // Climate & Emissions
+    { name: "CDP", domain: "cdp.net", description: "CDP climate, water, and forest disclosures" },
+    { name: "SBTi", domain: "sciencebasedtargets.org", description: "Science-based emissions reduction targets" },
+    { name: "TCFD Hub", domain: "tcfdhub.org", description: "TCFD-aligned climate disclosures" },
     { name: "UNEP FI", domain: "unepfi.org", description: "Net Zero Banking Alliance materials" },
-    { name: "UN Global Compact", domain: "unglobalcompact.org", description: "UN Global Compact sustainability reports" },
-    { name: "Company Reports", domain: "company.com", description: "Company sustainability reports" },
+    { name: "Banking on Climate Chaos", domain: "bankingonclimatechaos.org", description: "Banks' fossil fuel financing activities" },
+    { name: "Coal Policy Tool", domain: "coalpolicytool.org", description: "Banks' coal financing policies" },
+    { name: "Oil & Gas Policy Tracker", domain: "oilgaspolicytracker.org", description: "Banks' oil and gas financing policies" },
+    { name: "Net Zero Asset Managers", domain: "netzeroassetmanagers.org", description: "Asset managers' net-zero progress" },
+    // ESG & Sustainability (broad)
+    { name: "GRI", domain: "globalreporting.org", description: "GRI sustainability reporting standards" },
+    { name: "UN Global Compact", domain: "unglobalcompact.org", description: "UN Global Compact sustainability commitments" },
+    { name: "PRI", domain: "unpri.org", description: "Principles for Responsible Investment signatory reports" },
+    // Human Rights & Social
+    { name: "Modern Slavery Registry", domain: "modernslaveryregistry.org", description: "UK Modern Slavery Act statements" },
+    { name: "Business & Human Rights", domain: "business-humanrights.org", description: "Corporate human rights tracking" },
   ];
 
   for (const row of workspaces.rows as any[]) {

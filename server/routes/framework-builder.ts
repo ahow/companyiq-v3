@@ -322,18 +322,72 @@ ADDITIONAL GUIDELINES:
   (f) Anti-ambiguous — explicit exclusions and boundary rules prevent common misinterpretations
 
 TRUSTED SOURCES:
-The platform has a catalog of trusted disclosure sources that can be assigned to frameworks. When generating a framework, you MUST suggest 5-20 relevant trusted sources from this catalog AND/OR suggest new ones. These sources will be searched specifically during company analysis.
+The platform has a catalog of trusted disclosure sources that can be assigned to frameworks. When generating a framework, you MUST select ONLY sources that are directly relevant to the framework's specific topic. Do NOT include climate/ESG sources for an AI governance framework, or AI sources for a climate framework.
 
-Available source categories:
-- Statutory/securities filing repositories: SEC EDGAR, UK FCA NSM, Companies House, SEDAR+, EDINET, HKEXnews, ASX, etc.
-- UK-specific statutory: Modern Slavery Registry, Gender Pay Gap Service, FCA SDR
-- Country-specific ESG registries: Australia Modern Slavery Register, Canada Bill S-211, US EPA TRI, EU E-PRTR, French Devoir de Vigilance, etc.
-- Voluntary global frameworks: CDP, TNFD, SBTi, SBTN, UN Global Compact
-- Finance-sector pledges: NZAM, NZAOA, PRI, UNEP FI PRB/PSI, Equator Principles, PCAF, etc.
-- UN-backed campaigns: Race to Zero, Race to Resilience, RE100, EV100, EP100, UN WEPs
-- Sector-specific registries: EITI, ICMM, RSPO, FSC, PEFC, IRMA, ASI, Bonsucro, etc.
-- Certification registries: B Corp, IAF CertSearch, LEED, BREEAM, WELL, ResponsibleSteel, etc.
-- National companies registers: EU BRIS, Handelsregister, data.inpi.fr, KvK, etc.
+CRITICAL RULE: Only include trusted sources where searching "site:{domain} {company name}" would plausibly return documents containing evidence relevant to THIS SPECIFIC framework's measures. If a source is primarily about a different topic, do NOT include it even if it is a well-known platform.
+
+─── GENERIC SOURCES (include for ALL frameworks) ───
+These are always relevant regardless of topic:
+- US SEC EDGAR (sec.gov): 10-K filings, proxy statements, annual reports — contain governance, strategy, and risk disclosures on all topics
+- UK Companies House (find-and-update.company-information.service.gov.uk): Annual reports and accounts
+- EU ESAP (esap.europa.eu): European Single Access Point for corporate disclosures
+
+─── TOPIC-SPECIFIC SOURCE CATALOG ───
+Only include sources from the category matching your framework's topic:
+
+**AI Governance & Technology:**
+- Partnership on AI (partnershiponai.org): Multi-stakeholder AI governance research and guidelines
+- Responsible AI Institute (responsibleai.org): AI certification and assessment programs
+- OECD AI Policy Observatory (oecd.ai): OECD AI principles, country policies, and company commitments
+- NIST AI (nist.gov): NIST AI Risk Management Framework and related standards
+- AI Incident Database (incidentdatabase.ai): Documented AI incidents and failures
+- Evident AI Index (evidentinsights.com): AI maturity benchmarking for financial institutions
+- Stanford HAI (hai.stanford.edu): AI governance research and corporate AI assessments
+- MIT AI Ethics (aiethics.mit.edu): Academic AI ethics research
+- World Economic Forum AI (weforum.org): AI governance frameworks and corporate pledges
+- EU AI Act Registry (artificialintelligenceact.eu): EU AI Act compliance and high-risk AI systems
+
+**Climate & Emissions:**
+- CDP (cdp.net): Climate, water, and forest disclosures
+- SBTi (sciencebasedtargets.org): Science-based emissions reduction targets
+- TCFD Hub (tcfdhub.org): TCFD-aligned climate disclosures
+- UNEP FI (unepfi.org): Net Zero Banking Alliance, PRB materials
+- Banking on Climate Chaos (bankingonclimatechaos.org): Banks' fossil fuel financing
+- Coal Policy Tool (coalpolicytool.org): Banks' coal financing policies
+- Oil & Gas Policy Tracker (oilgaspolicytracker.org): Banks' oil and gas policies
+- Net Zero Asset Managers (netzeroassetmanagers.org): Asset managers' net-zero progress
+- PCAF (carbonaccountingfinancials.com): Financed emissions methodology and reporting
+
+**ESG & Sustainability (broad):**
+- GRI (globalreporting.org): GRI sustainability reporting standards
+- UN Global Compact (unglobalcompact.org): UNGC sustainability commitments
+- TNFD (tnfd.global): Taskforce on Nature-related Financial Disclosures
+- PRI (unpri.org): Principles for Responsible Investment signatory reports
+- B Corp (bcorporation.net): B Corp certification assessments
+
+**Human Rights & Social:**
+- UK Modern Slavery Registry (modernslaveryregistry.org): Modern slavery statements
+- Business & Human Rights Resource Centre (business-humanrights.org): Corporate human rights tracking
+- KnowTheChain (knowthechain.org): Supply chain forced labor benchmarks
+- Gender Pay Gap Service (gender-pay-gap.service.gov.uk): UK gender pay gap reports
+
+**Biodiversity & Nature:**
+- TNFD (tnfd.global): Nature-related risk disclosures
+- SBTN (sciencebasedtargetsnetwork.org): Science-based targets for nature
+- CDP Forests (cdp.net): Forest-related disclosures
+
+**Finance-Sector Specific:**
+- Equator Principles (equator-principles.com): Project finance environmental standards
+- PCAF (carbonaccountingfinancials.com): Financed emissions accounting
+- NZBA (unepfi.org): Net Zero Banking Alliance commitments
+
+**Sector-Specific Registries:**
+- EITI (eiti.org): Extractive Industries Transparency Initiative
+- ICMM (icmm.com): Mining and metals sustainability
+- RSPO (rspo.org): Sustainable palm oil certification
+- FSC (fsc.org): Forest stewardship certification
+
+You may also suggest NEW sources not in this catalog if they are specifically relevant to the framework topic. Mark these with "(NEW — not in platform catalog)" in the reason field so the user knows they will be added.
 
 WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON block in your response. The JSON must follow this exact structure:
 \`\`\`json
