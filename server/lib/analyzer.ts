@@ -242,6 +242,97 @@ function verifyQuoteProvenance(
   return { found: false, similarity: 0 };
 }
 
+// ─── Source Normalization ────────────────────────────────────────────────────
+
+/**
+ * Normalize quote sources to match actual document titles from the evidence text.
+ * The evidence text contains headers like: --- DOCUMENT: <title> [<url>] ---
+ * If the LLM returned a source that doesn't match any document title, find the
+ * best match or fall back to the document where the quote text was found.
+ */
+function normalizeQuoteSources(
+  quotes: Array<{ text: string; source: string; page?: number }>,
+  evidenceText: string
+): Array<{ text: string; source: string; page?: number }> {
+  // Extract all document titles from the evidence text headers
+  const headerPattern = /--- DOCUMENT: (.+?) \[(.+?)\] ---/g;
+  const documentHeaders: Array<{ title: string; url: string; startIdx: number }> = [];
+  let match;
+  while ((match = headerPattern.exec(evidenceText)) !== null) {
+    documentHeaders.push({ title: match[1].trim(), url: match[2].trim(), startIdx: match.index });
+  }
+
+  if (documentHeaders.length === 0) return quotes;
+
+  // Build a set of valid document titles for quick lookup
+  const validTitles = new Set(documentHeaders.map(h => h.title.toLowerCase()));
+
+  return quotes.map(quote => {
+    // Check if the source already matches a valid document title
+    if (quote.source && validTitles.has(quote.source.toLowerCase())) {
+      return quote;
+    }
+
+    // Source doesn't match any document title — try to find the correct one
+    let bestSource = quote.source;
+
+    // Strategy 1: Find which document contains the quote text
+    if (quote.text) {
+      const normalizedQuote = quote.text.replace(/\s+/g, " ").trim().toLowerCase();
+      const normalizedEvidence = evidenceText.toLowerCase();
+      const quoteIdx = normalizedEvidence.indexOf(normalizedQuote.slice(0, 80));
+
+      if (quoteIdx >= 0) {
+        // Find the document header that precedes this quote position
+        let containingDoc = documentHeaders[0];
+        for (const header of documentHeaders) {
+          if (header.startIdx <= quoteIdx) {
+            containingDoc = header;
+          } else {
+            break;
+          }
+        }
+        bestSource = containingDoc.title;
+      }
+    }
+
+    // Strategy 2: Fuzzy match the source string against document titles
+    if (bestSource === quote.source && quote.source) {
+      const sourceLower = quote.source.toLowerCase();
+      let bestSimilarity = 0;
+      let bestMatch = "";
+
+      for (const header of documentHeaders) {
+        const titleLower = header.title.toLowerCase();
+        // Check if source is a substring of a title or vice versa
+        if (titleLower.includes(sourceLower) || sourceLower.includes(titleLower)) {
+          bestSource = header.title;
+          break;
+        }
+        // Simple word overlap similarity
+        const sourceWords = new Set(sourceLower.split(/\s+/));
+        const titleWords = titleLower.split(/\s+/);
+        const overlap = titleWords.filter(w => sourceWords.has(w)).length;
+        const similarity = overlap / Math.max(sourceWords.size, titleWords.length);
+        if (similarity > bestSimilarity && similarity > 0.3) {
+          bestSimilarity = similarity;
+          bestMatch = header.title;
+        }
+      }
+      if (bestMatch && bestSource === quote.source) {
+        bestSource = bestMatch;
+      }
+    }
+
+    // Strategy 3: If still no match, use the first document as fallback
+    if (bestSource === quote.source || !bestSource) {
+      bestSource = documentHeaders[0].title;
+    }
+
+    return { ...quote, source: bestSource };
+  });
+}
+
 // ─── Contradiction Detection + Tie-Breaker ───────────────────────────────────
 
 async function detectAndResolvContradiction(opts: {
@@ -569,6 +660,11 @@ export async function analyzeCompanyMeasures(opts: {
           measureResult.verdictNuance = (measureResult.verdictNuance || "") +
             " [Note: Some quotes could not be verified verbatim in source text]";
         }
+      }
+
+      // Source normalization: ensure quote sources match actual document titles
+      if (measureResult.quotes.length > 0) {
+        measureResult.quotes = normalizeQuoteSources(measureResult.quotes, finalEvidence);
       }
 
       // Contradiction detection + tie-breaker

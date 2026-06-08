@@ -4,7 +4,8 @@
  * Implements fair-share scheduling across workspaces:
  * - Each workspace gets equal processing priority regardless of batch size
  * - Configurable concurrency per worker instance
- * - Automatic retry with exponential backoff
+ * - Automatic retry with exponential backoff (up to 3 attempts)
+ * - Jobs that fail all 3 attempts are marked "failed" and batch progress updates
  * - Graceful shutdown handling
  */
 
@@ -17,6 +18,8 @@ import crypto from "crypto";
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
 const JOB_TIMEOUT = parseInt(process.env.JOB_TIMEOUT_MS || "600000", 10); // 10 min default
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 30000; // 30 seconds between retries
 
 // Track cancelled batches
 const cancelledBatches = new Set<number>();
@@ -30,6 +33,45 @@ export interface AnalysisJobData {
   skipFetch?: boolean;
 }
 
+// ─── Retry Helper ──────────────────────────────────────────────────────────
+
+/**
+ * Re-enqueue a failed job for retry after a delay.
+ * Uses increasing delay: 30s, 60s, 90s for attempts 1, 2, 3.
+ */
+async function reEnqueueForRetry(jobData: AnalysisJobData, attemptNumber: number): Promise<void> {
+  const { getQueue } = await import("./queue.js");
+  const q = getQueue();
+  const delay = RETRY_DELAY_MS * attemptNumber; // 30s, 60s, 90s
+  
+  await q.add(
+    `analysis-${jobData.batchId}-${jobData.companyId}-retry${attemptNumber}`,
+    jobData,
+    {
+      delay,
+      priority: 1, // High priority for retries
+      jobId: `batch-${jobData.batchId}-company-${jobData.companyId}-attempt${attemptNumber + 1}`,
+    }
+  );
+  console.log(`[Worker] Re-enqueued job ${jobData.jobId} for retry (attempt ${attemptNumber + 1}/${MAX_RETRY_ATTEMPTS}, delay ${delay}ms)`);
+}
+
+/**
+ * Determine if an error is retriable (transient) vs permanent (non-retriable).
+ * Non-retriable errors: missing data, configuration issues.
+ * Retriable errors: timeouts, API rate limits, network errors, LLM failures.
+ */
+function isRetriableError(error: string): boolean {
+  const nonRetriable = [
+    "Company not found",
+    "Framework not found",
+    "No measures in framework",
+    "Could not claim job",
+    "Cancelled",
+  ];
+  return !nonRetriable.some(msg => error.includes(msg));
+}
+
 // ─── Job Processor ──────────────────────────────────────────────────────────
 
 async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineResult> {
@@ -37,29 +79,40 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
 
   console.log(`[Worker] Processing job ${jobId}: company=${companyId}, framework=${frameworkId}, batch=${batchId}, workspace=${workspaceId}`);
 
-  // Claim the job in our DB
+  // Check if batch was cancelled
+  if (cancelledBatches.has(batchId)) {
+    return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+  }
+
+  // Claim the job in our DB (increments attempts counter)
   const claimed = await storage.claimJob(jobId as number);
   if (!claimed) {
-    console.warn(`[Worker] Job ${jobId} could not be claimed (already taken or not pending)`);
+    console.warn(`[Worker] Job ${jobId} could not be claimed (already taken or max attempts reached)`);
     return { success: false, error: "Could not claim job", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
+
+  const currentAttempt = (claimed as any).attempts || 1;
+  console.log(`[Worker] Job ${jobId} claimed (attempt ${currentAttempt}/${MAX_RETRY_ATTEMPTS})`);
 
   // Load company, framework, and measures
   const company = await storage.getCompanyById(companyId, workspaceId);
   if (!company) {
     await storage.failJob(jobId, "Company not found");
+    await handleFinalFailure(jobId, batchId, frameworkId, workspaceId, "Company not found");
     return { success: false, error: "Company not found", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
   const framework = await storage.getFrameworkById(frameworkId, workspaceId);
   if (!framework) {
     await storage.failJob(jobId, "Framework not found");
+    await handleFinalFailure(jobId, batchId, frameworkId, workspaceId, "Framework not found");
     return { success: false, error: "Framework not found", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
   const measures = await storage.getFrameworkMeasures(frameworkId);
   if (measures.length === 0) {
     await storage.failJob(jobId, "No measures in framework");
+    await handleFinalFailure(jobId, batchId, frameworkId, workspaceId, "No measures in framework");
     return { success: false, error: "No measures in framework", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
@@ -77,74 +130,105 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
     });
 
     if (result.success) {
+      // ─── SUCCESS PATH ───
       await storage.completeJob(jobId);
-      console.log(`[Worker] Job ${jobId} completed successfully`);
-    } else if (result.error === "Cancelled") {
-      console.log(`[Worker] Job ${jobId} cancelled`);
-    } else {
-      await storage.failJob(jobId, result.error || "Unknown error");
-      await storage.incrementBatchFailed(batchId);
-      console.warn(`[Worker] Job ${jobId} failed: ${result.error}`);
-    }
+      console.log(`[Worker] Job ${jobId} completed successfully (attempt ${currentAttempt})`);
 
-    // Check if batch is complete — use atomic increment + check to avoid race conditions
-    if (result.success) {
+      // Increment batch completed and check if batch is done
       const batchRow = await storage.incrementBatchCompleted(batchId) as any;
       if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
         console.log(`[Worker] Batch ${batchId} complete: ${batchRow.completed_jobs} completed, ${batchRow.failed_jobs} failed`);
         await storage.completeBatchRun(batchId);
-        setTimeout(async () => {
-          try {
-            await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
-          } catch (err: any) {
-            console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
-          }
-        }, 60000);
+        scheduleBatchResultsSave(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
       }
-    } else if (result.error !== "Cancelled") {
-      // For failed jobs, incrementBatchFailed was already called above — check completion
-      const { db } = await import("./db.js");
-      const { sql } = await import("drizzle-orm");
-      const [batchRow] = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`).then(r => r.rows) as any[];
-      if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
-        console.log(`[Worker] Batch ${batchId} complete: ${batchRow.completed_jobs} completed, ${batchRow.failed_jobs} failed`);
-        await storage.completeBatchRun(batchId);
-        setTimeout(async () => {
-          try {
-            await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
-          } catch (err: any) {
-            console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
-          }
-        }, 60000);
-      }
+    } else if (result.error === "Cancelled") {
+      console.log(`[Worker] Job ${jobId} cancelled`);
+    } else {
+      // ─── PIPELINE RETURNED FAILURE ───
+      await handleJobFailure(job.data, currentAttempt, result.error || "Unknown pipeline error");
     }
 
     return result;
   } catch (error: any) {
-    console.error(`[Worker] Job ${jobId} threw error: ${error.message}`);
-    await storage.failJob(jobId, error.message);
-    await storage.incrementBatchFailed(batchId);
-    // Check if batch is complete after this failure (fixes stuck-batch bug)
-    try {
-      const { db } = await import("./db.js");
-      const { sql } = await import("drizzle-orm");
-      const [batchRow] = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`).then(r => r.rows) as any[];
-      if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
-        console.log(`[Worker] Batch ${batchId} complete (from catch): ${batchRow.completed_jobs} completed, ${batchRow.failed_jobs} failed`);
-        await storage.completeBatchRun(batchId);
-        setTimeout(async () => {
-          try {
-            await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
-          } catch (err: any) {
-            console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
-          }
-        }, 60000);
-      }
-    } catch (checkErr: any) {
-      console.error(`[Worker] Failed to check batch completion after error: ${checkErr.message}`);
-    }
+    // ─── UNHANDLED EXCEPTION ───
+    console.error(`[Worker] Job ${jobId} threw error (attempt ${currentAttempt}): ${error.message}`);
+    await handleJobFailure(job.data, currentAttempt, error.message);
     return { success: false, error: error.message, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
+}
+
+/**
+ * Handle a job failure: either retry or mark as permanently failed.
+ */
+async function handleJobFailure(jobData: AnalysisJobData, currentAttempt: number, errorMessage: string): Promise<void> {
+  const { jobId, batchId, frameworkId, workspaceId } = jobData;
+
+  // Call failJob which sets status back to 'pending' if attempts < 3, or 'failed' if >= 3
+  await storage.failJob(jobId, errorMessage);
+
+  if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(errorMessage)) {
+    // ─── RETRY PATH: Re-enqueue the job ───
+    console.log(`[Worker] Job ${jobId} will be retried (attempt ${currentAttempt}/${MAX_RETRY_ATTEMPTS}, error: ${errorMessage})`);
+    await reEnqueueForRetry(jobData, currentAttempt);
+  } else {
+    // ─── FINAL FAILURE: Mark as failed and update batch progress ───
+    console.warn(`[Worker] Job ${jobId} permanently failed after ${currentAttempt} attempt(s): ${errorMessage}`);
+    await handleFinalFailure(jobId, batchId, frameworkId, workspaceId, errorMessage);
+  }
+}
+
+/**
+ * Handle the final failure of a job (all retries exhausted or non-retriable error).
+ * Increments batch failed counter and checks if batch is complete.
+ */
+async function handleFinalFailure(jobId: number, batchId: number, frameworkId: number, workspaceId: number, errorMessage: string): Promise<void> {
+  // Update company status to show failure in dashboard
+  try {
+    const { db } = await import("./db.js");
+    const { sql } = await import("drizzle-orm");
+    // Get the company ID from the job
+    const [jobRow] = await db.execute(sql`SELECT company_id FROM analysis_jobs WHERE id = ${jobId}`).then(r => r.rows) as any[];
+    if (jobRow) {
+      await db.execute(sql`
+        UPDATE companies SET 
+          analysis_status = 'failed',
+          summary = ${`Analysis failed after ${MAX_RETRY_ATTEMPTS} attempts: ${errorMessage}`}
+        WHERE id = ${jobRow.company_id}
+      `);
+    }
+  } catch (err: any) {
+    console.error(`[Worker] Failed to update company status for job ${jobId}: ${err.message}`);
+  }
+
+  // Increment batch failed counter
+  await storage.incrementBatchFailed(batchId);
+
+  // Check if batch is now complete
+  try {
+    const { db } = await import("./db.js");
+    const { sql } = await import("drizzle-orm");
+    const [batchRow] = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`).then(r => r.rows) as any[];
+    if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
+      console.log(`[Worker] Batch ${batchId} complete (with failures): ${batchRow.completed_jobs} completed, ${batchRow.failed_jobs} failed`);
+      await storage.completeBatchRun(batchId);
+      scheduleBatchResultsSave(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
+    }
+  } catch (checkErr: any) {
+    console.error(`[Worker] Failed to check batch completion after final failure: ${checkErr.message}`);
+  }
+}
+
+/**
+ * Schedule batch results save with a delay to allow any in-flight jobs to complete.
+ */
+function scheduleBatchResultsSave(batchId: number, frameworkId: number, workspaceId: number, listId?: number): void {
+  setTimeout(async () => {
+    try {
+      await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
+    } catch (err: any) {
+      console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
+    }
+  }, 60000);
 }
 
 // ─── Batch Results Saving ───────────────────────────────────────────────────
@@ -343,7 +427,7 @@ export function startWorker(workerId?: string): Worker {
     }
   }, HEALTH_CHECK_INTERVAL);
 
-  console.log(`[Worker] Started with concurrency=${MAX_CONCURRENT}, timeout=${JOB_TIMEOUT}ms`);
+  console.log(`[Worker] Started with concurrency=${MAX_CONCURRENT}, timeout=${JOB_TIMEOUT}ms, maxRetries=${MAX_RETRY_ATTEMPTS}`);
   return worker;
 }
 
