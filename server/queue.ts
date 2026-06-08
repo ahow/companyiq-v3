@@ -27,6 +27,9 @@ export function getQueue(): Queue {
         removeOnComplete: { count: 1000 },
         removeOnFail: { count: 5000 },
       },
+      settings: {
+        lockDuration: 600000, // 10 min — must exceed pipeline timeout (8 min)
+      },
     });
   }
   return queue;

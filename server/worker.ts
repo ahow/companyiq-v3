@@ -124,6 +124,25 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
     console.error(`[Worker] Job ${jobId} threw error: ${error.message}`);
     await storage.failJob(jobId, error.message);
     await storage.incrementBatchFailed(batchId);
+    // Check if batch is complete after this failure (fixes stuck-batch bug)
+    try {
+      const { db } = await import("./db.js");
+      const { sql } = await import("drizzle-orm");
+      const [batchRow] = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`).then(r => r.rows) as any[];
+      if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
+        console.log(`[Worker] Batch ${batchId} complete (from catch): ${batchRow.completed_jobs} completed, ${batchRow.failed_jobs} failed`);
+        await storage.completeBatchRun(batchId);
+        setTimeout(async () => {
+          try {
+            await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
+          } catch (err: any) {
+            console.error(`[Worker] Failed to save results for batch ${batchId}: ${err.message}`);
+          }
+        }, 60000);
+      }
+    } catch (checkErr: any) {
+      console.error(`[Worker] Failed to check batch completion after error: ${checkErr.message}`);
+    }
     return { success: false, error: error.message, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 }
@@ -260,6 +279,7 @@ export function startWorker(workerId?: string): Worker {
     {
       connection,
       concurrency: MAX_CONCURRENT,
+      lockDuration: JOB_TIMEOUT, // Must match queue lockDuration (10 min)
       settings: {
         stalledInterval: JOB_TIMEOUT,
       },

@@ -19,6 +19,11 @@
  * 
  * Key benefit: Once documents are fetched for a company, they can be
  * reused across multiple framework evaluations without re-fetching.
+ * 
+ * TIMEOUT ARCHITECTURE:
+ * - Per-document fetch: 45 seconds (prevents a single URL from blocking)
+ * - Fetch phase budget: 5 minutes (stops fetching and proceeds with what we have)
+ * - Per-company pipeline: 8 minutes (hard cap — ensures batch always completes)
  */
 
 import * as storage from "../storage.js";
@@ -27,6 +32,11 @@ import { processDocument, inferDocumentType } from "./processor.js";
 import { analyzeCompanyMeasures, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
+
+// ─── Timeout Constants ──────────────────────────────────────────────────────
+const PIPELINE_TIMEOUT_MS = parseInt(process.env.PIPELINE_TIMEOUT_MS || "480000", 10); // 8 min
+const FETCH_PHASE_BUDGET_MS = parseInt(process.env.FETCH_PHASE_BUDGET_MS || "300000", 10); // 5 min
+const PER_DOCUMENT_TIMEOUT_MS = parseInt(process.env.PER_DOCUMENT_TIMEOUT_MS || "45000", 10); // 45 sec
 
 export interface PipelineOptions {
   company: Company;
@@ -46,6 +56,27 @@ export interface PipelineResult {
   documentsCached: number;
 }
 
+// ─── Timeout Helper ─────────────────────────────────────────────────────────
+
+class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new TimeoutError(`${label} timed out after ${Math.round(ms / 1000)}s`));
+    }, ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
 // ─── Phase 1: Fetch Documents (Company-Level) ───────────────────────────────
 
 async function runFetchPhase(opts: {
@@ -57,6 +88,7 @@ async function runFetchPhase(opts: {
   const { company, framework, workspaceId, cancelCheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
+  const fetchPhaseStart = Date.now();
 
   console.log(`[${companyName}] === PHASE 1: FETCH ===`);
 
@@ -131,10 +163,29 @@ async function runFetchPhase(opts: {
   let totalFetched = 0;
   let pass = 0;
   const MAX_PASSES = 4; // Each pass gives pending docs another attempt (3 failures = dead)
+  let fetchBudgetExceeded = false;
 
   while (true) {
     pass++;
     if (cancelCheck?.()) break;
+
+    // ─── FETCH PHASE TIME BUDGET CHECK ──────────────────────────────────
+    const elapsed = Date.now() - fetchPhaseStart;
+    if (elapsed > FETCH_PHASE_BUDGET_MS) {
+      console.warn(`[${companyName}] Fetch phase budget exceeded (${Math.round(elapsed / 1000)}s > ${Math.round(FETCH_PHASE_BUDGET_MS / 1000)}s) — proceeding with available documents`);
+      fetchBudgetExceeded = true;
+      // Force-mark remaining pending docs as dead so we can proceed
+      const remainingPending = (await storage.getAcceptedDocuments(companyId)).filter(d => d.fetchStatus === "pending");
+      for (const doc of remainingPending) {
+        await storage.recordFetchFailure(companyId, doc.url);
+        await storage.recordFetchFailure(companyId, doc.url);
+        await storage.recordFetchFailure(companyId, doc.url);
+      }
+      if (remainingPending.length > 0) {
+        console.warn(`[${companyName}] Force-marked ${remainingPending.length} remaining pending docs as dead (budget exceeded)`);
+      }
+      break;
+    }
 
     // Re-read from DB each pass to get current state
     const allDocs = await storage.getAcceptedDocuments(companyId);
@@ -162,7 +213,7 @@ async function runFetchPhase(opts: {
       break;
     }
 
-    console.log(`[${companyName}] Fetch pass ${pass}: ${pendingDocs.length} pending, ${okDocs.length} ok, ${deadDocs.length} dead`);
+    console.log(`[${companyName}] Fetch pass ${pass}: ${pendingDocs.length} pending, ${okDocs.length} ok, ${deadDocs.length} dead (elapsed: ${Math.round(elapsed / 1000)}s)`);
 
     // Priority-sort: company domain first, then PDFs
     const sortedPending = [...pendingDocs].sort((a, b) => {
@@ -175,13 +226,25 @@ async function runFetchPhase(opts: {
       return 0;
     });
 
-    // Fetch each pending document
+    // Fetch each pending document with per-document timeout
     for (const doc of sortedPending) {
       if (cancelCheck?.()) break;
 
+      // Check budget mid-loop
+      if (Date.now() - fetchPhaseStart > FETCH_PHASE_BUDGET_MS) {
+        console.warn(`[${companyName}] Fetch budget exceeded mid-pass — stopping`);
+        fetchBudgetExceeded = true;
+        break;
+      }
+
       try {
         const type = inferDocumentType(doc.url);
-        const content = await processDocument(doc.url, type);
+        // Wrap processDocument with a per-document timeout
+        const content = await withTimeout(
+          processDocument(doc.url, type),
+          PER_DOCUMENT_TIMEOUT_MS,
+          `[${companyName}] fetch ${doc.url.slice(0, 80)}`
+        );
 
         if (content && content.length > 50) {
           await storage.recordFetchSuccess(companyId, doc.url, content);
@@ -190,9 +253,27 @@ async function runFetchPhase(opts: {
           await storage.recordFetchFailure(companyId, doc.url);
         }
       } catch (error: any) {
-        console.warn(`[${companyName}] Fetch failed for ${doc.url}: ${error.message}`);
+        if (error instanceof TimeoutError) {
+          console.warn(`[${companyName}] Document fetch TIMEOUT (${PER_DOCUMENT_TIMEOUT_MS / 1000}s): ${doc.url.slice(0, 100)}`);
+        } else {
+          console.warn(`[${companyName}] Fetch failed for ${doc.url}: ${error.message}`);
+        }
         await storage.recordFetchFailure(companyId, doc.url);
       }
+    }
+
+    // If budget exceeded mid-pass, force-kill remaining pending docs
+    if (fetchBudgetExceeded) {
+      const remainingPending = (await storage.getAcceptedDocuments(companyId)).filter(d => d.fetchStatus === "pending");
+      for (const doc of remainingPending) {
+        await storage.recordFetchFailure(companyId, doc.url);
+        await storage.recordFetchFailure(companyId, doc.url);
+        await storage.recordFetchFailure(companyId, doc.url);
+      }
+      if (remainingPending.length > 0) {
+        console.warn(`[${companyName}] Force-marked ${remainingPending.length} remaining pending docs as dead (budget exceeded)`);
+      }
+      break;
     }
 
     // Brief pause between passes to avoid hammering servers
@@ -201,7 +282,11 @@ async function runFetchPhase(opts: {
     }
   }
 
-  console.log(`[${companyName}] Fetch phase complete: ${totalFetched} fetched, ${newFetchCount} new this run`);
+  // Final count
+  const finalDocs = await storage.getAcceptedDocuments(companyId);
+  totalFetched = finalDocs.filter(d => d.fetchStatus === "ok").length;
+
+  console.log(`[${companyName}] Fetch phase complete: ${totalFetched} fetched, ${newFetchCount} new this run (${Math.round((Date.now() - fetchPhaseStart) / 1000)}s elapsed${fetchBudgetExceeded ? ', BUDGET EXCEEDED' : ''})`);
 
   // Update status to fetched
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "fetched" });
@@ -385,72 +470,106 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   const { company, framework, measures, workspaceId, cancelCheck, skipFetch } = opts;
   const companyName = company.name;
   const companyId = company.id;
+  const pipelineStart = Date.now();
 
-  try {
-    // Phase 1: Fetch (unless skipping to reuse cached docs)
-    let fetchResult = { fetchedCount: 0, totalAccepted: 0 };
-    if (!skipFetch) {
-      fetchResult = await runFetchPhase({ company, framework, workspaceId, cancelCheck });
-      
-      if (cancelCheck?.()) {
-        return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+  // Wrap the entire pipeline in a hard timeout to prevent any single company
+  // from blocking the worker indefinitely. This ensures batch counters always
+  // increment and the batch eventually completes.
+  const pipelinePromise = (async (): Promise<PipelineResult> => {
+    try {
+      // Phase 1: Fetch (unless skipping to reuse cached docs)
+      let fetchResult = { fetchedCount: 0, totalAccepted: 0 };
+      if (!skipFetch) {
+        fetchResult = await runFetchPhase({ company, framework, workspaceId, cancelCheck });
+        
+        if (cancelCheck?.()) {
+          return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+        }
+
+        if (fetchResult.fetchedCount === 0) {
+          await storage.updateCompany(companyId, workspaceId, {
+            analysisStatus: "completed",
+            totalScore: 0,
+            summary: "No documents could be fetched for analysis.",
+          });
+          return {
+            success: false,
+            error: "No documents could be fetched",
+            documentsProcessed: 0,
+            documentsFresh: fetchResult.totalAccepted,
+            documentsCached: 0,
+          };
+        }
+      } else {
+        console.log(`[${companyName}] Skipping fetch phase (reusing cached documents)`);
+        // Ensure status reflects we're past fetching
+        await storage.updateCompany(companyId, workspaceId, { analysisStatus: "fetched" });
       }
 
-      if (fetchResult.fetchedCount === 0) {
-        await storage.updateCompany(companyId, workspaceId, {
-          analysisStatus: "completed",
-          totalScore: 0,
-          summary: "No documents could be fetched for analysis.",
-        });
+      // Phase 2: Analyze
+      const analysis = await runAnalyzePhase({ company, framework, measures, workspaceId, cancelCheck });
+
+      if (!analysis) {
         return {
           success: false,
-          error: "No documents could be fetched",
-          documentsProcessed: 0,
+          error: "Analysis produced no results",
+          documentsProcessed: fetchResult.fetchedCount,
           documentsFresh: fetchResult.totalAccepted,
           documentsCached: 0,
         };
       }
-    } else {
-      console.log(`[${companyName}] Skipping fetch phase (reusing cached documents)`);
-      // Ensure status reflects we're past fetching
-      await storage.updateCompany(companyId, workspaceId, { analysisStatus: "fetched" });
-    }
 
-    // Phase 2: Analyze
-    const analysis = await runAnalyzePhase({ company, framework, measures, workspaceId, cancelCheck });
+      const elapsed = Math.round((Date.now() - pipelineStart) / 1000);
+      console.log(`[${companyName}] Pipeline completed in ${elapsed}s`);
 
-    if (!analysis) {
       return {
-        success: false,
-        error: "Analysis produced no results",
+        success: true,
+        analysis,
         documentsProcessed: fetchResult.fetchedCount,
         documentsFresh: fetchResult.totalAccepted,
+        documentsCached: skipFetch ? fetchResult.fetchedCount : 0,
+      };
+    } catch (error: any) {
+      console.error(`[${companyName}] Pipeline error: ${error.message}`);
+      await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
+      await storage.logProcessingError({
+        companyId,
+        companyName,
+        stage: "pipeline",
+        error: `${error.message} | ${error.stack?.slice(0, 500) || ""}`,
+      });
+      return {
+        success: false,
+        error: error.message,
+        documentsProcessed: 0,
+        documentsFresh: 0,
         documentsCached: 0,
       };
     }
+  })();
 
-    return {
-      success: true,
-      analysis,
-      documentsProcessed: fetchResult.fetchedCount,
-      documentsFresh: fetchResult.totalAccepted,
-      documentsCached: skipFetch ? fetchResult.fetchedCount : 0,
-    };
-  } catch (error: any) {
-    console.error(`[${companyName}] Pipeline error: ${error.message}`);
-    await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
-    await storage.logProcessingError({
-      companyId,
-      companyName,
-      stage: "pipeline",
-      error: `${error.message} | ${error.stack?.slice(0, 500) || ""}`,
-    });
-    return {
-      success: false,
-      error: error.message,
-      documentsProcessed: 0,
-      documentsFresh: 0,
-      documentsCached: 0,
-    };
+  // Apply the hard pipeline timeout
+  try {
+    return await withTimeout(pipelinePromise, PIPELINE_TIMEOUT_MS, `[${companyName}] pipeline`);
+  } catch (timeoutError: any) {
+    if (timeoutError instanceof TimeoutError) {
+      const elapsed = Math.round((Date.now() - pipelineStart) / 1000);
+      console.error(`[${companyName}] PIPELINE TIMEOUT after ${elapsed}s — marking as failed`);
+      await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
+      await storage.logProcessingError({
+        companyId,
+        companyName,
+        stage: "pipeline",
+        error: `Pipeline timed out after ${elapsed}s (limit: ${PIPELINE_TIMEOUT_MS / 1000}s)`,
+      });
+      return {
+        success: false,
+        error: `Pipeline timed out after ${elapsed}s`,
+        documentsProcessed: 0,
+        documentsFresh: 0,
+        documentsCached: 0,
+      };
+    }
+    throw timeoutError;
   }
 }
