@@ -186,7 +186,7 @@ class GeminiProvider implements AIProvider {
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
       body,
-      { timeout: 120000 }
+      { timeout: 180000 }
     );
 
     return response.data.candidates[0].content.parts[0].text;

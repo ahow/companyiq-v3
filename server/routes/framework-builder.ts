@@ -6,6 +6,91 @@ import * as storage from "../storage.js";
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
+// ─── JSON Repair Utility ─────────────────────────────────────────────────────
+// Handles truncated or malformed JSON from LLM output (e.g., when hitting token limits)
+function repairAndParseJSON(raw: string): any {
+  // Remove any trailing incomplete content after the last complete object/array
+  let json = raw;
+  
+  // Try parsing as-is first
+  try { return JSON.parse(json); } catch {}
+  
+  // Strategy 1: Close unclosed brackets/braces
+  // Count open vs close brackets
+  let openBraces = 0, openBrackets = 0;
+  let inString = false, escaped = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') openBraces++;
+    else if (ch === '}') openBraces--;
+    else if (ch === '[') openBrackets++;
+    else if (ch === ']') openBrackets--;
+  }
+  
+  // If we're inside a string, close it
+  if (inString) json += '"';
+  
+  // Remove trailing comma or incomplete key-value
+  json = json.replace(/,\s*$/, '');
+  json = json.replace(/,\s*"[^"]*"\s*:\s*$/, '');
+  json = json.replace(/,\s*"[^"]*"\s*$/, '');
+  json = json.replace(/,\s*\{[^}]*$/, '');
+  json = json.replace(/,\s*\[[^\]]*$/, '');
+  
+  // Close remaining open brackets/braces
+  // Recount after cleanup
+  openBraces = 0; openBrackets = 0; inString = false; escaped = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') openBraces++;
+    else if (ch === '}') openBraces--;
+    else if (ch === '[') openBrackets++;
+    else if (ch === ']') openBrackets--;
+  }
+  
+  // Close brackets then braces (arrays inside objects)
+  for (let i = 0; i < openBrackets; i++) json += ']';
+  for (let i = 0; i < openBraces; i++) json += '}';
+  
+  // Try parsing the repaired JSON
+  try { return JSON.parse(json); } catch {}
+  
+  // Strategy 2: More aggressive — find the last valid closing point
+  // Try progressively shorter substrings
+  for (let cutoff = json.length - 1; cutoff > json.length * 0.5; cutoff--) {
+    const attempt = json.slice(0, cutoff);
+    // Recount and close
+    let ob = 0, obk = 0, ins = false, esc = false;
+    for (let i = 0; i < attempt.length; i++) {
+      const ch = attempt[i];
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') { ins = !ins; continue; }
+      if (ins) continue;
+      if (ch === '{') ob++;
+      else if (ch === '}') ob--;
+      else if (ch === '[') obk++;
+      else if (ch === ']') obk--;
+    }
+    let fixed = attempt;
+    if (ins) fixed += '"';
+    fixed = fixed.replace(/,\s*$/, '');
+    for (let i = 0; i < obk; i++) fixed += ']';
+    for (let i = 0; i < ob; i++) fixed += '}';
+    try { return JSON.parse(fixed); } catch {}
+  }
+  
+  throw new Error('Could not repair JSON');
+}
+
 // ─── File Upload for Chat Context ────────────────────────────────────────────
 
 router.post("/upload", upload.single("file"), async (req: Request, res: Response) => {
@@ -338,29 +423,46 @@ ${fileContext && fileContext.length > 0 ? `\nUPLOADED REFERENCE FILES:\nThe user
     ).join("\n\n");
 
     // Use higher token limit for framework generation (OpenAI supports 16K, DeepSeek 8K)
-    // If the conversation suggests we're generating (user approved structure), use OpenAI as primary
-    // to get the full 16K output capacity for large frameworks
+    // If the conversation suggests we're generating (user approved structure), use Gemini as primary
+    // since it supports up to 65K output tokens — needed for large frameworks with 20+ measures
+    // that include detailed scoring guidance, explicit exclusions, and evidence keywords
     const lastUserMsg = messages[messages.length - 1]?.content?.toLowerCase() || '';
     const isLikelyGenerating = lastUserMsg.includes('build it') || lastUserMsg.includes('go ahead') || 
       lastUserMsg.includes('generate') || lastUserMsg.includes('approve') || lastUserMsg.includes('looks good') ||
-      lastUserMsg.includes('please build') || lastUserMsg.includes('create it');
+      lastUserMsg.includes('please build') || lastUserMsg.includes('create it') || lastUserMsg.includes('yes');
     
     const { text } = await completeWithFallback(
-      isLikelyGenerating ? "openai" : "deepseek",
+      isLikelyGenerating ? "gemini" : "deepseek",
       {
         system: systemPrompt,
         prompt: conversationPrompt,
-        maxTokens: 16384,
+        maxTokens: isLikelyGenerating ? 65536 : 16384,
       }
     );
 
     // Check if the response contains a framework JSON
     let frameworkDraft = null;
+    // Try complete JSON block first (opening + closing backticks)
     const jsonMatch = text.match(/```json\s*([\s\S]*?)```/);
     if (jsonMatch) {
       try {
         frameworkDraft = JSON.parse(jsonMatch[1].trim());
-      } catch {}
+      } catch {
+        // JSON might be malformed — try to repair it
+        try {
+          frameworkDraft = repairAndParseJSON(jsonMatch[1].trim());
+        } catch {}
+      }
+    }
+    // Fallback: if output was truncated (no closing ```), try to extract and repair
+    if (!frameworkDraft) {
+      const truncatedMatch = text.match(/```json\s*([\s\S]+)$/);
+      if (truncatedMatch) {
+        try {
+          frameworkDraft = repairAndParseJSON(truncatedMatch[1].trim());
+          console.warn(`[FrameworkBuilder] Recovered truncated JSON (output likely hit token limit)`);
+        } catch {}
+      }
     }
 
     res.json({
