@@ -481,9 +481,39 @@ ${fileContext && fileContext.length > 0 ? `\nUPLOADED REFERENCE FILES:\nThe user
     // since it supports up to 65K output tokens — needed for large frameworks with 20+ measures
     // that include detailed scoring guidance, explicit exclusions, and evidence keywords
     const lastUserMsg = messages[messages.length - 1]?.content?.toLowerCase() || '';
-    const isLikelyGenerating = lastUserMsg.includes('build it') || lastUserMsg.includes('go ahead') || 
+    const hasGenerationIntent = lastUserMsg.includes('build it') || lastUserMsg.includes('go ahead') || 
       lastUserMsg.includes('generate') || lastUserMsg.includes('approve') || lastUserMsg.includes('looks good') ||
       lastUserMsg.includes('please build') || lastUserMsg.includes('create it') || lastUserMsg.includes('yes');
+
+    // Stage-tracking: check if key stages have been covered in conversation history
+    // This prevents premature generation when user says "yes" to an early-stage question
+    const assistantMessages = messages.filter((m: { role: string }) => m.role === 'assistant').map((m: { content: string }) => m.content.toLowerCase()).join(' ');
+    
+    // Stage 3 indicators: assistant discussed document sources, trusted sources, or search strategy
+    const stage3Covered = assistantMessages.includes('trusted source') || 
+      assistantMessages.includes('document source') || 
+      assistantMessages.includes('search template') || 
+      assistantMessages.includes('document types') ||
+      assistantMessages.includes('disclosure platform') ||
+      assistantMessages.includes('where should we look') ||
+      assistantMessages.includes('domains to exclude');
+    
+    // Stage 4 indicators: assistant asked disambiguation probes
+    const stage4Covered = assistantMessages.includes('boundary case') || 
+      assistantMessages.includes('disambiguation') || 
+      assistantMessages.includes('partial coverage') ||
+      assistantMessages.includes('let me check my understanding');
+    
+    // Stage 5 indicators: assistant proposed category structure
+    const stage5Covered = assistantMessages.includes('category structure') || 
+      assistantMessages.includes('proposed structure') ||
+      assistantMessages.includes('categories:') ||
+      (assistantMessages.includes('category') && assistantMessages.includes('measures per'));
+    
+    // Only allow generation if all critical stages have been covered
+    // OR if the conversation is long enough (10+ messages) suggesting stages were compressed
+    const minStagesCovered = (stage3Covered && stage4Covered && stage5Covered) || messages.length >= 10;
+    const isLikelyGenerating = hasGenerationIntent && minStagesCovered;
     
     const { text } = await completeWithFallback(
       isLikelyGenerating ? "gemini" : "deepseek",

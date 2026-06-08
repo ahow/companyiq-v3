@@ -391,6 +391,73 @@ function buildCJKQueries(companyName: string, framework: Framework): string[] {
   ];
 }
 
+// ─── Auto-Domain Inference ─────────────────────────────────────────────────
+
+/**
+ * Infer the company's primary corporate domain from general search results.
+ * Looks for the most common corporate domain that appears to belong to the company.
+ * Excludes known generic/news/social domains.
+ */
+function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: string): string | null {
+  const excludedDomains = new Set([
+    "linkedin.com", "twitter.com", "facebook.com", "youtube.com", "instagram.com",
+    "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
+    "bbc.com", "theguardian.com", "nytimes.com", "wsj.com", "medium.com",
+    "indeed.com", "glassdoor.com", "theladders.com", "builtin.com",
+    "sec.gov", "companieshouse.gov.uk", "google.com", "amazon.com",
+    "github.com", "reddit.com", "quora.com", "stackexchange.com",
+    "sustainabilityreports.com", "relayto.com", "cdp.net",
+    "sciencebasedtargets.org", "unglobalcompact.org",
+    "aijobs.com", "machinelearningjobs.co.uk", "builtinnyc.com",
+    "siliconangle.com", "techcrunch.com", "wired.com", "venturebeat.com",
+  ]);
+
+  // Count domain occurrences from candidates
+  const domainCounts = new Map<string, number>();
+  for (const c of candidates) {
+    try {
+      const url = new URL(c.url);
+      let domain = url.hostname.replace(/^www\./, "");
+      if (excludedDomains.has(domain)) continue;
+      // Skip very generic TLDs that are unlikely to be corporate
+      if (domain.endsWith(".gov") || domain.endsWith(".edu")) continue;
+      domainCounts.set(domain, (domainCounts.get(domain) || 0) + 1);
+    } catch {
+      continue;
+    }
+  }
+
+  if (domainCounts.size === 0) return null;
+
+  // Sort by frequency and pick the most common
+  const sorted = [...domainCounts.entries()].sort((a, b) => b[1] - a[1]);
+
+  // The top domain should appear at least 2 times to be considered reliable
+  if (sorted[0][1] < 2) return null;
+
+  // Additional heuristic: the domain should contain part of the company name
+  // or be clearly corporate (not a news/blog site)
+  const topDomain = sorted[0][0];
+  const companyWords = companyName.toLowerCase().split(/[\s&,.']+/).filter(w => w.length > 2);
+  const domainLower = topDomain.toLowerCase();
+
+  // Check if any significant word from company name appears in the domain
+  const nameMatch = companyWords.some(word => domainLower.includes(word));
+  if (nameMatch) return topDomain;
+
+  // If no name match but appears 3+ times, still use it (might be abbreviated)
+  if (sorted[0][1] >= 3) return topDomain;
+
+  // Try second-most-common domain if it matches the name
+  if (sorted.length > 1 && sorted[1][1] >= 2) {
+    const secondDomain = sorted[1][0];
+    const secondMatch = companyWords.some(word => secondDomain.toLowerCase().includes(word));
+    if (secondMatch) return secondDomain;
+  }
+
+  return null;
+}
+
 // ─── Ranking and Demotion ────────────────────────────────────────────────────
 
 function calculatePriority(
@@ -553,17 +620,28 @@ async function runRelevanceGate(
 
     try {
       const { text } = await completeWithFallback(gateModel, {
-        system: `You are a document relevance classifier for corporate disclosure analysis. Given a list of URLs found for a specific company, classify each as "accept" or "reject".
+        system: `You are a strict document relevance classifier for corporate disclosure analysis. Given a list of URLs found for a specific company, classify each as "accept" or "reject".
 
-ACCEPT: Corporate reports, filings, policy documents, governance pages, sustainability reports, annual reports, and other substantive disclosures that are ABOUT THIS SPECIFIC COMPANY.
+ACCEPT ONLY:
+- Corporate reports, filings, policy documents, governance pages, sustainability reports, annual reports, and other substantive disclosures that are SPECIFICALLY ABOUT THIS EXACT COMPANY
+- Documents hosted on this company's own corporate domain
+- Regulatory filings specifically naming this company
+- Industry reports where this company is a primary subject (not just mentioned in passing)
 
 REJECT:
-- Documents about a DIFFERENT entity that happens to share a similar name or acronym (e.g., EU regulatory body ACER vs. Acer the computer company)
+- Documents about a DIFFERENT company, even if in the same industry (e.g., if searching for BNP Paribas, reject documents about DBS Bank, AXA, Santander, etc.)
+- Generic industry articles that mention multiple companies without focusing on the target company
+- Documents about a DIFFERENT entity that happens to share a similar name or acronym
 - News articles, marketing content, job postings, product pages
 - YouTube videos, social media posts (unless they link to official disclosures)
 - Documents from unrelated organizations
+- Blog posts or thought-leadership articles from consulting firms unless they are a detailed case study of this specific company
 
-IMPORTANT: Pay close attention to the company identity (sector, country, domain) to distinguish from similarly-named entities.`,
+CRITICAL RULES:
+1. If the URL domain belongs to ANOTHER company (e.g., dbs.com, axa-im.ch when searching for BNP Paribas), REJECT it unless it explicitly discusses the target company
+2. If the title mentions another company name prominently, REJECT it
+3. When in doubt, REJECT rather than accept — false positives are more harmful than false negatives
+4. Pay close attention to the company identity (sector, country, domain) to distinguish from similarly-named entities`,
         prompt: `Company: ${companyName}${identityBlock}\nAnalysis topic: ${framework.topicDescription || framework.name}\n\nClassify each URL as relevant to THIS SPECIFIC COMPANY's disclosures:\n\n${urlList}\n\nReturn a JSON array of objects: [{"index": 1, "verdict": "accept"|"reject", "reason": "brief reason"}]`,
         json: true,
         maxTokens: 2000,
@@ -668,14 +746,24 @@ export async function searchCompanyDocuments(opts: {
     }
   }
 
-  // Lane 2: Domain-anchored search
-  if (companyDomain) {
-    console.log(`[${companyName}] Running domain-anchored search lane`);
-    const domainQueries = buildDomainQueries(companyName, companyDomain, framework);
+  // Lane 2: Domain-anchored search (with auto-detection if no domain set)
+  let effectiveDomain = companyDomain || null;
+  if (!effectiveDomain) {
+    // Auto-detect domain from general search results
+    effectiveDomain = inferDomainFromResults(allCandidates, companyName);
+    if (effectiveDomain) {
+      console.log(`[${companyName}] Auto-detected domain: ${effectiveDomain}`);
+    }
+  }
+  if (effectiveDomain) {
+    console.log(`[${companyName}] Running domain-anchored search lane (domain: ${effectiveDomain})`);
+    const domainQueries = buildDomainQueries(companyName, effectiveDomain, framework);
     for (const query of domainQueries) {
       const results = await webSearch(query, { num: searchDepth });
       for (const r of results) addCandidate(r, "domain");
     }
+  } else {
+    console.log(`[${companyName}] No domain available, skipping domain-anchored search`);
   }
 
   // Lane 3: Trusted source search (framework-specific sources take priority)
@@ -760,7 +848,7 @@ export async function searchCompanyDocuments(opts: {
     sector: opts.sector,
     country: opts.country,
     isin: opts.isin,
-    domain: companyDomain,
+    domain: effectiveDomain || companyDomain,
   });
 
   console.log(`[${companyName}] Gate accepted ${accepted.length} documents`);
