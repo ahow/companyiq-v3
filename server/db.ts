@@ -142,6 +142,19 @@ export async function initializeDatabase(): Promise<void> {
     `);
 
     // ─── Documents ──────────────────────────────────────────────────────────
+    // ─── Document Content (Deduplicated) ──────────────────────────────────────
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS document_content (
+        id SERIAL PRIMARY KEY,
+        url_hash TEXT NOT NULL UNIQUE,
+        url TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_length INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS documents (
         id SERIAL PRIMARY KEY,
@@ -153,12 +166,18 @@ export async function initializeDatabase(): Promise<void> {
         gate_reason TEXT,
         fetch_status TEXT NOT NULL DEFAULT 'pending',
         fetch_failures INTEGER NOT NULL DEFAULT 0,
+        content_id INTEGER REFERENCES document_content(id),
         content TEXT,
         fetched_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT NOW() NOT NULL,
         UNIQUE(company_id, url)
       )
     `);
+    // Migration: add content_id column if documents table already exists
+    await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_id INTEGER REFERENCES document_content(id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS documents_content_id_idx ON documents(content_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS dc_url_hash_idx ON document_content(url_hash)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS dc_url_idx ON document_content(url)`);
 
     // ─── Measure Scores ─────────────────────────────────────────────────────
     await db.execute(sql`

@@ -2,6 +2,15 @@ import { db } from "./db.js";
 import { eq, and, sql, desc, asc, inArray, isNull } from "drizzle-orm";
 import * as schema from "../shared/schema.js";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
+
+// ─── URL Hashing for Content Deduplication ─────────────────────────────────
+
+function hashUrl(url: string): string {
+  // Normalize URL before hashing: lowercase, trim, remove trailing slash
+  const normalized = url.trim().toLowerCase().replace(/\/+$/, "");
+  return crypto.createHash("sha256").update(normalized).digest("hex");
+}
 
 // ─── User Operations ────────────────────────────────────────────────────────
 
@@ -204,7 +213,7 @@ export async function deleteFrameworkMeasures(frameworkId: number) {
   await db.delete(schema.frameworkMeasures).where(eq(schema.frameworkMeasures.frameworkId, frameworkId));
 }
 
-// ─── Document Operations ────────────────────────────────────────────────────
+// ─── Document Operations (with Content Deduplication) ───────────────────────
 
 export async function getAcceptedDocuments(companyId: number) {
   return db
@@ -226,10 +235,30 @@ export async function getAcceptedDocuments(companyId: number) {
 }
 
 export async function getFetchedDocuments(companyId: number) {
-  return db
-    .select()
-    .from(schema.documents)
-    .where(and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "ok")));
+  // JOIN with document_content to get deduplicated content
+  // Falls back to inline content column for rows not yet migrated
+  const rows = await db.execute(sql`
+    SELECT d.id, d.company_id, d.url, d.title, d.type, d.gate_verdict,
+           d.gate_reason, d.fetch_status, d.fetch_failures, d.fetched_at, d.created_at,
+           COALESCE(dc.content, d.content) AS content
+    FROM documents d
+    LEFT JOIN document_content dc ON dc.id = d.content_id
+    WHERE d.company_id = ${companyId} AND d.fetch_status = 'ok'
+  `);
+  return rows.rows as Array<{
+    id: number;
+    company_id: number;
+    url: string;
+    title: string | null;
+    type: string;
+    gate_verdict: string | null;
+    gate_reason: string | null;
+    fetch_status: string;
+    fetch_failures: number;
+    fetched_at: Date | null;
+    created_at: Date;
+    content: string | null;
+  }>;
 }
 
 export async function upsertDocument(data: { companyId: number; url: string; title?: string; type: string; gateVerdict: string; gateReason?: string }) {
@@ -245,10 +274,30 @@ export async function upsertDocument(data: { companyId: number; url: string; tit
 }
 
 export async function recordFetchSuccess(companyId: number, url: string, content: string) {
-  await db
-    .update(schema.documents)
-    .set({ fetchStatus: "ok", content, fetchedAt: new Date() })
-    .where(and(eq(schema.documents.companyId, companyId), eq(schema.documents.url, url)));
+  // Step 1: Upsert content into the deduplicated document_content table
+  const urlHash = hashUrl(url);
+  const contentLength = content.length;
+
+  const dcResult = await db.execute(sql`
+    INSERT INTO document_content (url_hash, url, content, content_length, created_at, updated_at)
+    VALUES (${urlHash}, ${url}, ${content}, ${contentLength}, NOW(), NOW())
+    ON CONFLICT (url_hash) DO UPDATE SET
+      content = EXCLUDED.content,
+      content_length = EXCLUDED.content_length,
+      updated_at = NOW()
+    RETURNING id
+  `);
+  const contentId = (dcResult.rows[0] as any)?.id;
+
+  // Step 2: Update the documents row to reference the content and mark as fetched
+  await db.execute(sql`
+    UPDATE documents SET
+      fetch_status = 'ok',
+      content_id = ${contentId},
+      content = NULL,
+      fetched_at = NOW()
+    WHERE company_id = ${companyId} AND url = ${url}
+  `);
 }
 
 export async function recordFetchFailure(companyId: number, url: string) {

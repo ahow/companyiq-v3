@@ -109,6 +109,18 @@ export const frameworkMeasures = pgTable("framework_measures", {
   frameworkIdx: index("measures_framework_idx").on(table.frameworkId),
 }));
 
+// ─── Document Content (Deduplicated, Shared Across Companies) ────────────────
+
+export const documentContent = pgTable("document_content", {
+  id: serial("id").primaryKey(),
+  urlHash: text("url_hash").notNull().unique(), // SHA-256 of normalized URL
+  url: text("url").notNull(),
+  content: text("content").notNull(),
+  contentLength: integer("content_length").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // ─── Documents (Company-Level, Reusable Across Frameworks) ─────────────────
 
 export const documents = pgTable("documents", {
@@ -121,7 +133,8 @@ export const documents = pgTable("documents", {
   gateReason: text("gate_reason"),
   fetchStatus: text("fetch_status").notNull().default("pending"), // pending | ok | dead
   fetchFailures: integer("fetch_failures").notNull().default(0),
-  content: text("content"),
+  contentId: integer("content_id").references(() => documentContent.id), // FK to deduplicated content
+  content: text("content"), // DEPRECATED: kept for migration rollback safety, will be NULLed
   fetchedAt: timestamp("fetched_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
@@ -300,6 +313,8 @@ export type Framework = typeof frameworks.$inferSelect;
 export type InsertFramework = typeof frameworks.$inferInsert;
 export type FrameworkMeasure = typeof frameworkMeasures.$inferSelect;
 export type InsertFrameworkMeasure = typeof frameworkMeasures.$inferInsert;
+export type DocumentContent = typeof documentContent.$inferSelect;
+export type InsertDocumentContent = typeof documentContent.$inferInsert;
 export type Document = typeof documents.$inferSelect;
 export type MeasureScore = typeof measureScores.$inferSelect;
 export type BatchRun = typeof batchRuns.$inferSelect;
