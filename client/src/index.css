@@ -5,3 +5,105 @@
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
+
+/* Dark mode overrides for common page elements */
+.dark body {
+  background-color: #030712; /* gray-950 */
+}
+
+/* Cards, panels, and white backgrounds */
+.dark .bg-white {
+  background-color: #111827 !important; /* gray-900 */
+}
+
+/* Gray-50 backgrounds (page backgrounds, subtle sections) */
+.dark .bg-gray-50 {
+  background-color: #030712 !important; /* gray-950 */
+}
+
+/* Gray-100 backgrounds (hover states, badges) */
+.dark .bg-gray-100 {
+  background-color: #1f2937 !important; /* gray-800 */
+}
+
+/* Border colors */
+.dark .border-gray-200 {
+  border-color: #374151 !important; /* gray-700 */
+}
+.dark .border-gray-100 {
+  border-color: #374151 !important; /* gray-700 */
+}
+.dark .border-gray-300 {
+  border-color: #4b5563 !important; /* gray-600 */
+}
+
+/* Text colors */
+.dark .text-gray-900 {
+  color: #f9fafb !important; /* gray-50 */
+}
+.dark .text-gray-800 {
+  color: #f3f4f6 !important; /* gray-100 */
+}
+.dark .text-gray-700 {
+  color: #e5e7eb !important; /* gray-200 */
+}
+.dark .text-gray-600 {
+  color: #d1d5db !important; /* gray-300 */
+}
+.dark .text-gray-500 {
+  color: #9ca3af !important; /* gray-400 */
+}
+
+/* Input and form elements */
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: #1f2937 !important; /* gray-800 */
+  border-color: #4b5563 !important; /* gray-600 */
+  color: #f3f4f6 !important; /* gray-100 */
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #6b7280 !important; /* gray-500 */
+}
+
+/* Tables */
+.dark table {
+  color: #e5e7eb; /* gray-200 */
+}
+.dark thead {
+  background-color: #1f2937 !important; /* gray-800 */
+}
+.dark tbody tr {
+  border-color: #374151 !important; /* gray-700 */
+}
+.dark tbody tr:hover {
+  background-color: #1f2937 !important; /* gray-800 */
+}
+
+/* Divide colors */
+.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #374151 !important; /* gray-700 */
+}
+
+/* Ring colors for focus states */
+.dark .ring-gray-200,
+.dark .ring-gray-300 {
+  --tw-ring-color: #4b5563 !important; /* gray-600 */
+}
+
+/* Shadow adjustments */
+.dark .shadow-sm,
+.dark .shadow,
+.dark .shadow-md,
+.dark .shadow-lg {
+  --tw-shadow-color: rgba(0, 0, 0, 0.3);
+}
+
+/* Hover states for backgrounds */
+.dark .hover\:bg-gray-50:hover {
+  background-color: #1f2937 !important; /* gray-800 */
+}
+.dark .hover\:bg-gray-100:hover {
+  background-color: #374151 !important; /* gray-700 */
+}

@@ -68,7 +68,7 @@ export default function App() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center dark:bg-gray-950">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
       </div>
     );
@@ -86,7 +86,7 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={authValue}>
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors">
         <Navbar currentPage={page} onNavigate={navigate} />
         <main className="max-w-7xl mx-auto px-4 py-6">
           {page === "dashboard" && (
