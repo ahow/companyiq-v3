@@ -37,14 +37,16 @@ export default function ResultsPage() {
       }
     }
 
-    // Build headers: company info + each measure (verdict + rationale + sources) + source documents
+    // Build headers: company info + 6 columns per measure + source documents
     const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total"];
-    // For each measure, add three columns: Verdict, Rationale, Sources
     const measureHeaders: string[] = [];
     for (const title of measureTitles) {
-      measureHeaders.push(`${title} - Verdict`);
+      measureHeaders.push(`${title} - Score`);
       measureHeaders.push(`${title} - Rationale`);
-      measureHeaders.push(`${title} - Sources`);
+      measureHeaders.push(`${title} - Supporting Quote`);
+      measureHeaders.push(`${title} - Source Document`);
+      measureHeaders.push(`${title} - Source Link`);
+      measureHeaders.push(`${title} - Confidence`);
     }
     const headers = [...baseHeaders, ...measureHeaders, "Source Documents"];
 
@@ -60,33 +62,74 @@ export default function ResultsPage() {
         row.measuresTotalCount ?? "",
       ];
 
-      // Map each measure title to verdict + rationale + sources
+      // Build a lookup from document title -> URL using sourceDocuments
+      const titleToUrl: Record<string, string> = {};
+      for (const doc of (row.sourceDocuments || [])) {
+        if (doc.title && doc.url) {
+          titleToUrl[doc.title.toLowerCase()] = doc.url;
+        }
+        // Also map URL as key to itself (in case source is already a URL)
+        if (doc.url) {
+          titleToUrl[doc.url.toLowerCase()] = doc.url;
+        }
+      }
+
+      // Map each measure title to 6 fields
       const measureValues: string[] = [];
       for (const title of measureTitles) {
         const ms = (row.measureScores || []).find((m: any) => m.title === title);
         if (ms) {
-          // Verdict
+          // (i) Score: verdict (Yes/No/Partial)
           measureValues.push(ms.verdict || (ms.score > 0 ? "Yes" : "No"));
-          // Rationale: combine evidenceSummary and quotes
+
+          // (ii) Rationale: evidenceSummary
+          measureValues.push(ms.evidenceSummary || "");
+
+          // (iii) Supporting Quote: verbatim quotes (only for positive scores)
           const quotes = (ms.quotes || []).map((q: any) => q.text).filter(Boolean);
-          const rationale = quotes.length > 0 
-            ? quotes.join(" | ") 
-            : (ms.evidenceSummary || "");
-          measureValues.push(rationale);
-          // Sources: URLs from quotes
-          const sources = (ms.quotes || [])
-            .map((q: any) => q.source)
-            .filter((s: string) => s && s.startsWith("http"));
-          const uniqueSources = [...new Set(sources)];
-          measureValues.push(uniqueSources.join(" ; "));
+          if (ms.score > 0 || ms.verdict === "Yes" || ms.verdict === "Partial") {
+            measureValues.push(quotes.join(" | "));
+          } else {
+            measureValues.push("");
+          }
+
+          // (iv) Source Document name(s) and (v) Source Link(s)
+          // Quote sources are document titles; map them to URLs
+          const sourceNames: string[] = [];
+          const sourceLinks: string[] = [];
+          const seenSources = new Set<string>();
+
+          for (const q of (ms.quotes || [])) {
+            if (!q.source) continue;
+            const srcKey = q.source.toLowerCase();
+            if (seenSources.has(srcKey)) continue;
+            seenSources.add(srcKey);
+
+            sourceNames.push(q.source);
+            // Look up URL from title
+            const url = titleToUrl[srcKey] || "";
+            if (url) {
+              sourceLinks.push(url);
+            } else {
+              // Try partial match
+              const matchedKey = Object.keys(titleToUrl).find(k => k.includes(srcKey) || srcKey.includes(k));
+              sourceLinks.push(matchedKey ? titleToUrl[matchedKey] : "");
+            }
+          }
+
+          measureValues.push(sourceNames.join(" ; "));
+          measureValues.push(sourceLinks.join(" ; "));
+
+          // (vi) Confidence level
+          measureValues.push(ms.confidence || "Low");
         } else {
-          measureValues.push("", "", "");
+          measureValues.push("", "", "", "", "", "");
         }
       }
 
-      // Source documents used for this company
+      // Source documents used for this company (all docs)
       const sourceDocs = (row.sourceDocuments || [])
-        .map((d: any) => d.url || d.title || "")
+        .map((d: any) => `${d.title || ""} [${d.url || ""}]`)
         .filter(Boolean)
         .join(" ; ");
 
