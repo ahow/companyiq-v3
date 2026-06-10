@@ -29,8 +29,9 @@ export const api = {
   // Auth
   login: (email: string, password: string) =>
     request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
-  signup: (email: string, password: string, name: string) =>
-    request("/auth/signup", { method: "POST", body: JSON.stringify({ email, password, name }) }),
+  signup: (email: string, password: string, name: string, opts?: { workspaceMode?: string; workspaceId?: number; workspaceName?: string }) =>
+    request("/auth/signup", { method: "POST", body: JSON.stringify({ email, password, name, ...opts }) }),
+  getWorkspaces: () => request("/auth/workspaces"),
   logout: () => request("/auth/logout", { method: "POST" }),
   getSession: async () => {
     try {
@@ -55,6 +56,7 @@ export const api = {
   // Lists
   getLists: () => request("/lists"),
   createList: (name: string, description?: string) => request("/lists", { method: "POST", body: JSON.stringify({ name, description }) }),
+  updateList: (id: number, data: any) => request(`/lists/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   getListCompanies: (id: number) => request(`/lists/${id}/companies`),
   addToList: (listId: number, companyId: number) => request(`/lists/${listId}/companies`, { method: "POST", body: JSON.stringify({ companyId }) }),
 

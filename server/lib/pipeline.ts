@@ -145,6 +145,14 @@ async function runFetchPhase(opts: {
     });
   }
 
+  // Step 3b: Cross-workspace document reuse — if content already exists in
+  // document_content (from another workspace's fetch), link it immediately
+  // so we don't re-fetch the same URL.
+  const reusedCount = await storage.linkExistingContent(companyId);
+  if (reusedCount > 0) {
+    console.log(`[${companyName}] Reused ${reusedCount} documents from global content cache (cross-workspace)`);
+  }
+
   // Save discovery diagnostics
   await storage.updateCompany(companyId, workspaceId, {
     discoveryDiagnostics: discoveryResult.diagnostics as any,

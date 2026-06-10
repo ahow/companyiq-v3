@@ -137,6 +137,20 @@ apiRouter.post("/lists", async (req: Request, res: Response) => {
   }
 });
 
+apiRouter.patch("/lists/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const listId = parseInt(req.params.id);
+    const { isShared } = req.body;
+    if (isShared !== undefined) {
+      await storage.updateCompanyList(listId, workspaceId, { isShared });
+    }
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 apiRouter.get("/lists/:id/companies", async (req: Request, res: Response) => {
   try {
     const companies = await storage.getListCompanies(parseInt(req.params.id));
@@ -399,7 +413,7 @@ apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
     if (!framework) return res.status(404).json({ error: "Framework not found" });
 
-    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds"];
+    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared"];
     const updates: Record<string, any> = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {

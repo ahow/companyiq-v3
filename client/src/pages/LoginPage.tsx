@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api } from "../lib/api";
 
 interface LoginPageProps {
@@ -13,6 +13,21 @@ export default function LoginPage({ onSuccess }: LoginPageProps) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Workspace selection state
+  const [workspaceMode, setWorkspaceMode] = useState<"create" | "join">("create");
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<number | null>(null);
+  const [availableWorkspaces, setAvailableWorkspaces] = useState<Array<{ id: number; name: string }>>([]);
+
+  // Load available workspaces when signup mode is active
+  useEffect(() => {
+    if (isSignup) {
+      api.getWorkspaces().then((data: any) => {
+        setAvailableWorkspaces(data.workspaces || []);
+      }).catch(() => {});
+    }
+  }, [isSignup]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -20,7 +35,13 @@ export default function LoginPage({ onSuccess }: LoginPageProps) {
 
     try {
       if (isSignup) {
-        await api.signup(email, password, name);
+        const opts: any = { workspaceMode };
+        if (workspaceMode === "join" && selectedWorkspaceId) {
+          opts.workspaceId = selectedWorkspaceId;
+        } else if (workspaceMode === "create" && workspaceName.trim()) {
+          opts.workspaceName = workspaceName.trim();
+        }
+        await api.signup(email, password, name, opts);
       } else {
         await api.login(email, password);
       }
@@ -84,6 +105,66 @@ export default function LoginPage({ onSuccess }: LoginPageProps) {
               minLength={6}
             />
           </div>
+
+          {/* Workspace selection — only shown during signup */}
+          {isSignup && (
+            <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+              <label className="block text-sm font-medium text-gray-700">Workspace</label>
+              <p className="text-xs text-gray-500">
+                <strong>Join an existing workspace</strong> to share company lists, frameworks, and results with other members.
+                <strong> Create a new workspace</strong> for independent analysis that runs in parallel without competing for queue priority.
+              </p>
+
+              <div className="flex gap-3">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="workspaceMode"
+                    value="create"
+                    checked={workspaceMode === "create"}
+                    onChange={() => setWorkspaceMode("create")}
+                    className="text-blue-600"
+                  />
+                  <span className="text-sm text-gray-700">Create new</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="workspaceMode"
+                    value="join"
+                    checked={workspaceMode === "join"}
+                    onChange={() => setWorkspaceMode("join")}
+                    className="text-blue-600"
+                  />
+                  <span className="text-sm text-gray-700">Join existing</span>
+                </label>
+              </div>
+
+              {workspaceMode === "create" && (
+                <input
+                  type="text"
+                  value={workspaceName}
+                  onChange={(e) => setWorkspaceName(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  placeholder="Workspace name (optional)"
+                />
+              )}
+
+              {workspaceMode === "join" && (
+                <select
+                  value={selectedWorkspaceId || ""}
+                  onChange={(e) => setSelectedWorkspaceId(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  required
+                >
+                  <option value="">Select a workspace...</option>
+                  {availableWorkspaces.map((ws) => (
+                    <option key={ws.id} value={ws.id}>{ws.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="text-red-600 text-sm bg-red-50 p-3 rounded-lg">{error}</div>

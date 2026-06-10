@@ -76,6 +76,7 @@ export async function initializeDatabase(): Promise<void> {
     `);
 
     // Add framework discovery configuration columns
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS is_shared BOOLEAN NOT NULL DEFAULT false`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS trusted_source_ids JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS search_templates JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS negative_keywords JSONB`);
@@ -108,6 +109,8 @@ export async function initializeDatabase(): Promise<void> {
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       )
     `);
+
+    await db.execute(sql`ALTER TABLE company_lists ADD COLUMN IF NOT EXISTS is_shared BOOLEAN NOT NULL DEFAULT false`);
 
     // ─── Companies ──────────────────────────────────────────────────────────
     await db.execute(sql`

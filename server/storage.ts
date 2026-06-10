@@ -70,6 +70,22 @@ export async function isWorkspaceMember(workspaceId: number, userId: number) {
   return !!member;
 }
 
+export async function getAllWorkspaces() {
+  return db.select({
+    id: schema.workspaces.id,
+    name: schema.workspaces.name,
+    slug: schema.workspaces.slug,
+  }).from(schema.workspaces).orderBy(asc(schema.workspaces.name));
+}
+
+export async function joinWorkspace(workspaceId: number, userId: number) {
+  await db.insert(schema.workspaceMembers).values({
+    workspaceId,
+    userId,
+    role: "member",
+  }).onConflictDoNothing();
+}
+
 // ─── Company Operations (Workspace-Scoped) ──────────────────────────────────
 
 export async function getCompanies(workspaceId: number) {
@@ -121,7 +137,10 @@ export async function deleteCompany(companyId: number, workspaceId: number) {
 // ─── Company List Operations ────────────────────────────────────────────────
 
 export async function getCompanyLists(workspaceId: number) {
-  const lists = await db.select().from(schema.companyLists).where(eq(schema.companyLists.workspaceId, workspaceId)).orderBy(desc(schema.companyLists.createdAt));
+  // Get own workspace lists + shared lists from other workspaces
+  const lists = await db.select().from(schema.companyLists)
+    .where(sql`${schema.companyLists.workspaceId} = ${workspaceId} OR ${schema.companyLists.isShared} = true`)
+    .orderBy(desc(schema.companyLists.createdAt));
   
   // Add memberCount for each list
   const listsWithCounts = await Promise.all(
@@ -140,6 +159,12 @@ export async function getCompanyLists(workspaceId: number) {
 export async function createCompanyList(workspaceId: number, name: string, description?: string) {
   const [list] = await db.insert(schema.companyLists).values({ workspaceId, name, description }).returning();
   return list;
+}
+
+export async function updateCompanyList(listId: number, workspaceId: number, updates: { isShared?: boolean }) {
+  await db.update(schema.companyLists)
+    .set(updates)
+    .where(and(eq(schema.companyLists.id, listId), eq(schema.companyLists.workspaceId, workspaceId)));
 }
 
 export async function getListCompanies(listId: number) {
@@ -163,7 +188,10 @@ export async function removeCompanyFromList(listId: number, companyId: number) {
 // ─── Framework Operations (Workspace-Scoped) ────────────────────────────────
 
 export async function getFrameworks(workspaceId: number) {
-  return db.select().from(schema.frameworks).where(eq(schema.frameworks.workspaceId, workspaceId)).orderBy(desc(schema.frameworks.updatedAt));
+  // Get own workspace frameworks + shared frameworks from other workspaces
+  return db.select().from(schema.frameworks)
+    .where(sql`${schema.frameworks.workspaceId} = ${workspaceId} OR ${schema.frameworks.isShared} = true`)
+    .orderBy(desc(schema.frameworks.updatedAt));
 }
 
 export async function getActiveFramework(workspaceId: number) {
@@ -175,10 +203,11 @@ export async function getActiveFramework(workspaceId: number) {
 }
 
 export async function getFrameworkById(frameworkId: number, workspaceId: number) {
+  // Also allow access to shared frameworks from other workspaces
   const [framework] = await db
     .select()
     .from(schema.frameworks)
-    .where(and(eq(schema.frameworks.id, frameworkId), eq(schema.frameworks.workspaceId, workspaceId)));
+    .where(sql`${schema.frameworks.id} = ${frameworkId} AND (${schema.frameworks.workspaceId} = ${workspaceId} OR ${schema.frameworks.isShared} = true)`);
   return framework || null;
 }
 
@@ -306,6 +335,27 @@ export async function recordFetchFailure(companyId: number, url: string) {
     fetch_status = CASE WHEN fetch_failures + 1 >= 3 THEN 'dead' ELSE 'pending' END
     WHERE company_id = ${companyId} AND url = ${url}
   `);
+}
+
+/**
+ * Cross-workspace document reuse: for any pending documents that already have
+ * content in the global document_content table (fetched by another workspace),
+ * link them immediately and mark as 'ok' to skip redundant fetching.
+ */
+export async function linkExistingContent(companyId: number): Promise<number> {
+  // URL normalization must match hashUrl(): lowercase, trim, remove trailing slash
+  const result = await db.execute(sql`
+    UPDATE documents d
+    SET content_id = dc.id,
+        fetch_status = 'ok',
+        fetched_at = NOW(),
+        content = NULL
+    FROM document_content dc
+    WHERE d.company_id = ${companyId}
+      AND d.fetch_status = 'pending'
+      AND dc.url_hash = encode(sha256(regexp_replace(lower(trim(d.url)), '/+$', '')::bytea), 'hex')
+  `);
+  return result.rowCount || 0;
 }
 
 export async function clearDiscoveredDocuments(companyId: number) {
@@ -687,7 +737,7 @@ export async function getCompanyByName(name: string, workspaceId: number) {
 }
 
 // ─── Framework Editor Operations ───────────────────────────────────────────
-export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[] }>) {
+export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; isShared: boolean }>) {
   await db.update(schema.frameworks).set(updates as any).where(eq(schema.frameworks.id, frameworkId));
 }
 

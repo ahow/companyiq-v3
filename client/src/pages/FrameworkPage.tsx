@@ -295,6 +295,11 @@ export default function FrameworkPage() {
                     active
                   </span>
                 )}
+                {f.isShared && (
+                  <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
+                    shared
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {!f.isActive && (
@@ -336,6 +341,20 @@ export default function FrameworkPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1.5 cursor-pointer" title="Share this framework across all workspaces">
+                <Globe className="w-3.5 h-3.5 text-gray-400" />
+                <span className="text-xs text-gray-500">Shared</span>
+                <input
+                  type="checkbox"
+                  checked={!!framework.isShared}
+                  onChange={async (e) => {
+                    await api.updateFramework(activeFrameworkId!, { isShared: e.target.checked });
+                    queryClient.invalidateQueries({ queryKey: ["frameworks"] });
+                    queryClient.invalidateQueries({ queryKey: ["framework", activeFrameworkId] });
+                  }}
+                  className="w-3.5 h-3.5 rounded text-purple-600"
+                />
+              </label>
               <button
                 onClick={() => setShowDiscoverySettings(!showDiscoverySettings)}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${

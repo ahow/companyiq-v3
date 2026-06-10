@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState, useRef } from "react";
-import { Plus, Trash2, Upload, Download, Users, X, FileSpreadsheet, Type } from "lucide-react";
+import { Plus, Trash2, Upload, Download, Users, X, FileSpreadsheet, Type, Globe } from "lucide-react";
 
 export default function ListsPage() {
   const queryClient = useQueryClient();
@@ -212,6 +212,7 @@ export default function ListsPage() {
                     <div>
                       <span className="text-sm font-medium text-gray-900">{l.name}</span>
                       <span className="text-xs text-gray-400 ml-2">({l.companyCount || l.memberCount || 0})</span>
+                      {l.isShared && <span className="ml-1 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[10px] rounded font-medium">Shared</span>}
                     </div>
                   </div>
                   <button
@@ -240,7 +241,21 @@ export default function ListsPage() {
                   <h2 className="font-semibold text-gray-900">{listDetail.name}</h2>
                   <p className="text-xs text-gray-500">{listMembers.length} companies</p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
+                  <label className="flex items-center gap-1.5 cursor-pointer" title="Share this list across all workspaces">
+                    <Globe className="w-3.5 h-3.5 text-gray-400" />
+                    <span className="text-xs text-gray-500">Shared</span>
+                    <input
+                      type="checkbox"
+                      checked={!!listDetail.isShared}
+                      onChange={async (e) => {
+                        await api.updateList(selectedListId!, { isShared: e.target.checked });
+                        queryClient.invalidateQueries({ queryKey: ["lists"] });
+                        queryClient.invalidateQueries({ queryKey: ["list", selectedListId] });
+                      }}
+                      className="w-3.5 h-3.5 rounded text-purple-600"
+                    />
+                  </label>
                   <button
                     onClick={() => setShowAddCompanyModal(true)}
                     className="flex items-center gap-1 px-3 py-1.5 border rounded-lg text-xs hover:bg-gray-50"

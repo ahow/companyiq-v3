@@ -8,7 +8,7 @@ export const authRouter = Router();
 
 authRouter.post("/signup", async (req: Request, res: Response) => {
   try {
-    const { email, password, name } = req.body;
+    const { email, password, name, workspaceMode, workspaceId: joinWorkspaceId, workspaceName } = req.body;
 
     if (!email || !password || !name) {
       return res.status(400).json({ error: "Email, password, and name are required" });
@@ -27,21 +27,40 @@ authRouter.post("/signup", async (req: Request, res: Response) => {
     // Create user
     const user = await storage.createUser(email.toLowerCase(), password, name);
 
-    // Create default workspace
-    const workspace = await storage.createWorkspace(`${name}'s Workspace`, user.id);
+    let workspace;
+    if (workspaceMode === "join" && joinWorkspaceId) {
+      // Join an existing workspace
+      await storage.joinWorkspace(joinWorkspaceId, user.id);
+      workspace = await storage.getWorkspaceById(joinWorkspaceId);
+    } else {
+      // Create a new workspace (default behavior)
+      const wsName = workspaceName || `${name}'s Workspace`;
+      workspace = await storage.createWorkspace(wsName, user.id);
+    }
 
     // Set session
     req.session.userId = user.id;
-    req.session.workspaceId = workspace.id;
+    req.session.workspaceId = workspace!.id;
     req.session.email = user.email;
 
     res.json({
       user: { id: user.id, email: user.email, name: user.name },
-      workspace: { id: workspace.id, name: workspace.name, slug: workspace.slug },
+      workspace: { id: workspace!.id, name: workspace!.name, slug: workspace!.slug },
     });
   } catch (error: any) {
     console.error("[Auth] Signup error:", error.message);
     res.status(500).json({ error: "Failed to create account" });
+  }
+});
+
+// ─── List Available Workspaces (for signup) ────────────────────────────────
+
+authRouter.get("/workspaces", async (_req: Request, res: Response) => {
+  try {
+    const workspaces = await storage.getAllWorkspaces();
+    res.json({ workspaces });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 

@@ -61,6 +61,7 @@ export const companyLists = pgTable("company_lists", {
   workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
   name: text("name").notNull(),
   description: text("description"),
+  isShared: boolean("is_shared").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   workspaceIdx: index("lists_workspace_idx").on(table.workspaceId),
@@ -83,6 +84,7 @@ export const frameworks = pgTable("frameworks", {
   topicDescription: text("topic_description"),
   version: integer("version").notNull().default(1),
   isActive: boolean("is_active").notNull().default(false),
+  isShared: boolean("is_shared").notNull().default(false),
   trustedSourceIds: jsonb("trusted_source_ids").$type<number[]>(),
   searchTemplates: jsonb("search_templates").$type<string[]>(),
   negativeKeywords: jsonb("negative_keywords").$type<string[]>(),
