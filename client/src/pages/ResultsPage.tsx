@@ -38,7 +38,7 @@ export default function ResultsPage() {
     }
 
     // Build headers: company info + 6 columns per measure + source documents
-    const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total"];
+    const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total", "Coverage Level", "Missing Tier 1 Sources"];
     const measureHeaders: string[] = [];
     for (const title of measureTitles) {
       measureHeaders.push(`${title} - Score`);
@@ -60,6 +60,8 @@ export default function ResultsPage() {
         row.totalScore ?? 0,
         row.measuresMetCount ?? "",
         row.measuresTotalCount ?? "",
+        row.coverageLevel || "unknown",
+        (row.missingTier1 || []).join("; "),
       ];
 
       // Build a lookup from document title -> URL using sourceDocuments

@@ -153,10 +153,19 @@ async function runFetchPhase(opts: {
     console.log(`[${companyName}] Reused ${reusedCount} documents from global content cache (cross-workspace)`);
   }
 
-  // Save discovery diagnostics
+  // Save discovery diagnostics (includes coverage metric)
   await storage.updateCompany(companyId, workspaceId, {
     discoveryDiagnostics: discoveryResult.diagnostics as any,
   });
+
+  // Log coverage level for monitoring
+  const coverage = discoveryResult.diagnostics.coverage;
+  if (coverage) {
+    console.log(`[${companyName}] Document coverage: ${coverage.coverageLevel} | Tier1: ${coverage.tier1Count}, Tier2: ${coverage.tier2Count}, Tier3: ${coverage.tier3Count}`);
+    if (coverage.coverageLevel === "minimal" || coverage.coverageLevel === "low") {
+      console.warn(`[${companyName}] LOW COVERAGE WARNING: Missing ${coverage.missingTier1Types.join(", ") || "key filings"}. Results may be unreliable.`);
+    }
+  }
 
   if (cancelCheck?.()) {
     await storage.updateCompany(companyId, workspaceId, { analysisStatus: "idle" });

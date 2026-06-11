@@ -246,6 +246,11 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       // Get source documents used in analysis
       const docs = await storage.getFetchedDocuments(company.id);
       const sourceDocuments = docs.map(d => ({ url: d.url, title: d.title || d.url }));
+      // Extract coverage level from discovery diagnostics
+      const diagnostics = company.discoveryDiagnostics as any;
+      const coverageLevel = diagnostics?.coverage?.coverageLevel || "unknown";
+      const missingTier1 = diagnostics?.coverage?.missingTier1Types || [];
+
       resultsData.push({
         companyId: company.id,
         companyName: company.name,
@@ -256,6 +261,8 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         measuresMetCount: company.measuresMetCount || 0,
         measuresTotalCount: company.measuresTotalCount || 0,
         summary: company.summary || undefined,
+        coverageLevel,
+        missingTier1,
         sourceDocuments,
         measureScores: scores.map(s => ({
           measureId: s.measureId,

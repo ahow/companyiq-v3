@@ -4,8 +4,271 @@ import { completeWithFallback } from "./ai-providers.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 
 const MAX_DOCS_RETURNED = 60;
-const PRE_GATE_CAP = 150;
+const PRE_GATE_CAP = 180;
 const SEARCH_TIMEOUT = 15000;
+
+// ─── Document Tier Classification ──────────────────────────────────────────
+// Tier 1 (mandatory): 10-K, 20-F, annual report, proxy/DEF 14A, AGM circular
+// Tier 2 (priority): Investor presentations, governance pages, AI/responsible-AI policy, press releases
+// Tier 3 (supplementary): ESG/sustainability reports, CDP responses, third-party assessments
+// Tier 4 (noise): Podcasts, app stores, job listings, unrelated third-party content
+
+export type DocumentTier = 1 | 2 | 3 | 4;
+
+export function classifyDocumentTier(url: string, title: string): DocumentTier {
+  const urlLower = url.toLowerCase();
+  const titleLower = title.toLowerCase();
+
+  // ─── Tier 4: Noise (deny-listed sources) ─────────────────────────────
+  if (isUrlDenied(urlLower)) return 4;
+
+  // ─── Tier 1: Mandatory filings ───────────────────────────────────────
+  const tier1Patterns = [
+    /10-?k/i, /20-?f/i, /def.?14a/i, /proxy.?statement/i,
+    /annual.?report/i, /agm.?circular/i, /annual.?general.?meeting/i,
+    /integrated.?report/i,
+  ];
+  const tier1Domains = ["sec.gov", "sedarplus.ca", "asx.com.au", "hkexnews.hk"];
+
+  if (tier1Domains.some(d => urlLower.includes(d))) return 1;
+  if (tier1Patterns.some(p => p.test(urlLower) || p.test(titleLower))) return 1;
+
+  // ─── Tier 2: Priority corporate disclosures ──────────────────────────
+  const tier2Patterns = [
+    /investor.?relation/i, /investor.?presentation/i, /investor.?day/i,
+    /capital.?markets.?day/i, /earnings/i, /governance/i,
+    /responsible.?ai/i, /ai.?policy/i, /ai.?ethics/i, /ai.?principles/i,
+    /corporate.?governance/i, /board.?of.?directors/i,
+    /press.?release/i, /newsroom/i, /media.?release/i,
+    /strategy.?presentation/i, /pillar.?3/i, /risk.?factor/i,
+    /r&d.?day/i, /research.?day/i, /science.?day/i,
+  ];
+
+  if (tier2Patterns.some(p => p.test(urlLower) || p.test(titleLower))) return 2;
+
+  // ─── Tier 3: Supplementary (ESG, sustainability, CDP, etc.) ──────────
+  const tier3Patterns = [
+    /sustainab/i, /esg/i, /cdp/i, /tcfd/i, /tnfd/i,
+    /climate/i, /environment/i, /csr/i, /social.?responsibility/i,
+  ];
+
+  if (tier3Patterns.some(p => p.test(urlLower) || p.test(titleLower))) return 3;
+
+  // Default: Tier 3 (supplementary — unknown type, not noise)
+  return 3;
+}
+
+// ─── URL Deny List (Hard Block at Retrieval) ───────────────────────────────
+// These URLs are NEVER useful for corporate disclosure analysis.
+// They are excluded before entering the candidate pool.
+
+const DENY_LIST_DOMAINS = [
+  // Podcast / media platforms
+  "podcasts.apple.com", "music.apple.com", "apps.apple.com", "itunes.apple.com",
+  "open.spotify.com", "soundcloud.com", "anchor.fm", "podcasts.google.com",
+  // App stores
+  "play.google.com", "store.steampowered.com", "apps.microsoft.com",
+  // Social media (non-corporate)
+  "tiktok.com", "pinterest.com", "tumblr.com", "reddit.com", "quora.com",
+  // Job boards
+  "indeed.com", "glassdoor.com", "linkedin.com/jobs", "ziprecruiter.com",
+  "lever.co", "greenhouse.io", "workday.com/en-us/careers",
+  // Generic aggregators / wikis
+  "wikipedia.org", "wikimedia.org", "fandom.com",
+  // Video platforms (unless corporate channel)
+  "youtube.com/watch", "vimeo.com",
+  // Academic / non-corporate
+  "arxiv.org", "ssrn.com", "researchgate.net",
+  // E-commerce
+  "amazon.com/dp", "amazon.com/gp", "ebay.com",
+  // News aggregators (not primary sources)
+  "news.google.com", "news.yahoo.com",
+];
+
+const DENY_LIST_PATH_PATTERNS = [
+  /\/jobs\//i, /\/careers\//i, /\/job-listing/i,
+  /\/recipe/i, /\/shop\//i, /\/store\//i,
+  /\/playlist/i, /\/episode/i, /\/podcast/i,
+];
+
+function isUrlDenied(urlLower: string): boolean {
+  if (DENY_LIST_DOMAINS.some(d => urlLower.includes(d))) return true;
+  if (DENY_LIST_PATH_PATTERNS.some(p => p.test(urlLower))) return true;
+  return false;
+}
+
+// ─── Coverage Metric ───────────────────────────────────────────────────────
+
+export interface CoverageMetric {
+  tier1Count: number; // 10-K, proxy, annual report
+  tier2Count: number; // IR, governance, AI policy, press
+  tier3Count: number; // ESG, sustainability
+  tier4Count: number; // Noise (should be 0 after filtering)
+  has10KOrAnnualReport: boolean;
+  hasProxyOrDEF14A: boolean;
+  hasInvestorPresentation: boolean;
+  hasGovernancePage: boolean;
+  hasAIPolicy: boolean;
+  coverageLevel: "full" | "adequate" | "low" | "minimal";
+  missingTier1Types: string[];
+}
+
+export function computeCoverageMetric(documents: DiscoveryCandidate[]): CoverageMetric {
+  let tier1Count = 0, tier2Count = 0, tier3Count = 0, tier4Count = 0;
+  let has10KOrAnnualReport = false;
+  let hasProxyOrDEF14A = false;
+  let hasInvestorPresentation = false;
+  let hasGovernancePage = false;
+  let hasAIPolicy = false;
+
+  for (const doc of documents) {
+    const tier = classifyDocumentTier(doc.url, doc.title);
+    const urlLower = doc.url.toLowerCase();
+    const titleLower = doc.title.toLowerCase();
+
+    switch (tier) {
+      case 1: tier1Count++; break;
+      case 2: tier2Count++; break;
+      case 3: tier3Count++; break;
+      case 4: tier4Count++; break;
+    }
+
+    // Specific type detection
+    if (/10-?k|20-?f|annual.?report|integrated.?report/i.test(urlLower + " " + titleLower)) {
+      has10KOrAnnualReport = true;
+    }
+    if (/def.?14a|proxy.?statement|agm.?circular/i.test(urlLower + " " + titleLower)) {
+      hasProxyOrDEF14A = true;
+    }
+    if (/investor.?presentation|investor.?day|capital.?markets/i.test(urlLower + " " + titleLower)) {
+      hasInvestorPresentation = true;
+    }
+    if (/governance|board.?of.?directors/i.test(urlLower + " " + titleLower)) {
+      hasGovernancePage = true;
+    }
+    if (/responsible.?ai|ai.?policy|ai.?ethics|ai.?principles/i.test(urlLower + " " + titleLower)) {
+      hasAIPolicy = true;
+    }
+  }
+
+  // Determine coverage level
+  const missingTier1Types: string[] = [];
+  if (!has10KOrAnnualReport) missingTier1Types.push("10-K / Annual Report");
+  if (!hasProxyOrDEF14A) missingTier1Types.push("Proxy / DEF 14A");
+
+  let coverageLevel: "full" | "adequate" | "low" | "minimal";
+  if (has10KOrAnnualReport && hasProxyOrDEF14A && (hasInvestorPresentation || hasGovernancePage)) {
+    coverageLevel = "full";
+  } else if (has10KOrAnnualReport || hasProxyOrDEF14A) {
+    coverageLevel = "adequate";
+  } else if (tier1Count > 0 || tier2Count >= 3) {
+    coverageLevel = "low";
+  } else {
+    coverageLevel = "minimal";
+  }
+
+  return {
+    tier1Count, tier2Count, tier3Count, tier4Count,
+    has10KOrAnnualReport, hasProxyOrDEF14A, hasInvestorPresentation,
+    hasGovernancePage, hasAIPolicy,
+    coverageLevel, missingTier1Types,
+  };
+}
+
+// ─── Sector-Specific Source Augmentation ───────────────────────────────────
+
+function buildSectorSpecificQueries(
+  companyName: string,
+  sector: string | null | undefined,
+  framework: Framework
+): string[] {
+  if (!sector) return [];
+  const sectorLower = sector.toLowerCase();
+  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+  const queries: string[] = [];
+
+  // Financials: Pillar 3, risk factors, prudential disclosures
+  if (/financ|bank|insurance|asset.?manage/i.test(sectorLower)) {
+    queries.push(
+      `"${companyName}" Pillar 3 disclosure 2024 OR 2023`,
+      `"${companyName}" risk management framework`,
+      `"${companyName}" operational risk OR model risk`,
+    );
+    if (/ai|artificial|machine/i.test(topic)) {
+      queries.push(
+        `"${companyName}" model risk management AI OR "machine learning"`,
+        `"${companyName}" operational resilience AI OR automation`,
+      );
+    }
+  }
+
+  // Pharma / Healthcare: R&D day, clinical AI, regulatory submissions
+  if (/pharma|health|biotech|life.?science|medical/i.test(sectorLower)) {
+    queries.push(
+      `"${companyName}" R&D day OR research day presentation`,
+      `"${companyName}" science day OR pipeline day`,
+      `"${companyName}" regulatory submission OR FDA`,
+    );
+    if (/ai|artificial|machine/i.test(topic)) {
+      queries.push(
+        `"${companyName}" AI drug discovery OR clinical AI`,
+        `"${companyName}" real world evidence AI OR machine learning`,
+      );
+    }
+  }
+
+  // Industrials / Manufacturing: Capital markets day, operational technology
+  if (/industrial|manufactur|engineer|aerospace|defense|auto/i.test(sectorLower)) {
+    queries.push(
+      `"${companyName}" capital markets day 2024 OR 2023`,
+      `"${companyName}" technology day OR innovation day`,
+      `"${companyName}" operational technology strategy`,
+    );
+    if (/ai|artificial|machine/i.test(topic)) {
+      queries.push(
+        `"${companyName}" predictive maintenance AI OR machine learning`,
+        `"${companyName}" autonomous systems OR digital twin`,
+      );
+    }
+  }
+
+  // Technology: Already well-served by existing lanes, but add AI-specific
+  if (/technolog|software|semiconductor|telecom/i.test(sectorLower)) {
+    if (/ai|artificial|machine/i.test(topic)) {
+      queries.push(
+        `"${companyName}" responsible AI report OR AI transparency`,
+        `"${companyName}" AI safety OR AI governance framework`,
+        `"${companyName}" model card OR AI impact assessment`,
+      );
+    }
+  }
+
+  // Energy / Utilities: Grid modernization, operational AI
+  if (/energy|utilit|oil|gas|mining|basic.?material/i.test(sectorLower)) {
+    queries.push(
+      `"${companyName}" technology strategy OR digital transformation`,
+    );
+    if (/ai|artificial|machine/i.test(topic)) {
+      queries.push(
+        `"${companyName}" grid optimization AI OR predictive analytics`,
+        `"${companyName}" digital operations AI OR automation`,
+        `"${companyName}" exploration technology AI OR machine learning`,
+      );
+    }
+  }
+
+  // Real Estate: PropTech, smart buildings
+  if (/real.?estate|property|reit/i.test(sectorLower)) {
+    if (/ai|artificial|machine/i.test(topic)) {
+      queries.push(
+        `"${companyName}" smart building AI OR proptech`,
+        `"${companyName}" digital strategy OR technology investment`,
+      );
+    }
+  }
+
+  return queries;
+}
 
 // ─── Search API Keys ────────────────────────────────────────────────────────
 
@@ -803,6 +1066,7 @@ export interface DiscoveryDiagnostics {
   finalCount: number;
   lanes: Record<string, number>;
   topUrls: Array<{ url: string; title: string; priority: number }>;
+  coverage?: CoverageMetric;
 }
 
 export interface DiscoveryResult {
@@ -832,6 +1096,11 @@ export async function searchCompanyDocuments(opts: {
 
   function addCandidate(result: SearchResult, lane: string) {
     if (seenUrls.has(result.link)) return;
+    // Hard deny-list filter: block noise URLs before they enter the candidate pool
+    if (isUrlDenied(result.link.toLowerCase())) {
+      laneCounts["denied"] = (laneCounts["denied"] || 0) + 1;
+      return;
+    }
     seenUrls.add(result.link);
     const priority = calculatePriority(result.link, result.title, companyDomain || null, framework);
     allCandidates.push({
@@ -984,6 +1253,21 @@ export async function searchCompanyDocuments(opts: {
     for (const r of results) addCandidate(r, "investor-relations");
   }
 
+  // Lane 10: Sector-specific source augmentation
+  // Adds targeted queries based on the company's sector:
+  // - Financials: Pillar 3, model risk, operational resilience
+  // - Pharma: R&D day, clinical AI, FDA submissions
+  // - Industrials: Capital markets day, operational technology
+  // - Energy/Utilities: Grid optimization, digital operations
+  if (opts.sector) {
+    console.log(`[${companyName}] Running sector-specific search lane (sector: ${opts.sector})`);
+    const sectorQueries = buildSectorSpecificQueries(companyName, opts.sector, framework);
+    for (const query of sectorQueries) {
+      const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+      for (const r of results) addCandidate(r, "sector-specific");
+    }
+  }
+
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);
 
   // Cap before gate to bound LLM cost
@@ -1002,10 +1286,26 @@ export async function searchCompanyDocuments(opts: {
 
   console.log(`[${companyName}] Gate accepted ${accepted.length} documents`);
 
+  // Tier-based re-ranking: boost Tier 1 and Tier 2 documents to ensure they
+  // are included even if their raw priority score is lower than ESG reports.
+  for (const doc of accepted) {
+    const tier = classifyDocumentTier(doc.url, doc.title);
+    if (tier === 1) doc.priority -= 15; // Strong boost for mandatory filings
+    else if (tier === 2) doc.priority -= 7; // Moderate boost for priority disclosures
+    // Tier 3 stays as-is; Tier 4 should already be filtered by deny list
+  }
+
   // Sort by priority and cap
   const finalDocs = accepted
     .sort((a, b) => a.priority - b.priority)
     .slice(0, MAX_DOCS_RETURNED);
+
+  // Compute coverage metric
+  const coverage = computeCoverageMetric(finalDocs);
+  console.log(`[${companyName}] Coverage: ${coverage.coverageLevel} (Tier1: ${coverage.tier1Count}, Tier2: ${coverage.tier2Count}, Tier3: ${coverage.tier3Count})`);
+  if (coverage.missingTier1Types.length > 0) {
+    console.warn(`[${companyName}] Missing mandatory sources: ${coverage.missingTier1Types.join(", ")}`);
+  }
 
   const diagnostics: DiscoveryDiagnostics = {
     totalCandidates: allCandidates.length,
@@ -1017,6 +1317,7 @@ export async function searchCompanyDocuments(opts: {
       title: d.title,
       priority: d.priority,
     })),
+    coverage,
   };
 
   return { documents: finalDocs, diagnostics };
