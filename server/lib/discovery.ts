@@ -177,6 +177,62 @@ export function computeCoverageMetric(documents: DiscoveryCandidate[]): Coverage
 
 // ─── Sector-Specific Source Augmentation ───────────────────────────────────
 
+// ─── Universal Disclosure Queries (Lane 10a — runs for ALL companies) ────────
+// These are document types and disclosure formats that exist across all sectors.
+// Previously some were incorrectly gated behind sector checks.
+
+function buildUniversalDisclosureQueries(
+  companyName: string,
+  framework: Framework
+): string[] {
+  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+  const frameworkName = (framework.name || "").toLowerCase();
+  const queries: string[] = [];
+
+  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+
+  // Capital markets day / investor day / strategy day — every sector holds these
+  queries.push(
+    `"${companyName}" capital markets day 2024 OR 2025 OR 2023`,
+    `"${companyName}" strategy day OR technology day OR innovation day`,
+  );
+
+  // Risk management framework — universal
+  queries.push(
+    `"${companyName}" risk management framework 2024 OR 2023`,
+  );
+
+  // Digital transformation / technology strategy — universal
+  queries.push(
+    `"${companyName}" digital transformation strategy`,
+    `"${companyName}" technology strategy OR technology investment`,
+  );
+
+  // Responsible AI / AI governance — relevant for ANY company using AI, not just tech
+  if (isAIRelated) {
+    queries.push(
+      `"${companyName}" responsible AI report OR responsible AI principles`,
+      `"${companyName}" AI governance framework OR AI policy`,
+      `"${companyName}" AI safety OR AI ethics OR AI transparency`,
+      `"${companyName}" AI impact assessment OR model card`,
+      `"${companyName}" operational resilience AI OR automation`,
+      `"${companyName}" predictive maintenance AI OR machine learning`,
+      `"${companyName}" digital operations AI OR automation`,
+    );
+  }
+
+  // Regulatory submissions — universal (every regulated company files with some authority)
+  queries.push(
+    `"${companyName}" regulatory submission OR regulatory filing 2024 OR 2023`,
+  );
+
+  return queries;
+}
+
+// ─── Sector-Specific Queries (Lane 10b — only for terminology unique to a sector) ──
+// These queries use terminology that is genuinely specific to one sector and would
+// produce noise or irrelevant results if applied to other sectors.
+
 function buildSectorSpecificQueries(
   companyName: string,
   sector: string | null | undefined,
@@ -187,27 +243,24 @@ function buildSectorSpecificQueries(
   const topic = (framework.topicDescription || framework.name || "").toLowerCase();
   const queries: string[] = [];
 
-  // Financials: Pillar 3, risk factors, prudential disclosures
+  // Financials: Pillar 3 (Basel III specific), CCAR/DFAST stress testing, Solvency II
   if (/financ|bank|insurance|asset.?manage/i.test(sectorLower)) {
     queries.push(
       `"${companyName}" Pillar 3 disclosure 2024 OR 2023`,
-      `"${companyName}" risk management framework`,
-      `"${companyName}" operational risk OR model risk`,
+      `"${companyName}" operational risk OR model risk management`,
     );
     if (/ai|artificial|machine/i.test(topic)) {
       queries.push(
-        `"${companyName}" model risk management AI OR "machine learning"`,
-        `"${companyName}" operational resilience AI OR automation`,
+        `"${companyName}" model risk management AI OR "machine learning" SR 11-7`,
       );
     }
   }
 
-  // Pharma / Healthcare: R&D day, clinical AI, regulatory submissions
+  // Pharma / Healthcare: R&D day, pipeline day, FDA-specific terminology
   if (/pharma|health|biotech|life.?science|medical/i.test(sectorLower)) {
     queries.push(
-      `"${companyName}" R&D day OR research day presentation`,
-      `"${companyName}" science day OR pipeline day`,
-      `"${companyName}" regulatory submission OR FDA`,
+      `"${companyName}" R&D day OR research day OR pipeline day presentation`,
+      `"${companyName}" science day presentation`,
     );
     if (/ai|artificial|machine/i.test(topic)) {
       queries.push(
@@ -217,52 +270,33 @@ function buildSectorSpecificQueries(
     }
   }
 
-  // Industrials / Manufacturing: Capital markets day, operational technology
+  // Industrials: OT-specific terminology
   if (/industrial|manufactur|engineer|aerospace|defense|auto/i.test(sectorLower)) {
     queries.push(
-      `"${companyName}" capital markets day 2024 OR 2023`,
-      `"${companyName}" technology day OR innovation day`,
-      `"${companyName}" operational technology strategy`,
+      `"${companyName}" operational technology OT strategy`,
     );
     if (/ai|artificial|machine/i.test(topic)) {
       queries.push(
-        `"${companyName}" predictive maintenance AI OR machine learning`,
         `"${companyName}" autonomous systems OR digital twin`,
       );
     }
   }
 
-  // Technology: Already well-served by existing lanes, but add AI-specific
-  if (/technolog|software|semiconductor|telecom/i.test(sectorLower)) {
-    if (/ai|artificial|machine/i.test(topic)) {
-      queries.push(
-        `"${companyName}" responsible AI report OR AI transparency`,
-        `"${companyName}" AI safety OR AI governance framework`,
-        `"${companyName}" model card OR AI impact assessment`,
-      );
-    }
-  }
-
-  // Energy / Utilities: Grid modernization, operational AI
+  // Energy / Utilities: Grid-specific, exploration-specific
   if (/energy|utilit|oil|gas|mining|basic.?material/i.test(sectorLower)) {
-    queries.push(
-      `"${companyName}" technology strategy OR digital transformation`,
-    );
     if (/ai|artificial|machine/i.test(topic)) {
       queries.push(
         `"${companyName}" grid optimization AI OR predictive analytics`,
-        `"${companyName}" digital operations AI OR automation`,
-        `"${companyName}" exploration technology AI OR machine learning`,
+        `"${companyName}" exploration technology AI OR seismic interpretation`,
       );
     }
   }
 
-  // Real Estate: PropTech, smart buildings
+  // Real Estate: PropTech-specific
   if (/real.?estate|property|reit/i.test(sectorLower)) {
     if (/ai|artificial|machine/i.test(topic)) {
       queries.push(
         `"${companyName}" smart building AI OR proptech`,
-        `"${companyName}" digital strategy OR technology investment`,
       );
     }
   }
@@ -1253,12 +1287,19 @@ export async function searchCompanyDocuments(opts: {
     for (const r of results) addCandidate(r, "investor-relations");
   }
 
-  // Lane 10: Sector-specific source augmentation
-  // Adds targeted queries based on the company's sector:
-  // - Financials: Pillar 3, model risk, operational resilience
-  // - Pharma: R&D day, clinical AI, FDA submissions
-  // - Industrials: Capital markets day, operational technology
-  // - Energy/Utilities: Grid optimization, digital operations
+  // Lane 10a: Universal disclosure queries (runs for ALL companies)
+  // Cross-sector document types: capital markets day, risk frameworks,
+  // responsible AI, digital transformation, regulatory filings.
+  console.log(`[${companyName}] Running universal disclosure search lane`);
+  const universalQueries = buildUniversalDisclosureQueries(companyName, framework);
+  for (const query of universalQueries) {
+    const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+    for (const r of results) addCandidate(r, "universal-disclosure");
+  }
+
+  // Lane 10b: Sector-specific terminology (only if sector is known)
+  // Only queries that use jargon unique to one sector (e.g., Pillar 3 for banks,
+  // R&D day for pharma, OT strategy for industrials).
   if (opts.sector) {
     console.log(`[${companyName}] Running sector-specific search lane (sector: ${opts.sector})`);
     const sectorQueries = buildSectorSpecificQueries(companyName, opts.sector, framework);
