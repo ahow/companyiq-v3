@@ -359,8 +359,15 @@ export async function linkExistingContent(companyId: number): Promise<number> {
 }
 
 export async function clearDiscoveredDocuments(companyId: number) {
+  // Clear PENDING documents (never fetched from prior runs)
   await db.delete(schema.documents).where(
     and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "pending"))
+  );
+  // Also clear DEAD documents (failed fetches from prior runs) — these are noise
+  // that should not persist across re-discovery runs. Successfully fetched docs
+  // (status: "ok") are preserved for reuse.
+  await db.delete(schema.documents).where(
+    and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "dead"))
   );
 }
 
@@ -392,6 +399,12 @@ export async function resetAllCompanies(workspaceId: number): Promise<number> {
     DELETE FROM measure_scores WHERE company_id IN (
       SELECT id FROM companies WHERE workspace_id = ${workspaceId}
     )
+  `);
+  // Clear dead and pending documents so fresh discovery can find better sources
+  await db.execute(sql`
+    DELETE FROM documents WHERE company_id IN (
+      SELECT id FROM companies WHERE workspace_id = ${workspaceId}
+    ) AND fetch_status IN ('pending', 'dead')
   `);
   // Reset all companies in one UPDATE
   const result = await db.execute(sql`
@@ -426,6 +439,12 @@ export async function resetListCompanies(listId: number, workspaceId: number): P
     DELETE FROM measure_scores WHERE company_id IN (
       SELECT company_id FROM company_list_members WHERE list_id = ${listId}
     )
+  `);
+  // Clear dead and pending documents so fresh discovery can find better sources
+  await db.execute(sql`
+    DELETE FROM documents WHERE company_id IN (
+      SELECT company_id FROM company_list_members WHERE list_id = ${listId}
+    ) AND fetch_status IN ('pending', 'dead')
   `);
   // Reset companies in this list
   await db.execute(sql`

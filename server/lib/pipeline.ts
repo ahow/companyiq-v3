@@ -264,8 +264,32 @@ async function runFetchPhase(opts: {
         );
 
         if (content && content.length > 50) {
-          await storage.recordFetchSuccess(companyId, doc.url, content);
-          newFetchCount++;
+          // POST-FETCH VALIDATION: Verify the document content actually relates
+          // to the target company. This catches cases where the gate accepted a
+          // document based on title/URL, but the actual content is about a
+          // different company entirely.
+          const contentLower = content.toLowerCase();
+          const companyNameLower = companyName.toLowerCase();
+          // Build name variants to check (full name, key words, domain)
+          const nameVariants: string[] = [companyNameLower];
+          // Add individual significant words (3+ chars) from company name
+          const nameWords = companyNameLower.split(/[\s,\.\-&]+/).filter(w => w.length >= 3 && !['inc', 'ltd', 'plc', 'corp', 'group', 'the', 'and', 'company', 'limited', 'corporation', 'holdings'].includes(w));
+          if (nameWords.length > 0) nameVariants.push(...nameWords);
+          // Add domain if available
+          if (companyDomain && companyDomain.length > 3) {
+            nameVariants.push(companyDomain.replace(/\.(com|org|net|co|io)$/i, ''));
+          }
+
+          const mentionsCompany = nameVariants.some(variant => contentLower.includes(variant));
+
+          if (mentionsCompany) {
+            await storage.recordFetchSuccess(companyId, doc.url, content);
+            newFetchCount++;
+          } else {
+            // Content doesn't mention the company at all — likely a wrong document
+            console.warn(`[${companyName}] POST-FETCH REJECT: ${doc.url.slice(0, 80)} — content does not mention company`);
+            await storage.recordFetchFailure(companyId, doc.url);
+          }
         } else {
           await storage.recordFetchFailure(companyId, doc.url);
         }

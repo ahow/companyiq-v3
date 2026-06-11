@@ -1044,9 +1044,12 @@ async function runRelevanceGate(
       .map((c, idx) => `${idx + 1}. URL: ${c.url}\n   Title: ${c.title}\n   Snippet: ${c.snippet}`)
       .join("\n\n");
 
-    try {
-      const { text } = await completeWithFallback(gateModel, {
-        system: `You are a strict document relevance classifier for corporate disclosure analysis. Given a list of URLs found for a specific company, classify each as "accept" or "reject".
+    // Retry up to 2 times on failure before rejecting the batch
+    let gateSuccess = false;
+    for (let attempt = 0; attempt < 2 && !gateSuccess; attempt++) {
+      try {
+        const { text } = await completeWithFallback(gateModel, {
+          system: `You are a strict document relevance classifier for corporate disclosure analysis. Given a list of URLs found for a specific company, classify each as "accept" or "reject".
 
 ACCEPT ONLY:
 - Corporate reports, filings, policy documents, governance pages, sustainability reports, annual reports, and other substantive disclosures that are SPECIFICALLY ABOUT THIS EXACT COMPANY
@@ -1068,24 +1071,31 @@ CRITICAL RULES:
 2. If the title mentions another company name prominently, REJECT it
 3. When in doubt, REJECT rather than accept — false positives are more harmful than false negatives
 4. Pay close attention to the company identity (sector, country, domain) to distinguish from similarly-named entities`,
-        prompt: `Company: ${companyName}${identityBlock}\nAnalysis topic: ${framework.topicDescription || framework.name}\n\nClassify each URL as relevant to THIS SPECIFIC COMPANY's disclosures:\n\n${urlList}\n\nReturn a JSON array of objects: [{"index": 1, "verdict": "accept"|"reject", "reason": "brief reason"}]`,
-        json: true,
-        maxTokens: 2000,
-      });
+          prompt: `Company: ${companyName}${identityBlock}\nAnalysis topic: ${framework.topicDescription || framework.name}\n\nClassify each URL as relevant to THIS SPECIFIC COMPANY's disclosures:\n\n${urlList}\n\nReturn a JSON array of objects: [{"index": 1, "verdict": "accept"|"reject", "reason": "brief reason"}]`,
+          json: true,
+          maxTokens: 2000,
+        });
 
-      const verdicts = JSON.parse(text);
-      for (const v of verdicts) {
-        const idx = v.index - 1;
-        if (idx >= 0 && idx < batch.length) {
-          if (v.verdict === "accept") {
-            accepted.push(batch[idx]);
+        const verdicts = JSON.parse(text);
+        for (const v of verdicts) {
+          const idx = v.index - 1;
+          if (idx >= 0 && idx < batch.length) {
+            if (v.verdict === "accept") {
+              accepted.push(batch[idx]);
+            }
           }
         }
+        gateSuccess = true;
+      } catch (error: any) {
+        if (attempt === 0) {
+          console.warn(`[Discovery] Gate batch attempt ${attempt + 1} failed: ${error.message}, retrying...`);
+          await new Promise(r => setTimeout(r, 2000));
+        } else {
+          // FAIL-CLOSED: On persistent failure, REJECT the entire batch
+          // This prevents unrelated documents from polluting the corpus
+          console.warn(`[Discovery] Gate batch REJECTED (all ${batch.length} candidates) after 2 failed attempts: ${error.message}`);
+        }
       }
-    } catch (error: any) {
-      // On gate failure, accept all in this batch (fail-open)
-      console.warn(`[Discovery] Gate batch failed: ${error.message}, accepting all`);
-      accepted.push(...batch);
     }
   }
 
@@ -1311,8 +1321,43 @@ export async function searchCompanyDocuments(opts: {
 
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);
 
+  // PRE-GATE HEURISTIC: Remove candidates whose title prominently mentions
+  // a DIFFERENT company name. This catches obvious cross-company contamination
+  // cheaply before the LLM gate runs.
+  const companyNameLower = companyName.toLowerCase();
+  const companyNameWords = companyNameLower.split(/[\s,\.\-&]+/).filter(w => w.length >= 3 && !['inc', 'ltd', 'plc', 'corp', 'group', 'the', 'and', 'company', 'limited', 'corporation', 'holdings', 'international'].includes(w));
+  const KNOWN_OTHER_COMPANIES = [
+    "blackrock", "vanguard", "state street", "fidelity", "jpmorgan", "goldman sachs",
+    "morgan stanley", "citigroup", "bank of america", "wells fargo", "hsbc", "barclays",
+    "deutsche bank", "ubs", "credit suisse", "bnp paribas", "societe generale",
+    "atlassian", "salesforce", "microsoft", "google", "amazon", "meta", "apple",
+    "nvidia", "tesla", "oracle", "ibm", "intel", "cisco", "adobe", "netflix",
+    "glaukos", "cirrus logic", "american integrity",
+  ];
+
+  const filteredCandidates = allCandidates.filter(c => {
+    const titleLower = c.title.toLowerCase();
+    // If title contains the target company name, always keep
+    if (companyNameWords.some(w => titleLower.includes(w))) return true;
+    // If title prominently mentions a known OTHER company, reject
+    const mentionsOther = KNOWN_OTHER_COMPANIES.some(other => {
+      // Don't reject if the other company name is part of our company name
+      if (companyNameLower.includes(other)) return false;
+      return titleLower.includes(other);
+    });
+    if (mentionsOther) {
+      laneCounts["pre-gate-rejected"] = (laneCounts["pre-gate-rejected"] || 0) + 1;
+      return false;
+    }
+    return true;
+  });
+
+  if (filteredCandidates.length < allCandidates.length) {
+    console.log(`[${companyName}] Pre-gate heuristic removed ${allCandidates.length - filteredCandidates.length} candidates mentioning other companies`);
+  }
+
   // Cap before gate to bound LLM cost
-  const preGateCandidates = allCandidates
+  const preGateCandidates = filteredCandidates
     .sort((a, b) => a.priority - b.priority)
     .slice(0, PRE_GATE_CAP);
 

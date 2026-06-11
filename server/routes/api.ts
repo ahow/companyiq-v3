@@ -83,6 +83,8 @@ apiRouter.post("/companies/:id/reset", async (req: Request, res: Response) => {
     const { workspaceId } = getSessionContext(req);
     const companyId = parseInt(req.params.id);
     await storage.clearMeasureScores(companyId);
+    // Also clear dead documents so fresh discovery can find better sources
+    await storage.clearDiscoveredDocuments(companyId);
     await storage.updateCompany(companyId, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
     res.json({ success: true });
   } catch (error: any) {
