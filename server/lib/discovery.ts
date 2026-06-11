@@ -4,7 +4,7 @@ import { completeWithFallback } from "./ai-providers.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 
 const MAX_DOCS_RETURNED = 60;
-const PRE_GATE_CAP = 120;
+const PRE_GATE_CAP = 150;
 const SEARCH_TIMEOUT = 15000;
 
 // ─── Search API Keys ────────────────────────────────────────────────────────
@@ -391,6 +391,116 @@ function buildCJKQueries(companyName: string, framework: Framework): string[] {
   ];
 }
 
+// ─── Regulatory Filing Queries (Lane 8) ──────────────────────────────────────
+
+/**
+ * Generates search queries targeting SEC filings (10-K, DEF 14A proxy),
+ * annual reports, and equivalent regulatory filings for non-US companies.
+ * These are critical for topics like AI governance where evidence often
+ * appears in risk factors, board oversight sections, and proxy statements
+ * rather than ESG/sustainability reports.
+ */
+function buildRegulatoryFilingQueries(companyName: string, framework: Framework): string[] {
+  const queries: string[] = [];
+  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+  const frameworkName = (framework.name || "").toLowerCase();
+
+  // Core filing queries (always run regardless of topic)
+  queries.push(
+    `"${companyName}" 10-K annual report filetype:pdf`,
+    `"${companyName}" proxy statement DEF 14A`,
+    `"${companyName}" annual report 2024 OR 2023`,
+    `site:sec.gov "${companyName}" 10-K`,
+    `site:sec.gov "${companyName}" DEF 14A`,
+  );
+
+  // Topic-specific filing queries
+  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+  const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
+
+  if (isAIRelated) {
+    queries.push(
+      `"${companyName}" 10-K "artificial intelligence" OR "machine learning"`,
+      `"${companyName}" proxy "artificial intelligence" OR "AI" board oversight`,
+      `"${companyName}" annual report AI strategy OR AI risk`,
+      `"${companyName}" 20-F "artificial intelligence"`, // non-US filers on US exchanges
+    );
+  } else if (isClimateRelated) {
+    queries.push(
+      `"${companyName}" 10-K climate risk OR "climate-related"`,
+      `"${companyName}" proxy climate OR sustainability oversight`,
+      `"${companyName}" annual report emissions OR net zero`,
+    );
+  } else {
+    // Generic topic in filings
+    const topicWords = topic.split(/\s+/).filter(w => w.length > 3).slice(0, 3).join(" ");
+    queries.push(
+      `"${companyName}" 10-K ${topicWords}`,
+      `"${companyName}" proxy statement ${topicWords}`,
+      `"${companyName}" annual report ${topicWords}`,
+    );
+  }
+
+  // Non-US equivalents
+  queries.push(
+    `"${companyName}" annual report governance 2024 OR 2023`,
+    `"${companyName}" integrated report 2024 OR 2023`,
+  );
+
+  return queries;
+}
+
+// ─── Investor Relations Queries (Lane 9) ──────────────────────────────────────
+
+/**
+ * Generates queries targeting investor relations pages, earnings presentations,
+ * and strategic disclosures that often contain governance/strategy evidence
+ * not found in ESG reports.
+ */
+function buildInvestorRelationsQueries(
+  companyName: string,
+  effectiveDomain: string | null,
+  framework: Framework
+): string[] {
+  const queries: string[] = [];
+  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+  const frameworkName = (framework.name || "").toLowerCase();
+
+  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+
+  // Domain-anchored IR queries (most valuable — finds the actual IR page)
+  if (effectiveDomain) {
+    queries.push(
+      `site:${effectiveDomain} investor relations`,
+      `site:${effectiveDomain} annual report 2024 OR 2023`,
+      `site:${effectiveDomain} proxy statement`,
+    );
+    if (isAIRelated) {
+      queries.push(
+        `site:${effectiveDomain} investor presentation AI`,
+        `site:${effectiveDomain} earnings AI OR "artificial intelligence"`,
+        `site:${effectiveDomain} strategy AI`,
+      );
+    }
+  }
+
+  // General IR queries
+  queries.push(
+    `"${companyName}" investor presentation 2024 OR 2025`,
+    `"${companyName}" investor day OR capital markets day`,
+  );
+
+  if (isAIRelated) {
+    queries.push(
+      `"${companyName}" investor presentation AI strategy`,
+      `"${companyName}" earnings call AI OR "artificial intelligence" transcript`,
+      `"${companyName}" capital expenditure AI OR "artificial intelligence"`,
+    );
+  }
+
+  return queries;
+}
+
 // ─── Auto-Domain Inference ─────────────────────────────────────────────────
 
 /**
@@ -546,6 +656,14 @@ function calculatePriority(
     "annual-report": -4,
     proxy: -3,
     "def-14a": -5,
+    "10-k": -5,
+    "10k": -5,
+    "20-f": -5,
+    "investor-relations": -4,
+    "investors": -3,
+    "investor-presentation": -4,
+    "earnings": -3,
+    "integrated-report": -4,
   };
   for (const [slug, bonus] of Object.entries(slugBonuses)) {
     if (urlLower.includes(slug)) priority += bonus;
@@ -561,6 +679,17 @@ function calculatePriority(
   const newsDomains = ["reuters.com", "bloomberg.com", "cnbc.com", "bbc.com", "medium.com"];
   if (newsDomains.some((d) => urlLower.includes(d))) {
     priority += 5;
+  }
+
+  // Podcast / app-store / media platform penalty (high false-positive rate)
+  const mediaPlatforms = [
+    "podcasts.apple.com", "music.apple.com", "apps.apple.com", "itunes.apple.com",
+    "open.spotify.com", "soundcloud.com", "anchor.fm",
+    "play.google.com", "store.steampowered.com",
+    "tiktok.com", "pinterest.com", "tumblr.com",
+  ];
+  if (mediaPlatforms.some((d) => urlLower.includes(d))) {
+    priority += 30; // Heavy penalty — these almost never contain corporate disclosures
   }
 
   // Negative keywords penalty
@@ -833,6 +962,26 @@ export async function searchCompanyDocuments(opts: {
   for (const query of multiDocQueries) {
     const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
     for (const r of results) addCandidate(r, "multi-doc");
+  }
+
+  // Lane 8: SEC / Regulatory Filings (10-K, proxy DEF 14A, annual reports)
+  // These are critical for non-ESG topics where evidence lives in financial filings
+  // rather than sustainability reports.
+  console.log(`[${companyName}] Running SEC/regulatory filing search lane`);
+  const filingQueries = buildRegulatoryFilingQueries(companyName, framework);
+  for (const query of filingQueries) {
+    const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+    for (const r of results) addCandidate(r, "regulatory");
+  }
+
+  // Lane 9: Investor Relations / Annual Report direct search
+  // Targets investor presentations, earnings transcripts, and annual reports
+  // that often contain strategy/governance disclosures missed by ESG-focused queries.
+  console.log(`[${companyName}] Running investor relations search lane`);
+  const irQueries = buildInvestorRelationsQueries(companyName, effectiveDomain, framework);
+  for (const query of irQueries) {
+    const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+    for (const r of results) addCandidate(r, "investor-relations");
   }
 
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);

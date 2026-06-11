@@ -128,6 +128,23 @@ function PipelineSettings() {
             </select>
           </div>
 
+          {/* Low-Confidence Handling */}
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div>
+              <div className="font-medium text-gray-900">Low-Confidence Positive Handling</div>
+              <div className="text-sm text-gray-500">What to do when a positive score has Low confidence (e.g. unverified quotes)</div>
+            </div>
+            <select
+              value={settings?.low_confidence_handling || "downgrade"}
+              onChange={(e) => updateSetting("low_confidence_handling", e.target.value)}
+              className="px-3 py-1.5 border rounded-lg text-sm"
+            >
+              <option value="downgrade">Downgrade to Partial</option>
+              <option value="flag">Flag for Review</option>
+              <option value="keep">Keep as-is</option>
+            </select>
+          </div>
+
           {/* Primary Scoring Provider */}
           <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
             <div>

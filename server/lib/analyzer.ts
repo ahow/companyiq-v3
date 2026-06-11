@@ -49,6 +49,7 @@ interface AnalysisSettings {
   twoPromptExtractionEnabled: boolean;
   crossVerifyEnabled: boolean;
   scoringMode: string;
+  lowConfidenceHandling: string; // "keep" | "downgrade" | "flag"
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -66,6 +67,7 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     twoPromptExtractionEnabled: settings.two_prompt_extraction_enabled === "true",
     crossVerifyEnabled: settings.cross_verify_enabled === "true",
     scoringMode: settings.scoring_mode || "binary",
+    lowConfidenceHandling: settings.low_confidence_handling || "downgrade",
   };
 }
 
@@ -162,6 +164,111 @@ ${evidenceText || "[No relevant evidence found in the document corpus]"}
 Evaluate this measure and return a JSON object with exactly these fields:
 {
   "score": 0 or 1,
+  "verdict": "Yes" | "No" | "Partial",
+  "confidence": "High" | "Medium" | "Low",
+  "evidenceSummary": "One paragraph explaining your assessment",
+  "quotes": [{"text": "verbatim quote from evidence", "source": "exact document title from --- DOCUMENT: <title> [url] --- header"}],
+  "verdictNuance": "optional caveats or notes" or null
+}`;
+
+  return { system, prompt };
+}
+
+// ─── Partial Scoring Prompt ─────────────────────────────────────────────────
+
+function buildPartialScoringPrompt(opts: {
+  companyName: string;
+  measure: FrameworkMeasure;
+  evidenceText: string;
+  terminology?: TerminologyMap;
+  topicDescription: string;
+  temporalWarning?: string | null;
+}): { system: string; prompt: string } {
+  const { companyName, measure, evidenceText, terminology, topicDescription, temporalWarning } = opts;
+
+  let terminologyBlock = "";
+  if (terminology) {
+    terminologyBlock = `\nCOMPANY TERMINOLOGY NOTE:
+This company uses the following specific terms for this topic. Treat these as equivalent to the framework's canonical terms when evaluating evidence:
+- Committees: ${terminology.committees.join(", ") || "None identified"}
+- Roles: ${terminology.roles.join(", ") || "None identified"}
+- Programmes: ${terminology.programmes.join(", ") || "None identified"}
+- Products/Policies: ${terminology.productsAndPolicies.join(", ") || "None identified"}
+- Other terms: ${terminology.otherTerms.join(", ") || "None identified"}
+Do not penalise evidence for using these terms instead of the framework's language.\n`;
+  }
+
+  const system = `You are an expert ESG/governance analyst scoring corporate disclosures against a structured assessment framework.
+
+Topic: ${topicDescription}
+
+SCORING RULES (Partial Credit Mode):
+- Score 1 (Yes): The company provides clear, specific evidence that FULLY addresses this measure. At least one verbatim quote from the source documents must support the score.
+- Score 0.5 (Partial): The company provides SOME evidence that partially addresses this measure, but it is incomplete, indirect, or does not fully satisfy all aspects of the requirement. A supporting quote should be provided where possible.
+- Score 0 (No): No evidence found, or evidence is too vague/generic to confirm any aspect of the specific requirement.
+
+WHEN TO USE PARTIAL (0.5):
+- The company addresses the topic generally but not the specific requirement (e.g., mentions AI but not AI governance specifically)
+- Evidence exists for some but not all components of a multi-part measure
+- The evidence is from a related initiative or programme that implies but does not explicitly confirm the requirement
+- A policy or commitment exists but lacks specificity, metrics, or implementation details
+- Evidence is outdated or from a superseded document but no current replacement is found
+
+CONFIDENCE LEVELS:
+- High: Clear evidence found (for Yes) or thorough search with no evidence (for No)
+- Medium: Evidence is ambiguous or indirect
+- Low: Document corpus may be incomplete or in a language not fully analyzed
+
+CRITICAL ANTI-INFERENCE RULES:
+1. You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided.
+2. DO NOT infer that a company has a specific target or policy because they are a member of an alliance or initiative. Alliance membership alone does not constitute evidence of a specific company-level commitment.
+3. DO NOT infer that a policy applies to all sectors or all activities if the text only names specific sectors.
+4. DO NOT conflate different types of financing activity.
+5. DO NOT conflate absolute emissions targets with emissions intensity targets.
+6. If the evidence does not contain an explicit, direct statement satisfying the measure, you MUST score it 0 or 0.5 (not 1).
+7. Pay careful attention to the TEMPORAL VALIDITY of evidence.
+
+CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
+CRITICAL: For the "source" field in quotes, you MUST use the EXACT document title as it appears in the "--- DOCUMENT: <title> [<url>] ---" headers in the evidence text.
+${terminologyBlock}`;
+
+  let scoringGuidance = "";
+  if (measure.scoringGuidance) {
+    let sg: any;
+    try {
+      sg = typeof measure.scoringGuidance === "string"
+        ? JSON.parse(measure.scoringGuidance)
+        : measure.scoringGuidance;
+    } catch {
+      sg = { yes: measure.scoringGuidance, no: "", partial: "" };
+    }
+    scoringGuidance = `\nScoring guidance:\n- Yes (1): ${sg.yes || "Clear evidence fully satisfying the requirement"}\n- Partial (0.5): ${sg.partial || "Some evidence but incomplete or indirect"}\n- No (0): ${sg.no || "No evidence found"}`;
+    if (sg.explicit_exclusions && Array.isArray(sg.explicit_exclusions) && sg.explicit_exclusions.length > 0) {
+      scoringGuidance += `\n\nEXPLICIT EXCLUSIONS (do NOT score Yes if only this evidence exists):\n${sg.explicit_exclusions.map((e: string) => `- ${e}`).join("\n")}`;
+    }
+    if (sg.required_evidence_type) {
+      scoringGuidance += `\n\nREQUIRED EVIDENCE TYPE: ${sg.required_evidence_type}`;
+    }
+    if (sg.temporal_note) {
+      scoringGuidance += `\n\nTEMPORAL NOTE: ${sg.temporal_note}`;
+    }
+  }
+
+  const temporalBlock = temporalWarning ? `\n${temporalWarning}\n` : "";
+
+  const prompt = `Company: ${companyName}
+${temporalBlock}
+MEASURE TO EVALUATE:
+Title: ${measure.title}
+Definition: ${measure.definition || measure.title}
+${scoringGuidance}
+
+EVIDENCE TEXT:
+${evidenceText || "[No relevant evidence found in the document corpus]"}
+
+Evaluate this measure and return a JSON object with exactly these fields:
+{
+  "score": 0 or 0.5 or 1,
   "verdict": "Yes" | "No" | "Partial",
   "confidence": "High" | "Medium" | "Low",
   "evidenceSummary": "One paragraph explaining your assessment",
@@ -646,6 +753,7 @@ export async function analyzeCompanyMeasures(opts: {
           topicDescription: framework.topicDescription || framework.name,
           provider: scoringProvider,
           temporalWarning: tw,
+          scoringMode: settings.scoringMode,
         });
       }
 
@@ -660,6 +768,24 @@ export async function analyzeCompanyMeasures(opts: {
           measureResult.verdictNuance = (measureResult.verdictNuance || "") +
             " [Note: Some quotes could not be verified verbatim in source text]";
         }
+      }
+
+      // Low-confidence positive handling
+      if (measureResult.score > 0 && measureResult.confidence === "Low") {
+        if (settings.lowConfidenceHandling === "downgrade") {
+          // Downgrade to Partial (0.5) — preserves the evidence but reduces the score
+          if (measureResult.score === 1) {
+            measureResult.score = 0.5;
+            measureResult.verdict = "Partial";
+            measureResult.verdictNuance = (measureResult.verdictNuance || "") +
+              " [Auto-downgraded: Low confidence positive reduced to Partial]";
+          }
+        } else if (settings.lowConfidenceHandling === "flag") {
+          // Flag for review — keep score but mark in nuance
+          measureResult.verdictNuance = (measureResult.verdictNuance || "") +
+            " [NEEDS REVIEW: Low confidence positive — manual verification recommended]";
+        }
+        // "keep" = do nothing, accept the score as-is
       }
 
       // Source normalization: ensure quote sources match actual document titles
@@ -686,8 +812,8 @@ export async function analyzeCompanyMeasures(opts: {
     }
   }
 
-  // Roll up scores
-  const maxPossibleScore = measures.length; // binary mode: 1 per measure
+  // Roll up scores (works for both binary and partial mode since partial gives 0.5)
+  const maxPossibleScore = measures.length; // 1 per measure max
   const totalScore = allResults.reduce((sum, r) => sum + r.score, 0);
   const scorePercentage = Math.round((totalScore / maxPossibleScore) * 100);
 
@@ -721,17 +847,15 @@ async function scoreSingleMeasure(opts: {
   topicDescription: string;
   provider: string;
   temporalWarning?: string | null;
+  scoringMode?: string;
 }): Promise<MeasureResult> {
-  const { companyName, measure, evidenceText, terminology, topicDescription, provider, temporalWarning } = opts;
+  const { companyName, measure, evidenceText, terminology, topicDescription, provider, temporalWarning, scoringMode } = opts;
 
-  const { system, prompt } = buildBinaryScoringPrompt({
-    companyName,
-    measure,
-    evidenceText,
-    terminology,
-    topicDescription,
-    temporalWarning,
-  });
+  // Choose prompt based on scoring mode
+  const usePartial = scoringMode === "partial";
+  const { system, prompt } = usePartial
+    ? buildPartialScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning })
+    : buildBinaryScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning });
 
   try {
     const { text } = await completeWithFallback(provider, {
@@ -743,18 +867,37 @@ async function scoreSingleMeasure(opts: {
 
     const parsed = extractAndParseJSON(text);
 
+    // Parse score: in partial mode allow 0, 0.5, 1; in binary mode coerce to 0 or 1
+    let score: number;
+    if (usePartial) {
+      const rawScore = parseFloat(parsed.score);
+      if (rawScore >= 0.75) score = 1;
+      else if (rawScore >= 0.25) score = 0.5;
+      else score = 0;
+    } else {
+      score = parsed.score === 1 ? 1 : 0;
+    }
+
+    // Determine verdict from score
+    let verdict: "Yes" | "No" | "Partial";
+    if (parsed.verdict && ["Yes", "No", "Partial"].includes(parsed.verdict)) {
+      verdict = parsed.verdict;
+    } else {
+      verdict = score === 1 ? "Yes" : score === 0.5 ? "Partial" : "No";
+    }
+
     return {
       measureId: measure.measureId,
       title: measure.title,
       definition: measure.definition,
       category: measure.category,
       categoryNumber: measure.categoryNumber,
-      score: parsed.score === 1 ? 1 : 0,
+      score,
       coverage: null,
       confidence: parsed.confidence || "Medium",
       evidenceSummary: parsed.evidenceSummary || "No evidence found",
       quotes: Array.isArray(parsed.quotes) ? parsed.quotes : [],
-      verdict: parsed.verdict || (parsed.score === 1 ? "Yes" : "No"),
+      verdict,
       verdictNuance: parsed.verdictNuance || null,
       displayOrder: measure.displayOrder,
     };
@@ -806,12 +949,13 @@ async function scoreWithEnsemble(opts: {
       topicDescription,
       provider,
       temporalWarning,
+      scoringMode: settings.scoringMode,
     });
     results.push(result);
   }
 
-  // Aggregation: "Any Valid Pass" for binary
-  // If any pass produces score=1 with verified quotes, use it
+  // Aggregation logic that supports both binary and partial modes
+  // Priority: score=1 with quotes > score=0.5 with quotes > score=0
   const positiveResults = results.filter((r) => r.score === 1 && r.quotes.length > 0);
   if (positiveResults.length > 0) {
     // Merge quotes from all positive passes
@@ -823,6 +967,20 @@ async function scoreWithEnsemble(opts: {
       ...positiveResults[0],
       quotes: uniqueQuotes,
       confidence: positiveResults.length >= 2 ? "High" : "Medium",
+    };
+  }
+
+  // In partial mode: check for partial results (score=0.5)
+  const partialResults = results.filter((r) => r.score === 0.5 && r.quotes.length > 0);
+  if (partialResults.length > 0) {
+    const allQuotes = partialResults.flatMap((r) => r.quotes);
+    const uniqueQuotes = allQuotes.filter(
+      (q, idx) => allQuotes.findIndex((oq) => oq.text === q.text) === idx
+    );
+    return {
+      ...partialResults[0],
+      quotes: uniqueQuotes,
+      confidence: partialResults.length >= 2 ? "Medium" : "Low",
     };
   }
 
