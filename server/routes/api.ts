@@ -106,11 +106,53 @@ apiRouter.post("/lists/:id/reset", async (req: Request, res: Response) => {
   }
 });
 
-// Reset all companies in workspace
+// Reset all companies in workspace (soft: keeps ok documents)
 apiRouter.post("/companies/reset-all", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
     const resetCount = await storage.resetAllCompanies(workspaceId);
+    res.json({ success: true, resetCount });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Full reset a single company (purge ALL documents including ok)
+apiRouter.post("/companies/:id/full-reset", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const companyId = parseInt(req.params.id);
+    await storage.clearMeasureScores(companyId);
+    await storage.fullResetCompanyDocuments(companyId);
+    await storage.updateCompany(companyId, workspaceId, {
+      analysisStatus: "idle", totalScore: null, summary: null,
+      measuresMet: null, measuresTotal: null, discoveryDiagnostics: null
+    } as any);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Full reset all companies in a list (purge ALL documents)
+apiRouter.post("/lists/:id/full-reset", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const listId = parseInt(req.params.id);
+    const list = await storage.getListById(listId, workspaceId);
+    if (!list) return res.status(404).json({ error: "List not found" });
+    const resetCount = await storage.fullResetListCompanies(listId, workspaceId);
+    res.json({ success: true, resetCount, listName: list.name });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Full reset all companies in workspace (purge ALL documents)
+apiRouter.post("/companies/full-reset-all", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const resetCount = await storage.fullResetAllCompanies(workspaceId);
     res.json({ success: true, resetCount });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

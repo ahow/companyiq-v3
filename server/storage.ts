@@ -371,6 +371,73 @@ export async function clearDiscoveredDocuments(companyId: number) {
   );
 }
 
+// Full reset: purge ALL documents including successfully fetched ones
+export async function fullResetCompanyDocuments(companyId: number) {
+  await db.delete(schema.documents).where(eq(schema.documents.companyId, companyId));
+}
+
+// Bulk full reset all companies in a workspace (purge ALL documents)
+export async function fullResetAllCompanies(workspaceId: number): Promise<number> {
+  // Delete all measure scores for companies in this workspace
+  await db.execute(sql`
+    DELETE FROM measure_scores WHERE company_id IN (
+      SELECT id FROM companies WHERE workspace_id = ${workspaceId}
+    )
+  `);
+  // Delete ALL documents (including ok) for a completely fresh start
+  await db.execute(sql`
+    DELETE FROM documents WHERE company_id IN (
+      SELECT id FROM companies WHERE workspace_id = ${workspaceId}
+    )
+  `);
+  // Reset all companies
+  await db.execute(sql`
+    UPDATE companies SET
+      analysis_status = 'idle',
+      total_score = NULL,
+      summary = NULL,
+      measures_met_count = NULL,
+      measures_total_count = NULL,
+      discovery_diagnostics = NULL,
+      updated_at = NOW()
+    WHERE workspace_id = ${workspaceId}
+  `);
+  const countResult = await db.execute(sql`SELECT COUNT(*) as cnt FROM companies WHERE workspace_id = ${workspaceId}`);
+  return (countResult.rows[0] as any)?.cnt || 0;
+}
+
+// Bulk full reset all companies in a specific list (purge ALL documents)
+export async function fullResetListCompanies(listId: number, workspaceId: number): Promise<number> {
+  // Delete measure scores for companies in this list
+  await db.execute(sql`
+    DELETE FROM measure_scores WHERE company_id IN (
+      SELECT company_id FROM company_list_members WHERE list_id = ${listId}
+    )
+  `);
+  // Delete ALL documents (including ok)
+  await db.execute(sql`
+    DELETE FROM documents WHERE company_id IN (
+      SELECT company_id FROM company_list_members WHERE list_id = ${listId}
+    )
+  `);
+  // Reset companies in this list
+  await db.execute(sql`
+    UPDATE companies SET
+      analysis_status = 'idle',
+      total_score = NULL,
+      summary = NULL,
+      measures_met_count = NULL,
+      measures_total_count = NULL,
+      discovery_diagnostics = NULL,
+      updated_at = NOW()
+    WHERE id IN (
+      SELECT company_id FROM company_list_members WHERE list_id = ${listId}
+    ) AND workspace_id = ${workspaceId}
+  `);
+  const countResult = await db.execute(sql`SELECT COUNT(*) as cnt FROM company_list_members WHERE list_id = ${listId}`);
+  return (countResult.rows[0] as any)?.cnt || 0;
+}
+
 // ─── Measure Score Operations ───────────────────────────────────────────────
 
 export async function getMeasureScores(companyId: number, frameworkId?: number) {

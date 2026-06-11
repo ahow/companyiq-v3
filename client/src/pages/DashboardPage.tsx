@@ -121,6 +121,16 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["companies"] }),
   });
 
+  const fullResetListMutation = useMutation({
+    mutationFn: (listId: number) => api.fullResetList(listId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["companies"] }),
+  });
+
+  const fullResetAllMutation = useMutation({
+    mutationFn: () => api.fullResetAll(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["companies"] }),
+  });
+
   const createCompanyMutation = useMutation({
     mutationFn: (data: any) => api.createCompany(data),
     onSuccess: () => {
@@ -318,9 +328,28 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
               onClick={handleReset}
               disabled={batchStatus?.running || companies.length === 0}
               className="flex items-center gap-1 px-3 py-2 text-sm bg-amber-50 border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              title={selectedList ? "Reset all companies in selected list (clear scores)" : "Reset all companies (clear scores)"}
+              title={selectedList ? "Reset all companies in selected list (clear scores, keep cached documents)" : "Reset all companies (clear scores, keep cached documents)"}
             >
               <RotateCcw className="w-4 h-4" /> {selectedList ? "Reset List" : "Reset All"}
+            </button>
+            <button
+              onClick={() => {
+                const target = selectedList
+                  ? `all companies in "${lists.find((l: any) => l.id === selectedList)?.name || "this list"}"`
+                  : `ALL ${companies.length} companies`;
+                if (confirm(`FULL RESET ${target}?\n\nThis will purge ALL documents (including previously fetched ones), scores, and diagnostics. Every company will start from scratch on next analysis.`)) {
+                  if (selectedList) {
+                    fullResetListMutation.mutate(selectedList);
+                  } else {
+                    fullResetAllMutation.mutate();
+                  }
+                }
+              }}
+              disabled={batchStatus?.running || companies.length === 0}
+              className="flex items-center gap-1 px-3 py-2 text-sm bg-red-50 border border-red-300 text-red-700 rounded-lg hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={selectedList ? "Full reset: purge ALL documents and start from scratch" : "Full reset: purge ALL documents for all companies"}
+            >
+              <Trash2 className="w-4 h-4" /> Full Reset
             </button>
           </div>
         </div>
@@ -346,6 +375,22 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
           <RotateCcw className="w-4 h-4 text-amber-600" />
           <span className="text-sm text-amber-700">
             All companies reset successfully. {(resetAllMutation.data as any)?.resetCount} companies cleared.
+          </span>
+        </div>
+      )}
+      {fullResetListMutation.isSuccess && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+          <Trash2 className="w-4 h-4 text-red-600" />
+          <span className="text-sm text-red-700">
+            Full reset complete. {(fullResetListMutation.data as any)?.resetCount} companies purged (all documents removed).
+          </span>
+        </div>
+      )}
+      {fullResetAllMutation.isSuccess && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+          <Trash2 className="w-4 h-4 text-red-600" />
+          <span className="text-sm text-red-700">
+            Full reset complete. {(fullResetAllMutation.data as any)?.resetCount} companies purged (all documents removed).
           </span>
         </div>
       )}

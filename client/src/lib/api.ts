@@ -49,8 +49,11 @@ export const api = {
   updateCompany: (id: number, data: any) => request(`/companies/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteCompany: (id: number) => request(`/companies/${id}`, { method: "DELETE" }),
   resetCompany: (id: number) => request(`/companies/${id}/reset`, { method: "POST" }),
+  fullResetCompany: (id: number) => request(`/companies/${id}/full-reset`, { method: "POST" }),
   resetList: (listId: number) => request(`/lists/${listId}/reset`, { method: "POST" }),
+  fullResetList: (listId: number) => request(`/lists/${listId}/full-reset`, { method: "POST" }),
   resetAll: () => request("/companies/reset-all", { method: "POST" }),
+  fullResetAll: () => request("/companies/full-reset-all", { method: "POST" }),
   importCompanies: (data: any) => request("/companies/import", { method: "POST", body: JSON.stringify(data) }),
 
   // Lists
