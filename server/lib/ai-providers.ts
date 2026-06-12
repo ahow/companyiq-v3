@@ -59,7 +59,7 @@ class ClaudeProvider implements AIProvider {
 
 class ClaudeHaikuProvider extends ClaudeProvider {
   constructor() {
-    super("claude-3-5-haiku-20241022");
+    super("claude-haiku-4-20250414");
     this.name = "claude-haiku";
   }
 }
@@ -205,6 +205,18 @@ function initProviders() {
   // Claude Haiku (cheap gate model)
   const haiku = new ClaudeHaikuProvider();
   providers.set("claude-haiku", haiku);
+
+  // GPT-4o-mini (cheap, fast gate model — fallback when Claude is unavailable)
+  const gpt4oMini = new OpenAICompatibleProvider({
+    name: "gpt-4o-mini",
+    model: "gpt-4o-mini",
+    family: "openai",
+    apiKeyEnv: "OPENAI_API_KEY",
+    baseUrl: process.env.OPENAI_API_BASE || "https://api.openai.com/v1",
+    seed: 42,
+    maxOutputTokens: 16384,
+  });
+  providers.set("gpt-4o-mini", gpt4oMini);
 
   // DeepSeek (supports up to 8K output tokens)
   const deepseek = new OpenAICompatibleProvider({

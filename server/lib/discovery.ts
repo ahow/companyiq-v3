@@ -1026,7 +1026,9 @@ async function runRelevanceGate(
   companyName: string,
   companyContext?: { sector?: string | null; country?: string | null; isin?: string | null; domain?: string | null }
 ): Promise<DiscoveryCandidate[]> {
-  const gateModel = "claude-haiku";
+  // Use gpt-4o-mini as primary gate model (cheap, fast, reliable)
+  // Falls back through completeWithFallback chain if unavailable
+  const gateModel = "gpt-4o-mini";
   const batchSize = 20;
   const accepted: DiscoveryCandidate[] = [];
 
@@ -1076,9 +1078,16 @@ CRITICAL RULES:
           maxTokens: 2000,
         });
 
-        const verdicts = JSON.parse(text);
+        const parsed = JSON.parse(text);
+        // Handle both raw arrays and wrapped objects (e.g., {"results": [...]})
+        const verdicts = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed.results) ? parsed.results
+          : Array.isArray(parsed.verdicts) ? parsed.verdicts
+          : Array.isArray(parsed.classifications) ? parsed.classifications
+          : Object.values(parsed).find(v => Array.isArray(v)) || [];
         for (const v of verdicts) {
-          const idx = v.index - 1;
+          const idx = (v.index || v.idx) - 1;
           if (idx >= 0 && idx < batch.length) {
             if (v.verdict === "accept") {
               accepted.push(batch[idx]);
