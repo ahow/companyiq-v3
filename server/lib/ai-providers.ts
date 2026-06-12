@@ -450,12 +450,24 @@ export function getFallbackProviders(primaryName: string): AIProvider[] {
   const available = getAvailableProviders().filter(
     (p) => p.name !== primaryName && p.family !== primary.family
   );
-  // Prioritize cheap, reliable fallbacks first: gpt-4o-mini, then gemini, then gpt-4o.
+  // Fallback ordering reflects the benchmarked quality/cost/reliability tiering
+  // (see MODEL_COMPARISON.md). With DeepSeek V4-Flash as primary, prefer the
+  // independent, high-grounding, reliable routes first and avoid Gemini early
+  // in the chain (it rate-limits under batch load):
+  //   1. openrouter  (DeepSeek V3.1 — 97% grounding, independent network path, ultra-cheap)
+  //   2. openai      (GPT-4o — fast, 100% completion, independent vendor)
+  //   3. claude      (premium, highest-tier reasoning)
+  //   4. everything else (gpt-4o-mini, minimax, mistral, deepseek-pro, gemini, r1)
   const rank = (name: string): number => {
-    if (name === "gpt-4o-mini") return 0;
-    if (name === "gemini") return 1;
-    if (name === "openai") return 2;
-    return 3;
+    if (name === "openrouter") return 0;
+    if (name === "openai") return 1;
+    if (name === "claude") return 2;
+    if (name === "gpt-4o-mini") return 3;
+    if (name === "minimax") return 4;
+    if (name === "mistral") return 5;
+    if (name === "deepseek-pro") return 6;
+    if (name === "gemini") return 7; // de-prioritized: rate-limits under batch load
+    return 8;
   };
   available.sort((a, b) => rank(a.name) - rank(b.name));
   return available;
@@ -467,6 +479,17 @@ export function getIndependentTieBreakerProvider(primaryName: string): AIProvide
   const candidates = getAvailableProviders().filter(
     (p) => p.family !== primary.family && p.name !== "claude-haiku"
   );
+  if (candidates.length === 0) return undefined;
+  // High-tier arbiter preference for the false-negative tie-break (see MODEL_COMPARISON.md):
+  // Claude Sonnet 4.5 is the strongest independent premium reviewer (95% grounding,
+  // 100% completion, balanced strictness) and is a different family from the DeepSeek
+  // primary, so it is the ideal arbiter. GPT-4o is the next independent choice.
+  // (DeepSeek V4-Pro is excluded here because it shares the primary's family.)
+  const preferred = ["claude", "openai"];
+  for (const name of preferred) {
+    const match = candidates.find((p) => p.name === name);
+    if (match) return match;
+  }
   return candidates[0];
 }
 

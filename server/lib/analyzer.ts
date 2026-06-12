@@ -59,7 +59,7 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     ensembleIterations: parseInt(settings.ensemble_iterations || "3"),
     pipelineLlm1: settings.pipeline_llm_1 || "deepseek",
     pipelineLlm2: settings.pipeline_llm_2 || "claude",
-    pipelineLlm3: settings.pipeline_llm_3 || "gemini",
+    pipelineLlm3: settings.pipeline_llm_3 || "openrouter", // V3.1 (independent route); replaces gemini which rate-limits under batch load
     scoringProvider: settings.scoring_provider || "deepseek",
     useBm25Retrieval: settings.use_bm25_retrieval !== "false",
     bm25SkipSummarizationBelowChars: parseInt(settings.bm25_skip_summarization_below_chars || "600000"),
