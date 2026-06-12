@@ -1,6 +1,33 @@
 import Anthropic from "@anthropic-ai/sdk";
 import axios from "axios";
 
+// ─── Key Collection Helper ───────────────────────────────────────────────────
+
+// Collects all keys for a provider from env vars, supporting BOTH:
+//   1. Numbered variants: KEY, KEY2, KEY3, ... (e.g., DEEPSEEK_API_KEY, DEEPSEEK_API_KEY2)
+//   2. Comma-separated values within a single var: KEY="k1,k2,k3"
+// Returns a deduplicated list of non-empty keys for round-robin rotation.
+export function collectApiKeys(baseEnvName: string): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  const addFrom = (raw: string | undefined) => {
+    if (!raw) return;
+    for (const part of raw.split(",").map((k) => k.trim()).filter((k) => k.length > 0)) {
+      if (!seen.has(part)) {
+        seen.add(part);
+        keys.push(part);
+      }
+    }
+  };
+  // Base var (e.g., DEEPSEEK_API_KEY)
+  addFrom(process.env[baseEnvName]);
+  // Numbered variants (e.g., DEEPSEEK_API_KEY2 ... DEEPSEEK_API_KEY10)
+  for (let i = 2; i <= 10; i++) {
+    addFrom(process.env[`${baseEnvName}${i}`]);
+  }
+  return keys;
+}
+
 // ─── Provider Interface ──────────────────────────────────────────────────────
 
 export interface AIProvider {
@@ -23,17 +50,24 @@ class ClaudeProvider implements AIProvider {
   name = "claude";
   model: string;
   family = "anthropic";
-  private client: Anthropic | null = null;
+  private apiKeys: string[];
+  private currentKeyIndex: number = 0;
 
-  constructor(model: string = "claude-sonnet-4-20250514") {
+  constructor(model: string = "claude-sonnet-4-5-20250929") {
     this.model = model;
-    if (process.env.ANTHROPIC_API_KEY) {
-      this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    }
+    // Collect ANTHROPIC_API_KEY, ANTHROPIC_API_KEY2, ANTHROPIC_API_KEY3, ... for rotation
+    this.apiKeys = collectApiKeys("ANTHROPIC_API_KEY");
+  }
+
+  private getNextKey(): string {
+    if (this.apiKeys.length === 0) throw new Error("Claude not configured");
+    const key = this.apiKeys[this.currentKeyIndex % this.apiKeys.length];
+    this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
+    return key;
   }
 
   isAvailable(): boolean {
-    return !!this.client;
+    return this.apiKeys.length > 0;
   }
 
   async complete(opts: {
@@ -43,23 +77,40 @@ class ClaudeProvider implements AIProvider {
     json?: boolean;
     temperature?: number;
   }): Promise<string> {
-    if (!this.client) throw new Error("Claude not configured");
-    const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: Math.min(opts.maxTokens ?? 4096, 8192),
-      temperature: opts.temperature ?? 0,
-      system: opts.system,
-      messages: [{ role: "user", content: opts.prompt }],
-    });
-    const block = response.content[0];
-    if (block.type === "text") return block.text;
-    throw new Error("Unexpected response type from Claude");
+    if (this.apiKeys.length === 0) throw new Error("Claude not configured");
+    // Try each available key once; rotate on rate-limit (429) or auth (401) errors
+    let lastError: any;
+    const attempts = Math.max(1, this.apiKeys.length);
+    for (let i = 0; i < attempts; i++) {
+      const client = new Anthropic({ apiKey: this.getNextKey() });
+      try {
+        const response = await client.messages.create({
+          model: this.model,
+          max_tokens: Math.min(opts.maxTokens ?? 4096, 8192),
+          temperature: opts.temperature ?? 0,
+          system: opts.system,
+          messages: [{ role: "user", content: opts.prompt }],
+        });
+        const block = response.content[0];
+        if (block.type === "text") return block.text;
+        throw new Error("Unexpected response type from Claude");
+      } catch (error: any) {
+        lastError = error;
+        const status = error.status || error.response?.status;
+        if ((status === 429 || status === 401) && i < attempts - 1) {
+          await new Promise(r => setTimeout(r, 500));
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError;
   }
 }
 
 class ClaudeHaikuProvider extends ClaudeProvider {
   constructor() {
-    super("claude-haiku-4-20250414");
+    super("claude-haiku-4-5-20251001");
     this.name = "claude-haiku";
   }
 }
@@ -88,9 +139,9 @@ class OpenAICompatibleProvider implements AIProvider {
     this.name = config.name;
     this.model = config.model;
     this.family = config.family;
-    // Support comma-separated keys for rotation (e.g., DEEPSEEK_API_KEY="key1,key2,key3")
-    const rawKey = process.env[config.apiKeyEnv] || "";
-    this.apiKeys = rawKey.split(",").map(k => k.trim()).filter(k => k.length > 0);
+    // Collect keys for rotation, supporting both numbered variants (KEY, KEY2, KEY3)
+    // and comma-separated values within a single var.
+    this.apiKeys = collectApiKeys(config.apiKeyEnv);
     this.baseUrl = config.baseUrl;
     this.seed = config.seed;
     this.maxOutputTokens = config.maxOutputTokens ?? 8192;
@@ -114,8 +165,6 @@ class OpenAICompatibleProvider implements AIProvider {
     json?: boolean;
     temperature?: number;
   }): Promise<string> {
-    const apiKey = this.getNextKey();
-
     const body: any = {
       model: this.model,
       messages: [
@@ -129,19 +178,38 @@ class OpenAICompatibleProvider implements AIProvider {
     if (this.seed !== undefined) body.seed = this.seed;
     if (opts.json) body.response_format = { type: "json_object" };
 
-    const response = await axios.post(
-      `${this.baseUrl}/chat/completions`,
-      body,
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 120000,
+    // Try each available key once; rotate on rate-limit (429) or auth (401) errors
+    let lastError: any;
+    const attempts = Math.max(1, this.apiKeys.length);
+    for (let i = 0; i < attempts; i++) {
+      const apiKey = this.getNextKey();
+      try {
+        const response = await axios.post(
+          `${this.baseUrl}/chat/completions`,
+          body,
+          {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 120000,
+          }
+        );
+        return response.data.choices[0].message.content;
+      } catch (error: any) {
+        lastError = error;
+        const status = error.response?.status;
+        // Only rotate to another key for rate-limit or auth errors; otherwise fail fast
+        if (status === 429 || status === 401) {
+          if (i < attempts - 1) {
+            await new Promise(r => setTimeout(r, 500));
+            continue;
+          }
+        }
+        throw error;
       }
-    );
-
-    return response.data.choices[0].message.content;
+    }
+    throw lastError;
   }
 }
 
@@ -316,14 +384,14 @@ export function getFallbackProviders(primaryName: string): AIProvider[] {
   const available = getAvailableProviders().filter(
     (p) => p.name !== primaryName && p.family !== primary.family
   );
-  // Prioritize OpenAI as first fallback for reliability
-  available.sort((a, b) => {
-    if (a.name === "openai") return -1;
-    if (b.name === "openai") return 1;
-    if (a.name === "gemini") return -1;
-    if (b.name === "gemini") return 1;
-    return 0;
-  });
+  // Prioritize cheap, reliable fallbacks first: gpt-4o-mini, then gemini, then gpt-4o.
+  const rank = (name: string): number => {
+    if (name === "gpt-4o-mini") return 0;
+    if (name === "gemini") return 1;
+    if (name === "openai") return 2;
+    return 3;
+  };
+  available.sort((a, b) => rank(a.name) - rank(b.name));
   return available;
 }
 

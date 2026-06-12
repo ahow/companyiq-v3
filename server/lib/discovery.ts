@@ -1026,9 +1026,9 @@ async function runRelevanceGate(
   companyName: string,
   companyContext?: { sector?: string | null; country?: string | null; isin?: string | null; domain?: string | null }
 ): Promise<DiscoveryCandidate[]> {
-  // Use gpt-4o-mini as primary gate model (cheap, fast, reliable)
-  // Falls back through completeWithFallback chain if unavailable
-  const gateModel = "gpt-4o-mini";
+  // Use deepseek as primary gate model (cheap, with 3 rotating keys for rate-limit headroom).
+  // Falls back through completeWithFallback chain (gpt-4o-mini, gemini, etc.) if it fails.
+  const gateModel = "deepseek";
   const batchSize = 20;
   const accepted: DiscoveryCandidate[] = [];
 
