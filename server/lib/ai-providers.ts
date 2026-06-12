@@ -127,6 +127,10 @@ class OpenAICompatibleProvider implements AIProvider {
   private seed: number | undefined;
   private maxOutputTokens: number;
 
+  private extraHeaders: Record<string, string>;
+  private supportsJsonMode: boolean;
+  private supportsSeed: boolean;
+
   constructor(config: {
     name: string;
     model: string;
@@ -135,6 +139,9 @@ class OpenAICompatibleProvider implements AIProvider {
     baseUrl: string;
     seed?: number;
     maxOutputTokens?: number;
+    extraHeaders?: Record<string, string>;
+    supportsJsonMode?: boolean;
+    supportsSeed?: boolean;
   }) {
     this.name = config.name;
     this.model = config.model;
@@ -145,6 +152,13 @@ class OpenAICompatibleProvider implements AIProvider {
     this.baseUrl = config.baseUrl;
     this.seed = config.seed;
     this.maxOutputTokens = config.maxOutputTokens ?? 8192;
+    this.extraHeaders = config.extraHeaders ?? {};
+    // JSON mode (response_format) is supported by most OpenAI-compatible APIs, but
+    // not universally (e.g., MiniMax rejects response_format type json_object);
+    // allow opt-out.
+    this.supportsJsonMode = config.supportsJsonMode ?? true;
+    // Mistral's API rejects the `seed` parameter (422 extra_forbidden); allow opt-out.
+    this.supportsSeed = config.supportsSeed ?? true;
   }
 
   private getNextKey(): string {
@@ -175,8 +189,8 @@ class OpenAICompatibleProvider implements AIProvider {
       temperature: opts.temperature ?? 0,
     };
 
-    if (this.seed !== undefined) body.seed = this.seed;
-    if (opts.json) body.response_format = { type: "json_object" };
+    if (this.seed !== undefined && this.supportsSeed) body.seed = this.seed;
+    if (opts.json && this.supportsJsonMode) body.response_format = { type: "json_object" };
 
     // Try each available key once; rotate on rate-limit (429) or auth (401) errors
     let lastError: any;
@@ -191,6 +205,7 @@ class OpenAICompatibleProvider implements AIProvider {
             headers: {
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
+              ...this.extraHeaders,
             },
             timeout: 120000,
           }
@@ -318,8 +333,8 @@ function initProviders() {
     family: "mistral",
     apiKeyEnv: "MISTRAL_API_KEY",
     baseUrl: "https://api.mistral.ai/v1",
-    seed: 42,
     maxOutputTokens: 8192,
+    supportsSeed: false, // Mistral API rejects the seed parameter (422)
   });
   providers.set("mistral", mistral);
 
@@ -334,11 +349,48 @@ function initProviders() {
     model: "MiniMax-Text-01",
     family: "minimax",
     apiKeyEnv: "MINIMAX_API_KEY",
-    baseUrl: "https://api.minimax.chat/v1",
-    seed: 42,
+    baseUrl: "https://api.minimax.io/v1",
     maxOutputTokens: 16384,
+    supportsJsonMode: false, // MiniMax rejects response_format type json_object
   });
   providers.set("minimax", minimax);
+
+  // ─── OpenRouter (gateway to many models, incl. high-tier DeepSeek R1) ──────
+  // Provides access to reasoning models (deepseek/deepseek-r1) and acts as an
+  // additional redundant route for Claude/GPT/Gemini families.
+  const openrouterHeaders = {
+    "HTTP-Referer": "https://app-production-9929.up.railway.app",
+    "X-Title": "CompanyIQ",
+  };
+
+  // Default OpenRouter route: DeepSeek V3.1 chat (fast, cheap, JSON-friendly).
+  const openrouter = new OpenAICompatibleProvider({
+    name: "openrouter",
+    model: "deepseek/deepseek-chat-v3.1",
+    family: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    seed: 42,
+    maxOutputTokens: 16384,
+    extraHeaders: openrouterHeaders,
+  });
+  providers.set("openrouter", openrouter);
+
+  // High-tier DeepSeek reasoning model via OpenRouter (R1). Reasoning models can
+  // emit non-JSON preamble, so JSON mode is disabled; the analyzer extracts JSON
+  // from the response defensively.
+  const deepseekR1 = new OpenAICompatibleProvider({
+    name: "deepseek-r1",
+    model: "deepseek/deepseek-r1-0528",
+    family: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    seed: 42,
+    maxOutputTokens: 16384,
+    extraHeaders: openrouterHeaders,
+    supportsJsonMode: false,
+  });
+  providers.set("deepseek-r1", deepseekR1);
 
   // Kimi (moonshot supports up to 4K output tokens)
   if (!process.env.KIMI_API_KEY) process.env.KIMI_API_KEY = "sk-SqknNt8WxX66s7vDUWcAY6ML7TCR2abC1ZOSRazHhIN5iZQY";
