@@ -313,6 +313,20 @@ function initProviders() {
   });
   providers.set("deepseek", deepseek);
 
+  // DeepSeek V4-Pro (flagship-tier; direct API). Supports JSON mode cleanly and
+  // returns pure JSON with no reasoning preamble (verified), so no special
+  // handling needed. Higher quality than V4-Flash at ~3x the cost.
+  const deepseekPro = new OpenAICompatibleProvider({
+    name: "deepseek-pro",
+    model: "deepseek-v4-pro",
+    family: "deepseek",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+    baseUrl: "https://api.deepseek.com/v1",
+    seed: 42,
+    maxOutputTokens: 8192,
+  });
+  providers.set("deepseek-pro", deepseekPro);
+
   // OpenAI (gpt-4o supports up to 16K output tokens)
   const openai = new OpenAICompatibleProvider({
     name: "openai",

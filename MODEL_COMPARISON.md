@@ -35,7 +35,7 @@ A standalone harness (`server/scripts/benchmark.ts`) imports the **real** produc
 | Measures sampled | 8 per framework (evenly across categories) |
 | Evidence source | Live production DB — real fetched documents, deduplicated via `document_content` |
 | Cells | 40 unique (company × measure) cells |
-| Calls | 40 × 8 models = **320 real scoring calls** |
+| Calls | 40 × 9 models = **360 real scoring calls** |
 | Decoding | `temperature: 0`, `maxTokens: 2000`, JSON mode where supported |
 
 **Quote-grounding metric:** each returned quote is checked for verbatim presence in the evidence text (exact match, with a 60%-contiguous-window fallback). The grounding rate is the fraction of quotes that are genuinely traceable to the source — a direct, objective measure of evidence discipline.
@@ -44,12 +44,13 @@ A standalone harness (`server/scripts/benchmark.ts`) imports the **real** produc
 
 ## 3. Headline results
 
-All metrics computed over the 320 calls. "Quality on success" excludes failed calls so a reliability problem (rate-limits) does not get mislabeled as a quality problem.
+All metrics computed over the 360 calls. "Quality on success" excludes failed calls so a reliability problem (rate-limits) does not get mislabeled as a quality problem.
 
 | Model | Route | Completion | Quote grounding | Consensus agreement | Yes-rate (strictness) | Avg latency | Cost / company (34 meas) |
 |---|---|---:|---:|---:|---:|---:|---:|
 | **DeepSeek V4-Flash** (`deepseek-chat`) | DeepSeek direct | **100%** | **97%** | **100%** | 15% | 4.2 s | **$0.015** |
 | DeepSeek V3.1 | OpenRouter | **100%** | **97%** | 95% | 10% | 17.7 s | $0.029 |
+| **DeepSeek V4-Pro** | DeepSeek direct | 92% | 94% | **97%** | 5% | 18.2 s | $0.046 |
 | Claude Sonnet 4.5 | Anthropic direct | **100%** | 95% | 95% | 20% | 11.6 s | $0.517 |
 | GPT-4o | OpenAI direct | **100%** | 92% | 95% | 15% | 2.9 s | $0.308 |
 | MiniMax-Text-01 | MiniMax direct | **100%** | 92% | 88% | 28% | 12.8 s | $0.036 |
@@ -63,6 +64,7 @@ Notes:
 - **Cost** uses measured token footprint (~2,746 input + 180–460 output tokens per measure) × current per-million pricing (sourced June 2026; see §6).
 - **Gemini's 18% completion** is entirely **rate-limit / quota exhaustion** (33 of 40 calls returned HTTP 429 "quota exceeded" or "high demand"), not a quality defect. On its 7 successful calls its grounding was weaker (64%) and it leaned permissive (high Yes-rate). This empirically reproduces the known batch-reliability issue that already drove the "DeepSeek-primary" preference.
 - **DeepSeek R1** failures were format-related (5 JSON-parse failures from reasoning leakage, 1 other) even after `<think>`-stripping and a JSON-only retry.
+- **DeepSeek V4-Pro** had 3 JSON-parse failures (of 40) on the most evidence-dense measures — as a "thinking" model it occasionally leaks reasoning into the output. This is milder than R1 and is addressable with the same defensive parsing the analyzer already applies.
 
 ---
 
@@ -74,6 +76,7 @@ DeepSeek V4-Flash and DeepSeek V3.1 lead on verbatim grounding (**97%**), with C
 ### Strictness and score inflation
 The frameworks are deliberately hard (low Yes-rates are expected and desirable). Reading the Yes-rate as a strictness dial:
 - **R1 is the strictest** (3% Yes) — but this cuts both ways (see false-negative finding below).
+- **DeepSeek V4-Pro is the next strictest (5% Yes) — and, crucially, its strictness is well-calibrated, not over-rejection** (see below). This makes it the standout "high-tier" candidate.
 - **DeepSeek V4-Flash, GPT-4o** sit at a healthy 15%; **Claude** at 20%.
 - **MiniMax (28%) and Mistral (24%)** are the most permissive — a mild score-inflation tendency, which is the specific failure mode the project's QC preference warns against.
 
@@ -84,6 +87,14 @@ The frameworks are deliberately hard (low Yes-rates are expected and desirable).
 - **MiniMax/Mistral over-accept on borderline measures.** They appear on the "Yes" side of nearly every split (e.g. Capgemini *strategic-AI-partnerships*, Delta *AI-reskilling*), consistent with their higher Yes-rates.
 
 DeepSeek V4-Flash matched the consensus on **100%** of cells — the best stability of any model tested.
+
+### DeepSeek V4-Pro: strict but well-calibrated (the key new finding)
+Unlike R1, V4-Pro's higher strictness is *discriminating*, not *over-rejecting*. Across its 37 successful cells it:
+- diverged from consensus on **only 1 cell** (Capgemini *AI-reskilling-programme*, where it said "No" against four "Yes"),
+- **never** over-accepted (0 cells where it said "Yes" while the majority said "No"), and
+- split from the cheaper V4-Flash on **only 1 of 40 cells**.
+
+In other words, V4-Pro reaches essentially the same verdicts as V4-Flash but is slightly more conservative on genuinely borderline measures — the desirable direction for a framework whose main risk is score inflation. Its one weakness is reliability: 3 JSON-parse failures (92% completion) on the hardest measures, versus V4-Flash's flawless 100%.
 
 ### Reliability under batch load
 This is decisive for CompanyIQ's batch workload. Only five models completed 100% of calls under concurrent load: **DeepSeek V4-Flash, DeepSeek V3.1, Claude, GPT-4o, MiniMax**. Gemini collapsed to 18% on quota; R1 dropped to 85% on format; Mistral had 2 transient 429s.
@@ -100,7 +111,7 @@ Per **full company analysis** (34 measures, single pass):
 | Tier | Models | Cost/company | Relative to DeepSeek |
 |---|---|---:|---:|
 | Ultra-low | DeepSeek V4-Flash $0.015, V3.1 $0.029, MiniMax $0.036 | <$0.04 | 1–2.4× |
-| Low | Gemini $0.052, R1 $0.070 | <$0.08 | 3.5–4.7× |
+| Low | DeepSeek V4-Pro $0.046, Gemini $0.052, R1 $0.070 | <$0.08 | 3–4.7× |
 | Premium | Mistral $0.250, GPT-4o $0.308, **Claude $0.517** | $0.25–0.52 | 17–35× |
 
 At batch scale this dominates the economics. Scoring the full corpus (≈2,565 companies × 34 measures) once:
@@ -110,8 +121,11 @@ At batch scale this dominates the economics. Scoring the full corpus (≈2,565 c
 | DeepSeek V4-Flash | **≈ $38** |
 | DeepSeek V3.1 (OpenRouter) | ≈ $75 |
 | MiniMax | ≈ $92 |
+| DeepSeek V4-Pro | ≈ $118 |
 | GPT-4o | ≈ $790 |
 | Claude Sonnet 4.5 | **≈ $1,325** |
+
+DeepSeek V4-Pro is notable here: it delivers near-Claude-level conservative judgment and the second-best consensus agreement (97%) at **~11× less cost** than Claude and only ~3× more than V4-Flash.
 
 Claude delivers marginally lower grounding (95% vs 97%) and **equal** consensus agreement (95% vs 100%) versus DeepSeek V4-Flash, at **~35× the cost**. For this task, the premium does not buy measurably better evidence discipline.
 
@@ -142,13 +156,14 @@ For CompanyIQ's evidence-based company-analysis task, the data supports a clear 
 | Role | Model | Rationale |
 |---|---|---|
 | **Primary (batch default)** | **DeepSeek V4-Flash** | Best evidence grounding (97%) and verdict stability (100% consensus), 100% completion under load, fastest-tier latency, cheapest by a wide margin. Already the project's chosen primary; the data strongly validates it. |
-| **Backup #1 (quality cross-check / tie-break)** | **Claude Sonnet 4.5** | Highest-tier reasoning, 95% grounding, 100% completion. Use as the arbiter on the ~17% of measures where models split, or for spot-check QA — not as the batch default (35× cost). |
+| **High-tier quality option** | **DeepSeek V4-Pro** | The best new addition. Strict but well-calibrated (5% Yes, 0 over-accepts, 97% consensus), 94% grounding, ~11× cheaper than Claude. Use it as the rigorous "second opinion" / arbiter on borderline measures, or as a higher-conviction batch backend where the 92% completion (fixable parsing) is acceptable. A far better high-tier DeepSeek choice than R1 (4× faster, better calibrated). |
+| **Backup #1 (premium cross-check)** | **Claude Sonnet 4.5** | Highest-tier reasoning, 95% grounding, 100% completion. Use as the arbiter on split measures or spot-check QA — not the batch default (35× cost). |
 | **Backup #2 (independent route, low cost)** | **DeepSeek V3.1 via OpenRouter** | Matches V4-Flash on grounding (97%), independent network path (resilience if DeepSeek-direct rate-limits), still ultra-cheap. |
 | **Tertiary fallback** | **GPT-4o** | Fast, reliable, 92% grounding; a fully independent vendor for redundancy. |
 | **Use with caution** | MiniMax, Mistral | Functional now (after the fixes below) but mildly inflation-prone (higher Yes-rate); acceptable as overflow capacity, not for primary scoring. |
-| **Not recommended as default** | Gemini 2.5 Flash (rate-limits under batch), DeepSeek R1 (too slow at ~49 s/call; over-rejects valid evidence; format instability) | Keep R1 available for optional strict second-opinion on individual measures, not batches. |
+| **Not recommended as default** | Gemini 2.5 Flash (rate-limits under batch), DeepSeek R1 (too slow at ~49 s/call; over-rejects valid evidence; format instability) | V4-Pro now supersedes R1 as the strict high-tier DeepSeek option. |
 
-**Optional high-confidence mode:** for the subset of judgment-heavy measures, an **ensemble** of DeepSeek V4-Flash + Claude with disagreement routed to a tie-break still costs only ~$0.53/company — cheaper than Claude-only, with a built-in audit signal.
+**Optional high-confidence mode:** for the subset of judgment-heavy measures, an **ensemble** of DeepSeek V4-Flash + DeepSeek V4-Pro (with disagreement escalated to Claude) gives a strict, well-calibrated cross-check for only ~$0.06/company — essentially free relative to a Claude-only pass, while keeping a premium arbiter only for the rare splits.
 
 ---
 

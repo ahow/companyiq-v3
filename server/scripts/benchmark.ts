@@ -23,9 +23,10 @@ const { Pool } = pg;
 
 // ─── Candidate models under test ──────────────────────────────────────────────
 // name = provider registry key. Each maps to a model already wired in ai-providers.ts.
-const CANDIDATES = [
+const DEFAULT_CANDIDATES = [
   "claude",       // claude-sonnet-4-5  (current main-analysis primary)
   "deepseek",     // deepseek-chat (direct API) — current batch primary per user pref
+  "deepseek-pro", // deepseek-v4-pro (direct API) — flagship-tier
   "deepseek-r1",  // deepseek/deepseek-r1-0528 via OpenRouter (high-tier reasoning)
   "openrouter",   // deepseek/deepseek-chat-v3.1 via OpenRouter
   "openai",       // gpt-4o
@@ -33,6 +34,10 @@ const CANDIDATES = [
   "gemini",       // gemini-2.5-flash
   "minimax",      // MiniMax-Text-01
 ];
+// Allow overriding the model set for targeted re-runs, e.g. MODELS_OVERRIDE=deepseek-pro
+const CANDIDATES = (process.env.MODELS_OVERRIDE
+  ? process.env.MODELS_OVERRIDE.split(",").map((s) => s.trim()).filter(Boolean)
+  : DEFAULT_CANDIDATES);
 
 // ─── Prompt builder (mirrors analyzer.ts buildBinaryScoringPrompt) ────────────
 function buildBinaryScoringPrompt(opts: {
@@ -228,7 +233,7 @@ async function main() {
     report.companies.push(companyResult);
   }
 
-  const outPath = `/tmp/benchmark_${frameworkId}.json`;
+  const outPath = `/tmp/benchmark_${frameworkId}${process.env.OUT_SUFFIX || ""}.json`;
   fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
   console.error(`\nWrote ${outPath}`);
   await pool.end();
