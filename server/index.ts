@@ -199,9 +199,16 @@ initializeDatabase().then(async () => {
     console.log(`[Server] CompanyIQ v3 running on port ${PORT}`);
     console.log(`[Server] Environment: ${process.env.NODE_ENV || "development"}`);
 
-    // Start the embedded worker
-    const workerId = `worker-${crypto.randomUUID().slice(0, 8)}`;
-    startWorker(workerId);
+    // Start the embedded worker — unless a dedicated worker service is used.
+    // Set RUN_WORKER=false on the web service once the standalone worker
+    // (server/worker-main.ts) is deployed, so the web process stays lean and
+    // heavy Chromium fetching can never affect web availability.
+    if (process.env.RUN_WORKER === "false") {
+      console.log("[Server] RUN_WORKER=false — embedded worker disabled (using dedicated worker service)");
+    } else {
+      const workerId = `worker-${crypto.randomUUID().slice(0, 8)}`;
+      startWorker(workerId);
+    }
   });
 }).catch((err) => {
   console.error("[Server] Failed to initialize database:", err);

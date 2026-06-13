@@ -153,12 +153,26 @@ async function getSharedBrowser(): Promise<any> {
     .launch({
       executablePath,
       headless: true,
+      // Memory/fork-conservative flags. The worker runs many sequential page
+      // loads on a constrained container; these reduce RSS and the number of
+      // helper processes Chromium spawns, mitigating the prior
+      // "spawn /usr/bin/chromium EAGAIN" fork-exhaustion under load.
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--single-process",
+        "--no-zygote",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--disable-translate",
+        "--mute-audio",
+        "--no-first-run",
+        "--disable-software-rasterizer",
+        "--js-flags=--max-old-space-size=256",
       ],
     })
     .then((b: any) => {
