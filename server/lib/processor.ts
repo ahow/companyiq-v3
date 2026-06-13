@@ -113,11 +113,44 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 
 const BROWSER_FETCH_TIMEOUT = 30000;
 
-async function fetchWithBrowser(url: string): Promise<string> {
-  let browser;
-  try {
-    const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium";
-    browser = await puppeteer.launch({
+// Limit how many browser fetches can run at once. Launching/holding many
+// Chromium contexts concurrently exhausts the container's process/fork and
+// memory budget ("fork: Resource temporarily unavailable"), which previously
+// cascaded into an unhandled rejection that crashed the whole process.
+const MAX_CONCURRENT_BROWSER = parseInt(process.env.MAX_CONCURRENT_BROWSER || "2", 10);
+let activeBrowserFetches = 0;
+const browserWaiters: Array<() => void> = [];
+
+async function acquireBrowserSlot(): Promise<void> {
+  if (activeBrowserFetches < MAX_CONCURRENT_BROWSER) {
+    activeBrowserFetches++;
+    return;
+  }
+  await new Promise<void>((resolve) => browserWaiters.push(resolve));
+  activeBrowserFetches++;
+}
+
+function releaseBrowserSlot(): void {
+  activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
+  const next = browserWaiters.shift();
+  if (next) next();
+}
+
+// A single shared Chromium instance is reused across fetches (one new *page* per
+// fetch) instead of launching a fresh browser per document. This drastically
+// reduces process spawns under batch load.
+let sharedBrowser: any = null;
+let sharedBrowserLaunching: Promise<any> | null = null;
+
+async function getSharedBrowser(): Promise<any> {
+  if (sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected()) {
+    return sharedBrowser;
+  }
+  if (sharedBrowserLaunching) return sharedBrowserLaunching;
+
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium";
+  sharedBrowserLaunching = puppeteer
+    .launch({
       executablePath,
       headless: true,
       args: [
@@ -127,15 +160,42 @@ async function fetchWithBrowser(url: string): Promise<string> {
         "--disable-gpu",
         "--single-process",
       ],
+    })
+    .then((b: any) => {
+      sharedBrowser = b;
+      sharedBrowserLaunching = null;
+      // If Chromium dies, clear the handle so the next call relaunches.
+      b.on("disconnected", () => {
+        if (sharedBrowser === b) sharedBrowser = null;
+      });
+      return b;
+    })
+    .catch((err: any) => {
+      sharedBrowserLaunching = null;
+      throw err;
     });
+  return sharedBrowserLaunching;
+}
 
-    const page = await browser.newPage();
+export async function closeSharedBrowser(): Promise<void> {
+  if (sharedBrowser) {
+    try { await sharedBrowser.close(); } catch { /* ignore */ }
+    sharedBrowser = null;
+  }
+}
+
+async function fetchWithBrowser(url: string): Promise<string> {
+  await acquireBrowserSlot();
+  let page: any = null;
+  try {
+    const browser = await getSharedBrowser();
+    page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
     await page.setViewport({ width: 1280, height: 800 });
 
     // Block unnecessary resources to speed up loading
     await page.setRequestInterception(true);
-    page.on("request", (req) => {
+    page.on("request", (req: any) => {
       const resourceType = req.resourceType();
       if (["image", "media", "font", "stylesheet"].includes(resourceType)) {
         req.abort();
@@ -175,13 +235,15 @@ async function fetchWithBrowser(url: string): Promise<string> {
     console.warn(`[Processor] Browser fetch failed for ${url}: ${error.message}`);
     return "";
   } finally {
-    if (browser) {
+    // Close only the page (the shared browser is reused), then free the slot.
+    if (page) {
       try {
-        await browser.close();
+        await page.close();
       } catch (e) {
         // Ignore close errors
       }
     }
+    releaseBrowserSlot();
   }
 }
 

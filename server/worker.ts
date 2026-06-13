@@ -422,4 +422,10 @@ export async function stopWorker(): Promise<void> {
     worker = null;
     console.log("[Worker] Stopped");
   }
+  try {
+    const { closeSharedBrowser } = await import("./lib/processor.js");
+    await closeSharedBrowser();
+  } catch {
+    /* ignore */
+  }
 }

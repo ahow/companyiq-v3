@@ -17,6 +17,64 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = parseInt(process.env.PORT || "3000");
 
+// ─── Log Noise Filter ───────────────────────────────────────────────────────
+// PDF.js (via pdf-parse) emits a high volume of benign warnings while parsing
+// malformed PDFs ("Unknown command", "Badly formatted number", "Ignoring
+// invalid character", flate-stream errors, etc.). Under batch load these can
+// exceed Railway's 500 logs/sec limit and drop genuinely useful log lines.
+// Filter only this known-benign noise; everything else passes through.
+(() => {
+  const NOISE_PATTERNS = [
+    "Unknown command",
+    "Badly formatted number",
+    "Ignoring invalid character",
+    "Unterminated string",
+    "FormatError: Bad encoding in flate stream",
+    "FormatError: Unknown charset format",
+    "getTextContent - ignoring",
+    "Skipping command",
+    "fontRef not available",
+    "Setting up fake worker",
+    "Indexing all PDF objects",
+  ];
+  const isNoise = (args: any[]) =>
+    typeof args[0] === "string" && NOISE_PATTERNS.some((p) => args[0].includes(p));
+  const origLog = console.log.bind(console);
+  const origWarn = console.warn.bind(console);
+  console.log = (...args: any[]) => { if (!isNoise(args)) origLog(...args); };
+  console.warn = (...args: any[]) => { if (!isNoise(args)) origWarn(...args); };
+})();
+
+// ─── Global Safety-Net Handlers ─────────────────────────────────────────────
+// The BullMQ worker runs in this same process. Without these handlers, a single
+// unhandled rejection from the document-fetch pipeline (e.g. a Chromium launch
+// failure under resource pressure) would terminate the entire web server and
+// take the app down. Log and survive instead of crashing.
+
+process.on("unhandledRejection", (reason: any) => {
+  const msg = reason instanceof Error ? `${reason.message}\n${reason.stack}` : String(reason);
+  console.error(`[FATAL-GUARD] Unhandled promise rejection (suppressed, process kept alive): ${msg}`);
+});
+
+process.on("uncaughtException", (err: any) => {
+  const msg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
+  console.error(`[FATAL-GUARD] Uncaught exception (suppressed, process kept alive): ${msg}`);
+});
+
+// Graceful shutdown so in-flight work and the worker close cleanly on deploys.
+async function gracefulShutdown(signal: string) {
+  console.log(`[Server] Received ${signal} — shutting down gracefully...`);
+  try {
+    const { stopWorker } = await import("./worker.js");
+    await stopWorker();
+  } catch (e: any) {
+    console.warn(`[Server] Worker shutdown error (non-fatal): ${e?.message}`);
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", () => { void gracefulShutdown("SIGTERM"); });
+process.on("SIGINT", () => { void gracefulShutdown("SIGINT"); });
+
 // ─── Middleware ─────────────────────────────────────────────────────────────
 
 app.use(cors({
