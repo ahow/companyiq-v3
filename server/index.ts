@@ -117,6 +117,64 @@ app.get("/api/results/:id/share", async (req, res) => {
   }
 });
 
+// ─── Admin: Resume/Enqueue Analysis (token-protected, no session) ───────────
+// Used to resume an interrupted batch for a specific set of companies without a
+// dashboard session. Protected by ADMIN_TOKEN. Runs the exact same enqueue path
+// the /analyze route uses (createBatchRun -> createAnalysisJobs -> addBatchJobs).
+app.post("/api/admin/resume-analysis", async (req, res) => {
+  try {
+    const token = req.header("x-admin-token");
+    if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const { workspaceId, frameworkId, companyIds } = req.body || {};
+    if (!workspaceId || !frameworkId || !Array.isArray(companyIds) || companyIds.length === 0) {
+      return res.status(400).json({ error: "workspaceId, frameworkId and non-empty companyIds[] required" });
+    }
+    const storage = await import("./storage.js");
+    const { addBatchJobs } = await import("./queue.js");
+
+    // Resolve companies within the given workspace
+    const companies: any[] = [];
+    for (const id of companyIds) {
+      const c = await storage.getCompanyById(Number(id), Number(workspaceId));
+      if (c) companies.push(c);
+    }
+    if (companies.length === 0) {
+      return res.status(400).json({ error: "No valid companies found in workspace" });
+    }
+
+    // Reset their status so they re-run cleanly
+    for (const company of companies) {
+      await storage.updateCompany(company.id, Number(workspaceId), { analysisStatus: "idle", totalScore: null, summary: null });
+    }
+
+    const batch = await storage.createBatchRun(Number(workspaceId), Number(frameworkId), companies.length);
+    const jobsData = companies.map((c) => ({
+      workspaceId: Number(workspaceId),
+      batchId: batch.id,
+      companyId: c.id,
+      companyName: c.name,
+      frameworkId: Number(frameworkId),
+    }));
+    const dbJobs = await storage.createAnalysisJobs(jobsData);
+    const queueJobs = dbJobs.map((j: any) => ({
+      jobId: j.id,
+      companyId: j.companyId,
+      frameworkId: j.frameworkId,
+      batchId: batch.id,
+      workspaceId: Number(workspaceId),
+    }));
+    await addBatchJobs(queueJobs, Number(workspaceId), batch.id);
+
+    console.log(`[Admin] Resume enqueued batch ${batch.id} with ${companies.length} companies (workspace ${workspaceId}, framework ${frameworkId})`);
+    res.json({ success: true, batchId: batch.id, enqueued: companies.length, requested: companyIds.length });
+  } catch (error: any) {
+    console.error(`[Admin] resume-analysis error: ${error?.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.use("/api/auth", authRouter);
 app.use("/api", apiRouter);
 app.use("/api/framework-builder", frameworkBuilderRouter);
