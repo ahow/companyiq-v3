@@ -7,6 +7,24 @@ import puppeteer from "puppeteer-core";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+// SEC EDGAR (and sec.report) enforce a Fair Access policy: requests must send a
+// descriptive User-Agent that identifies the requester, otherwise they are
+// rejected with HTTP 403. A browser-style UA is NOT accepted. With a compliant
+// UA + Accept-Encoding, plain HTTP fetches of SEC documents succeed, which means
+// no Chromium browser fallback is needed for the dominant document source and
+// the worker avoids fork-exhaustion ("spawn /usr/bin/chromium EAGAIN").
+const SEC_USER_AGENT =
+  process.env.SEC_USER_AGENT || "CompanyIQ Research admin@pullcite.com";
+
+function isSecHost(url: string): boolean {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === "www.sec.gov" || h === "sec.gov" || h.endsWith(".sec.gov") || h.endsWith("sec.report");
+  } catch {
+    return false;
+  }
+}
+
 const FETCH_TIMEOUT = 15000;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_BASE = 2000;
@@ -42,13 +60,16 @@ async function fetchWithRetry(
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
+      const sec = isSecHost(url);
+      const headers: Record<string, string> = {
+        "User-Agent": sec ? SEC_USER_AGENT : USER_AGENT,
+        Accept: opts.responseType === "arraybuffer"
+          ? "application/pdf"
+          : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+      };
       const response = await axios.get(url, {
-        headers: {
-          "User-Agent": USER_AGENT,
-          Accept: opts.responseType === "arraybuffer"
-            ? "application/pdf"
-            : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
+        headers,
         timeout: FETCH_TIMEOUT,
         responseType: opts.responseType || "text",
         maxRedirects: 5,
@@ -142,6 +163,28 @@ function releaseBrowserSlot(): void {
 let sharedBrowser: any = null;
 let sharedBrowserLaunching: Promise<any> | null = null;
 
+// Circuit breaker: when Chromium cannot be launched because the container is out
+// of fork/process budget ("spawn /usr/bin/chromium EAGAIN" / "Cannot fork"),
+// retrying the launch for every single URL only deepens the fork storm and slows
+// the whole worker to a crawl. Instead, after a launch failure we open a cooldown
+// window during which browser fallback is skipped entirely (the fetch simply
+// returns empty and the analyzer proceeds with the documents it could fetch over
+// HTTP). The window auto-resets so transient pressure can recover.
+const BROWSER_LAUNCH_COOLDOWN_MS = parseInt(process.env.BROWSER_LAUNCH_COOLDOWN_MS || "120000", 10);
+let browserLaunchBlockedUntil = 0;
+
+function isBrowserCircuitOpen(): boolean {
+  return Date.now() < browserLaunchBlockedUntil;
+}
+
+function tripBrowserCircuit(reason: string): void {
+  browserLaunchBlockedUntil = Date.now() + BROWSER_LAUNCH_COOLDOWN_MS;
+  console.warn(
+    `[Processor] Chromium launch circuit OPEN for ${Math.round(BROWSER_LAUNCH_COOLDOWN_MS / 1000)}s (reason: ${reason}). ` +
+    `Skipping browser fallback until cooldown expires.`
+  );
+}
+
 async function getSharedBrowser(): Promise<any> {
   if (sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected()) {
     return sharedBrowser;
@@ -186,6 +229,10 @@ async function getSharedBrowser(): Promise<any> {
     })
     .catch((err: any) => {
       sharedBrowserLaunching = null;
+      const msg = String(err?.message || err);
+      if (/EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch/i.test(msg)) {
+        tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
+      }
       throw err;
     });
   return sharedBrowserLaunching;
@@ -199,6 +246,12 @@ export async function closeSharedBrowser(): Promise<void> {
 }
 
 async function fetchWithBrowser(url: string): Promise<string> {
+  // If the launch circuit is open, skip immediately without acquiring a slot or
+  // attempting another fork. This prevents per-URL launch storms when the
+  // container is out of process budget.
+  if (isBrowserCircuitOpen()) {
+    return "";
+  }
   await acquireBrowserSlot();
   let page: any = null;
   try {
