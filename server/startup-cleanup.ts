@@ -17,28 +17,46 @@ import { db } from "./db.js";
 import { sql } from "drizzle-orm";
 import { getQueue } from "./queue.js";
 
-// Grace period: if a batch was created within this many seconds, skip cleanup entirely.
-// This protects active extractions from being killed by deploys.
-const GRACE_PERIOD_SECONDS = 300; // 5 minutes
+// Activity window: if a running batch has had ANY job claimed or completed within
+// this many seconds, it is considered ALIVE and cleanup is skipped entirely.
+//
+// IMPORTANT: this must be based on recent *job activity*, NOT on how long ago the
+// batch started. Real batches run for many hours, so a start-time-based grace
+// period (the old behavior) would always expire mid-batch and a routine redeploy
+// would then cancel a batch the worker was actively processing. Judging by recent
+// job activity keeps long-running-but-live batches safe across deploys while still
+// cleaning up genuinely orphaned/stalled batches.
+const ACTIVITY_WINDOW_SECONDS = 600; // 10 minutes of no job activity => considered stalled
 
 export async function cleanupOnStartup(): Promise<void> {
   console.log("[Startup] Cleaning up stale jobs from previous server session...");
 
   try {
-    // Check if there's a recently-created running batch within the grace period
-    const recentBatchResult = await db.execute(sql`
-      SELECT id, started_at 
-      FROM batch_runs 
-      WHERE status = 'running' 
-        AND started_at > NOW() - INTERVAL '${sql.raw(String(GRACE_PERIOD_SECONDS))} seconds'
+    // Is there a running batch with recent job activity (claimed or completed)?
+    const activeBatchResult = await db.execute(sql`
+      SELECT b.id,
+             GREATEST(
+               COALESCE(MAX(j.claimed_at), 'epoch'),
+               COALESCE(MAX(j.completed_at), 'epoch'),
+               b.started_at
+             ) AS last_activity
+      FROM batch_runs b
+      JOIN analysis_jobs j ON j.batch_id = b.id
+      WHERE b.status = 'running'
+      GROUP BY b.id, b.started_at
+      HAVING GREATEST(
+               COALESCE(MAX(j.claimed_at), 'epoch'),
+               COALESCE(MAX(j.completed_at), 'epoch'),
+               b.started_at
+             ) > NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds'
       LIMIT 1
     `);
 
-    if (recentBatchResult.rows.length > 0) {
-      const recentBatch = recentBatchResult.rows[0] as any;
+    if (activeBatchResult.rows.length > 0) {
+      const activeBatch = activeBatchResult.rows[0] as any;
       console.log(
-        `[Startup] Found active batch ${recentBatch.id} started at ${recentBatch.started_at} ` +
-        `(within ${GRACE_PERIOD_SECONDS}s grace period) — SKIPPING cleanup to preserve active extraction`
+        `[Startup] Found ACTIVE batch ${activeBatch.id} (last job activity ${activeBatch.last_activity}, ` +
+        `within ${ACTIVITY_WINDOW_SECONDS}s) — SKIPPING cleanup to preserve in-flight processing`
       );
       console.log("[Startup] The worker will resume processing the existing queue on reconnect");
       return;
