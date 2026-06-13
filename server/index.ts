@@ -191,9 +191,16 @@ app.get("*", (req, res) => {
 
 // Initialize database then start server
 initializeDatabase().then(async () => {
-  // Clean up stale jobs from previous server sessions
-  // This ensures analysis only runs when explicitly triggered by the user
-  await cleanupOnStartup();
+  // Clean up stale jobs from previous server sessions.
+  // IMPORTANT: when a dedicated worker service owns the queue (RUN_WORKER=false),
+  // the web service must NOT run cleanup — otherwise a web redeploy would cancel
+  // batches the worker is actively processing (web/worker startup race).
+  // The dedicated worker performs cleanup instead (gated by WORKER_RUN_CLEANUP).
+  if (process.env.RUN_WORKER === "false") {
+    console.log("[Server] RUN_WORKER=false — skipping startup cleanup (owned by dedicated worker service)");
+  } else {
+    await cleanupOnStartup();
+  }
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Server] CompanyIQ v3 running on port ${PORT}`);

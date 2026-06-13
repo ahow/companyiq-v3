@@ -10,10 +10,11 @@
  *
  * Notes:
  * - No Express server is started here; this process only consumes the queue.
- * - Startup cleanup is intentionally NOT run here by default. Cleanup that
- *   cancels stale batches / drains the queue is owned by the web service
- *   (single owner) to avoid two services racing to wipe each other's jobs.
- *   Set WORKER_RUN_CLEANUP=true only if this worker should own cleanup instead.
+ * - Queue lifecycle (cleanup of stale/orphaned jobs) is owned by THIS worker
+ *   service, since it is the only process that consumes the queue. The web
+ *   service must NOT run cleanup (RUN_WORKER=false disables it there), so a web
+ *   redeploy can never cancel batches the worker is actively processing.
+ *   Enable cleanup here by setting WORKER_RUN_CLEANUP=true on the worker service.
  */
 
 import crypto from "crypto";
