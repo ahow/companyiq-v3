@@ -27,17 +27,17 @@ export async function cleanupOnStartup(): Promise<void> {
   try {
     // Check if there's a recently-created running batch within the grace period
     const recentBatchResult = await db.execute(sql`
-      SELECT id, created_at 
+      SELECT id, started_at 
       FROM batch_runs 
       WHERE status = 'running' 
-        AND created_at > NOW() - INTERVAL '${sql.raw(String(GRACE_PERIOD_SECONDS))} seconds'
+        AND started_at > NOW() - INTERVAL '${sql.raw(String(GRACE_PERIOD_SECONDS))} seconds'
       LIMIT 1
     `);
 
     if (recentBatchResult.rows.length > 0) {
       const recentBatch = recentBatchResult.rows[0] as any;
       console.log(
-        `[Startup] Found active batch ${recentBatch.id} created at ${recentBatch.created_at} ` +
+        `[Startup] Found active batch ${recentBatch.id} started at ${recentBatch.started_at} ` +
         `(within ${GRACE_PERIOD_SECONDS}s grace period) — SKIPPING cleanup to preserve active extraction`
       );
       console.log("[Startup] The worker will resume processing the existing queue on reconnect");
