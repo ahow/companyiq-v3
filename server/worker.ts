@@ -36,7 +36,16 @@ export interface AnalysisJobData {
 // ─── Retry Helpers ─────────────────────────────────────────────────────────
 
 function isRetriableError(error: string): boolean {
-  const nonRetriable = ["Company not found", "Framework not found", "No measures in framework", "Could not claim job"];
+  const nonRetriable = [
+    "Company not found",
+    "Framework not found",
+    "No measures in framework",
+    "Could not claim job",
+    // A watchdog timeout means the pipeline hung (typically un-fetchable company /
+    // no domain). Retrying just hangs again for another full timeout window, so
+    // treat it as a final failure to free the slot and let the batch close.
+    "Job watchdog timeout",
+  ];
   return !nonRetriable.some(msg => error.includes(msg));
 }
 
@@ -102,14 +111,30 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
   const cancelCheck = () => cancelledBatches.has(batchId);
 
   try {
-    const result = await runAnalysisPipeline({
-      company,
-      framework,
-      measures,
-      workspaceId,
-      cancelCheck,
-      skipFetch,
-    });
+    // Hard watchdog: the analysis pipeline can occasionally hang on a network
+    // fetch/discovery step that has no inner socket timeout (e.g. companies with
+    // no domain whose document discovery never returns). Without this race, such
+    // a job awaits forever, permanently occupying a concurrency slot and freezing
+    // the batch counter (BullMQ does NOT abort a still-running async function;
+    // lockDuration/stalledInterval only trigger if the worker process dies).
+    // Racing against JOB_TIMEOUT guarantees the slot is freed and the job is
+    // marked failed so the batch can always reach completion.
+    const result = await Promise.race([
+      runAnalysisPipeline({
+        company,
+        framework,
+        measures,
+        workspaceId,
+        cancelCheck,
+        skipFetch,
+      }),
+      new Promise<PipelineResult>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms")),
+          JOB_TIMEOUT
+        )
+      ),
+    ]);
 
     if (result.success) {
       await storage.completeJob(jobId);
