@@ -85,6 +85,14 @@ export const api = {
   getSettings: () => request("/settings"),
   setSetting: (key: string, value: string) => request("/settings", { method: "POST", body: JSON.stringify({ key, value }) }),
 
+  // User / workspace member management
+  getUsers: () => request("/users"),
+  addUser: (data: { email: string; name?: string; password?: string; role?: string }) =>
+    request("/users", { method: "POST", body: JSON.stringify(data) }),
+  updateUserRole: (userId: number, role: string) =>
+    request(`/users/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
+  removeUser: (userId: number) => request(`/users/${userId}`, { method: "DELETE" }),
+
   // Trusted Sources
   getTrustedSources: () => request("/trusted-sources"),
   addTrustedSource: (name: string, domain: string, description?: string) => request("/trusted-sources", { method: "POST", body: JSON.stringify({ name, domain, description }) }),

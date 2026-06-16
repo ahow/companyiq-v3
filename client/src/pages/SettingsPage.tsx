@@ -1,16 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState } from "react";
-import { Plus, Trash2, Key, Globe, Settings, Activity, Shield, Ban, Edit2, Check, X, ToggleLeft, ToggleRight } from "lucide-react";
+import { Plus, Trash2, Key, Globe, Settings, Activity, Shield, Ban, Edit2, Check, X, ToggleLeft, ToggleRight, Users } from "lucide-react";
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"pipeline" | "trusted" | "excluded" | "queue">("pipeline");
+  const [activeTab, setActiveTab] = useState<"pipeline" | "trusted" | "excluded" | "queue" | "users">("pipeline");
 
   const tabs = [
     { id: "pipeline" as const, label: "Pipeline Settings", icon: Settings },
     { id: "trusted" as const, label: "Trusted Sources", icon: Shield },
     { id: "excluded" as const, label: "Excluded Sources", icon: Ban },
+    { id: "users" as const, label: "Users", icon: Users },
     { id: "queue" as const, label: "Queue & API Keys", icon: Activity },
   ];
 
@@ -39,6 +40,7 @@ export default function SettingsPage() {
       {activeTab === "pipeline" && <PipelineSettings />}
       {activeTab === "trusted" && <TrustedSourcesPanel />}
       {activeTab === "excluded" && <ExcludedSourcesPanel />}
+      {activeTab === "users" && <UsersPanel />}
       {activeTab === "queue" && <QueuePanel />}
     </div>
   );
@@ -651,6 +653,219 @@ function ExcludedSourcesPanel() {
       </div>
       <div className="text-xs text-gray-400">
         {sources?.length || 0} excluded sources configured. Active exclusions will filter out documents from these domains.
+      </div>
+    </div>
+  );
+}
+
+// ─── Users / Members Panel ───────────────────────────────────────────────────
+
+const ROLE_BADGES: Record<string, string> = {
+  owner: "bg-purple-100 text-purple-700",
+  admin: "bg-blue-100 text-blue-700",
+  member: "bg-gray-100 text-gray-600",
+};
+
+function UsersPanel() {
+  const queryClient = useQueryClient();
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ email: "", name: "", password: "", role: "member" });
+  const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editRole, setEditRole] = useState("member");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["users"],
+    queryFn: api.getUsers,
+  });
+
+  const members: any[] = data?.members || [];
+  const currentUserId: number | undefined = data?.currentUserId;
+  const currentUserRole: string | undefined = data?.currentUserRole;
+  const canManage = currentUserRole === "owner" || currentUserRole === "admin";
+
+  const addMutation = useMutation({
+    mutationFn: () => api.addUser(form),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      setShowAdd(false);
+      setForm({ email: "", name: "", password: "", role: "member" });
+      setError(null);
+    },
+    onError: (e: any) => setError(e.message || "Failed to add user"),
+  });
+
+  const roleMutation = useMutation({
+    mutationFn: ({ userId, role }: { userId: number; role: string }) => api.updateUserRole(userId, role),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      setEditingId(null);
+      setError(null);
+    },
+    onError: (e: any) => setError(e.message || "Failed to update role"),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (userId: number) => api.removeUser(userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      setError(null);
+    },
+    onError: (e: any) => setError(e.message || "Failed to remove user"),
+  });
+
+  if (isLoading) return <div className="text-gray-400 text-sm">Loading users...</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg border p-6">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="font-semibold text-gray-900">Workspace Members</h2>
+          {canManage && (
+            <button
+              onClick={() => { setShowAdd((v) => !v); setError(null); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+            >
+              <Plus className="w-4 h-4" /> Add Member
+            </button>
+          )}
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          People with access to this workspace. Roles control who can manage members and settings
+          (<span className="font-medium">owner</span> &amp; <span className="font-medium">admin</span> can manage; <span className="font-medium">member</span> cannot).
+        </p>
+
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-lg text-sm text-red-700">{error}</div>
+        )}
+
+        {showAdd && canManage && (
+          <div className="mb-4 p-4 bg-gray-50 rounded-lg space-y-3">
+            <div className="text-sm font-medium text-gray-700">Add a member</div>
+            <p className="text-xs text-gray-500">
+              Enter the email of an existing user to add them, or fill in name + password to create a new account.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="email"
+                placeholder="Email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                className="px-3 py-2 border rounded-lg text-sm"
+              />
+              <input
+                type="text"
+                placeholder="Name (new users only)"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="px-3 py-2 border rounded-lg text-sm"
+              />
+              <input
+                type="password"
+                placeholder="Initial password (new users, min 8 chars)"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                className="px-3 py-2 border rounded-lg text-sm"
+              />
+              <select
+                value={form.role}
+                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                className="px-3 py-2 border rounded-lg text-sm"
+              >
+                <option value="member">Member</option>
+                <option value="admin">Admin</option>
+                <option value="owner">Owner</option>
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => addMutation.mutate()}
+                disabled={!form.email || addMutation.isPending}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+              >
+                {addMutation.isPending ? "Adding..." : "Add"}
+              </button>
+              <button
+                onClick={() => { setShowAdd(false); setError(null); }}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="divide-y border rounded-lg">
+          {members.map((m) => (
+            <div key={m.userId} className="group grid grid-cols-12 gap-2 items-center px-4 py-3">
+              <div className="col-span-5">
+                <div className="text-sm font-medium text-gray-900">
+                  {m.name}{m.userId === currentUserId && <span className="ml-2 text-xs text-gray-400">(you)</span>}
+                </div>
+                <div className="text-xs text-gray-500">{m.email}</div>
+              </div>
+              <div className="col-span-4">
+                {editingId === m.userId ? (
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={editRole}
+                      onChange={(e) => setEditRole(e.target.value)}
+                      className="px-2 py-1 border rounded text-sm"
+                    >
+                      <option value="member">Member</option>
+                      <option value="admin">Admin</option>
+                      <option value="owner">Owner</option>
+                    </select>
+                    <button
+                      onClick={() => roleMutation.mutate({ userId: m.userId, role: editRole })}
+                      className="p-1 text-green-600 hover:bg-green-50 rounded"
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => setEditingId(null)} className="p-1 text-gray-400 hover:bg-gray-100 rounded">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_BADGES[m.role] || ROLE_BADGES.member}`}>
+                    {m.role}
+                  </span>
+                )}
+              </div>
+              <div className="col-span-3 flex justify-end gap-1">
+                {canManage && editingId !== m.userId && (
+                  <>
+                    <button
+                      onClick={() => { setEditingId(m.userId); setEditRole(m.role); setError(null); }}
+                      className="p-1 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Change role"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    {m.userId !== currentUserId && (
+                      <button
+                        onClick={() => { if (confirm(`Remove ${m.name} from the workspace?`)) removeMutation.mutate(m.userId); }}
+                        className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Remove member"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+          {members.length === 0 && (
+            <div className="p-6 text-center text-gray-400 text-sm">No members found.</div>
+          )}
+        </div>
+
+        {!canManage && (
+          <div className="mt-3 text-xs text-gray-400">
+            You have <span className="font-medium">member</span> access. Contact an owner or admin to manage users.
+          </div>
+        )}
       </div>
     </div>
   );

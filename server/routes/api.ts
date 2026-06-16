@@ -683,6 +683,126 @@ apiRouter.post("/settings", async (req: Request, res: Response) => {
   }
 });
 
+// ─── User / Workspace Member Management ──────────────────────────────────────
+
+// Only owners and admins may manage members.
+async function requireAdmin(req: Request, res: Response): Promise<{ workspaceId: number; userId: number; role: string } | null> {
+  const { workspaceId, userId } = getSessionContext(req);
+  const role = await storage.getMemberRole(workspaceId, userId);
+  if (role !== "owner" && role !== "admin") {
+    res.status(403).json({ error: "You do not have permission to manage users in this workspace" });
+    return null;
+  }
+  return { workspaceId, userId, role };
+}
+
+const VALID_ROLES = ["owner", "admin", "member"];
+
+// List members of the current workspace.
+apiRouter.get("/users", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId, userId } = getSessionContext(req);
+    const myRole = await storage.getMemberRole(workspaceId, userId);
+    const members = await storage.getWorkspaceMembers(workspaceId);
+    res.json({ members, currentUserId: userId, currentUserRole: myRole });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add a member: either an existing user by email, or create a new user.
+apiRouter.post("/users", async (req: Request, res: Response) => {
+  try {
+    const ctx = await requireAdmin(req, res);
+    if (!ctx) return;
+    const { workspaceId } = ctx;
+    const { email, name, password, role } = req.body;
+
+    if (!email) return res.status(400).json({ error: "Email is required" });
+    const memberRole = VALID_ROLES.includes(role) ? role : "member";
+    const normalizedEmail = String(email).toLowerCase().trim();
+
+    const existing = await storage.getUserByEmail(normalizedEmail);
+    if (existing) {
+      const alreadyRole = await storage.getMemberRole(workspaceId, existing.id);
+      if (alreadyRole) {
+        return res.status(409).json({ error: "This user is already a member of the workspace" });
+      }
+      await storage.addWorkspaceMember(workspaceId, existing.id, memberRole);
+      return res.json({ success: true, userId: existing.id, created: false });
+    }
+
+    // New user — name and password required.
+    if (!name || !password) {
+      return res.status(400).json({ error: "Name and an initial password are required to create a new user" });
+    }
+    if (String(password).length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+    const user = await storage.createUserAndAddToWorkspace(normalizedEmail, password, name, workspaceId, memberRole);
+    res.json({ success: true, userId: user.id, created: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update a member's role.
+apiRouter.patch("/users/:userId", async (req: Request, res: Response) => {
+  try {
+    const ctx = await requireAdmin(req, res);
+    if (!ctx) return;
+    const { workspaceId } = ctx;
+    const targetUserId = parseInt(req.params.userId);
+    const { role } = req.body;
+
+    if (!VALID_ROLES.includes(role)) {
+      return res.status(400).json({ error: "Invalid role" });
+    }
+    const currentRole = await storage.getMemberRole(workspaceId, targetUserId);
+    if (!currentRole) return res.status(404).json({ error: "User is not a member of this workspace" });
+
+    // Prevent demoting the last remaining owner.
+    if (currentRole === "owner" && role !== "owner") {
+      const ownerCount = await storage.countWorkspaceOwners(workspaceId);
+      if (ownerCount <= 1) {
+        return res.status(400).json({ error: "Cannot demote the last owner of the workspace" });
+      }
+    }
+    await storage.updateMemberRole(workspaceId, targetUserId, role);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove a member from the workspace.
+apiRouter.delete("/users/:userId", async (req: Request, res: Response) => {
+  try {
+    const ctx = await requireAdmin(req, res);
+    if (!ctx) return;
+    const { workspaceId, userId } = ctx;
+    const targetUserId = parseInt(req.params.userId);
+
+    const currentRole = await storage.getMemberRole(workspaceId, targetUserId);
+    if (!currentRole) return res.status(404).json({ error: "User is not a member of this workspace" });
+
+    // Prevent removing the last remaining owner.
+    if (currentRole === "owner") {
+      const ownerCount = await storage.countWorkspaceOwners(workspaceId);
+      if (ownerCount <= 1) {
+        return res.status(400).json({ error: "Cannot remove the last owner of the workspace" });
+      }
+    }
+    if (targetUserId === userId) {
+      return res.status(400).json({ error: "You cannot remove yourself" });
+    }
+    await storage.removeWorkspaceMember(workspaceId, targetUserId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Trusted Sources ────────────────────────────────────────────────────────
 
 apiRouter.get("/trusted-sources", async (req: Request, res: Response) => {

@@ -86,6 +86,79 @@ export async function joinWorkspace(workspaceId: number, userId: number) {
   }).onConflictDoNothing();
 }
 
+// ─── Workspace Member Management ────────────────────────────────────────────
+
+// List all members of a workspace with their user details and role.
+export async function getWorkspaceMembers(workspaceId: number) {
+  return db
+    .select({
+      membershipId: schema.workspaceMembers.id,
+      userId: schema.users.id,
+      email: schema.users.email,
+      name: schema.users.name,
+      role: schema.workspaceMembers.role,
+      joinedAt: schema.workspaceMembers.joinedAt,
+    })
+    .from(schema.workspaceMembers)
+    .innerJoin(schema.users, eq(schema.workspaceMembers.userId, schema.users.id))
+    .where(eq(schema.workspaceMembers.workspaceId, workspaceId))
+    .orderBy(asc(schema.users.name));
+}
+
+// Get a single member's role within a workspace (null if not a member).
+export async function getMemberRole(workspaceId: number, userId: number): Promise<string | null> {
+  const [member] = await db
+    .select({ role: schema.workspaceMembers.role })
+    .from(schema.workspaceMembers)
+    .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, userId)));
+  return member?.role ?? null;
+}
+
+// Add an existing user to a workspace with a given role (idempotent).
+export async function addWorkspaceMember(workspaceId: number, userId: number, role: string = "member") {
+  await db.insert(schema.workspaceMembers).values({ workspaceId, userId, role }).onConflictDoNothing();
+  return getMemberRole(workspaceId, userId);
+}
+
+// Create a brand-new user and add them to the workspace in one step.
+export async function createUserAndAddToWorkspace(
+  email: string,
+  password: string,
+  name: string,
+  workspaceId: number,
+  role: string = "member"
+) {
+  const user = await createUser(email, password, name);
+  await addWorkspaceMember(workspaceId, user.id, role);
+  return user;
+}
+
+// Update a member's role within a workspace.
+export async function updateMemberRole(workspaceId: number, userId: number, role: string) {
+  await db
+    .update(schema.workspaceMembers)
+    .set({ role })
+    .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, userId)));
+  return getMemberRole(workspaceId, userId);
+}
+
+// Remove a member from a workspace.
+export async function removeWorkspaceMember(workspaceId: number, userId: number) {
+  await db
+    .delete(schema.workspaceMembers)
+    .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, userId)));
+}
+
+// Count members holding the "owner" role in a workspace (used to prevent
+// removing or demoting the last owner).
+export async function countWorkspaceOwners(workspaceId: number): Promise<number> {
+  const rows = await db
+    .select({ id: schema.workspaceMembers.id })
+    .from(schema.workspaceMembers)
+    .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.role, "owner")));
+  return rows.length;
+}
+
 // ─── Company Operations (Workspace-Scoped) ──────────────────────────────────
 
 export async function getCompanies(workspaceId: number) {
