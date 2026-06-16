@@ -782,10 +782,13 @@ export async function cacheSummary(data: { companyId: number; documentHash: stri
     });
 }
 
-// ─── Trusted Sources ────────────────────────────────────────────────────────
+// ─── Trusted Sources (GLOBAL) ─────────────────────────────────────────────────
+// Source lists are now GLOBAL: every workspace shares one list. The
+// `workspaceId` parameters are retained for call-site compatibility but the
+// queries intentionally ignore them so all workspaces see/share the same rows.
 
-export async function getTrustedSources(workspaceId: number) {
-  return db.select().from(schema.trustedSources).where(eq(schema.trustedSources.workspaceId, workspaceId));
+export async function getTrustedSources(_workspaceId?: number) {
+  return db.select().from(schema.trustedSources);
 }
 
 export async function addTrustedSource(workspaceId: number, name: string, domain: string, description?: string | null) {
@@ -793,18 +796,18 @@ export async function addTrustedSource(workspaceId: number, name: string, domain
   return source;
 }
 
-export async function updateTrustedSource(id: number, workspaceId: number, updates: { name?: string; domain?: string; description?: string | null; isActive?: boolean }) {
-  await db.update(schema.trustedSources).set(updates as any).where(and(eq(schema.trustedSources.id, id), eq(schema.trustedSources.workspaceId, workspaceId)));
+export async function updateTrustedSource(id: number, _workspaceId: number, updates: { name?: string; domain?: string; description?: string | null; isActive?: boolean }) {
+  await db.update(schema.trustedSources).set(updates as any).where(eq(schema.trustedSources.id, id));
 }
 
-export async function deleteTrustedSource(id: number, workspaceId: number) {
-  await db.delete(schema.trustedSources).where(and(eq(schema.trustedSources.id, id), eq(schema.trustedSources.workspaceId, workspaceId)));
+export async function deleteTrustedSource(id: number, _workspaceId: number) {
+  await db.delete(schema.trustedSources).where(eq(schema.trustedSources.id, id));
 }
 
-// ─── Excluded Sources ────────────────────────────────────────────────────────────
+// ─── Excluded Sources (GLOBAL) ────────────────────────────────────────────────
 
-export async function getExcludedSources(workspaceId: number) {
-  return db.select().from(schema.excludedSources).where(eq(schema.excludedSources.workspaceId, workspaceId));
+export async function getExcludedSources(_workspaceId?: number) {
+  return db.select().from(schema.excludedSources);
 }
 
 export async function addExcludedSource(workspaceId: number, domain: string, reason?: string | null) {
@@ -812,12 +815,116 @@ export async function addExcludedSource(workspaceId: number, domain: string, rea
   return source;
 }
 
-export async function updateExcludedSource(id: number, workspaceId: number, updates: { domain?: string; reason?: string | null; isActive?: boolean }) {
-  await db.update(schema.excludedSources).set(updates as any).where(and(eq(schema.excludedSources.id, id), eq(schema.excludedSources.workspaceId, workspaceId)));
+export async function updateExcludedSource(id: number, _workspaceId: number, updates: { domain?: string; reason?: string | null; isActive?: boolean }) {
+  await db.update(schema.excludedSources).set(updates as any).where(eq(schema.excludedSources.id, id));
 }
 
-export async function deleteExcludedSource(id: number, workspaceId: number) {
-  await db.delete(schema.excludedSources).where(and(eq(schema.excludedSources.id, id), eq(schema.excludedSources.workspaceId, workspaceId)));
+export async function deleteExcludedSource(id: number, _workspaceId: number) {
+  await db.delete(schema.excludedSources).where(eq(schema.excludedSources.id, id));
+}
+
+// ─── Platform Sources (GLOBAL — shared multi-tenant hosts) ────────────────────
+// Documents hosted on these domains are ALWAYS issuer-verified by the LLM,
+// overriding the own-domain fast-path. The list is global across all workspaces.
+
+export async function getPlatformSources() {
+  return db.select().from(schema.platformSources);
+}
+
+/** Active platform host domains (normalized) for the verification gate. */
+export async function getActivePlatformHosts(): Promise<string[]> {
+  const rows = await db.select().from(schema.platformSources).where(eq(schema.platformSources.isActive, true));
+  return rows
+    .map(r => (r.domain || "").trim().toLowerCase().replace(/^www\./, "").replace(/\.$/, ""))
+    .filter(Boolean);
+}
+
+export async function addPlatformSource(domain: string, reason?: string | null, autoDetected = false, companyCount?: number | null) {
+  const norm = (domain || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").replace(/\.$/, "");
+  if (!norm) throw new Error("Invalid domain");
+  const [source] = await db
+    .insert(schema.platformSources)
+    .values({ workspaceId: null as any, domain: norm, reason: reason || null, autoDetected, companyCount: companyCount ?? null })
+    .onConflictDoNothing({ target: schema.platformSources.domain })
+    .returning();
+  if (source) return source;
+  // Already exists — return the existing row.
+  const [existing] = await db.select().from(schema.platformSources).where(eq(schema.platformSources.domain, norm));
+  return existing;
+}
+
+export async function updatePlatformSource(id: number, updates: { domain?: string; reason?: string | null; isActive?: boolean }) {
+  await db.update(schema.platformSources).set(updates as any).where(eq(schema.platformSources.id, id));
+}
+
+export async function deletePlatformSource(id: number) {
+  await db.delete(schema.platformSources).where(eq(schema.platformSources.id, id));
+}
+
+/**
+ * AUTO-ENFORCE the >=3-companies rule. Scans the documents table for the
+ * registrable domain of every accepted/fetched URL, counts how many DISTINCT
+ * companies each domain appears on, and upserts any domain meeting the
+ * threshold as an auto-detected platform source. Returns the list of domains
+ * added/updated. Idempotent.
+ */
+export async function detectAndUpsertPlatformSources(minCompanies = 3): Promise<{ domain: string; companyCount: number; added: boolean }[]> {
+  // Compute registrable-ish domain (last two labels, or three for known
+  // two-part TLDs) from each document URL, then count distinct companies.
+  const rows: any[] = (await db.execute(sql`
+    WITH hosts AS (
+      SELECT
+        d.company_id AS company_id,
+        lower(
+          regexp_replace(
+            regexp_replace(split_part(split_part(d.url, '://', 2), '/', 1), '^www\\.', ''),
+            ':\\d+$', ''
+          )
+        ) AS host
+      FROM documents d
+      WHERE d.url ~ '://'
+    ),
+    regdom AS (
+      SELECT
+        company_id,
+        CASE
+          WHEN host ~ '\\.(co|com|org|net|gov|edu|ac)\\.[a-z]{2}$'
+            THEN (regexp_match(host, '([^.]+\\.[^.]+\\.[a-z]{2})$'))[1]
+          ELSE (regexp_match(host, '([^.]+\\.[^.]+)$'))[1]
+        END AS domain
+      FROM hosts
+      WHERE host IS NOT NULL AND host <> ''
+    )
+    SELECT domain, COUNT(DISTINCT company_id)::int AS company_count
+    FROM regdom
+    WHERE domain IS NOT NULL
+    GROUP BY domain
+    HAVING COUNT(DISTINCT company_id) >= ${minCompanies}
+    ORDER BY company_count DESC
+  `)).rows as any[];
+
+  const results: { domain: string; companyCount: number; added: boolean }[] = [];
+  for (const r of rows) {
+    const domain = (r.domain || "").toLowerCase();
+    const companyCount = parseInt(r.company_count, 10) || 0;
+    if (!domain) continue;
+    // Upsert: insert if new, otherwise refresh company_count for existing rows.
+    const [inserted] = await db
+      .insert(schema.platformSources)
+      .values({ workspaceId: null as any, domain, reason: `Auto-detected: appears across ${companyCount} companies`, autoDetected: true, companyCount })
+      .onConflictDoNothing({ target: schema.platformSources.domain })
+      .returning();
+    if (inserted) {
+      results.push({ domain, companyCount, added: true });
+    } else {
+      // Keep company_count fresh on existing auto-detected rows.
+      await db.update(schema.platformSources)
+        .set({ companyCount })
+        .where(and(eq(schema.platformSources.domain, domain), eq(schema.platformSources.autoDetected, true)));
+      results.push({ domain, companyCount, added: false });
+    }
+  }
+  return results;
 }
 
 // ─── Workspace Settings ─────────────────────────────────────────────────────

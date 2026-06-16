@@ -351,6 +351,46 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS excluded_workspace_idx ON excluded_sources(workspace_id)`);
 
+    // ─── Platform Sources (GLOBAL — shared multi-tenant hosts) ───────────────
+    // workspace_id is nullable (global rows use NULL). domain is globally unique.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS platform_sources (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER REFERENCES workspaces(id),
+        domain TEXT NOT NULL,
+        reason TEXT,
+        auto_detected BOOLEAN NOT NULL DEFAULT false,
+        company_count INTEGER,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS platform_domain_idx ON platform_sources(domain)`);
+
+    // Seed well-known shared/multi-tenant hosts (idempotent).
+    const seedPlatformHosts: { domain: string; reason: string }[] = [
+      { domain: "q4cdn.com", reason: "Shared investor-relations CDN (hosts many issuers)" },
+      { domain: "q4web.com", reason: "Shared investor-relations platform" },
+      { domain: "q4inc.com", reason: "Shared investor-relations platform" },
+      { domain: "s3.amazonaws.com", reason: "Shared object storage (multi-tenant)" },
+      { domain: "cloudfront.net", reason: "Shared CDN (multi-tenant)" },
+      { domain: "sharepoint.com", reason: "Shared document hosting (multi-tenant)" },
+      { domain: "substack.com", reason: "Third-party blog platform (multi-author)" },
+      { domain: "blogspot.com", reason: "Third-party blog platform (multi-author)" },
+      { domain: "wordpress.com", reason: "Third-party blog platform (multi-author)" },
+      { domain: "medium.com", reason: "Third-party blog platform (multi-author)" },
+      { domain: "seekingalpha.com", reason: "Third-party financial aggregator (covers many companies)" },
+      { domain: "marketscreener.com", reason: "Third-party financial aggregator (covers many companies)" },
+      { domain: "financialreports.eu", reason: "Third-party filing aggregator (covers many companies)" },
+    ];
+    for (const p of seedPlatformHosts) {
+      await db.execute(sql`
+        INSERT INTO platform_sources (workspace_id, domain, reason, auto_detected, is_active)
+        VALUES (NULL, ${p.domain}, ${p.reason}, false, true)
+        ON CONFLICT (domain) DO NOTHING
+      `);
+    }
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────────
     await seedDefaultSettings();
 

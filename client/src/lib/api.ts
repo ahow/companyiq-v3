@@ -105,6 +105,13 @@ export const api = {
   updateExcludedSource: (id: number, data: any) => request(`/excluded-sources/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteExcludedSource: (id: number) => request(`/excluded-sources/${id}`, { method: "DELETE" }),
 
+  // Platform Sources (global shared multi-tenant hosts — always issuer-verified)
+  getPlatformSources: () => request("/platform-sources"),
+  addPlatformSource: (domain: string, reason?: string) => request("/platform-sources", { method: "POST", body: JSON.stringify({ domain, reason }) }),
+  updatePlatformSource: (id: number, data: any) => request(`/platform-sources/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deletePlatformSource: (id: number) => request(`/platform-sources/${id}`, { method: "DELETE" }),
+  detectPlatformSources: (minCompanies = 3) => request("/platform-sources/detect", { method: "POST", body: JSON.stringify({ minCompanies }) }),
+
   // Results (delete)
   deleteResult: (id: number) => request(`/results/${id}`, { method: "DELETE" }),
 

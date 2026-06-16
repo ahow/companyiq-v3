@@ -260,6 +260,26 @@ export const excludedSources = pgTable("excluded_sources", {
   workspaceIdx: index("excluded_workspace_idx").on(table.workspaceId),
 }));
 
+// ─── Platform Sources (Global — shared multi-tenant hosts) ─────────────────
+// Hosts that serve documents for MANY different companies (shared
+// investor-relations CDNs, blogs, aggregators). A document on one of these
+// hosts is ALWAYS issuer-verified by the LLM, even if it would otherwise
+// match a company's own verified domain (closes the fast-path bypass).
+// `autoDetected` marks entries added by the >=3-companies heuristic.
+
+export const platformSources = pgTable("platform_sources", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id),
+  domain: text("domain").notNull(),
+  reason: text("reason"),
+  autoDetected: boolean("auto_detected").notNull().default(false),
+  companyCount: integer("company_count"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  domainIdx: uniqueIndex("platform_domain_idx").on(table.domain),
+}));
+
 // ─── Workspace Settings ────────────────────────────────────────────────────
 
 export const workspaceSettings = pgTable("workspace_settings", {
@@ -325,3 +345,4 @@ export type TrustedSource = typeof trustedSources.$inferSelect;
 export type WorkspaceSetting = typeof workspaceSettings.$inferSelect;
 export type AnalysisResultSnapshot = typeof analysisResults.$inferSelect;
 export type ExcludedSource = typeof excludedSources.$inferSelect;
+export type PlatformSource = typeof platformSources.$inferSelect;

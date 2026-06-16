@@ -82,15 +82,40 @@ export function hostMatchesDomain(url: string, verifiedDomain: string): boolean 
 export interface VerifyGateInput {
   url: string;
   verifiedDomain: string | null | undefined; // company's verified domain (may be empty/null)
+  /**
+   * Global "platform sources" — shared multi-tenant hosts (e.g. q4cdn.com,
+   * substack.com). If the document's host matches any of these, verification is
+   * FORCED regardless of the own-domain fast-path. This is a guardrail that
+   * cannot be bypassed even if a company's verified domain was mistakenly set
+   * to a shared host. Normalized (no protocol/www), suffix-matched.
+   */
+  platformHosts?: string[];
+}
+
+/** Does the URL's host equal or fall under any of the given platform hosts? */
+export function isPlatformHost(url: string, platformHosts: string[] | undefined): boolean {
+  if (!platformHosts || platformHosts.length === 0) return false;
+  const host = hostOf(url);
+  if (!host) return false;
+  for (const raw of platformHosts) {
+    const p = (raw || "").trim().toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+    if (!p) continue;
+    if (host === p || host.endsWith(`.${p}`)) return true;
+  }
+  return false;
 }
 
 /**
  * Decide whether the LLM verification should run for this document.
- * Triggers (per user requirement):
- *   - company has NO verified domain, OR
- *   - document host != company's verified domain.
+ * Triggers:
+ *   - the document host is a known PLATFORM source (shared multi-tenant host)
+ *     — ALWAYS verify, overriding the own-domain fast-path; OR
+ *   - the company has NO verified domain; OR
+ *   - the document host != the company's verified domain.
  */
 export function shouldVerifyDocument(input: VerifyGateInput): boolean {
+  // Platform-source override takes priority over everything else.
+  if (isPlatformHost(input.url, input.platformHosts)) return true;
   const domain = normalizeDomain(input.verifiedDomain);
   if (!domain) return true; // no verified domain -> verify everything
   return !hostMatchesDomain(input.url, domain); // off-domain -> verify

@@ -522,6 +522,12 @@ apiRouter.post("/analyze", async (req: Request, res: Response) => {
       await storage.updateCompany(company.id, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
     }
 
+    // Auto-enforce the >=3-companies platform-source rule before a batch run.
+    // Non-blocking: a failure here must never block the analysis from starting.
+    storage.detectAndUpsertPlatformSources(3)
+      .then((d) => console.log(`[PlatformSources] Auto-detect at batch start: ${d.filter(x => x.added).length} new, ${d.length} qualifying (>=3 companies)`))
+      .catch((e) => console.warn(`[PlatformSources] Auto-detect failed (non-fatal): ${e?.message || e}`));
+
     // Create batch run
     const batch = await storage.createBatchRun(workspaceId, frameworkId, companies.length, listId);
 
@@ -882,6 +888,57 @@ apiRouter.delete("/excluded-sources/:id", async (req: Request, res: Response) =>
     const { workspaceId } = getSessionContext(req);
     await storage.deleteExcludedSource(parseInt(req.params.id), workspaceId);
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Platform Sources (GLOBAL — shared multi-tenant hosts) ──────────────────────
+// Documents on these hosts are ALWAYS issuer-verified (override own-domain
+// fast-path). The list is global across all workspaces.
+
+apiRouter.get("/platform-sources", async (_req: Request, res: Response) => {
+  try {
+    const sources = await storage.getPlatformSources();
+    res.json(sources);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/platform-sources", async (req: Request, res: Response) => {
+  try {
+    const source = await storage.addPlatformSource(req.body.domain, req.body.reason, false);
+    res.json(source);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.patch("/platform-sources/:id", async (req: Request, res: Response) => {
+  try {
+    await storage.updatePlatformSource(parseInt(req.params.id), req.body);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.delete("/platform-sources/:id", async (req: Request, res: Response) => {
+  try {
+    await storage.deletePlatformSource(parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Run the >=3-companies auto-detection now and upsert any qualifying hosts.
+apiRouter.post("/platform-sources/detect", async (req: Request, res: Response) => {
+  try {
+    const min = parseInt(req.body?.minCompanies ?? "3", 10) || 3;
+    const detected = await storage.detectAndUpsertPlatformSources(min);
+    res.json({ detected, added: detected.filter(d => d.added).length, total: detected.length });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

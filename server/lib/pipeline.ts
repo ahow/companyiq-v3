@@ -123,6 +123,9 @@ async function runFetchPhase(opts: {
 
   // Step 2: Run discovery (web search + relevance gate)
   const trustedSources = await storage.getTrustedSources(workspaceId);
+  // Global platform sources (shared multi-tenant hosts). Documents on these
+  // hosts are ALWAYS issuer-verified, overriding the own-domain fast-path.
+  const platformHosts = await storage.getActivePlatformHosts();
   const settings = await storage.getSettings(workspaceId);
   const searchDepth = parseInt(settings.search_depth || "10");
   const queryVariants = parseInt(settings.discovery_query_variants || "3");
@@ -201,7 +204,7 @@ async function runFetchPhase(opts: {
         await storage.recordFetchFailure(companyId, d.url);
         continue;
       }
-      if (!shouldVerifyDocument({ url: d.url, verifiedDomain: company.domain })) {
+      if (!shouldVerifyDocument({ url: d.url, verifiedDomain: company.domain, platformHosts })) {
         await storage.markLinkedDocumentVerified(companyId, d.url);
         reuseKept++;
         continue;
@@ -386,7 +389,7 @@ async function runFetchPhase(opts: {
           //    A document is KEPT only if the LLM confirms it is about THIS
           //    company — so relevant off-domain / shared-CDN documents are
           //    retained, while other companies' documents are rejected.
-          const needsVerify = shouldVerifyDocument({ url: doc.url, verifiedDomain: company.domain });
+          const needsVerify = shouldVerifyDocument({ url: doc.url, verifiedDomain: company.domain, platformHosts });
 
           if (!needsVerify) {
             // On the company's own verified domain — accept without LLM cost.

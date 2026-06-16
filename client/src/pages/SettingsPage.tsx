@@ -1,16 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState } from "react";
-import { Plus, Trash2, Key, Globe, Settings, Activity, Shield, Ban, Edit2, Check, X, ToggleLeft, ToggleRight, Users } from "lucide-react";
+import { Plus, Trash2, Key, Globe, Settings, Activity, Shield, Ban, Edit2, Check, X, ToggleLeft, ToggleRight, Users, Server, Search, Sparkles } from "lucide-react";
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"pipeline" | "trusted" | "excluded" | "queue" | "users">("pipeline");
+  const [activeTab, setActiveTab] = useState<"pipeline" | "trusted" | "excluded" | "platform" | "queue" | "users">("pipeline");
 
   const tabs = [
     { id: "pipeline" as const, label: "Pipeline Settings", icon: Settings },
     { id: "trusted" as const, label: "Trusted Sources", icon: Shield },
     { id: "excluded" as const, label: "Excluded Sources", icon: Ban },
+    { id: "platform" as const, label: "Platform Sources", icon: Server },
     { id: "users" as const, label: "Users", icon: Users },
     { id: "queue" as const, label: "Queue & API Keys", icon: Activity },
   ];
@@ -40,6 +41,7 @@ export default function SettingsPage() {
       {activeTab === "pipeline" && <PipelineSettings />}
       {activeTab === "trusted" && <TrustedSourcesPanel />}
       {activeTab === "excluded" && <ExcludedSourcesPanel />}
+      {activeTab === "platform" && <PlatformSourcesPanel />}
       {activeTab === "users" && <UsersPanel />}
       {activeTab === "queue" && <QueuePanel />}
     </div>
@@ -653,6 +655,155 @@ function ExcludedSourcesPanel() {
       </div>
       <div className="text-xs text-gray-400">
         {sources?.length || 0} excluded sources configured. Active exclusions will filter out documents from these domains.
+      </div>
+    </div>
+  );
+}
+
+// ─── Platform Sources Panel (GLOBAL) ──────────────────────────────────────────
+
+function PlatformSourcesPanel() {
+  const queryClient = useQueryClient();
+  const [newDomain, setNewDomain] = useState("");
+  const [newReason, setNewReason] = useState("");
+  const [detectResult, setDetectResult] = useState<string | null>(null);
+
+  const { data: sources } = useQuery({
+    queryKey: ["platformSources"],
+    queryFn: api.getPlatformSources,
+  });
+
+  const addMutation = useMutation({
+    mutationFn: () => api.addPlatformSource(newDomain, newReason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["platformSources"] });
+      setNewDomain("");
+      setNewReason("");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.deletePlatformSource(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["platformSources"] }),
+  });
+
+  const toggleActiveMutation = useMutation({
+    mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) =>
+      api.updatePlatformSource(id, { isActive: !isActive }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["platformSources"] }),
+  });
+
+  const detectMutation = useMutation({
+    mutationFn: () => api.detectPlatformSources(3),
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ["platformSources"] });
+      setDetectResult(`Scan complete: ${res.added} new host(s) auto-added, ${res.total} qualifying (≥3 companies).`);
+    },
+  });
+
+  return (
+    <div className="bg-white rounded-lg border p-6 space-y-4">
+      <div>
+        <h2 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
+          <Server className="w-4 h-4 text-indigo-600" /> Platform Sources
+        </h2>
+        <p className="text-sm text-gray-500 mb-1">
+          Shared, multi-tenant hosts (investor-relations CDNs, blogs, aggregators) that serve documents for <strong>many different companies</strong> &mdash; e.g. <span className="font-mono">q4cdn.com</span>.
+        </p>
+        <p className="text-sm text-gray-500">
+          Any document on these hosts is <strong>always</strong> issuer-verified by the LLM against the company under analysis, even if it would otherwise match the company&rsquo;s own domain. This prevents one company&rsquo;s filing (e.g. a Pfizer 10-K) from being wrongly attached to another. This list is <strong>global</strong> across all workspaces.
+        </p>
+      </div>
+
+      <div className="p-4 bg-indigo-50 rounded-lg border border-indigo-100 flex items-center justify-between gap-4">
+        <div className="text-sm text-indigo-900">
+          <div className="font-medium flex items-center gap-1.5"><Sparkles className="w-4 h-4" /> Auto-enforce the ≥3-companies rule</div>
+          <div className="text-xs text-indigo-700 mt-0.5">Scan all fetched documents and automatically add any host that appears across 3 or more companies.</div>
+        </div>
+        <button
+          onClick={() => detectMutation.mutate()}
+          disabled={detectMutation.isPending}
+          className="flex items-center gap-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50 whitespace-nowrap"
+        >
+          <Search className="w-4 h-4" /> {detectMutation.isPending ? "Scanning…" : "Scan now"}
+        </button>
+      </div>
+      {detectResult && <div className="text-xs text-indigo-700">{detectResult}</div>}
+
+      <div className="p-4 bg-gray-50 rounded-lg border space-y-2">
+        <div className="text-sm font-medium text-gray-900 mb-2">Add Platform Host</div>
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            type="text"
+            value={newDomain}
+            onChange={(e) => setNewDomain(e.target.value)}
+            placeholder="Shared host (e.g., q4cdn.com)"
+            className="px-3 py-2 border rounded-lg text-sm"
+          />
+          <input
+            type="text"
+            value={newReason}
+            onChange={(e) => setNewReason(e.target.value)}
+            placeholder="Reason (optional)"
+            className="px-3 py-2 border rounded-lg text-sm"
+          />
+        </div>
+        <button
+          onClick={() => addMutation.mutate()}
+          disabled={!newDomain}
+          className="flex items-center gap-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50"
+        >
+          <Plus className="w-4 h-4" /> Add Platform Host
+        </button>
+      </div>
+
+      <div className="border rounded-lg divide-y">
+        <div className="px-4 py-2 bg-gray-50 grid grid-cols-12 gap-2 text-xs font-medium text-gray-500 uppercase">
+          <div className="col-span-1">Active</div>
+          <div className="col-span-4">Host</div>
+          <div className="col-span-5">Reason</div>
+          <div className="col-span-2 text-right">Actions</div>
+        </div>
+        {sources?.map((source: any) => (
+          <div key={source.id} className="px-4 py-3 grid grid-cols-12 gap-2 items-center group">
+            <div className="col-span-1">
+              <button onClick={() => toggleActiveMutation.mutate({ id: source.id, isActive: source.isActive })}>
+                {source.isActive ? (
+                  <ToggleRight className="w-5 h-5 text-indigo-600" />
+                ) : (
+                  <ToggleLeft className="w-5 h-5 text-gray-400" />
+                )}
+              </button>
+            </div>
+            <div className={`col-span-4 text-sm font-mono flex items-center gap-2 ${source.isActive ? "text-gray-900" : "text-gray-400"}`}>
+              {source.domain}
+              {source.autoDetected && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-sans bg-amber-100 text-amber-700" title={source.companyCount ? `Seen on ${source.companyCount} companies` : ""}>
+                  auto{source.companyCount ? ` · ${source.companyCount}` : ""}
+                </span>
+              )}
+            </div>
+            <div className={`col-span-5 text-xs ${source.isActive ? "text-gray-500" : "text-gray-400"}`}>
+              {source.reason || "—"}
+            </div>
+            <div className="col-span-2 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={() => deleteMutation.mutate(source.id)}
+                className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        ))}
+        {(!sources || sources.length === 0) && (
+          <div className="p-6 text-center text-gray-400 text-sm">
+            No platform sources configured. Add shared hosts above or run a scan.
+          </div>
+        )}
+      </div>
+      <div className="text-xs text-gray-400">
+        {sources?.length || 0} platform hosts configured. Active hosts force LLM issuer-verification on every document, overriding the own-domain fast-path.
       </div>
     </div>
   );
