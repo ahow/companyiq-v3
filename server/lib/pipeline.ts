@@ -31,6 +31,7 @@ import { searchCompanyDocuments, type DiscoveryResult } from "./discovery.js";
 import { processDocument, inferDocumentType } from "./processor.js";
 import { analyzeCompanyMeasures, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
+import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 // ─── Timeout Constants ──────────────────────────────────────────────────────
@@ -267,28 +268,63 @@ async function runFetchPhase(opts: {
           // POST-FETCH VALIDATION: Verify the document content actually relates
           // to the target company. This catches cases where the gate accepted a
           // document based on title/URL, but the actual content is about a
-          // different company entirely.
-          const contentLower = content.toLowerCase();
-          const companyNameLower = companyName.toLowerCase();
-          // Build name variants to check (full name, key words, domain)
-          const nameVariants: string[] = [companyNameLower];
-          // Add individual significant words (3+ chars) from company name
-          const nameWords = companyNameLower.split(/[\s,\.\-&]+/).filter(w => w.length >= 3 && !['inc', 'ltd', 'plc', 'corp', 'group', 'the', 'and', 'company', 'limited', 'corporation', 'holdings'].includes(w));
-          if (nameWords.length > 0) nameVariants.push(...nameWords);
-          // Add domain if available
-          if (companyDomain && companyDomain.length > 3) {
-            nameVariants.push(companyDomain.replace(/\.(com|org|net|co|io)$/i, ''));
-          }
+          // different company entirely (e.g. a foreign filing pulled in via a
+          // shared investor-relations CDN such as q4cdn.com).
+          //
+          // Layered policy:
+          //  - If the doc is hosted on the company's OWN verified domain, trust
+          //    it (fast path, no LLM call).
+          //  - Otherwise (no verified domain set, OR host != verified domain),
+          //    run an LLM check on the actual content to confirm the issuer.
+          //    A document is KEPT only if the LLM confirms it is about THIS
+          //    company — so relevant off-domain / shared-CDN documents are
+          //    retained, while other companies' documents are rejected.
+          const needsVerify = shouldVerifyDocument({ url: doc.url, verifiedDomain: company.domain });
 
-          const mentionsCompany = nameVariants.some(variant => contentLower.includes(variant));
-
-          if (mentionsCompany) {
+          if (!needsVerify) {
+            // On the company's own verified domain — accept without LLM cost.
             await storage.recordFetchSuccess(companyId, doc.url, content);
             newFetchCount++;
           } else {
-            // Content doesn't mention the company at all — likely a wrong document
-            console.warn(`[${companyName}] POST-FETCH REJECT: ${doc.url.slice(0, 80)} — content does not mention company`);
-            await storage.recordFetchFailure(companyId, doc.url);
+            const vr = await verifyDocumentCompany(
+              {
+                name: companyName,
+                isin: company.isin,
+                sector: company.sector,
+                country: company.country,
+                ticker: company.ticker,
+                verifiedDomain: company.domain,
+              },
+              { url: doc.url, title: doc.title, content }
+            );
+
+            if (vr.verdict === "match") {
+              await storage.recordFetchSuccess(companyId, doc.url, content);
+              newFetchCount++;
+            } else if (vr.verdict === "error") {
+              // Fail-safe: the verifier itself failed (LLM/parse error). Fall back
+              // to the cheap substring heuristic so a transient verifier outage
+              // does not silently discard a genuinely relevant document.
+              const contentLower = content.toLowerCase();
+              const companyNameLower = companyName.toLowerCase();
+              const nameWords = companyNameLower
+                .split(/[\s,\.\-&]+/)
+                .filter(w => w.length >= 4 && !['inc', 'ltd', 'plc', 'corp', 'group', 'the', 'and', 'company', 'limited', 'corporation', 'holdings', 'international'].includes(w));
+              const fallbackMentions = companyNameLower.length >= 4 && contentLower.includes(companyNameLower)
+                || nameWords.some(w => contentLower.includes(w));
+              if (fallbackMentions) {
+                console.warn(`[${companyName}] VERIFY ERROR (${vr.reason}); kept via name-mention fallback: ${doc.url.slice(0, 80)}`);
+                await storage.recordFetchSuccess(companyId, doc.url, content);
+                newFetchCount++;
+              } else {
+                console.warn(`[${companyName}] VERIFY ERROR (${vr.reason}); no name mention — rejected: ${doc.url.slice(0, 80)}`);
+                await storage.recordFetchFailure(companyId, doc.url);
+              }
+            } else {
+              // different_company or generic -> reject
+              console.warn(`[${companyName}] POST-FETCH REJECT (${vr.verdict}${vr.detectedIssuer ? `: ${vr.detectedIssuer}` : ''}): ${doc.url.slice(0, 80)} — ${vr.reason}`);
+              await storage.recordFetchFailure(companyId, doc.url);
+            }
           }
         } else {
           await storage.recordFetchFailure(companyId, doc.url);
