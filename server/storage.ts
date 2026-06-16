@@ -434,15 +434,25 @@ export async function recordVerificationReject(companyId: number, url: string, r
 
 /**
  * Cross-workspace document reuse: for any pending documents that already have
- * content in the global document_content table (fetched by another workspace),
- * link them immediately and mark as 'ok' to skip redundant fetching.
+ * content in the global document_content table (fetched for ANOTHER company),
+ * link the cached content to avoid re-fetching the same URL.
+ *
+ * IMPORTANT (contamination fix): the global document_content cache is keyed only
+ * by URL hash and is shared across ALL companies/workspaces. A shared-CDN URL
+ * (e.g. s206.q4cdn.com/.../10-K.pdf) fetched once for company A would otherwise
+ * be linked to company B and marked 'ok', BYPASSING the post-fetch issuer
+ * verifier — which is exactly how a Pfizer 10-K became attached to 3SBio.
+ *
+ * Therefore reused content is linked but marked 'needs_verify' (NOT 'ok'), so
+ * the pipeline still runs the same issuer-verification on it (using the cached
+ * content, so no network re-fetch is needed) before it can be scored.
  */
 export async function linkExistingContent(companyId: number): Promise<number> {
   // URL normalization must match hashUrl(): lowercase, trim, remove trailing slash
   const result = await db.execute(sql`
     UPDATE documents d
     SET content_id = dc.id,
-        fetch_status = 'ok',
+        fetch_status = 'needs_verify',
         fetched_at = NOW(),
         content = NULL
     FROM document_content dc
@@ -451,6 +461,39 @@ export async function linkExistingContent(companyId: number): Promise<number> {
       AND dc.url_hash = encode(sha256(regexp_replace(lower(trim(d.url)), '/+$', '')::bytea), 'hex')
   `);
   return result.rowCount || 0;
+}
+
+/**
+ * Return documents that were linked from cached content and still need issuer
+ * verification ('needs_verify'), including the cached content text so the
+ * pipeline can verify without re-fetching.
+ */
+export async function getDocumentsNeedingVerification(companyId: number) {
+  const rows = await db.execute(sql`
+    SELECT d.id, d.url, d.title, d.type,
+           COALESCE(dc.content, d.content) AS content
+    FROM documents d
+    LEFT JOIN document_content dc ON dc.id = d.content_id
+    WHERE d.company_id = ${companyId} AND d.fetch_status = 'needs_verify'
+  `);
+  return rows.rows as Array<{
+    id: number;
+    url: string;
+    title: string | null;
+    type: string;
+    content: string | null;
+  }>;
+}
+
+/**
+ * Promote a verified, cache-linked document to 'ok' (keeps its existing
+ * content_id; no re-fetch). Used after issuer verification of reused content.
+ */
+export async function markLinkedDocumentVerified(companyId: number, url: string) {
+  await db.execute(sql`
+    UPDATE documents SET fetch_status = 'ok', fetched_at = NOW()
+    WHERE company_id = ${companyId} AND url = ${url} AND fetch_status = 'needs_verify'
+  `);
 }
 
 export async function clearDiscoveredDocuments(companyId: number) {
@@ -467,6 +510,11 @@ export async function clearDiscoveredDocuments(companyId: number) {
   // Clear REJECTED documents (verified as belonging to a different company).
   await db.delete(schema.documents).where(
     and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "rejected"))
+  );
+  // Clear NEEDS_VERIFY documents (cache-linked but not yet issuer-verified) —
+  // these are transient and must be re-evaluated on each re-discovery.
+  await db.delete(schema.documents).where(
+    and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "needs_verify"))
   );
 }
 

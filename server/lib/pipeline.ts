@@ -184,6 +184,77 @@ async function runFetchPhase(opts: {
   const reusedCount = await storage.linkExistingContent(companyId);
   if (reusedCount > 0) {
     console.log(`[${companyName}] Reused ${reusedCount} documents from global content cache (cross-workspace)`);
+
+    // CONTAMINATION FIX: cache-linked documents are marked 'needs_verify' (not
+    // 'ok') because the global content cache is shared by URL across ALL
+    // companies — a shared-CDN URL fetched for another issuer (e.g. a Pfizer
+    // 10-K on s206.q4cdn.com) must NOT be silently trusted for this company.
+    // Run the SAME issuer verification used in the fetch loop, but on the
+    // already-cached content (no network re-fetch). Own-domain docs fast-path
+    // to 'ok' with no LLM cost, exactly like the fetch loop.
+    const toVerify = await storage.getDocumentsNeedingVerification(companyId);
+    let reuseKept = 0, reuseRejected = 0;
+    for (const d of toVerify) {
+      const content = d.content || "";
+      if (content.length <= 50) {
+        // No usable cached content — drop back to normal fetch path.
+        await storage.recordFetchFailure(companyId, d.url);
+        continue;
+      }
+      if (!shouldVerifyDocument({ url: d.url, verifiedDomain: company.domain })) {
+        await storage.markLinkedDocumentVerified(companyId, d.url);
+        reuseKept++;
+        continue;
+      }
+      try {
+        const vr = await verifyDocumentCompany(
+          {
+            name: companyName,
+            isin: company.isin,
+            sector: company.sector,
+            country: company.country,
+            ticker: company.ticker,
+            verifiedDomain: company.domain,
+          },
+          { url: d.url, title: d.title, content }
+        );
+        if (vr.verdict === "match") {
+          await storage.markLinkedDocumentVerified(companyId, d.url);
+          reuseKept++;
+        } else if (vr.verdict === "error") {
+          // Fail-safe: same cheap name-mention heuristic as the fetch loop.
+          const contentLower = content.toLowerCase();
+          const companyNameLower = companyName.toLowerCase();
+          const nameWords = companyNameLower
+            .split(/[\s,\.\-&]+/)
+            .filter(w => w.length >= 4 && !['inc', 'ltd', 'plc', 'corp', 'group', 'the', 'and', 'company', 'limited', 'corporation', 'holdings', 'international'].includes(w));
+          const fallbackMentions = (companyNameLower.length >= 4 && contentLower.includes(companyNameLower))
+            || nameWords.some(w => contentLower.includes(w));
+          if (fallbackMentions) {
+            console.warn(`[${companyName}] REUSE VERIFY ERROR (${vr.reason}); kept via name-mention fallback: ${d.url.slice(0, 80)}`);
+            await storage.markLinkedDocumentVerified(companyId, d.url);
+            reuseKept++;
+          } else {
+            console.warn(`[${companyName}] REUSE VERIFY ERROR (${vr.reason}); no name mention — rejected: ${d.url.slice(0, 80)}`);
+            await storage.recordVerificationReject(companyId, d.url, `error — ${vr.reason}`);
+            reuseRejected++;
+          }
+        } else {
+          const issuer = vr.detectedIssuer ? `: ${vr.detectedIssuer}` : '';
+          console.warn(`[${companyName}] REUSE POST-FETCH REJECT (${vr.verdict}${issuer}): ${d.url.slice(0, 80)} — ${vr.reason}`);
+          await storage.recordVerificationReject(companyId, d.url, `${vr.verdict}${issuer} — ${vr.reason}`);
+          reuseRejected++;
+        }
+      } catch (e: any) {
+        // On unexpected error, reject conservatively to avoid contamination.
+        console.warn(`[${companyName}] REUSE VERIFY EXCEPTION; rejected: ${d.url.slice(0, 80)} — ${e?.message?.slice(0, 120)}`);
+        await storage.recordVerificationReject(companyId, d.url, `error — verify exception`);
+        reuseRejected++;
+      }
+    }
+    if (toVerify.length > 0) {
+      console.log(`[${companyName}] Reuse verification: ${reuseKept} kept, ${reuseRejected} rejected (of ${toVerify.length})`);
+    }
   }
 
   // Save discovery diagnostics (includes coverage metric)
