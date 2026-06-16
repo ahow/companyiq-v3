@@ -35,9 +35,14 @@ import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verificat
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 // ─── Timeout Constants ──────────────────────────────────────────────────────
-const PIPELINE_TIMEOUT_MS = parseInt(process.env.PIPELINE_TIMEOUT_MS || "480000", 10); // 8 min
-const FETCH_PHASE_BUDGET_MS = parseInt(process.env.FETCH_PHASE_BUDGET_MS || "300000", 10); // 5 min
-const PER_DOCUMENT_TIMEOUT_MS = parseInt(process.env.PER_DOCUMENT_TIMEOUT_MS || "45000", 10); // 45 sec
+// NOTE: these must all stay below the BullMQ queue/worker lockDuration (10 min)
+// so a single long-running company never exceeds its lock. Large annual-report
+// PDFs can take 60–90s to download, so the per-document timeout must exceed the
+// processor's binary fetch timeout (FETCH_TIMEOUT_BINARY, default 90s) to let a
+// legitimately slow download finish instead of being cut off and marked dead.
+const PIPELINE_TIMEOUT_MS = parseInt(process.env.PIPELINE_TIMEOUT_MS || "540000", 10); // 9 min
+const FETCH_PHASE_BUDGET_MS = parseInt(process.env.FETCH_PHASE_BUDGET_MS || "360000", 10); // 6 min
+const PER_DOCUMENT_TIMEOUT_MS = parseInt(process.env.PER_DOCUMENT_TIMEOUT_MS || "100000", 10); // 100 sec
 
 export interface PipelineOptions {
   company: Company;

@@ -25,7 +25,14 @@ function isSecHost(url: string): boolean {
   }
 }
 
-const FETCH_TIMEOUT = 15000;
+// Large annual-report PDFs (often 10–20 MB) routinely take 25–40s to download
+// over the network. The previous 15s timeout caused such files to be marked
+// "dead" even though they were perfectly reachable. We now use a generous
+// default and an even larger timeout for binary/PDF responses. Both stay below
+// the pipeline's PER_DOCUMENT_TIMEOUT_MS (default 45s) unless overridden, so a
+// genuinely hung request is still cut off by the outer guard.
+const FETCH_TIMEOUT = parseInt(process.env.FETCH_TIMEOUT_MS || "40000", 10); // 40s for HTML
+const FETCH_TIMEOUT_BINARY = parseInt(process.env.FETCH_TIMEOUT_BINARY_MS || "90000", 10); // 90s for PDF/binary
 const MAX_RETRIES = 2;
 const RETRY_DELAY_BASE = 2000;
 
@@ -68,11 +75,15 @@ async function fetchWithRetry(
           : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate",
       };
+      const isBinary = opts.responseType === "arraybuffer";
       const response = await axios.get(url, {
         headers,
-        timeout: FETCH_TIMEOUT,
+        timeout: isBinary ? FETCH_TIMEOUT_BINARY : FETCH_TIMEOUT,
         responseType: opts.responseType || "text",
         maxRedirects: 5,
+        // Allow large reports (annual reports can exceed 25 MB).
+        maxContentLength: 64 * 1024 * 1024,
+        maxBodyLength: 64 * 1024 * 1024,
         validateStatus: (status) => status < 400,
       });
 
@@ -328,8 +339,20 @@ export async function processDocument(
     let content = "";
 
     if (type === "pdf" || url.toLowerCase().endsWith(".pdf")) {
-      const { data } = await fetchWithRetry(url, { responseType: "arraybuffer" });
-      content = await extractTextFromPdf(Buffer.from(data));
+      const { data, contentType } = await fetchWithRetry(url, { responseType: "arraybuffer" });
+      const buf = Buffer.from(data);
+      // Some CDNs return a small HTML challenge/interstitial page with HTTP 200
+      // instead of the actual PDF. Detect that (by content-type, magic bytes, or
+      // implausibly small size) and fall back to the browser, which can pass the
+      // challenge and render the real document.
+      const looksLikePdf = buf.slice(0, 5).toString("latin1") === "%PDF-";
+      const ctSaysHtml = contentType.toLowerCase().includes("text/html");
+      if (!looksLikePdf && (ctSaysHtml || buf.length < 4096)) {
+        console.log(`[Processor] PDF URL returned non-PDF/interstitial (ct=${contentType}, ${buf.length}B) for ${url} — trying browser fallback`);
+        content = await fetchWithBrowser(url);
+      } else {
+        content = await extractTextFromPdf(buf);
+      }
     } else {
       try {
         const { data, contentType } = await fetchWithRetry(url);
