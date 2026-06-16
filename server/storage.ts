@@ -338,6 +338,28 @@ export async function recordFetchFailure(companyId: number, url: string) {
 }
 
 /**
+ * Terminal rejection: the post-fetch LLM verifier determined this document
+ * belongs to a DIFFERENT company (or is generic/non-disclosure). Mark it
+ * 'rejected' so it is (a) excluded from scoring (getAcceptedDocuments only
+ * returns 'ok'), (b) never retried (status is terminal, not 'pending'), and
+ * (c) purged on the next re-discovery. The reason/issuer is stored in
+ * gate_reason for auditability. Any previously linked content reference is
+ * cleared so the wrong-company text cannot leak into analysis.
+ */
+export async function recordVerificationReject(companyId: number, url: string, reason: string) {
+  await db.execute(sql`
+    UPDATE documents SET
+      fetch_status = 'rejected',
+      fetch_failures = 99,
+      content_id = NULL,
+      content = NULL,
+      gate_verdict = 'reject',
+      gate_reason = ${reason.slice(0, 500)}
+    WHERE company_id = ${companyId} AND url = ${url}
+  `);
+}
+
+/**
  * Cross-workspace document reuse: for any pending documents that already have
  * content in the global document_content table (fetched by another workspace),
  * link them immediately and mark as 'ok' to skip redundant fetching.
@@ -368,6 +390,10 @@ export async function clearDiscoveredDocuments(companyId: number) {
   // (status: "ok") are preserved for reuse.
   await db.delete(schema.documents).where(
     and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "dead"))
+  );
+  // Clear REJECTED documents (verified as belonging to a different company).
+  await db.delete(schema.documents).where(
+    and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "rejected"))
   );
 }
 

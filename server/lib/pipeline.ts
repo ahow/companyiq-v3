@@ -321,9 +321,13 @@ async function runFetchPhase(opts: {
                 await storage.recordFetchFailure(companyId, doc.url);
               }
             } else {
-              // different_company or generic -> reject
-              console.warn(`[${companyName}] POST-FETCH REJECT (${vr.verdict}${vr.detectedIssuer ? `: ${vr.detectedIssuer}` : ''}): ${doc.url.slice(0, 80)} — ${vr.reason}`);
-              await storage.recordFetchFailure(companyId, doc.url);
+              // different_company or generic -> TERMINAL reject. Mark the row
+              // 'rejected' so it is excluded from scoring AND never retried
+              // (avoids repeated re-fetch + repeated LLM verifier cost), and is
+              // purged on the next re-discovery.
+              const issuer = vr.detectedIssuer ? `: ${vr.detectedIssuer}` : '';
+              console.warn(`[${companyName}] POST-FETCH REJECT (${vr.verdict}${issuer}): ${doc.url.slice(0, 80)} — ${vr.reason}`);
+              await storage.recordVerificationReject(companyId, doc.url, `${vr.verdict}${issuer} — ${vr.reason}`);
             }
           }
         } else {
