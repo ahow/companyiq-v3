@@ -28,6 +28,34 @@ export function collectApiKeys(baseEnvName: string): string[] {
   return keys;
 }
 
+// ─── Global LLM Concurrency Limiter ──────────────────────────────────────────
+// A single semaphore gates ALL outbound LLM calls in this process. No matter how
+// many companies/documents are processed concurrently (worker concurrency ×
+// in-company fetch parallelism), at most LLM_MAX_CONCURRENCY requests are in
+// flight at once. This keeps the primary provider (DeepSeek) within its rate
+// limit and prevents 429-storm-induced dropped scoring — protecting analysis
+// quality at scale. When running multiple worker replicas, size this so that
+// (LLM_MAX_CONCURRENCY × replica_count) stays within the provider's account
+// limit.
+const LLM_MAX_CONCURRENCY = parseInt(process.env.LLM_MAX_CONCURRENCY || "8", 10);
+let llmActive = 0;
+const llmWaiters: Array<() => void> = [];
+
+async function acquireLlmSlot(): Promise<void> {
+  if (llmActive < LLM_MAX_CONCURRENCY) {
+    llmActive++;
+    return;
+  }
+  await new Promise<void>((resolve) => llmWaiters.push(resolve));
+  llmActive++;
+}
+
+function releaseLlmSlot(): void {
+  llmActive = Math.max(0, llmActive - 1);
+  const next = llmWaiters.shift();
+  if (next) next();
+}
+
 // ─── Provider Interface ──────────────────────────────────────────────────────
 
 export interface AIProvider {
@@ -494,6 +522,20 @@ export function getIndependentTieBreakerProvider(primaryName: string): AIProvide
 }
 
 export async function completeWithFallback(
+  providerName: string,
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }
+): Promise<{ text: string; provider: string }> {
+  // Gate every LLM call (primary + fallbacks) through the global semaphore so
+  // total in-flight requests never exceed LLM_MAX_CONCURRENCY for this process.
+  await acquireLlmSlot();
+  try {
+    return await completeWithFallbackInner(providerName, opts);
+  } finally {
+    releaseLlmSlot();
+  }
+}
+
+async function completeWithFallbackInner(
   providerName: string,
   opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }
 ): Promise<{ text: string; provider: string }> {

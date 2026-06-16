@@ -43,6 +43,12 @@ import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.j
 const PIPELINE_TIMEOUT_MS = parseInt(process.env.PIPELINE_TIMEOUT_MS || "540000", 10); // 9 min
 const FETCH_PHASE_BUDGET_MS = parseInt(process.env.FETCH_PHASE_BUDGET_MS || "360000", 10); // 6 min
 const PER_DOCUMENT_TIMEOUT_MS = parseInt(process.env.PER_DOCUMENT_TIMEOUT_MS || "100000", 10); // 100 sec
+// Max documents fetched concurrently WITHIN a single company. Kept small so it
+// composes safely with worker concurrency and the shared browser-slot pool
+// (MAX_CONCURRENT_BROWSER): worst-case browser demand ~= WORKER_CONCURRENCY but
+// the per-process browser pool caps actual Chromium use regardless. Quality is
+// unaffected — the same fetch+verify runs per doc, just overlapped.
+const INCOMPANY_FETCH_CONCURRENCY = parseInt(process.env.INCOMPANY_FETCH_CONCURRENCY || "4", 10);
 
 export interface PipelineOptions {
   company: Company;
@@ -270,15 +276,19 @@ async function runFetchPhase(opts: {
       return 0;
     });
 
-    // Fetch each pending document with per-document timeout
-    for (const doc of sortedPending) {
-      if (cancelCheck?.()) break;
+    // Fetch pending documents with BOUNDED PARALLELISM. The per-document logic
+    // (fetch -> verify -> record) is identical to the previous sequential
+    // version; only the orchestration is concurrent, capped at
+    // INCOMPANY_FETCH_CONCURRENCY so we never overwhelm the shared browser-slot
+    // pool or the LLM rate limit. Quality is unchanged: every doc is still
+    // fetched and verified with the same checks.
+    const processOne = async (doc: typeof sortedPending[number]): Promise<void> => {
+      if (cancelCheck?.()) return;
 
-      // Check budget mid-loop
+      // Check budget before starting this document
       if (Date.now() - fetchPhaseStart > FETCH_PHASE_BUDGET_MS) {
-        console.warn(`[${companyName}] Fetch budget exceeded mid-pass — stopping`);
         fetchBudgetExceeded = true;
-        break;
+        return;
       }
 
       try {
@@ -367,6 +377,27 @@ async function runFetchPhase(opts: {
         }
         await storage.recordFetchFailure(companyId, doc.url);
       }
+    };
+
+    // Run processOne over sortedPending with a fixed-size worker pool. Documents
+    // are pulled from a shared cursor so faster docs don't wait on slower ones.
+    let cursor = 0;
+    const poolSize = Math.max(1, Math.min(INCOMPANY_FETCH_CONCURRENCY, sortedPending.length));
+    const runWorker = async (): Promise<void> => {
+      while (true) {
+        if (cancelCheck?.()) return;
+        if (Date.now() - fetchPhaseStart > FETCH_PHASE_BUDGET_MS) {
+          fetchBudgetExceeded = true;
+          return;
+        }
+        const idx = cursor++;
+        if (idx >= sortedPending.length) return;
+        await processOne(sortedPending[idx]);
+      }
+    };
+    await Promise.all(Array.from({ length: poolSize }, () => runWorker()));
+    if (fetchBudgetExceeded) {
+      console.warn(`[${companyName}] Fetch budget exceeded during parallel pass — stopping`);
     }
 
     // If budget exceeded mid-pass, force-kill remaining pending docs
