@@ -825,6 +825,13 @@ const SHARED_HOST_SUFFIXES = [
   "investis.com", "investorroom.com", "investorrelations.com",
   "nasdaq.com", "nyse.com", "marketwatch.com", "morningstar.com", "yahoo.com",
   "seekingalpha.com", "simplywall.st", "tipranks.com",
+  // Blog platforms, newsletters and third-party aggregators that frequently
+  // contain an industry keyword (e.g. "semiconductor") in their subdomain and
+  // would otherwise be mis-detected as a company's own site.
+  "substack.com", "blogspot.com", "tumblr.com", "ghost.io", "notion.site",
+  "financialreports.eu", "marketscreener.com", "alphaspread.com", "spglobal.com",
+  "stockanalysis.com", "wallmine.com", "investing.com", "barchart.com",
+  "gurufocus.com", "stocktitan.net", "fintel.io", "moomoo.com",
 ];
 
 function isSharedHost(domain: string): boolean {
@@ -875,15 +882,37 @@ function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: s
 
   // Additional heuristic: the domain should contain part of the company name
   // or be clearly corporate (not a news/blog site)
+  // Generic corporate/industry descriptors must NOT, on their own, satisfy a
+  // name match — otherwise a third-party site like "tspasemiconductor.substack.com"
+  // matches "Hanmi Semiconductor" via the word "semiconductor". We require at
+  // least one *distinctive* company token (a non-generic word) to match.
+  const GENERIC_NAME_WORDS = new Set([
+    "the", "and", "for", "group", "holding", "holdings", "company", "companies",
+    "corp", "corporation", "incorporated", "inc", "ltd", "limited", "llc", "plc",
+    "co", "sa", "se", "ag", "nv", "spa", "oyj", "asa", "ab", "as", "bv", "kg",
+    "international", "global", "worldwide", "industries", "industrial", "enterprise",
+    "enterprises", "technologies", "technology", "systems", "solutions", "services",
+    "products", "semiconductor", "semiconductors", "electronics", "electric",
+    "financial", "bank", "banking", "capital", "partners", "resources", "materials",
+    "energy", "power", "motors", "motor", "pharmaceutical", "pharmaceuticals",
+    "chemical", "chemicals", "insurance", "asset", "management", "trust", "properties",
+    "property", "realty", "real", "estate", "manufacturing", "telecom", "communications",
+    "media", "retail", "foods", "food", "beverage", "automotive", "aerospace",
+    "hong", "kong", "china", "japan", "korea", "america", "american", "national",
+  ]);
   const topDomain = sorted[0][0];
   const companyWords = companyName.toLowerCase().split(/[\s&,.']+/).filter(w => w.length > 2);
+  const distinctiveWords = companyWords.filter(w => !GENERIC_NAME_WORDS.has(w));
+  // Use distinctive words when available; fall back to all words only if a company
+  // name is entirely generic (rare).
+  const matchWords = distinctiveWords.length > 0 ? distinctiveWords : companyWords;
   const domainLower = topDomain.toLowerCase();
 
   // Check if any significant word from company name appears in the domain.
   // A company-name match is now REQUIRED — we no longer accept a domain solely
   // because it "appears 3+ times", which previously caused mis-anchoring to
   // shared hosts and unrelated high-frequency domains.
-  const nameMatch = companyWords.some(word => domainLower.includes(word));
+  const nameMatch = matchWords.some(word => domainLower.includes(word));
   if (nameMatch) return topDomain;
 
   // Try other frequent domains that DO match the company name (scan the top few,
@@ -892,7 +921,7 @@ function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: s
   for (let i = 1; i < Math.min(sorted.length, 6); i++) {
     const [candidateDomain, count] = sorted[i];
     if (count < 2) break;
-    if (companyWords.some(word => candidateDomain.toLowerCase().includes(word))) {
+    if (matchWords.some(word => candidateDomain.toLowerCase().includes(word))) {
       return candidateDomain;
     }
   }
