@@ -933,6 +933,27 @@ apiRouter.delete("/platform-sources/:id", async (req: Request, res: Response) =>
   }
 });
 
+// Delete-and-suppress: keep a tombstone so the >=3-companies auto-detection
+// will NOT re-add this domain even if it keeps qualifying.
+apiRouter.post("/platform-sources/:id/suppress", async (req: Request, res: Response) => {
+  try {
+    const domain = await storage.suppressPlatformSource(parseInt(req.params.id));
+    res.json({ success: true, domain });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Lift suppression so the domain can be auto-detected / re-activated again.
+apiRouter.post("/platform-sources/:id/unsuppress", async (req: Request, res: Response) => {
+  try {
+    await storage.unsuppressPlatformSource(parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Run the >=3-companies auto-detection now and upsert any qualifying hosts.
 apiRouter.post("/platform-sources/detect", async (req: Request, res: Response) => {
   try {

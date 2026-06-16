@@ -110,6 +110,8 @@ export const api = {
   addPlatformSource: (domain: string, reason?: string) => request("/platform-sources", { method: "POST", body: JSON.stringify({ domain, reason }) }),
   updatePlatformSource: (id: number, data: any) => request(`/platform-sources/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deletePlatformSource: (id: number) => request(`/platform-sources/${id}`, { method: "DELETE" }),
+  suppressPlatformSource: (id: number) => request(`/platform-sources/${id}/suppress`, { method: "POST" }),
+  unsuppressPlatformSource: (id: number) => request(`/platform-sources/${id}/unsuppress`, { method: "POST" }),
   detectPlatformSources: (minCompanies = 3) => request("/platform-sources/detect", { method: "POST", body: JSON.stringify({ minCompanies }) }),
 
   // Results (delete)

@@ -833,7 +833,8 @@ export async function getPlatformSources() {
 
 /** Active platform host domains (normalized) for the verification gate. */
 export async function getActivePlatformHosts(): Promise<string[]> {
-  const rows = await db.select().from(schema.platformSources).where(eq(schema.platformSources.isActive, true));
+  const rows = await db.select().from(schema.platformSources)
+    .where(and(eq(schema.platformSources.isActive, true), eq(schema.platformSources.suppressed, false)));
   return rows
     .map(r => (r.domain || "").trim().toLowerCase().replace(/^www\./, "").replace(/\.$/, ""))
     .filter(Boolean);
@@ -859,6 +860,44 @@ export async function updatePlatformSource(id: number, updates: { domain?: strin
 
 export async function deletePlatformSource(id: number) {
   await db.delete(schema.platformSources).where(eq(schema.platformSources.id, id));
+}
+
+/**
+ * Delete-and-suppress: instead of removing the row, mark it suppressed and
+ * inactive so it (a) stops force-verifying immediately and (b) will NOT be
+ * re-added by the >=3-companies auto-detection even if it keeps qualifying.
+ * If the row no longer exists (was hard-deleted), insert a suppressed tombstone
+ * keyed on the domain so future auto-detect runs still skip it.
+ */
+export async function suppressPlatformSource(id: number) {
+  const [row] = await db.select().from(schema.platformSources).where(eq(schema.platformSources.id, id));
+  if (row) {
+    await db.update(schema.platformSources)
+      .set({ suppressed: true, isActive: false })
+      .where(eq(schema.platformSources.id, id));
+    return row.domain;
+  }
+  return null;
+}
+
+/** Suppress by domain (used when re-adding a tombstone for a hard-deleted row). */
+export async function suppressPlatformDomain(domain: string) {
+  const norm = (domain || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").replace(/\.$/, "");
+  if (!norm) throw new Error("Invalid domain");
+  const [existing] = await db.select().from(schema.platformSources).where(eq(schema.platformSources.domain, norm));
+  if (existing) {
+    await db.update(schema.platformSources).set({ suppressed: true, isActive: false }).where(eq(schema.platformSources.domain, norm));
+  } else {
+    await db.insert(schema.platformSources)
+      .values({ workspaceId: null as any, domain: norm, reason: "Suppressed: will not auto-re-add", autoDetected: true, suppressed: true, isActive: false })
+      .onConflictDoNothing({ target: schema.platformSources.domain });
+  }
+  return norm;
+}
+
+/** Lift suppression so a domain can be auto-detected / re-activated again. */
+export async function unsuppressPlatformSource(id: number) {
+  await db.update(schema.platformSources).set({ suppressed: false }).where(eq(schema.platformSources.id, id));
 }
 
 /**
@@ -917,10 +956,16 @@ export async function detectAndUpsertPlatformSources(minCompanies = 3): Promise<
     if (inserted) {
       results.push({ domain, companyCount, added: true });
     } else {
-      // Keep company_count fresh on existing auto-detected rows.
+      // Keep company_count fresh on existing auto-detected rows, but NEVER
+      // touch suppressed rows (they were deliberately removed and must not be
+      // re-activated or re-counted into the active set).
       await db.update(schema.platformSources)
         .set({ companyCount })
-        .where(and(eq(schema.platformSources.domain, domain), eq(schema.platformSources.autoDetected, true)));
+        .where(and(
+          eq(schema.platformSources.domain, domain),
+          eq(schema.platformSources.autoDetected, true),
+          eq(schema.platformSources.suppressed, false),
+        ));
       results.push({ domain, companyCount, added: false });
     }
   }

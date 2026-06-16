@@ -275,6 +275,9 @@ export const platformSources = pgTable("platform_sources", {
   autoDetected: boolean("auto_detected").notNull().default(false),
   companyCount: integer("company_count"),
   isActive: boolean("is_active").notNull().default(true),
+  // When true, this domain has been deliberately removed and must NOT be
+  // re-added by the >=3-companies auto-detection, even if it keeps qualifying.
+  suppressed: boolean("suppressed").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   domainIdx: uniqueIndex("platform_domain_idx").on(table.domain),

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState } from "react";
-import { Plus, Trash2, Key, Globe, Settings, Activity, Shield, Ban, Edit2, Check, X, ToggleLeft, ToggleRight, Users, Server, Search, Sparkles } from "lucide-react";
+import { Plus, Trash2, Key, Globe, Settings, Activity, Shield, Ban, Edit2, Check, X, ToggleLeft, ToggleRight, Users, Server, Search, Sparkles, RotateCcw } from "lucide-react";
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
@@ -687,6 +687,16 @@ function PlatformSourcesPanel() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["platformSources"] }),
   });
 
+  const suppressMutation = useMutation({
+    mutationFn: (id: number) => api.suppressPlatformSource(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["platformSources"] }),
+  });
+
+  const unsuppressMutation = useMutation({
+    mutationFn: (id: number) => api.unsuppressPlatformSource(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["platformSources"] }),
+  });
+
   const toggleActiveMutation = useMutation({
     mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) =>
       api.updatePlatformSource(id, { isActive: !isActive }),
@@ -761,10 +771,10 @@ function PlatformSourcesPanel() {
         <div className="px-4 py-2 bg-gray-50 grid grid-cols-12 gap-2 text-xs font-medium text-gray-500 uppercase">
           <div className="col-span-1">Active</div>
           <div className="col-span-4">Host</div>
-          <div className="col-span-5">Reason</div>
-          <div className="col-span-2 text-right">Actions</div>
+          <div className="col-span-4">Reason</div>
+          <div className="col-span-3 text-right">Actions</div>
         </div>
-        {sources?.map((source: any) => (
+        {sources?.filter((s: any) => !s.suppressed).map((source: any) => (
           <div key={source.id} className="px-4 py-3 grid grid-cols-12 gap-2 items-center group">
             <div className="col-span-1">
               <button onClick={() => toggleActiveMutation.mutate({ id: source.id, isActive: source.isActive })}>
@@ -783,27 +793,66 @@ function PlatformSourcesPanel() {
                 </span>
               )}
             </div>
-            <div className={`col-span-5 text-xs ${source.isActive ? "text-gray-500" : "text-gray-400"}`}>
+            <div className={`col-span-4 text-xs ${source.isActive ? "text-gray-500" : "text-gray-400"}`}>
               {source.reason || "—"}
             </div>
-            <div className="col-span-2 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="col-span-3 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
                 onClick={() => deleteMutation.mutate(source.id)}
-                className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                title="Delete (auto-detection may re-add it later)"
+                className="px-2 py-1 text-[11px] text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded flex items-center gap-1"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Trash2 className="w-3.5 h-3.5" /> Delete
+              </button>
+              <button
+                onClick={() => suppressMutation.mutate(source.id)}
+                title="Delete and never auto-re-add (until restored)"
+                className="px-2 py-1 text-[11px] text-red-500 hover:text-red-700 hover:bg-red-50 rounded flex items-center gap-1 whitespace-nowrap"
+              >
+                <Ban className="w-3.5 h-3.5" /> Don&rsquo;t re-add
               </button>
             </div>
           </div>
         ))}
-        {(!sources || sources.length === 0) && (
+        {(!sources || sources.filter((s: any) => !s.suppressed).length === 0) && (
           <div className="p-6 text-center text-gray-400 text-sm">
-            No platform sources configured. Add shared hosts above or run a scan.
+            No active platform sources. Add shared hosts above or run a scan.
           </div>
         )}
       </div>
+
+      {sources?.some((s: any) => s.suppressed) && (
+        <div className="border rounded-lg divide-y border-red-100">
+          <div className="px-4 py-2 bg-red-50 text-xs font-medium text-red-700 uppercase flex items-center gap-1.5">
+            <Ban className="w-3.5 h-3.5" /> Suppressed domains &mdash; will not be auto-re-added
+          </div>
+          {sources.filter((s: any) => s.suppressed).map((source: any) => (
+            <div key={source.id} className="px-4 py-3 grid grid-cols-12 gap-2 items-center group bg-red-50/30">
+              <div className="col-span-5 text-sm font-mono text-gray-400 line-through flex items-center gap-2">
+                {source.domain}
+                {source.autoDetected && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-sans bg-gray-100 text-gray-500 no-underline">
+                    auto{source.companyCount ? ` · ${source.companyCount}` : ""}
+                  </span>
+                )}
+              </div>
+              <div className="col-span-4 text-xs text-gray-400">{source.reason || "—"}</div>
+              <div className="col-span-3 flex justify-end">
+                <button
+                  onClick={() => unsuppressMutation.mutate(source.id)}
+                  title="Lift suppression so this domain can be detected/added again"
+                  className="px-2 py-1 text-[11px] text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded flex items-center gap-1"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Restore
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="text-xs text-gray-400">
-        {sources?.length || 0} platform hosts configured. Active hosts force LLM issuer-verification on every document, overriding the own-domain fast-path.
+        {sources?.filter((s: any) => !s.suppressed).length || 0} active platform host(s). Active hosts force LLM issuer-verification on every document, overriding the own-domain fast-path. &ldquo;Don&rsquo;t re-add&rdquo; removes a host and blocks the ≥3-companies auto-detection from re-adding it.
       </div>
     </div>
   );

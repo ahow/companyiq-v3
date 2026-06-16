@@ -366,6 +366,7 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
     await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS platform_domain_idx ON platform_sources(domain)`);
+    await db.execute(sql`ALTER TABLE platform_sources ADD COLUMN IF NOT EXISTS suppressed BOOLEAN NOT NULL DEFAULT false`);
 
     // Seed well-known shared/multi-tenant hosts (idempotent).
     const seedPlatformHosts: { domain: string; reason: string }[] = [
