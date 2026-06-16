@@ -805,9 +805,37 @@ function buildInvestorRelationsQueries(
  * Looks for the most common corporate domain that appears to belong to the company.
  * Excludes known generic/news/social domains.
  */
+// Shared CDNs, IR-platform hosts, document repositories and cloud storage that
+// host content for HUNDREDS of different companies. Anchoring a company to one
+// of these (e.g. s206.q4cdn.com) is the root cause of document contamination,
+// so they must NEVER be treated as a company's primary domain. Matched as a
+// suffix so all subdomains (s1.q4cdn.com, s206.q4cdn.com, ...) are covered.
+const SHARED_HOST_SUFFIXES = [
+  "q4cdn.com", "q4web.com", "q4inc.com",
+  "s3.amazonaws.com", "amazonaws.com", "cloudfront.net",
+  "sharepoint.com", "blob.core.windows.net", "windows.net",
+  "googleusercontent.com", "storage.googleapis.com", "firebasestorage.googleapis.com",
+  "azureedge.net", "akamaihd.net", "akamaized.net", "fastly.net", "cloudflare.net",
+  "wordpress.com", "squarespace.com", "wixsite.com", "weebly.com",
+  "netlify.app", "vercel.app", "herokuapp.com", "github.io",
+  "scribd.com", "slideshare.net", "issuu.com", "docsend.com", "box.com",
+  "dropbox.com", "drive.google.com", "docs.google.com",
+  "sec.report", "annualreports.com", "responsibilityreports.com",
+  "businesswire.com", "prnewswire.com", "globenewswire.com", "newswire.ca",
+  "investis.com", "investorroom.com", "investorrelations.com",
+  "nasdaq.com", "nyse.com", "marketwatch.com", "morningstar.com", "yahoo.com",
+  "seekingalpha.com", "simplywall.st", "tipranks.com",
+];
+
+function isSharedHost(domain: string): boolean {
+  return SHARED_HOST_SUFFIXES.some(
+    (suffix) => domain === suffix || domain.endsWith("." + suffix)
+  );
+}
+
 function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: string): string | null {
   const excludedDomains = new Set([
-    "linkedin.com", "twitter.com", "facebook.com", "youtube.com", "instagram.com",
+    "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com", "instagram.com",
     "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
     "bbc.com", "theguardian.com", "nytimes.com", "wsj.com", "medium.com",
     "indeed.com", "glassdoor.com", "theladders.com", "builtin.com",
@@ -826,6 +854,9 @@ function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: s
       const url = new URL(c.url);
       let domain = url.hostname.replace(/^www\./, "");
       if (excludedDomains.has(domain)) continue;
+      // Never anchor to shared CDNs / IR platforms / document repositories that
+      // host content for many different companies (prevents contamination).
+      if (isSharedHost(domain)) continue;
       // Skip very generic TLDs that are unlikely to be corporate
       if (domain.endsWith(".gov") || domain.endsWith(".edu")) continue;
       domainCounts.set(domain, (domainCounts.get(domain) || 0) + 1);
@@ -848,20 +879,26 @@ function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: s
   const companyWords = companyName.toLowerCase().split(/[\s&,.']+/).filter(w => w.length > 2);
   const domainLower = topDomain.toLowerCase();
 
-  // Check if any significant word from company name appears in the domain
+  // Check if any significant word from company name appears in the domain.
+  // A company-name match is now REQUIRED — we no longer accept a domain solely
+  // because it "appears 3+ times", which previously caused mis-anchoring to
+  // shared hosts and unrelated high-frequency domains.
   const nameMatch = companyWords.some(word => domainLower.includes(word));
   if (nameMatch) return topDomain;
 
-  // If no name match but appears 3+ times, still use it (might be abbreviated)
-  if (sorted[0][1] >= 3) return topDomain;
-
-  // Try second-most-common domain if it matches the name
-  if (sorted.length > 1 && sorted[1][1] >= 2) {
-    const secondDomain = sorted[1][0];
-    const secondMatch = companyWords.some(word => secondDomain.toLowerCase().includes(word));
-    if (secondMatch) return secondDomain;
+  // Try other frequent domains that DO match the company name (scan the top few,
+  // not just the second). This recovers cases where a news/aggregator domain is
+  // the most common but the company's own domain is also present.
+  for (let i = 1; i < Math.min(sorted.length, 6); i++) {
+    const [candidateDomain, count] = sorted[i];
+    if (count < 2) break;
+    if (companyWords.some(word => candidateDomain.toLowerCase().includes(word))) {
+      return candidateDomain;
+    }
   }
 
+  // No domain confidently matches the company name — return null rather than
+  // guessing, so the company is left with no domain (surfaced on the Domains page).
   return null;
 }
 
@@ -1125,6 +1162,12 @@ export interface DiscoveryDiagnostics {
 export interface DiscoveryResult {
   documents: DiscoveryCandidate[];
   diagnostics: DiscoveryDiagnostics;
+  /** The domain used to anchor the search. Either the company's stored domain
+   *  or one auto-detected from search results. Null if none could be determined. */
+  effectiveDomain?: string | null;
+  /** True when effectiveDomain was auto-detected (i.e. company had no stored domain).
+   *  Used by the pipeline to decide whether to persist the detected domain. */
+  domainAutoDetected?: boolean;
 }
 
 export async function searchCompanyDocuments(opts: {
@@ -1199,10 +1242,12 @@ export async function searchCompanyDocuments(opts: {
 
   // Lane 2: Domain-anchored search (with auto-detection if no domain set)
   let effectiveDomain = companyDomain || null;
+  let domainAutoDetected = false;
   if (!effectiveDomain) {
     // Auto-detect domain from general search results
     effectiveDomain = inferDomainFromResults(allCandidates, companyName);
     if (effectiveDomain) {
+      domainAutoDetected = true;
       console.log(`[${companyName}] Auto-detected domain: ${effectiveDomain}`);
     }
   }
@@ -1415,7 +1460,7 @@ export async function searchCompanyDocuments(opts: {
     coverage,
   };
 
-  return { documents: finalDocs, diagnostics };
+  return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected };
 }
 
 // ─── Ensemble Discovery (multiple passes with varied phrasing) ───────────────
@@ -1439,6 +1484,8 @@ export async function searchCompanyDocumentsWithEnsemble(opts: {
   // Multiple passes with slightly varied queries
   const allDocs: DiscoveryCandidate[] = [];
   const seenUrls = new Set<string>();
+  let effectiveDomain: string | null = opts.companyDomain || null;
+  let domainAutoDetected = false;
 
   for (let i = 0; i < iterations; i++) {
     const result = await searchCompanyDocuments(opts);
@@ -1447,6 +1494,11 @@ export async function searchCompanyDocumentsWithEnsemble(opts: {
         seenUrls.add(doc.url);
         allDocs.push(doc);
       }
+    }
+    // Capture the first auto-detected domain so the pipeline can persist it
+    if (result.effectiveDomain && !effectiveDomain) {
+      effectiveDomain = result.effectiveDomain;
+      domainAutoDetected = !!result.domainAutoDetected;
     }
   }
 
@@ -1467,5 +1519,7 @@ export async function searchCompanyDocumentsWithEnsemble(opts: {
         priority: d.priority,
       })),
     },
+    effectiveDomain,
+    domainAutoDetected,
   };
 }

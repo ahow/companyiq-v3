@@ -133,6 +133,27 @@ async function runFetchPhase(opts: {
 
   console.log(`[${companyName}] Discovery found ${discoveryResult.documents.length} accepted documents`);
 
+  // Persist an auto-detected domain back to the company record so future runs
+  // (and the Domains dashboard) have it, and so contamination heuristics can
+  // rely on a stored domain. Only write when the company had no domain set and
+  // discovery confidently auto-detected one.
+  if (
+    discoveryResult.domainAutoDetected &&
+    discoveryResult.effectiveDomain &&
+    !company.domain
+  ) {
+    try {
+      await storage.updateCompany(companyId, workspaceId, {
+        domain: discoveryResult.effectiveDomain,
+      });
+      // Keep the in-memory company object in sync for the rest of this run
+      (company as any).domain = discoveryResult.effectiveDomain;
+      console.log(`[${companyName}] Persisted auto-detected domain: ${discoveryResult.effectiveDomain}`);
+    } catch (e: any) {
+      console.warn(`[${companyName}] Failed to persist auto-detected domain: ${e.message}`);
+    }
+  }
+
   // Step 3: Store discovered documents in DB (company-level, no frameworkId in uniqueness)
   for (const doc of discoveryResult.documents) {
     const type = inferDocumentType(doc.url);

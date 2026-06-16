@@ -10,6 +10,7 @@ import ResultsPage from "./pages/ResultsPage";
 import SettingsPage from "./pages/SettingsPage";
 import AIBuilderPage from "./pages/AIBuilderPage";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
+import DomainsPage from "./pages/DomainsPage";
 import GuidePage from "./pages/GuidePage";
 import Navbar from "./components/Navbar";
 
@@ -44,6 +45,7 @@ type Page =
   | "settings"
   | "ai-builder"
   | "diagnostics"
+  | "domains"
   | "guide";
 
 export default function App() {
@@ -104,6 +106,7 @@ export default function App() {
           {page === "settings" && <SettingsPage />}
           {page === "ai-builder" && <AIBuilderPage />}
           {page === "diagnostics" && <DiagnosticsPage />}
+          {page === "domains" && <DomainsPage />}
           {page === "guide" && <GuidePage />}
         </main>
       </div>
