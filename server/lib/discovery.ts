@@ -58,6 +58,112 @@ export function classifyDocumentTier(url: string, title: string): DocumentTier {
   return 3;
 }
 
+// ─── Filing Year Detection + Recency Gating (Layer A) ───────────────────────
+// Periodic filings (10-K, 20-F, annual report, proxy/DEF 14A) accumulate over
+// many years on sources like SEC EDGAR. Without recency gating, a company's
+// entire 10-15 year filing history floods the corpus with stale, topic-free
+// boilerplate that dilutes the few recent, topic-relevant filings. We detect
+// the filing year and keep only the most recent instances within a validity
+// window (the framework's stated "evidence from the past N years").
+
+const RECENCY_WINDOW_YEARS = parseInt(process.env.DISCOVERY_RECENCY_WINDOW_YEARS || "4", 10);
+const MAX_PER_PERIODIC_TYPE = parseInt(process.env.DISCOVERY_MAX_PER_PERIODIC_TYPE || "2", 10);
+
+// Patterns that identify a periodic filing and a normalized "type key" so we can
+// keep the newest N of each type rather than the newest N overall.
+function periodicFilingType(url: string, title: string): string | null {
+  const s = (url + " " + title).toLowerCase();
+  if (/def.?14a|proxy.?statement|agm.?circular|notice.?of.?meeting/.test(s)) return "proxy";
+  if (/10-?k\b|10k|annual.?report.?on.?form.?10-?k/.test(s)) return "10-K";
+  if (/20-?f\b|20f/.test(s)) return "20-F";
+  if (/annual.?report|integrated.?report/.test(s)) return "annual-report";
+  return null;
+}
+
+// Best-effort extraction of the filing/publication year from the URL or title.
+// Handles: EDGAR accession dates (xxxxxxxxxx-YY-xxxxxx), compact period-end
+// dates (bac-20231231 / 20241231), and bare 4-digit years (2011..2026).
+export function detectFilingYear(url: string, title: string): number | null {
+  const nowYear = new Date().getFullYear();
+  const candidates: number[] = [];
+  const u = url.toLowerCase();
+  const t = (title || "").toLowerCase();
+
+  // 1) Compact period-end dates: 8 digits YYYYMMDD where YYYY is plausible.
+  for (const m of u.matchAll(/(20[0-3]\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/g)) {
+    const y = parseInt(m[1], 10);
+    if (y >= 2000 && y <= nowYear + 1) candidates.push(y);
+  }
+
+  // 2) EDGAR accession number: NNNNNNNNNN-YY-NNNNNN  (the middle 2 digits = year)
+  for (const m of u.matchAll(/\d{10}-(\d{2})-\d{6}/g)) {
+    const yy = parseInt(m[1], 10);
+    const y = yy <= (nowYear % 100) + 1 ? 2000 + yy : 1900 + yy;
+    if (y >= 2000 && y <= nowYear + 1) candidates.push(y);
+  }
+
+  // 3) Bare 4-digit years anywhere in url or title.
+  for (const src of [u, t]) {
+    for (const m of src.matchAll(/\b(20[0-3]\d)\b/g)) {
+      const y = parseInt(m[1], 10);
+      if (y >= 2000 && y <= nowYear + 1) candidates.push(y);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  // Prefer the most recent plausible year found (filings are named by period).
+  return Math.max(...candidates);
+}
+
+/**
+ * Layer A — Recency gate.
+ * For periodic filing types, drop instances older than the validity window and
+ * keep at most MAX_PER_PERIODIC_TYPE of the most recent instances per type.
+ * Non-periodic documents (policies, IR pages, ESG, governance, etc.) are never
+ * dropped here — only the historical-filing flood is trimmed.
+ * Filings whose year cannot be determined are kept (fail-open), but de-prioritized
+ * slightly so dated ones don't outrank clearly-recent ones.
+ */
+export function applyRecencyGate<T extends { url: string; title: string; priority: number }>(
+  documents: T[],
+  opts?: { windowYears?: number; maxPerType?: number; nowYear?: number }
+): { kept: T[]; dropped: T[] } {
+  const windowYears = opts?.windowYears ?? RECENCY_WINDOW_YEARS;
+  const maxPerType = opts?.maxPerType ?? MAX_PER_PERIODIC_TYPE;
+  const nowYear = opts?.nowYear ?? new Date().getFullYear();
+  const minYear = nowYear - windowYears + 1; // inclusive lower bound
+
+  const kept: T[] = [];
+  const dropped: T[] = [];
+  // Group periodic filings by type to keep newest-N-per-type.
+  const periodicByType = new Map<string, Array<{ doc: T; year: number | null }>>();
+
+  for (const doc of documents) {
+    const ptype = periodicFilingType(doc.url, doc.title);
+    if (!ptype) { kept.push(doc); continue; }
+    const year = detectFilingYear(doc.url, doc.title);
+    if (!periodicByType.has(ptype)) periodicByType.set(ptype, []);
+    periodicByType.get(ptype)!.push({ doc, year });
+  }
+
+  for (const [, entries] of periodicByType) {
+    // Sort newest-first; unknown years sink to the bottom (treated as oldest).
+    entries.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+    let keptOfType = 0;
+    for (const { doc, year } of entries) {
+      const withinWindow = year === null ? true : year >= minYear;
+      if (keptOfType < maxPerType && withinWindow) {
+        kept.push(doc);
+        keptOfType++;
+      } else {
+        dropped.push(doc);
+      }
+    }
+  }
+
+  return { kept, dropped };
+}
+
 // ─── URL Deny List (Hard Block at Retrieval) ───────────────────────────────
 // These URLs are NEVER useful for corporate disclosure analysis.
 // They are excluded before entering the candidate pool.
@@ -1455,9 +1561,18 @@ export async function searchCompanyDocuments(opts: {
 
   console.log(`[${companyName}] Gate accepted ${accepted.length} documents`);
 
+  // Layer A — Recency gate: trim the historical-filing flood so stale, topic-free
+  // periodic filings don't dilute the corpus. Keeps newest-N-per-type within the
+  // validity window; never drops non-periodic docs (policies, IR, ESG, governance).
+  const { kept: recencyKept, dropped: recencyDropped } = applyRecencyGate(accepted);
+  if (recencyDropped.length > 0) {
+    console.log(`[${companyName}] Recency gate dropped ${recencyDropped.length} stale/duplicate periodic filings (kept ${recencyKept.length})`);
+  }
+  const recencyFiltered = recencyKept;
+
   // Tier-based re-ranking: boost Tier 1 and Tier 2 documents to ensure they
   // are included even if their raw priority score is lower than ESG reports.
-  for (const doc of accepted) {
+  for (const doc of recencyFiltered) {
     const tier = classifyDocumentTier(doc.url, doc.title);
     if (tier === 1) doc.priority -= 15; // Strong boost for mandatory filings
     else if (tier === 2) doc.priority -= 7; // Moderate boost for priority disclosures
@@ -1465,7 +1580,7 @@ export async function searchCompanyDocuments(opts: {
   }
 
   // Sort by priority and cap
-  const finalDocs = accepted
+  const finalDocs = recencyFiltered
     .sort((a, b) => a.priority - b.priority)
     .slice(0, MAX_DOCS_RETURNED);
 

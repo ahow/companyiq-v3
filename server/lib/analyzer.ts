@@ -1,6 +1,6 @@
 import * as storage from "../storage.js";
 import { completeWithFallback, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
-import { buildEvidencePacksForCategory, chunkText, tokenize, buildBM25Index, bm25Score } from "./passage-retrieval.js";
+import { buildEvidencePacksForCategory, chunkText, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack } from "./passage-retrieval.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { generateDocumentHash } from "./processor.js";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -685,6 +685,12 @@ export async function analyzeCompanyMeasures(opts: {
     console.log(`[${companyName}] Summarized via ${summarizerModel} (${combinedText.length} chars)`);
   }
 
+  // Layer B/D — derive the framework's topic lexicon (AI/ML by default) and
+  // measure how much topic-relevant evidence the corpus actually contains.
+  const topicTerms = deriveTopicTerms(framework.topicDescription || undefined, framework.name);
+  const corpusTopicStats = computeCorpusTopicStats(combinedText, topicTerms);
+  console.log(`[${companyName}] Corpus topic evidence: ${corpusTopicStats.topicChunks}/${corpusTopicStats.totalChunks} chunks contain topic terms (${corpusTopicStats.topicHits} hits)`);
+
   // Group measures by category
   const categoryMap = new Map<string, FrameworkMeasure[]>();
   for (const measure of measures) {
@@ -701,18 +707,22 @@ export async function analyzeCompanyMeasures(opts: {
     console.log(`[${companyName}] Scoring category: ${category} (${categoryMeasures.length} measures)`);
 
     // Build evidence packs via BM25
-    let evidencePacks: Array<{ measureId: string; text: string }>;
+    let evidencePacks: Array<{ measureId: string; text: string; topicHits?: number }>;
     if (settings.useBm25Retrieval) {
       evidencePacks = buildEvidencePacksForCategory({
         measures: categoryMeasures,
         combinedText,
         terminology,
+        topicTerms,
       });
     } else {
       // No BM25: use full text for all measures
+      const fullSlice = combinedText.slice(0, 10000);
+      const sliceHits = computeCorpusTopicStats(fullSlice, topicTerms).topicHits;
       evidencePacks = categoryMeasures.map((m) => ({
         measureId: m.measureId,
-        text: combinedText.slice(0, 10000),
+        text: fullSlice,
+        topicHits: sliceHits,
       }));
     }
 
@@ -800,6 +810,19 @@ export async function analyzeCompanyMeasures(opts: {
         evidenceText: finalEvidence,
         primaryProvider: scoringProvider,
       });
+
+      // Layer D — Honest coverage signal. Previously hardcoded to null, which let
+      // a 0% score coexist with a "full coverage" label. We now base coverage on
+      // whether topic-relevant evidence actually reached this measure's pack and
+      // whether the corpus contained any topic evidence at all. This flags the
+      // genuine "under-evidenced" cases for review instead of mislabeling them.
+      const packTopicHits = (evidencePack as EvidencePack | undefined)?.topicHits ?? 0;
+      let coverageLabel: string;
+      if (packTopicHits >= 3) coverageLabel = "full";
+      else if (packTopicHits >= 1) coverageLabel = "partial";
+      else if (corpusTopicStats.topicChunks === 0) coverageLabel = "none"; // corpus genuinely has no topic content
+      else coverageLabel = "low"; // topic evidence exists in corpus but did not reach this pack
+      measureResult.coverage = coverageLabel;
 
       return measureResult;
     };
