@@ -14,6 +14,7 @@ import { getRedisConnection } from "./redis.js";
 import { runAnalysisPipeline, type PipelineResult } from "./lib/pipeline.js";
 import * as storage from "./storage.js";
 import crypto from "crypto";
+import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -50,6 +51,11 @@ function isRetriableError(error: string): boolean {
 }
 
 async function reEnqueueForRetry(jobData: AnalysisJobData, attemptNumber: number): Promise<void> {
+  // Never resurrect a cancelled batch via a retry.
+  if (cancelledBatches.has(jobData.batchId) || isBatchCancelledCached(jobData.batchId)) {
+    console.log("[Worker] Skipping retry re-enqueue for job " + jobData.jobId + " — batch " + jobData.batchId + " is cancelled");
+    return;
+  }
   try {
     const { getQueue } = await import("./queue.js");
     const q = getQueue();
@@ -70,8 +76,12 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
 
-  // Check if batch was cancelled
-  if (cancelledBatches.has(batchId)) {
+  // Check if batch was cancelled. Authoritative (async) check against Redis so
+  // that a cancel issued on the web service is honored by every worker replica,
+  // including jobs already pulled from the queue. This also seeds the local
+  // synchronous cache used by the pipeline's cancelCheck below.
+  if (cancelledBatches.has(batchId) || (await isBatchCancelled(batchId))) {
+    cancelledBatches.add(batchId);
     return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
@@ -107,8 +117,10 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
     return { success: false, error: "No measures in framework", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
-  // Run the pipeline
-  const cancelCheck = () => cancelledBatches.has(batchId);
+  // Run the pipeline. cancelCheck stays synchronous (the pipeline calls it at
+  // many hot checkpoints) but is backed by a Redis-refreshed cache, so an
+  // in-flight pipeline aborts within ~2s of a cancel on any replica.
+  const cancelCheck = () => cancelledBatches.has(batchId) || isBatchCancelledCached(batchId);
 
   try {
     // Hard watchdog: the analysis pipeline can occasionally hang on a network
@@ -436,9 +448,16 @@ export function startWorker(workerId?: string): Worker {
 }
 
 export function cancelBatch(batchId: number): void {
+  // Local flag for this process (cheap fast-path)...
   cancelledBatches.add(batchId);
-  // Clean up after 1 hour
-  setTimeout(() => cancelledBatches.delete(batchId), 3600000);
+  // ...and a durable, cross-process signal in Redis so every worker replica
+  // honors the cancel for jobs they have already pulled or have queued/delayed.
+  void markBatchCancelled(batchId);
+  // Clean up local memory after 1 hour (Redis key has its own TTL).
+  setTimeout(() => {
+    cancelledBatches.delete(batchId);
+    forgetBatchCancellation(batchId);
+  }, 3600000);
 }
 
 export async function stopWorker(): Promise<void> {

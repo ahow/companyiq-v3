@@ -70,21 +70,35 @@ export async function addBatchJobs(
 }
 
 /**
- * Remove all pending jobs for a batch (for cancellation)
+ * Remove all not-yet-running jobs for a batch (for cancellation).
+ *
+ * Previously this only removed `waiting` jobs, which let two categories of jobs
+ * survive a cancel and keep advancing the "done" counter for minutes:
+ *   - `delayed` jobs: retries scheduled with exponential backoff
+ *   - `prioritized` jobs: re-enqueued retries added with a priority
+ * We now sweep waiting + delayed + prioritized. Active (already-running) jobs
+ * can't be force-removed safely, but they observe the Redis cancel flag via the
+ * worker's cancelCheck and abort at their next checkpoint.
  */
 export async function removeBatchJobs(batchId: number): Promise<number> {
   const q = getQueue();
-  const waiting = await q.getWaiting();
+  // getJobs across all non-active, not-yet-started states.
+  const jobs = await q.getJobs(["waiting", "delayed", "prioritized", "paused"]);
   let removed = 0;
 
-  for (const job of waiting) {
-    if (job.data.batchId === batchId) {
-      await job.remove();
-      removed++;
+  for (const job of jobs) {
+    if (job?.data?.batchId === batchId) {
+      try {
+        await job.remove();
+        removed++;
+      } catch (err: any) {
+        // A job may transition to active between listing and removal; ignore.
+        console.warn(`[Queue] Could not remove job ${job.id} for batch ${batchId}: ${err.message}`);
+      }
     }
   }
 
-  console.log(`[Queue] Removed ${removed} pending jobs for batch ${batchId}`);
+  console.log(`[Queue] Removed ${removed} pending/delayed jobs for batch ${batchId}`);
   return removed;
 }
 
