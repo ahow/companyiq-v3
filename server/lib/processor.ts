@@ -103,6 +103,118 @@ async function fetchWithRetry(
   throw lastError || new Error(`Failed to fetch ${url}`);
 }
 
+// ─── Bot-Protection Cookie Warm-up (Incapsula / Cloudflare-style) ─────────────
+// Some issuer sites (e.g. www.airbus.com via Imperva/Incapsula) answer a cold
+// request for a direct file with HTTP 200 + a tiny HTML challenge interstitial
+// instead of the real document. A normal browser succeeds only because it
+// already holds a session cookie (e.g. incap_ses_*). We replicate that: GET the
+// site origin once to collect Set-Cookie, then re-request the file with those
+// cookies + a same-origin Referer. The cookie is cached per host so we pay the
+// warm-up cost at most once per host per worker process.
+
+const hostCookieJar = new Map<string, { cookie: string; ts: number }>();
+const COOKIE_TTL_MS = 20 * 60 * 1000; // refresh warm-up cookies every 20 min
+
+/** Heuristic: does this HTML body look like a bot-protection challenge page? */
+function looksLikeChallenge(html: string): boolean {
+  if (!html) return false;
+  const head = html.slice(0, 4000).toLowerCase();
+  return (
+    head.includes("_incapsula_resource") ||
+    head.includes("incident id") ||
+    head.includes("request unsuccessful") ||
+    head.includes("cf-browser-verification") ||
+    head.includes("checking your browser") ||
+    head.includes("just a moment...") ||
+    head.includes("attention required")
+  );
+}
+
+function originOf(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Collect (and cache) session cookies by GET-ing the site origin. */
+async function warmCookiesForUrl(url: string): Promise<string | null> {
+  const origin = originOf(url);
+  if (!origin) return null;
+  const host = new URL(origin).host;
+  const cached = hostCookieJar.get(host);
+  if (cached && Date.now() - cached.ts < COOKIE_TTL_MS) return cached.cookie;
+  try {
+    const resp = await axios.get(origin + "/", {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+      },
+      timeout: FETCH_TIMEOUT,
+      maxRedirects: 5,
+      validateStatus: () => true, // even a challenge page Set-Cookies the session
+    });
+    const setCookies: string[] = ([] as string[]).concat(
+      (resp.headers["set-cookie"] as any) || []
+    );
+    const cookie = setCookies
+      .map((c) => c.split(";")[0].trim())
+      .filter(Boolean)
+      .join("; ");
+    if (cookie) {
+      hostCookieJar.set(host, { cookie, ts: Date.now() });
+      return cookie;
+    }
+  } catch (e: any) {
+    console.warn(`[Processor] Cookie warm-up failed for ${origin}: ${e.message}`);
+  }
+  return null;
+}
+
+/**
+ * Re-fetch a URL after warming bot-protection cookies. Sends the captured
+ * session cookie plus a same-origin Referer. Returns the response or null on
+ * failure (caller falls back to the browser).
+ */
+async function fetchWithWarmCookies(
+  url: string,
+  opts: { responseType?: "arraybuffer" | "text" } = {}
+): Promise<{ data: any; contentType: string } | null> {
+  const cookie = await warmCookiesForUrl(url);
+  if (!cookie) return null;
+  const origin = originOf(url);
+  const isBinary = opts.responseType === "arraybuffer";
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: isBinary
+          ? "application/pdf"
+          : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+        Cookie: cookie,
+        ...(origin ? { Referer: origin + "/" } : {}),
+      },
+      timeout: isBinary ? FETCH_TIMEOUT_BINARY : FETCH_TIMEOUT,
+      responseType: opts.responseType || "text",
+      maxRedirects: 5,
+      maxContentLength: 64 * 1024 * 1024,
+      maxBodyLength: 64 * 1024 * 1024,
+      validateStatus: (status) => status < 400,
+    });
+    return {
+      data: response.data,
+      contentType: String(response.headers["content-type"] || ""),
+    };
+  } catch (e: any) {
+    console.warn(`[Processor] Warm-cookie retry failed for ${url}: ${e.message}`);
+    return null;
+  }
+}
+
 // ─── HTML Processing ─────────────────────────────────────────────────────────
 
 function extractTextFromHtml(html: string): string {
@@ -348,8 +460,20 @@ export async function processDocument(
       const looksLikePdf = buf.slice(0, 5).toString("latin1") === "%PDF-";
       const ctSaysHtml = contentType.toLowerCase().includes("text/html");
       if (!looksLikePdf && (ctSaysHtml || buf.length < 4096)) {
-        console.log(`[Processor] PDF URL returned non-PDF/interstitial (ct=${contentType}, ${buf.length}B) for ${url} — trying browser fallback`);
-        content = await fetchWithBrowser(url);
+        // Likely a bot-protection challenge (e.g. Incapsula). First try a
+        // cookie warm-up + retry — far cheaper and more reliable than a
+        // headless browser, and it actually passes Incapsula challenges that
+        // the browser fallback often can't on a constrained worker.
+        console.log(`[Processor] PDF URL returned non-PDF/interstitial (ct=${contentType}, ${buf.length}B) for ${url} — trying cookie warm-up retry`);
+        const warm = await fetchWithWarmCookies(url, { responseType: "arraybuffer" });
+        const warmBuf = warm ? Buffer.from(warm.data) : null;
+        if (warmBuf && warmBuf.slice(0, 5).toString("latin1") === "%PDF-") {
+          console.log(`[Processor] Cookie warm-up retry succeeded for ${url} (${warmBuf.length}B PDF)`);
+          content = await extractTextFromPdf(warmBuf);
+        } else {
+          console.log(`[Processor] Cookie warm-up retry did not yield a PDF for ${url} — trying browser fallback`);
+          content = await fetchWithBrowser(url);
+        }
       } else {
         content = await extractTextFromPdf(buf);
       }
@@ -361,6 +485,18 @@ export async function processDocument(
         if (contentType.includes("application/pdf")) {
           const { data: pdfData } = await fetchWithRetry(url, { responseType: "arraybuffer" });
           content = await extractTextFromPdf(Buffer.from(pdfData));
+        } else if (looksLikeChallenge(String(data))) {
+          // Bot-protection challenge interstitial returned for an HTML page.
+          // Warm cookies and retry before falling back to the browser.
+          console.log(`[Processor] HTML page returned a bot-challenge interstitial for ${url} — trying cookie warm-up retry`);
+          const warm = await fetchWithWarmCookies(url);
+          if (warm && warm.contentType.includes("application/pdf")) {
+            content = await extractTextFromPdf(Buffer.from(warm.data));
+          } else if (warm && !looksLikeChallenge(String(warm.data))) {
+            content = extractTextFromHtml(String(warm.data));
+          } else {
+            content = await fetchWithBrowser(url);
+          }
         } else {
           content = extractTextFromHtml(data);
         }
