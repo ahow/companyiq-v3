@@ -432,7 +432,7 @@ interface SearchResult {
 async function webSearchSerper(
   query: string,
   apiKey: string,
-  opts: { num?: number; tbs?: string } = {}
+  opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {}
 ): Promise<SearchResult[]> {
   const body: any = {
     q: query,
@@ -440,6 +440,9 @@ async function webSearchSerper(
   };
   // Map tbs (time-based search) to Serper's tbs parameter
   if (opts.tbs) body.tbs = opts.tbs;
+  // Localization: gl = country code, hl = interface language
+  if (opts.gl) body.gl = opts.gl;
+  if (opts.hl) body.hl = opts.hl;
 
   const response = await axios.post("https://google.serper.dev/search", body, {
     headers: {
@@ -461,7 +464,7 @@ async function webSearchSerper(
 async function webSearchSerpApi(
   query: string,
   apiKey: string,
-  opts: { num?: number; tbs?: string } = {}
+  opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {}
 ): Promise<SearchResult[]> {
   const params: any = {
     q: query,
@@ -470,6 +473,9 @@ async function webSearchSerpApi(
     num: opts.num || 10,
   };
   if (opts.tbs) params.tbs = opts.tbs;
+  // Localization: gl = country code, hl = interface language
+  if (opts.gl) params.gl = opts.gl;
+  if (opts.hl) params.hl = opts.hl;
 
   const response = await axios.get("https://serpapi.com/search.json", {
     params,
@@ -487,7 +493,7 @@ async function webSearchSerpApi(
 
 async function webSearch(
   query: string,
-  opts: { num?: number; tbs?: string } = {}
+  opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {}
 ): Promise<SearchResult[]> {
   // Try Serper.dev first (cheaper, faster), fall back to SerpAPI
   const serperKey = getSerperApiKey();
@@ -776,6 +782,110 @@ function buildTrustedSourceQueries(companyName: string, sources: TrustedSource[]
   return sources
     .filter((s) => s.isActive)
     .map((s) => `site:${s.domain} "${companyName}"`);
+}
+
+// ─── Multilingual / Localized Sourcing ───────────────────────────────────────
+
+/**
+ * Maps a company's country (free-text name or ISO-2/ISO-3 code) to a Google
+ * locale (gl), interface language (hl), and a set of native-language AI search
+ * terms. Used to localize discovery so non-English issuers' AI disclosures
+ * (which often live in local-language filings) are surfaced.
+ *
+ * Keyed by lowercase country identifiers. Returns null for US/UK/other English
+ * markets where the default English lanes already provide full coverage.
+ */
+interface LocaleProfile {
+  gl: string; // Google country code
+  hl: string; // Google interface language
+  lang: string; // human-readable language label
+  aiTerms: string[]; // native-language AI / strategy / governance terms
+  reportTerms: string[]; // native-language annual report / filing terms
+}
+
+const LOCALE_PROFILES: Record<string, LocaleProfile> = {
+  france: { gl: "fr", hl: "fr", lang: "French", aiTerms: ["intelligence artificielle", "IA strat\u00e9gie", "gouvernance de l'IA", "IA responsable"], reportTerms: ["document d'enregistrement universel", "rapport annuel"] },
+  germany: { gl: "de", hl: "de", lang: "German", aiTerms: ["k\u00fcnstliche Intelligenz", "KI-Strategie", "KI-Governance", "verantwortungsvolle KI"], reportTerms: ["Gesch\u00e4ftsbericht", "Jahresabschluss"] },
+  switzerland: { gl: "ch", hl: "de", lang: "German/French", aiTerms: ["k\u00fcnstliche Intelligenz", "intelligence artificielle", "KI-Strategie"], reportTerms: ["Gesch\u00e4ftsbericht", "rapport annuel"] },
+  spain: { gl: "es", hl: "es", lang: "Spanish", aiTerms: ["inteligencia artificial", "estrategia de IA", "gobernanza de la IA", "IA responsable"], reportTerms: ["informe anual", "cuentas anuales"] },
+  mexico: { gl: "mx", hl: "es", lang: "Spanish", aiTerms: ["inteligencia artificial", "estrategia de IA", "gobernanza de la IA"], reportTerms: ["informe anual"] },
+  italy: { gl: "it", hl: "it", lang: "Italian", aiTerms: ["intelligenza artificiale", "strategia di IA", "governance dell'IA"], reportTerms: ["relazione annuale", "bilancio"] },
+  brazil: { gl: "br", hl: "pt", lang: "Portuguese", aiTerms: ["intelig\u00eancia artificial", "estrat\u00e9gia de IA", "governan\u00e7a de IA"], reportTerms: ["relat\u00f3rio anual"] },
+  portugal: { gl: "pt", hl: "pt", lang: "Portuguese", aiTerms: ["intelig\u00eancia artificial", "estrat\u00e9gia de IA"], reportTerms: ["relat\u00f3rio anual"] },
+  netherlands: { gl: "nl", hl: "nl", lang: "Dutch", aiTerms: ["kunstmatige intelligentie", "AI-strategie", "AI-governance"], reportTerms: ["jaarverslag"] },
+  japan: { gl: "jp", hl: "ja", lang: "Japanese", aiTerms: ["\u4eba\u5de5\u77e5\u80fd", "AI\u6226\u7565", "AI\u30ac\u30d0\u30ca\u30f3\u30b9", "\u8cac\u4efb\u3042\u308bAI"], reportTerms: ["\u6709\u4fa1\u8a3c\u5238\u5831\u544a\u66f8", "\u7d71\u5408\u5831\u544a\u66f8"] },
+  china: { gl: "cn", hl: "zh-cn", lang: "Chinese", aiTerms: ["\u4eba\u5de5\u667a\u80fd", "AI\u6218\u7565", "\u4eba\u5de5\u667a\u80fd\u6cbb\u7406"], reportTerms: ["\u5e74\u5ea6\u62a5\u544a", "\u5e74\u62a5"] },
+  "hong kong": { gl: "hk", hl: "zh-tw", lang: "Chinese", aiTerms: ["\u4eba\u5de5\u667a\u80fd", "AI\u6230\u7565"], reportTerms: ["\u5e74\u5831", "\u5e74\u5ea6\u5831\u544a"] },
+  taiwan: { gl: "tw", hl: "zh-tw", lang: "Chinese", aiTerms: ["\u4eba\u5de5\u667a\u6167", "AI\u7b56\u7565"], reportTerms: ["\u5e74\u5831"] },
+  "south korea": { gl: "kr", hl: "ko", lang: "Korean", aiTerms: ["\uc778\uacf5\uc9c0\ub2a5", "AI \uc804\ub7b5", "AI \uac70\ubc84\ub10c\uc2a4"], reportTerms: ["\uc0ac\uc5c5\ubcf4\uace0\uc11c", "\uc5f0\ucc28\ubcf4\uace0\uc11c"] },
+  korea: { gl: "kr", hl: "ko", lang: "Korean", aiTerms: ["\uc778\uacf5\uc9c0\ub2a5", "AI \uc804\ub7b5"], reportTerms: ["\uc0ac\uc5c5\ubcf4\uace0\uc11c"] },
+  sweden: { gl: "se", hl: "sv", lang: "Swedish", aiTerms: ["artificiell intelligens", "AI-strategi"], reportTerms: ["\u00e5rsredovisning"] },
+  finland: { gl: "fi", hl: "fi", lang: "Finnish", aiTerms: ["teko\u00e4ly", "teko\u00e4lystrategia"], reportTerms: ["vuosikertomus"] },
+  denmark: { gl: "dk", hl: "da", lang: "Danish", aiTerms: ["kunstig intelligens", "AI-strategi"], reportTerms: ["\u00e5rsrapport"] },
+  norway: { gl: "no", hl: "no", lang: "Norwegian", aiTerms: ["kunstig intelligens", "KI-strategi"], reportTerms: ["\u00e5rsrapport"] },
+  belgium: { gl: "be", hl: "nl", lang: "Dutch/French", aiTerms: ["kunstmatige intelligentie", "intelligence artificielle"], reportTerms: ["jaarverslag", "rapport annuel"] },
+  austria: { gl: "at", hl: "de", lang: "German", aiTerms: ["k\u00fcnstliche Intelligenz", "KI-Strategie"], reportTerms: ["Gesch\u00e4ftsbericht"] },
+};
+
+// ISO-2 / ISO-3 code aliases mapping to the country keys above
+const COUNTRY_CODE_ALIASES: Record<string, string> = {
+  fr: "france", fra: "france",
+  de: "germany", deu: "germany",
+  ch: "switzerland", che: "switzerland",
+  es: "spain", esp: "spain",
+  mx: "mexico", mex: "mexico",
+  it: "italy", ita: "italy",
+  br: "brazil", bra: "brazil",
+  pt: "portugal", prt: "portugal",
+  nl: "netherlands", nld: "netherlands",
+  jp: "japan", jpn: "japan",
+  cn: "china", chn: "china",
+  hk: "hong kong", hkg: "hong kong",
+  tw: "taiwan", twn: "taiwan",
+  kr: "south korea", kor: "south korea",
+  se: "sweden", swe: "sweden",
+  fi: "finland", fin: "finland",
+  dk: "denmark", dnk: "denmark",
+  no: "norway", nor: "norway",
+  be: "belgium", bel: "belgium",
+  at: "austria", aut: "austria",
+};
+
+function resolveLocaleProfile(country?: string | null): LocaleProfile | null {
+  if (!country) return null;
+  const key = country.trim().toLowerCase();
+  if (LOCALE_PROFILES[key]) return LOCALE_PROFILES[key];
+  if (COUNTRY_CODE_ALIASES[key]) return LOCALE_PROFILES[COUNTRY_CODE_ALIASES[key]];
+  // Loose contains-match for names like "korea, republic of" or "united states"
+  for (const name of Object.keys(LOCALE_PROFILES)) {
+    if (key.includes(name)) return LOCALE_PROFILES[name];
+  }
+  return null;
+}
+
+/**
+ * Builds native-language AI search queries for a company based on its country
+ * locale profile. Only emitted when the framework is AI-related and a profile
+ * exists. Returns the queries plus the gl/hl to use for them.
+ */
+function buildLocalizedAIQueries(
+  companyName: string,
+  framework: Framework,
+  profile: LocaleProfile
+): string[] {
+  const topic = framework.topicDescription || framework.name || "";
+  const frameworkName = (framework.name || "").toLowerCase();
+  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+  if (!isAIRelated) return [];
+  const queries: string[] = [];
+  for (const term of profile.aiTerms) {
+    queries.push(`"${companyName}" ${term}`);
+  }
+  // Pair the strongest AI term with a native annual-report term to surface filings
+  if (profile.aiTerms[0] && profile.reportTerms[0]) {
+    queries.push(`"${companyName}" ${profile.aiTerms[0]} ${profile.reportTerms[0]}`);
+  }
+  return queries;
 }
 
 function buildCJKQueries(companyName: string, framework: Framework): string[] {
@@ -1319,6 +1429,7 @@ export async function searchCompanyDocuments(opts: {
   queryVariants?: number; // Number of LLM-generated query variants (default: 3)
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
+  const localeProfile = resolveLocaleProfile(opts.country);
   const searchDepth = opts.searchDepth || 10;
   const queryVariants = opts.queryVariants ?? 3;
   const allCandidates: DiscoveryCandidate[] = [];
@@ -1422,6 +1533,21 @@ export async function searchCompanyDocuments(opts: {
     for (const query of cjkQueries) {
       const results = await webSearch(query, { num: searchDepth });
       for (const r of results) addCandidate(r, "cjk");
+    }
+  }
+
+  // Lane 4b: Country-localized native-language AI search
+  // Issues native-language AI/strategy/governance queries with the company's
+  // home-country Google locale (gl/hl) so foreign-language AI disclosures are
+  // surfaced. Gated by an env flag and only runs for non-English locales.
+  if (process.env.MULTILINGUAL_DISCOVERY_ENABLED !== "false" && localeProfile) {
+    const localizedQueries = buildLocalizedAIQueries(companyName, framework, localeProfile);
+    if (localizedQueries.length > 0) {
+      console.log(`[${companyName}] Running localized ${localeProfile.lang} search lane (gl=${localeProfile.gl}, hl=${localeProfile.hl})`);
+      for (const query of localizedQueries) {
+        const results = await webSearch(query, { num: searchDepth, gl: localeProfile.gl, hl: localeProfile.hl });
+        for (const r of results) addCandidate(r, "localized");
+      }
     }
   }
 

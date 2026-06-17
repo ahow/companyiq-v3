@@ -3,6 +3,7 @@ import { completeWithFallback, getProvider, getIndependentTieBreakerProvider } f
 import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, chunkText, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { generateDocumentHash } from "./processor.js";
+import { translateDocumentsToEnglish } from "./translation.js";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -645,6 +646,22 @@ export async function analyzeCompanyMeasures(opts: {
 
   console.log(`[${companyName}] Starting analysis: ${measures.length} measures, ${documentTexts.length} documents`);
 
+  // Stage: Multilingual translation (DeepSeek). Translate only the foreign-
+  // language portions of fetched documents to English BEFORE terminology,
+  // summarization, BM25 retrieval, and the English topic-floor run — so the
+  // whole downstream pipeline operates over English while originals are
+  // preserved inline for audit. English documents pass through untouched.
+  let workingTexts = documentTexts;
+  try {
+    const tr = await translateDocumentsToEnglish(documentTexts);
+    workingTexts = tr.texts;
+    if (tr.translatedCount > 0) {
+      console.log(`[${companyName}] Multilingual: translated ${tr.translatedCount}/${documentTexts.length} document(s) to English (${tr.charsTranslated} chars via DeepSeek)`);
+    }
+  } catch (trErr: any) {
+    console.warn(`[${companyName}] Multilingual translation skipped: ${trErr?.message}`);
+  }
+
   // Stage: Terminology discovery
   let terminology: TerminologyMap | undefined;
   if (settings.terminologyDiscoveryEnabled) {
@@ -653,18 +670,18 @@ export async function analyzeCompanyMeasures(opts: {
       companyId,
       frameworkId: framework.id,
       topicDescription: framework.topicDescription || framework.name,
-      documentTexts,
+      documentTexts: workingTexts,
     });
   }
 
-  // Stage: Summarization / raw-pass
-  const totalChars = documentTexts.reduce((sum, t) => sum + t.length, 0);
+  // Stage: Summarization / raw-pass (operates over translated workingTexts)
+  const totalChars = workingTexts.reduce((sum, t) => sum + t.length, 0);
   let combinedText: string;
   let summarizerModel: string;
 
   if (settings.useBm25Retrieval && totalChars <= settings.bm25SkipSummarizationBelowChars) {
     // BM25-skip path: use raw text directly with document title headers
-    combinedText = documentTexts.map((text, idx) => {
+    combinedText = workingTexts.map((text, idx) => {
       const title = documentTitles?.[idx] || documentUrls[idx] || `Document ${idx + 1}`;
       const url = documentUrls[idx] || "";
       return `\n\n--- DOCUMENT: ${title} [${url}] ---\n\n${text}`;
@@ -675,7 +692,7 @@ export async function analyzeCompanyMeasures(opts: {
     const result = await summarizeDocuments({
       companyName,
       companyId,
-      documentTexts,
+      documentTexts: workingTexts,
       documentUrls,
       documentTitles,
       topicDescription: framework.topicDescription || framework.name,

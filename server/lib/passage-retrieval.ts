@@ -98,6 +98,19 @@ const DEFAULT_AI_TOPIC_TERMS = [
   "ai-powered", "ai powered", "ai-driven", "ai driven", "ai capabilities",
   "algorithmic", "automation", "predictive model", "foundation model",
   "chatbot", "copilot", "intelligent automation", "data science",
+  // Multilingual AI terms so foreign-language passages are recognized by the
+  // topic floor (French, German, Spanish, Italian, Portuguese, Dutch, Nordic,
+  // Japanese, Chinese, Korean). High-precision terms only.
+  "intelligence artificielle", // FR
+  "k\u00fcnstliche intelligenz", "ki-strategie", "ki-governance", // DE
+  "inteligencia artificial", // ES
+  "intelligenza artificiale", // IT
+  "intelig\u00eancia artificial", // PT
+  "kunstmatige intelligentie", // NL
+  "artificiell intelligens", "teko\u00e4ly", "kunstig intelligens", // SV/FI/DA-NO
+  "\u4eba\u5de5\u77e5\u80fd", "\u751f\u6210ai", // JA (artificial intelligence, generative AI)
+  "\u4eba\u5de5\u667a\u80fd", "\u4eba\u5de5\u667a\u6167", // ZH-CN / ZH-TW
+  "\uc778\uacf5\uc9c0\ub2a5", // KO
 ];
 
 const TOPIC_TERM_PATTERN_CACHE = new Map<string, RegExp>();
@@ -110,7 +123,13 @@ function buildTopicRegex(terms: string[]): RegExp {
   // flexible whitespace; single tokens require boundaries to avoid "aid"→"ai".
   const parts = terms.map((t) => {
     const esc = t.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
-    return /\s/.test(t) ? esc : `\\b${esc}\\b`;
+    // Multi-word terms: match as-is (flexible whitespace).
+    if (/\s/.test(t)) return esc;
+    // ASCII single tokens: use word boundaries to avoid "aid"→"ai".
+    // Non-ASCII single tokens (e.g. CJK 人工知能) have no ASCII \b boundary,
+    // so match them directly — \b would never fire and the term would be lost.
+    if (/^[\x00-\x7f]+$/.test(t)) return `\\b${esc}\\b`;
+    return esc;
   });
   const re = new RegExp(`(?:${parts.join("|")})`, "gi");
   TOPIC_TERM_PATTERN_CACHE.set(key, re);
