@@ -229,8 +229,15 @@ export interface EvidencePack {
 
 // Tunables (env-overridable so behavior can be adjusted without a code change).
 const TOPIC_RELEVANCE_WEIGHT = parseFloat(process.env.RETRIEVAL_TOPIC_WEIGHT || "2.0");
-const MAX_CHUNKS_PER_DOC = parseInt(process.env.RETRIEVAL_MAX_CHUNKS_PER_DOC || "4", 10);
-const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_CHUNKS || "3", 10);
+const MAX_CHUNKS_PER_DOC = parseInt(process.env.RETRIEVAL_MAX_CHUNKS_PER_DOC || "5", 10);
+const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_CHUNKS || "4", 10);
+
+// Per-measure evidence budget. Previously hardcoded at topK=12 / maxChars=8000
+// (~2K tokens), which capped how much of the fetched corpus each question could
+// ever "see". Raising these lets the scorer examine substantially more evidence
+// per measure. Env-overridable so it can be tuned without a redeploy.
+const EVIDENCE_TOP_K = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "20", 10);
+const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "20000", 10);
 
 export function buildEvidencePackForMeasure(opts: {
   measure: FrameworkMeasure;
@@ -248,8 +255,8 @@ export function buildEvidencePackForMeasure(opts: {
     bm25Index,
     terminology,
     topicTerms = DEFAULT_AI_TOPIC_TERMS,
-    topK = 12,
-    maxChars = 8000,
+    topK = EVIDENCE_TOP_K,
+    maxChars = EVIDENCE_MAX_CHARS,
     maxChunksPerDoc = MAX_CHUNKS_PER_DOC,
   } = opts;
 
@@ -380,8 +387,10 @@ export function buildEvidencePacksForCategory(opts: {
   combinedText: string;
   terminology?: TerminologyMap;
   topicTerms?: string[];
+  topK?: number;
+  maxChars?: number;
 }): EvidencePack[] {
-  const { measures, combinedText, terminology, topicTerms = DEFAULT_AI_TOPIC_TERMS } = opts;
+  const { measures, combinedText, terminology, topicTerms = DEFAULT_AI_TOPIC_TERMS, topK, maxChars } = opts;
 
   const chunks = chunkDocuments(combinedText);
   if (chunks.length === 0) {
@@ -403,6 +412,8 @@ export function buildEvidencePacksForCategory(opts: {
       bm25Index,
       terminology,
       topicTerms,
+      topK,
+      maxChars,
     })
   );
 }

@@ -1,6 +1,6 @@
 import * as storage from "../storage.js";
 import { completeWithFallback, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
-import { buildEvidencePacksForCategory, chunkText, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack } from "./passage-retrieval.js";
+import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, chunkText, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { generateDocumentHash } from "./processor.js";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -478,7 +478,7 @@ async function detectAndResolvContradiction(opts: {
   try {
     const { text } = await completeWithFallback(tieBreaker.name, {
       system: "You are an independent reviewer. Given a measure and evidence, determine if the evidence supports a YES or NO verdict. Return JSON: {\"verdict\": \"Yes\"|\"No\", \"reason\": \"brief explanation\"}",
-      prompt: `Measure: ${measure.title}\nDefinition: ${measure.definition}\n\nEvidence:\n${evidenceText.slice(0, 3000)}\n\nDoes this evidence support a YES verdict for this measure?`,
+      prompt: `Measure: ${measure.title}\nDefinition: ${measure.definition}\n\nEvidence:\n${evidenceText.slice(0, 8000)}\n\nDoes this evidence support a YES verdict for this measure?`,
       json: true,
       maxTokens: 500,
     });
@@ -726,6 +726,23 @@ export async function analyzeCompanyMeasures(opts: {
       }));
     }
 
+    // Shared corpus index for the targeted deep-read second pass (built once per
+    // category, reused across measures). Only built when BM25 retrieval is on.
+    let deepChunks: Chunk[] | null = null;
+    let deepBm25Index: ReturnType<typeof buildBM25Index> | null = null;
+    const buildDeepIndex = () => {
+      if (deepChunks === null) {
+        deepChunks = chunkDocuments(combinedText);
+        deepBm25Index = buildBM25Index(deepChunks.map((c) => c.text));
+      }
+    };
+
+    // Deep-read budget (env-tunable). Much larger than the normal per-measure
+    // budget; used only for measures that came back under-evidenced.
+    const DEEP_TOP_K = parseInt(process.env.RETRIEVAL_DEEPREAD_TOP_K || "40", 10);
+    const DEEP_MAX_CHARS = parseInt(process.env.RETRIEVAL_DEEPREAD_MAX_CHARS || "40000", 10);
+    const DEEPREAD_ENABLED = (process.env.RETRIEVAL_DEEPREAD_ENABLED || "true").toLowerCase() !== "false";
+
     // Score measures in parallel (batch of 5 concurrent)
     const MEASURE_CONCURRENCY = 5;
     const scoreMeasure = async (measure: FrameworkMeasure): Promise<MeasureResult> => {
@@ -823,6 +840,90 @@ export async function analyzeCompanyMeasures(opts: {
       else if (corpusTopicStats.topicChunks === 0) coverageLabel = "none"; // corpus genuinely has no topic content
       else coverageLabel = "low"; // topic evidence exists in corpus but did not reach this pack
       measureResult.coverage = coverageLabel;
+
+      // ─── Targeted deep-read second pass (under-evidenced measures only) ──────
+      // When a measure scored 0/Partial AND coverage is "low" — meaning the
+      // corpus DOES contain topic-relevant evidence but the normal-budget pack
+      // failed to surface enough of it for this specific question — re-retrieve
+      // this one measure with a much larger, topic-biased budget and re-score.
+      // This spends extra effort precisely where evidence was thin, directly
+      // attacking the "0% / under-evidenced" pattern without lowering standards
+      // or wasting compute on measures that are already well-evidenced or that
+      // genuinely have no topic content in the corpus ("none").
+      const eligibleForDeepRead =
+        DEEPREAD_ENABLED &&
+        settings.useBm25Retrieval &&
+        coverageLabel === "low" &&
+        measureResult.score < 1;
+
+      if (eligibleForDeepRead) {
+        try {
+          buildDeepIndex();
+          if (deepChunks && deepBm25Index) {
+            const deepPack = buildEvidencePackForMeasure({
+              measure,
+              chunks: deepChunks,
+              bm25Index: deepBm25Index,
+              terminology,
+              topicTerms,
+              topK: DEEP_TOP_K,
+              maxChars: DEEP_MAX_CHARS,
+            });
+            // Only re-score if the deep pass actually surfaced more topic evidence
+            // than the original pack (otherwise re-scoring adds cost for no gain).
+            if (deepPack.topicHits > packTopicHits && deepPack.text.length > 0) {
+              console.log(`[${companyName}] Deep-read re-score for ${measure.measureId}: topicHits ${packTopicHits}→${deepPack.topicHits}, evidence ${finalEvidence.length}→${deepPack.text.length} chars`);
+              let deepResult: MeasureResult;
+              if (settings.ensembleScoring) {
+                deepResult = await scoreWithEnsemble({
+                  companyName,
+                  measure,
+                  evidenceText: deepPack.text,
+                  terminology,
+                  topicDescription: framework.topicDescription || framework.name,
+                  settings,
+                  temporalWarning: tw,
+                });
+              } else {
+                deepResult = await scoreSingleMeasure({
+                  companyName,
+                  measure,
+                  evidenceText: deepPack.text,
+                  terminology,
+                  topicDescription: framework.topicDescription || framework.name,
+                  provider: scoringProvider,
+                  temporalWarning: tw,
+                  scoringMode: settings.scoringMode,
+                });
+              }
+              // Verify provenance of any quotes against the deep evidence.
+              if (deepResult.score > 0 && deepResult.quotes.length > 0) {
+                const allVerified = deepResult.quotes.every(
+                  (q) => verifyQuoteProvenance(q.text, deepPack.text).found
+                );
+                if (!allVerified) {
+                  deepResult.confidence = "Low";
+                  deepResult.verdictNuance = (deepResult.verdictNuance || "") +
+                    " [Note: Some quotes could not be verified verbatim in source text]";
+                }
+                deepResult.quotes = normalizeQuoteSources(deepResult.quotes, deepPack.text);
+              }
+              // Adopt the deep result only if it is at least as strong (we never
+              // lower a score via the deep pass — it can only recover missed
+              // evidence, consistent with not inflating or deflating standards).
+              if (deepResult.score >= measureResult.score) {
+                deepResult.coverage = deepPack.topicHits >= 3 ? "full" : deepPack.topicHits >= 1 ? "partial" : coverageLabel;
+                deepResult.verdictNuance = (deepResult.verdictNuance || "") +
+                  " [Deep-read pass: re-scored on expanded evidence]";
+                measureResult = deepResult;
+              }
+            }
+          }
+        } catch (deepErr: any) {
+          console.warn(`[${companyName}] Deep-read pass failed for ${measure.measureId}: ${deepErr.message}`);
+          // Keep the original result on any failure.
+        }
+      }
 
       return measureResult;
     };
