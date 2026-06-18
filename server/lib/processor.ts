@@ -4,6 +4,22 @@ import pdfParse from "pdf-parse";
 import crypto from "crypto";
 import puppeteer from "puppeteer-core";
 
+/**
+ * Thrown when a document URL fails for a reason that will NOT resolve on retry
+ * within the same run (e.g. 401 paywall, 403 CDN block on a direct file). The
+ * pipeline uses this to mark such URLs 'dead' in a single step instead of
+ * burning 3 retry passes (and, for slow timeouts, minutes of budget) on a URL
+ * that is never going to succeed.
+ */
+export class PermanentFetchError extends Error {
+  statusCode?: number;
+  constructor(message: string, statusCode?: number) {
+    super(message);
+    this.name = "PermanentFetchError";
+    this.statusCode = statusCode;
+  }
+}
+
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -507,11 +523,16 @@ export async function processDocument(
         const isCdnBlock = statusCode === 403 && /\.(pdf|xlsx|docx|csv|zip)($|\?)/i.test(url);
 
         if (isPaywall) {
-          // 401 = paywall (WSJ, Reuters, FT) — browser won't have credentials either
-          console.log(`[Processor] HTTP fetch failed for ${url} (401 Unauthorized/paywall), skipping browser fallback`);
+          // 401 = paywall (WSJ, Reuters, FT) — browser won't have credentials either.
+          // Terminal: throw so the pipeline marks this URL dead in one step
+          // instead of retrying it across passes.
+          console.log(`[Processor] HTTP fetch failed for ${url} (401 Unauthorized/paywall), marking permanent`);
+          throw new PermanentFetchError(`401 paywall: ${url}`, 401);
         } else if (isCdnBlock) {
-          // 403 on a direct file/PDF link = CDN block — browser can't bypass
-          console.log(`[Processor] HTTP fetch failed for ${url} (403 on direct file), skipping browser fallback`);
+          // 403 on a direct file/PDF link = CDN block — browser can't bypass.
+          // Terminal: throw so the pipeline marks this URL dead in one step.
+          console.log(`[Processor] HTTP fetch failed for ${url} (403 on direct file), marking permanent`);
+          throw new PermanentFetchError(`403 CDN block: ${url}`, 403);
         } else {
           // Timeout, 5xx, 403 on HTML page, network error — browser fallback is valuable
           console.log(`[Processor] HTTP fetch failed for ${url} (${httpError.message}), trying browser fallback...`);
@@ -526,6 +547,12 @@ export async function processDocument(
 
     return content;
   } catch (error: any) {
+    // Propagate terminal failures unchanged so the pipeline can mark the URL
+    // dead in a single step (no browser fallback, no retry passes).
+    if (error instanceof PermanentFetchError) {
+      console.log(`[Processor] Permanent failure for ${url} (${error.message}) — not retrying`);
+      throw error;
+    }
     console.warn(`[Processor] Failed to process ${url}: ${error.message}`);
     // Final fallback: try browser only if not a known-dead pattern
     const statusCode = error.response?.status;

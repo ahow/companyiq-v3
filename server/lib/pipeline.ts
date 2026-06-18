@@ -28,7 +28,7 @@
 
 import * as storage from "../storage.js";
 import { searchCompanyDocuments, type DiscoveryResult } from "./discovery.js";
-import { processDocument, inferDocumentType } from "./processor.js";
+import { processDocument, inferDocumentType, PermanentFetchError } from "./processor.js";
 import { analyzeCompanyMeasures, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
@@ -445,11 +445,20 @@ async function runFetchPhase(opts: {
         }
       } catch (error: any) {
         if (error instanceof TimeoutError) {
-          console.warn(`[${companyName}] Document fetch TIMEOUT (${PER_DOCUMENT_TIMEOUT_MS / 1000}s): ${doc.url.slice(0, 100)}`);
+          // A per-document timeout is the most budget-expensive failure mode and
+          // almost never resolves on a retry within the same run. Mark it dead in
+          // one step so the fetch loop does not re-attempt it (and re-burn the
+          // full timeout) on every subsequent pass.
+          console.warn(`[${companyName}] Document fetch TIMEOUT (${PER_DOCUMENT_TIMEOUT_MS / 1000}s) — marking dead: ${doc.url.slice(0, 100)}`);
+          await storage.recordFetchDead(companyId, doc.url);
+        } else if (error instanceof PermanentFetchError) {
+          // 401 paywall / 403 CDN block — will not succeed on retry. Mark dead now.
+          console.warn(`[${companyName}] Permanent fetch failure — marking dead: ${doc.url.slice(0, 100)} (${error.message})`);
+          await storage.recordFetchDead(companyId, doc.url);
         } else {
           console.warn(`[${companyName}] Fetch failed for ${doc.url}: ${error.message}`);
+          await storage.recordFetchFailure(companyId, doc.url);
         }
-        await storage.recordFetchFailure(companyId, doc.url);
       }
     };
 

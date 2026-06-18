@@ -411,6 +411,22 @@ export async function recordFetchFailure(companyId: number, url: string) {
 }
 
 /**
+ * One-shot terminal failure: mark a URL 'dead' immediately, without waiting for
+ * the 3-strike counter. Used for failures that will NOT resolve on retry within
+ * the same run (401 paywall, 403 CDN block) and for per-document timeouts (a URL
+ * that times out is the single most budget-expensive failure mode and almost
+ * never succeeds on a subsequent pass in the same run). This stops the fetch
+ * loop from burning multiple passes — and minutes of the fetch budget — on URLs
+ * that are effectively unreachable.
+ */
+export async function recordFetchDead(companyId: number, url: string) {
+  await db.execute(sql`
+    UPDATE documents SET fetch_failures = 3, fetch_status = 'dead'
+    WHERE company_id = ${companyId} AND url = ${url}
+  `);
+}
+
+/**
  * Terminal rejection: the post-fetch LLM verifier determined this document
  * belongs to a DIFFERENT company (or is generic/non-disclosure). Mark it
  * 'rejected' so it is (a) excluded from scoring (getAcceptedDocuments only
