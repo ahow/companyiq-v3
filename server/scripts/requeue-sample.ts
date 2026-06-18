@@ -43,9 +43,22 @@ async function main() {
   if (companies.length === 0) throw new Error("No companies resolved");
 
   // Reset each company's status so the re-run is clean (same as /api/analyze).
+  // When SAMPLE_FULL_RESET=1, also purge ALL prior documents (including ok/dead)
+  // so every document is re-discovered and re-fetched from scratch under the
+  // current code — the true apples-to-apples test for the WAF-PDF retrieval fix.
+  const fullReset = process.env.SAMPLE_FULL_RESET === "1";
   for (const c of companies) {
-    await storage.updateCompany(c.id, WORKSPACE_ID, { analysisStatus: "idle", totalScore: null, summary: null });
+    if (fullReset) {
+      await storage.clearMeasureScores(c.id);
+      await storage.fullResetCompanyDocuments(c.id);
+    }
+    await storage.updateCompany(c.id, WORKSPACE_ID, {
+      analysisStatus: "idle", totalScore: null, summary: null,
+      measuresMetCount: null, measuresTotalCount: null,
+      ...(fullReset ? { discoveryDiagnostics: null as any } : {}),
+    });
   }
+  console.log(`[Requeue] reset complete (fullReset=${fullReset})`);
 
   const batch = await storage.createBatchRun(WORKSPACE_ID, FRAMEWORK_ID, companies.length);
   console.log(`[Requeue] created batch ${batch.id} for ${companies.length} companies`);
