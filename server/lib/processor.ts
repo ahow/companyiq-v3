@@ -20,6 +20,17 @@ export class PermanentFetchError extends Error {
   }
 }
 
+// Thrown when the browser fallback could not RUN (Chromium failed to launch, or
+// the launch circuit is open) — as opposed to running and returning unusable
+// content. This is a TRANSIENT condition: the URL should stay pending and be
+// retried on a later pass once browser capacity recovers, NOT marked dead.
+export class BrowserUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrowserUnavailableError";
+  }
+}
+
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -324,6 +335,55 @@ function tripBrowserCircuit(reason: string): void {
   );
 }
 
+async function launchChromiumWithRetry(executablePath: string): Promise<any> {
+  // NOTE: we deliberately do NOT pass --single-process. While it reduces the
+  // number of helper processes, in this container it is the dominant cause of
+  // "Failed to launch the browser process: Code: null" crashes under concurrent
+  // load. --no-zygote + --disable-dev-shm-usage is Puppeteer's recommended
+  // container combo and launches far more reliably.
+  const args = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--no-zygote",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--disable-translate",
+    "--mute-audio",
+    "--no-first-run",
+    "--disable-software-rasterizer",
+    "--js-flags=--max-old-space-size=256",
+    // Force HTTP/1.1. Akamai/Cloudflare WAFs in front of investor-relations PDFs
+    // (e.g. Adobe, NVIDIA) fingerprint and reset HTTP/2 connections, surfacing as
+    // ERR_HTTP2_PROTOCOL_ERROR and yielding zero bytes. Over HTTP/1.1 the same
+    // requests are served normally (verified: Adobe 10-K + AI Ethics PDFs).
+    "--disable-http2",
+  ];
+  const MAX_LAUNCH_ATTEMPTS = parseInt(process.env.BROWSER_LAUNCH_ATTEMPTS || "3", 10);
+  let lastErr: any = null;
+  for (let attempt = 1; attempt <= MAX_LAUNCH_ATTEMPTS; attempt++) {
+    try {
+      return await puppeteer.launch({ executablePath, headless: true, args, protocolTimeout: 120000 });
+    } catch (err: any) {
+      lastErr = err;
+      const msg = String(err?.message || err);
+      // Transient fork/resource pressure — back off and retry rather than
+      // immediately giving up (which would strand high-value PDFs).
+      if (attempt < MAX_LAUNCH_ATTEMPTS && /EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg)) {
+        const backoff = 1500 * attempt + Math.floor(Math.random() * 1000);
+        console.warn(`[Processor] Chromium launch attempt ${attempt}/${MAX_LAUNCH_ATTEMPTS} failed (${msg.split("\n")[0].slice(0, 80)}) — retrying in ${backoff}ms`);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 async function getSharedBrowser(): Promise<any> {
   if (sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected()) {
     return sharedBrowser;
@@ -331,32 +391,7 @@ async function getSharedBrowser(): Promise<any> {
   if (sharedBrowserLaunching) return sharedBrowserLaunching;
 
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium";
-  sharedBrowserLaunching = puppeteer
-    .launch({
-      executablePath,
-      headless: true,
-      // Memory/fork-conservative flags. The worker runs many sequential page
-      // loads on a constrained container; these reduce RSS and the number of
-      // helper processes Chromium spawns, mitigating the prior
-      // "spawn /usr/bin/chromium EAGAIN" fork-exhaustion under load.
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process",
-        "--no-zygote",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-default-apps",
-        "--disable-sync",
-        "--disable-translate",
-        "--mute-audio",
-        "--no-first-run",
-        "--disable-software-rasterizer",
-        "--js-flags=--max-old-space-size=256",
-      ],
-    })
+  sharedBrowserLaunching = launchChromiumWithRetry(executablePath)
     .then((b: any) => {
       sharedBrowser = b;
       sharedBrowserLaunching = null;
@@ -369,7 +404,7 @@ async function getSharedBrowser(): Promise<any> {
     .catch((err: any) => {
       sharedBrowserLaunching = null;
       const msg = String(err?.message || err);
-      if (/EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch/i.test(msg)) {
+      if (/EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg)) {
         tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
       }
       throw err;
@@ -471,17 +506,48 @@ async function fetchWithBrowser(url: string): Promise<string> {
  */
 async function fetchPdfViaBrowser(url: string): Promise<string> {
   if (isBrowserCircuitOpen()) {
-    return "";
+    // Browser fallback is temporarily unavailable — signal TRANSIENT so the
+    // caller keeps the URL retryable rather than marking it permanently dead.
+    throw new BrowserUnavailableError(`browser circuit open: ${url}`);
   }
   await acquireBrowserSlot();
   let page: any = null;
+  let browserLaunched = false;
   try {
     const browser = await getSharedBrowser();
+    browserLaunched = true;
     page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
     await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
 
-    // Step 1: warm the WAF session by visiting the origin (cheap, HTML only).
+    // Strategy A (primary): navigate directly to the PDF URL and capture the
+    // response body bytes. Over HTTP/1.1 (forced via --disable-http2) the WAF
+    // serves the real PDF with a 200 application/pdf response. This is the most
+    // reliable path because it uses Chromium's own network stack end-to-end.
+    try {
+      const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: BROWSER_FETCH_TIMEOUT });
+      if (resp && resp.ok()) {
+        const ct = String(resp.headers()["content-type"] || "").toLowerCase();
+        const bodyBuf: Buffer = await resp.buffer();
+        if (bodyBuf && bodyBuf.length > 0) {
+          const isPdf = bodyBuf.slice(0, 5).toString("latin1") === "%PDF-" || ct.includes("application/pdf");
+          if (isPdf && bodyBuf.slice(0, 5).toString("latin1") === "%PDF-") {
+            const text = await extractTextFromPdf(bodyBuf);
+            if (text) {
+              console.log(`[Processor] Browser-PDF (direct nav) succeeded for ${url} (${bodyBuf.length}B PDF)`);
+              return text;
+            }
+          }
+        }
+      }
+    } catch (navErr: any) {
+      // Direct navigation can fail on some interstitials; fall through to the
+      // in-page fetch strategy below.
+      console.log(`[Processor] Browser-PDF direct nav did not yield bytes for ${url} (${String(navErr?.message || navErr).slice(0, 80)}) — trying in-page fetch`);
+    }
+
+    // Strategy B (fallback): warm the origin, then fetch the binary from inside
+    // the trusted page context.
     const origin = originOf(url);
     if (origin) {
       try {
@@ -491,7 +557,6 @@ async function fetchPdfViaBrowser(url: string): Promise<string> {
       }
     }
 
-    // Step 2: fetch the binary from inside the trusted page context.
     const base64: string | null = await page.evaluate(async (target: string) => {
       try {
         const resp = await fetch(target, { credentials: "include" });
@@ -533,9 +598,13 @@ async function fetchPdfViaBrowser(url: string): Promise<string> {
     return "";
   } catch (error: any) {
     const msg = String(error?.message || error);
-    if (/EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch/i.test(msg)) {
+    const isLaunchFailure = /EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg) || !browserLaunched;
+    if (isLaunchFailure) {
       tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
+      // The browser never actually ran — TRANSIENT. Keep the URL retryable.
+      throw new BrowserUnavailableError(`browser launch failed: ${url} (${msg.split("\n")[0].slice(0, 80)})`);
     }
+    // Browser ran but the in-page fetch / parse failed — treat as unusable content.
     console.warn(`[Processor] Browser-PDF fetch failed for ${url}: ${msg}`);
     return "";
   } finally {
@@ -573,11 +642,18 @@ export async function processDocument(
           throw new PermanentFetchError(`401 paywall: ${url}`, 401);
         }
         console.log(`[Processor] Direct PDF fetch failed for ${url} (${pdfHttpError.message}) — trying WAF-aware browser-PDF fetch`);
-        const viaBrowser = await fetchPdfViaBrowser(url);
-        if (viaBrowser) {
-          setCachedContent(url, viaBrowser);
-          return viaBrowser;
+        try {
+          const viaBrowser = await fetchPdfViaBrowser(url);
+          if (viaBrowser) {
+            setCachedContent(url, viaBrowser);
+            return viaBrowser;
+          }
+        } catch (browserErr: any) {
+          // Browser couldn't RUN (launch failure / circuit open) — TRANSIENT.
+          // Re-throw so the URL stays pending for a later pass instead of dead.
+          if (browserErr instanceof BrowserUnavailableError) throw browserErr;
         }
+        // Browser ran but produced no usable content — genuinely permanent.
         throw new PermanentFetchError(`PDF fetch failed (browser-PDF also failed): ${url}`);
       }
       const buf = Buffer.from(data);
@@ -650,7 +726,12 @@ export async function processDocument(
           // fix for high-value IR PDFs (e.g. Adobe AI Ethics, 10-K) that were
           // previously discarded, artificially deflating well-governed firms.
           console.log(`[Processor] HTTP 403 on direct file ${url} — trying WAF-aware browser-PDF fetch`);
-          content = await fetchPdfViaBrowser(url);
+          try {
+            content = await fetchPdfViaBrowser(url);
+          } catch (browserErr: any) {
+            // Browser couldn't RUN — TRANSIENT; keep retryable.
+            if (browserErr instanceof BrowserUnavailableError) throw browserErr;
+          }
           if (!content) {
             console.log(`[Processor] Browser-PDF fetch also failed for ${url} (403), marking permanent`);
             throw new PermanentFetchError(`403 CDN block (browser-PDF also failed): ${url}`, 403);
@@ -673,6 +754,13 @@ export async function processDocument(
     // dead in a single step (no browser fallback, no retry passes).
     if (error instanceof PermanentFetchError) {
       console.log(`[Processor] Permanent failure for ${url} (${error.message}) — not retrying`);
+      throw error;
+    }
+    // Transient browser-unavailable — re-throw so the pipeline keeps the URL
+    // pending for a later pass (do NOT mark dead). Once browser capacity
+    // recovers, the high-value PDF can still be fetched.
+    if (error instanceof BrowserUnavailableError) {
+      console.log(`[Processor] Browser temporarily unavailable for ${url} — leaving retryable`);
       throw error;
     }
     console.warn(`[Processor] Failed to process ${url}: ${error.message}`);
