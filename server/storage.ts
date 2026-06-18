@@ -176,6 +176,7 @@ export async function getCompanies(workspaceId: number) {
     measuresMetCount: schema.companies.measuresMetCount,
     measuresTotalCount: schema.companies.measuresTotalCount,
     summary: schema.companies.summary,
+    discoveryDiagnostics: schema.companies.discoveryDiagnostics,
     createdAt: schema.companies.createdAt,
     updatedAt: schema.companies.updatedAt,
   }).from(schema.companies).where(eq(schema.companies.workspaceId, workspaceId)).orderBy(asc(schema.companies.name));

@@ -287,6 +287,8 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       const diagnostics = company.discoveryDiagnostics as any;
       const coverageLevel = diagnostics?.coverage?.coverageLevel || "unknown";
       const missingTier1 = diagnostics?.coverage?.missingTier1Types || [];
+      // Fetch-coverage signal (how much discovered evidence was actually read).
+      const fetchCoverage = diagnostics?.fetchCoverage || null;
 
       resultsData.push({
         companyId: company.id,
@@ -300,6 +302,10 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         summary: company.summary || undefined,
         coverageLevel,
         missingTier1,
+        documentsFetched: fetchCoverage?.documentsFetched ?? undefined,
+        documentsDiscovered: fetchCoverage?.documentsDiscovered ?? undefined,
+        fetchRatio: fetchCoverage?.fetchRatio ?? undefined,
+        lowEvidence: fetchCoverage?.lowEvidence ?? undefined,
         sourceDocuments,
         measureScores: scores.map(s => ({
           measureId: s.measureId,

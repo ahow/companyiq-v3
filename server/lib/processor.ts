@@ -453,6 +453,99 @@ async function fetchWithBrowser(url: string): Promise<string> {
   }
 }
 
+/**
+ * Fetch a PDF (or other binary doc) that sits behind a WAF/CDN bot-protection
+ * layer (Akamai, Cloudflare, Imperva) which blocks plain Node/axios requests by
+ * TLS/HTTP-2 fingerprint but trusts a real browser session.
+ *
+ * Strategy:
+ *  1. Navigate Chromium to the URL's ORIGIN so the WAF issues its trust cookies
+ *     to a genuine browser session (the same reason a human never sees the block).
+ *  2. From inside that trusted page context, run `fetch(url)` and read the
+ *     response as an arraybuffer, then hand the raw bytes back to Node as base64.
+ *     This reuses the browser's cookies, TLS fingerprint and HTTP/2 stack, so the
+ *     WAF serves the real PDF instead of killing the stream.
+ *  3. Parse the bytes with the existing pdf-parse path.
+ *
+ * Returns extracted text, or "" if the browser path also fails / is unavailable.
+ */
+async function fetchPdfViaBrowser(url: string): Promise<string> {
+  if (isBrowserCircuitOpen()) {
+    return "";
+  }
+  await acquireBrowserSlot();
+  let page: any = null;
+  try {
+    const browser = await getSharedBrowser();
+    page = await browser.newPage();
+    await page.setUserAgent(USER_AGENT);
+    await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
+
+    // Step 1: warm the WAF session by visiting the origin (cheap, HTML only).
+    const origin = originOf(url);
+    if (origin) {
+      try {
+        await page.goto(origin + "/", { waitUntil: "domcontentloaded", timeout: BROWSER_FETCH_TIMEOUT });
+      } catch {
+        // Origin warm-up is best-effort; continue to the in-page fetch regardless.
+      }
+    }
+
+    // Step 2: fetch the binary from inside the trusted page context.
+    const base64: string | null = await page.evaluate(async (target: string) => {
+      try {
+        const resp = await fetch(target, { credentials: "include" });
+        if (!resp.ok) return null;
+        const buf = await resp.arrayBuffer();
+        // Convert to base64 in chunks to avoid call-stack overflow on big files.
+        let binary = "";
+        const bytes = new Uint8Array(buf);
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)) as any);
+        }
+        return btoa(binary);
+      } catch {
+        return null;
+      }
+    }, url);
+
+    if (!base64) {
+      console.log(`[Processor] Browser-PDF in-page fetch returned no bytes for ${url}`);
+      return "";
+    }
+
+    const buf = Buffer.from(base64, "base64");
+    const looksLikePdf = buf.slice(0, 5).toString("latin1") === "%PDF-";
+    if (looksLikePdf) {
+      const text = await extractTextFromPdf(buf);
+      if (text) {
+        console.log(`[Processor] Browser-PDF fetch succeeded for ${url} (${buf.length}B PDF)`);
+        return text;
+      }
+      return "";
+    }
+    // Not a PDF — could be an HTML doc served at a .pdf URL; extract as HTML.
+    const asText = buf.toString("utf8");
+    if (asText && !looksLikeChallenge(asText)) {
+      return extractTextFromHtml(asText);
+    }
+    return "";
+  } catch (error: any) {
+    const msg = String(error?.message || error);
+    if (/EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch/i.test(msg)) {
+      tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
+    }
+    console.warn(`[Processor] Browser-PDF fetch failed for ${url}: ${msg}`);
+    return "";
+  } finally {
+    if (page) {
+      try { await page.close(); } catch { /* ignore */ }
+    }
+    releaseBrowserSlot();
+  }
+}
+
 // ─── Main Process Document Function ──────────────────────────────────────────
 
 export async function processDocument(
@@ -467,7 +560,26 @@ export async function processDocument(
     let content = "";
 
     if (type === "pdf" || url.toLowerCase().endsWith(".pdf")) {
-      const { data, contentType } = await fetchWithRetry(url, { responseType: "arraybuffer" });
+      let data: any, contentType: string;
+      try {
+        ({ data, contentType } = await fetchWithRetry(url, { responseType: "arraybuffer" }));
+      } catch (pdfHttpError: any) {
+        // A direct PDF request can be killed by a WAF at the transport layer
+        // (e.g. Akamai HTTP/2 INTERNAL_ERROR, or a 403). axios surfaces this as a
+        // thrown error rather than a response. A real browser session usually
+        // gets the bytes, so try the WAF-aware browser-PDF path before giving up.
+        const sc = pdfHttpError.response?.status;
+        if (sc === 401) {
+          throw new PermanentFetchError(`401 paywall: ${url}`, 401);
+        }
+        console.log(`[Processor] Direct PDF fetch failed for ${url} (${pdfHttpError.message}) — trying WAF-aware browser-PDF fetch`);
+        const viaBrowser = await fetchPdfViaBrowser(url);
+        if (viaBrowser) {
+          setCachedContent(url, viaBrowser);
+          return viaBrowser;
+        }
+        throw new PermanentFetchError(`PDF fetch failed (browser-PDF also failed): ${url}`);
+      }
       const buf = Buffer.from(data);
       // Some CDNs return a small HTML challenge/interstitial page with HTTP 200
       // instead of the actual PDF. Detect that (by content-type, magic bytes, or
@@ -487,8 +599,10 @@ export async function processDocument(
           console.log(`[Processor] Cookie warm-up retry succeeded for ${url} (${warmBuf.length}B PDF)`);
           content = await extractTextFromPdf(warmBuf);
         } else {
-          console.log(`[Processor] Cookie warm-up retry did not yield a PDF for ${url} — trying browser fallback`);
-          content = await fetchWithBrowser(url);
+          console.log(`[Processor] Cookie warm-up retry did not yield a PDF for ${url} — trying browser-PDF fetch`);
+          // Use the WAF-aware browser PDF path (real browser session reads the
+          // bytes), NOT the HTML scraper which returns ~nothing for a PDF.
+          content = await fetchPdfViaBrowser(url);
         }
       } else {
         content = await extractTextFromPdf(buf);
@@ -529,10 +643,18 @@ export async function processDocument(
           console.log(`[Processor] HTTP fetch failed for ${url} (401 Unauthorized/paywall), marking permanent`);
           throw new PermanentFetchError(`401 paywall: ${url}`, 401);
         } else if (isCdnBlock) {
-          // 403 on a direct file/PDF link = CDN block — browser can't bypass.
-          // Terminal: throw so the pipeline marks this URL dead in one step.
-          console.log(`[Processor] HTTP fetch failed for ${url} (403 on direct file), marking permanent`);
-          throw new PermanentFetchError(`403 CDN block: ${url}`, 403);
+          // 403 on a direct file/PDF link = WAF/CDN bot block (Akamai/Cloudflare/
+          // Imperva). A plain axios request is blocked by TLS/HTTP-2 fingerprint,
+          // but a real browser session frequently passes. Try the WAF-aware
+          // browser-PDF path; only mark permanent if THAT also fails. This is the
+          // fix for high-value IR PDFs (e.g. Adobe AI Ethics, 10-K) that were
+          // previously discarded, artificially deflating well-governed firms.
+          console.log(`[Processor] HTTP 403 on direct file ${url} — trying WAF-aware browser-PDF fetch`);
+          content = await fetchPdfViaBrowser(url);
+          if (!content) {
+            console.log(`[Processor] Browser-PDF fetch also failed for ${url} (403), marking permanent`);
+            throw new PermanentFetchError(`403 CDN block (browser-PDF also failed): ${url}`, 403);
+          }
         } else {
           // Timeout, 5xx, 403 on HTML page, network error — browser fallback is valuable
           console.log(`[Processor] HTTP fetch failed for ${url} (${httpError.message}), trying browser fallback...`);
@@ -561,8 +683,11 @@ export async function processDocument(
 
     if (!isPaywall && !isCdnBlock) {
       try {
-        console.log(`[Processor] Final browser fallback for ${url}`);
-        const browserContent = await fetchWithBrowser(url);
+        // For PDF URLs use the WAF-aware byte path (the HTML scraper returns
+        // ~nothing for a PDF rendered in Chromium's viewer); otherwise scrape HTML.
+        const isPdfUrl = url.toLowerCase().includes(".pdf");
+        console.log(`[Processor] Final browser fallback for ${url}${isPdfUrl ? ' (browser-PDF)' : ''}`);
+        const browserContent = isPdfUrl ? await fetchPdfViaBrowser(url) : await fetchWithBrowser(url);
         if (browserContent) {
           setCachedContent(url, browserContent);
           return browserContent;

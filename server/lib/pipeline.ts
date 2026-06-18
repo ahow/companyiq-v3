@@ -506,8 +506,43 @@ async function runFetchPhase(opts: {
   // Final count
   const finalDocs = await storage.getAcceptedDocuments(companyId);
   totalFetched = finalDocs.filter(d => d.fetchStatus === "ok").length;
+  const totalDead = finalDocs.filter(d => d.fetchStatus === "dead").length;
+  const totalDiscovered = finalDocs.length;
 
   console.log(`[${companyName}] Fetch phase complete: ${totalFetched} fetched, ${newFetchCount} new this run (${Math.round((Date.now() - fetchPhaseStart) / 1000)}s elapsed${fetchBudgetExceeded ? ', BUDGET EXCEEDED' : ''})`);
+
+  // ─── Persist a fetch-coverage signal ───────────────────────────────────────
+  // A low score backed by thin retrieval (most key docs `dead`) should be
+  // visibly distinguishable from a genuine low score. We merge a `fetchCoverage`
+  // block into the existing discoveryDiagnostics jsonb (no schema migration) so
+  // the UI/export can show "X of Y fetched" and flag low-evidence results.
+  try {
+    const fetchRatio = totalDiscovered > 0 ? totalFetched / totalDiscovered : 0;
+    // Did any Tier-1 (primary filing) document fail to fetch?
+    const deadDocs = finalDocs.filter(d => d.fetchStatus === "dead");
+    const deadTier1 = deadDocs.some(d => /10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy.?statement/i.test((d.url + " " + (d.title || "")).toLowerCase()));
+    const lowEvidence = totalFetched < 3 || fetchRatio < 0.5 || (deadTier1 && fetchRatio < 0.7);
+    const existingDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+    await storage.updateCompany(companyId, workspaceId, {
+      discoveryDiagnostics: {
+        ...existingDiag,
+        fetchCoverage: {
+          documentsFetched: totalFetched,
+          documentsDead: totalDead,
+          documentsDiscovered: totalDiscovered,
+          fetchRatio: Math.round(fetchRatio * 100) / 100,
+          deadPrimaryFiling: deadTier1,
+          lowEvidence,
+          budgetExceeded: fetchBudgetExceeded,
+        },
+      } as any,
+    });
+    if (lowEvidence) {
+      console.warn(`[${companyName}] LOW EVIDENCE: only ${totalFetched}/${totalDiscovered} docs fetched (ratio ${Math.round(fetchRatio * 100)}%${deadTier1 ? ', a primary filing failed to fetch' : ''}) — score may understate true disclosure`);
+    }
+  } catch (covErr: any) {
+    console.warn(`[${companyName}] Failed to persist fetch-coverage diagnostics (non-fatal): ${covErr.message}`);
+  }
 
   // Update status to fetched
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "fetched" });
@@ -641,9 +676,17 @@ async function runAnalyzePhase(opts: {
 
   await storage.createMeasureScores(scoreRows);
 
-  // Update company with results
+  // Update company with results.
+  // Populate measuresMetCount/measuresTotalCount (previously left null, which
+  // surfaced as blank columns in the CSV/API export). "Met" counts measures with
+  // a Yes verdict; partial verdicts contribute fractionally to the score but are
+  // not counted as fully met here.
+  const allMeasureResults = analysis.categories.flatMap((c) => c.measures);
+  const measuresMet = allMeasureResults.filter((m) => m.verdict === "Yes").length;
   await storage.updateCompany(companyId, workspaceId, {
     totalScore: analysis.scorePercentage,
+    measuresMetCount: measuresMet,
+    measuresTotalCount: measures.length,
     summary: analysis.summary,
     analysisStatus: "completed",
   });

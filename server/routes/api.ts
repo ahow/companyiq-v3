@@ -126,7 +126,7 @@ apiRouter.post("/companies/:id/full-reset", async (req: Request, res: Response) 
     await storage.fullResetCompanyDocuments(companyId);
     await storage.updateCompany(companyId, workspaceId, {
       analysisStatus: "idle", totalScore: null, summary: null,
-      measuresMet: null, measuresTotal: null, discoveryDiagnostics: null
+      measuresMetCount: null, measuresTotalCount: null, discoveryDiagnostics: null
     } as any);
     res.json({ success: true });
   } catch (error: any) {
