@@ -59,7 +59,7 @@ function isSecHost(url: string): boolean {
 // the pipeline's PER_DOCUMENT_TIMEOUT_MS (default 45s) unless overridden, so a
 // genuinely hung request is still cut off by the outer guard.
 const FETCH_TIMEOUT = parseInt(process.env.FETCH_TIMEOUT_MS || "40000", 10); // 40s for HTML
-const FETCH_TIMEOUT_BINARY = parseInt(process.env.FETCH_TIMEOUT_BINARY_MS || "90000", 10); // 90s for PDF/binary
+const FETCH_TIMEOUT_BINARY = parseInt(process.env.FETCH_TIMEOUT_BINARY_MS || "25000", 10); // 25s: fail fast on WAF-hung PDFs so the browser-PDF fallback fits inside PER_DOCUMENT_TIMEOUT_MS
 const MAX_RETRIES = 2;
 const RETRY_DELAY_BASE = 2000;
 
@@ -88,11 +88,15 @@ function setCachedContent(url: string, content: string): void {
 
 async function fetchWithRetry(
   url: string,
-  opts: { responseType?: "arraybuffer" | "text" } = {}
+  opts: { responseType?: "arraybuffer" | "text"; maxAttempts?: number } = {}
 ): Promise<{ data: any; contentType: string }> {
   let lastError: Error | null = null;
+  // Binary (PDF) fetches default to a single attempt: a WAF that hangs will hang
+  // again on retry, and the retry would consume the per-document budget that the
+  // browser-PDF fallback needs. Callers can override.
+  const maxAttempts = opts.maxAttempts ?? (opts.responseType === "arraybuffer" ? 1 : MAX_RETRIES);
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const sec = isSecHost(url);
       const headers: Record<string, string> = {
@@ -120,7 +124,7 @@ async function fetchWithRetry(
       };
     } catch (error: any) {
       lastError = error;
-      if (attempt < MAX_RETRIES - 1) {
+      if (attempt < maxAttempts - 1) {
         const delay = RETRY_DELAY_BASE * Math.pow(2, attempt);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
