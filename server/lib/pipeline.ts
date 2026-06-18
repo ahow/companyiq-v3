@@ -339,8 +339,26 @@ async function runFetchPhase(opts: {
 
     console.log(`[${companyName}] Fetch pass ${pass}: ${pendingDocs.length} pending, ${okDocs.length} ok, ${deadDocs.length} dead (elapsed: ${Math.round(elapsed / 1000)}s)`);
 
-    // Priority-sort: company domain first, then PDFs
+    // Priority-sort so the fetch budget is always spent on the most
+    // decision-relevant disclosures first (important for doc-heavy issuers whose
+    // WAF PDFs are slow and may exceed the budget):
+    //   1. High-value content: primary filings (10-K/20-F/annual/proxy) AND
+    //      AI-governance material (ai ethics / responsible ai / ai policy / csr).
+    //   2. Company-domain documents.
+    //   3. PDFs over HTML.
+    // Low-value periodic filings (old 10-Qs) and generic product/marketing pages
+    // therefore sink to the bottom and are the first to be dropped on budget.
+    const HIGH_VALUE_RE = /10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy|ai.?ethic|responsible.?ai|ai.?governance|ai.?policy|ai.?principle|ethics.?and.?integrity|csr.?report|sustainability.?report|esg/i;
+    const LOW_VALUE_RE = /10-?q|transcript|glossary|generative-ai-vs|gen-ai-glossary|express\/web/i;
+    const rank = (u: string): number => {
+      const s = u.toLowerCase();
+      if (LOW_VALUE_RE.test(s)) return -1;
+      if (HIGH_VALUE_RE.test(s)) return 2;
+      return 0;
+    };
     const sortedPending = [...pendingDocs].sort((a, b) => {
+      const aRank = rank(a.url), bRank = rank(b.url);
+      if (aRank !== bRank) return bRank - aRank;
       const aIsCompanyDomain = companyDomain && a.url.toLowerCase().includes(companyDomain) ? 1 : 0;
       const bIsCompanyDomain = companyDomain && b.url.toLowerCase().includes(companyDomain) ? 1 : 0;
       if (aIsCompanyDomain !== bIsCompanyDomain) return bIsCompanyDomain - aIsCompanyDomain;
