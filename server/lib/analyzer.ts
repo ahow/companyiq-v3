@@ -2,6 +2,7 @@ import * as storage from "../storage.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
 import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, chunkText, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
+import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash } from "./processor.js";
 import { translateDocumentsToEnglish } from "./translation.js";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -745,9 +746,29 @@ export async function analyzeCompanyMeasures(opts: {
     console.log(`[${companyName}] Summarized via ${summarizerModel} (${combinedText.length} chars)`);
   }
 
-  // Layer B/D — derive the framework's topic lexicon (AI/ML by default) and
-  // measure how much topic-relevant evidence the corpus actually contains.
-  const topicTerms = deriveTopicTerms(framework.topicDescription || undefined, framework.name);
+  // Layer B/D — derive the framework's topic lexicon and measure how much
+  // topic-relevant evidence the corpus actually contains. TOPIC-AGNOSTIC: the
+  // lexicon is expanded from the framework's own topic description + measure
+  // wording (LLM-backed, cached per framework), so retrieval works for ANY topic
+  // and catches issuers that use adjacent vocabulary (e.g. "machine learning" /
+  // "generative AI" for an AI framework). Falls back to deterministic tokens.
+  const deterministicTerms = deriveTopicTerms(framework.topicDescription || undefined, framework.name);
+  let topicTerms = deterministicTerms;
+  try {
+    const lex = await deriveTopicLexicon({
+      frameworkId: framework.id,
+      workspaceId,
+      topicDescription: framework.topicDescription,
+      frameworkName: framework.name,
+      measureTitles: measures.map((m) => `${m.title}${m.definition ? " — " + m.definition : ""}`),
+    });
+    if (lex.terms.length > 0) {
+      topicTerms = [...new Set([...lex.terms, ...deterministicTerms])];
+      console.log(`[${companyName}] Topic lexicon (${lex.source}): ${lex.terms.length} framework terms + ${deterministicTerms.length} deterministic -> ${topicTerms.length} total`);
+    }
+  } catch (lexErr: any) {
+    console.warn(`[${companyName}] Topic lexicon derivation failed, using deterministic terms: ${lexErr?.message}`);
+  }
   const corpusTopicStats = computeCorpusTopicStats(combinedText, topicTerms);
   console.log(`[${companyName}] Corpus topic evidence: ${corpusTopicStats.topicChunks}/${corpusTopicStats.totalChunks} chunks contain topic terms (${corpusTopicStats.topicHits} hits)`);
 

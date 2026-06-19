@@ -556,6 +556,53 @@ async function fetchWithBrowser(url: string): Promise<string> {
  *
  * Returns extracted text, or "" if the browser path also fails / is unavailable.
  */
+// ─── WAF Session Priming (Akamai / Imperva, topic-independent) ───────────────
+// Akamai Bot Manager and Imperva/Incapsula issue their trust cookies (`_abck`,
+// `bm_sv`, `ak_bmsc`, `reese84`, `incap_ses_*`) only AFTER a real browser has
+// loaded a navigable HTML page on the origin and executed the sensor JS. The
+// earlier in-page fetch fired before those cookies were present, so Akamai-
+// fronted IR portals (e.g. ir.tesla.com) kept returning interstitials and the
+// PDFs were marked dead. This helper navigates the origin, sets realistic
+// client-hint / fetch-metadata headers, and polls document.cookie until the
+// sensor cookies settle (re-navigating once if needed). It is generic: any
+// Akamai/Imperva-protected host benefits, regardless of analysis topic.
+const WAF_COOKIE_RE = /(_abck|bm_sv|bm_sz|ak_bmsc|reese84|incap_ses_|visid_incap_|nlbi_)/i;
+const WAF_PRIME_HEADERS: Record<string, string> = {
+  "Accept-Language": "en-US,en;q=0.9",
+  "sec-ch-ua": '"Chromium";v="120", "Not(A:Brand";v="24", "Google Chrome";v="120"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
+  "Upgrade-Insecure-Requests": "1",
+};
+
+async function primeWafSession(page: any, origin: string): Promise<boolean> {
+  const budgetMs = parseInt(process.env.WAF_PRIME_BUDGET_MS || "7000", 10);
+  const deadline = Date.now() + budgetMs;
+  const hasWafCookie = async (): Promise<boolean> => {
+    try {
+      const cookies = await page.cookies();
+      return Array.isArray(cookies) && cookies.some((c: any) => WAF_COOKIE_RE.test(c?.name || ""));
+    } catch {
+      return false;
+    }
+  };
+  let navigations = 0;
+  while (Date.now() < deadline && navigations < 2) {
+    try {
+      await page.goto(origin + "/", { waitUntil: "networkidle2", timeout: BROWSER_FETCH_TIMEOUT });
+    } catch {
+      // best-effort: an interstitial nav still Set-Cookies the sensor token
+    }
+    navigations++;
+    // Let the Akamai/Imperva sensor JS run and post back its token.
+    for (let i = 0; i < 6 && Date.now() < deadline; i++) {
+      if (await hasWafCookie()) return true;
+      await new Promise((r) => setTimeout(r, 600));
+    }
+  }
+  return await hasWafCookie();
+}
+
 async function fetchPdfViaBrowser(url: string): Promise<string> {
   if (isBrowserCircuitOpen()) {
     // Browser fallback is temporarily unavailable — signal TRANSIENT so the
@@ -570,7 +617,7 @@ async function fetchPdfViaBrowser(url: string): Promise<string> {
     browserLaunched = true;
     page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
-    await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
+    await page.setExtraHTTPHeaders(WAF_PRIME_HEADERS);
 
     // Strategy A (primary): navigate directly to the PDF URL and capture the
     // response body bytes. Over HTTP/1.1 (forced via --disable-http2) the WAF
@@ -598,22 +645,23 @@ async function fetchPdfViaBrowser(url: string): Promise<string> {
       console.log(`[Processor] Browser-PDF direct nav did not yield bytes for ${url} (${String(navErr?.message || navErr).slice(0, 80)}) — trying in-page fetch`);
     }
 
-    // Strategy B (fallback): warm the origin, then fetch the binary from inside
-    // the trusted page context.
+    // Strategy B (fallback): PRIME the WAF session on the origin (Akamai/Imperva
+    // issue their trust cookies only after the sensor JS runs on a real HTML
+    // page), then fetch the binary from inside the now-trusted page context.
     const origin = originOf(url);
+    let wafPrimed = false;
     if (origin) {
-      try {
-        await page.goto(origin + "/", { waitUntil: "domcontentloaded", timeout: BROWSER_FETCH_TIMEOUT });
-      } catch {
-        // Origin warm-up is best-effort; continue to the in-page fetch regardless.
-      }
+      wafPrimed = await primeWafSession(page, origin);
+      console.log(`[Processor] WAF session prime for ${origin} -> ${wafPrimed ? "sensor cookies present" : "no sensor cookies (continuing)"}`);
     }
 
-    // REVIEWER FIX v3d (issue #3): Tesla IR PDFs on ir.tesla.com (Akamai) were
-    // dying en masse. Akamai validates Referer + Accept on direct file fetches,
-    // and rejects some credentialed cross-path requests. We now send explicit
-    // Accept/Referer headers and try credentialed THEN uncredentialed.
-    const base64: string | null = await page.evaluate(async (target: string, originUrl: string) => {
+    // REVIEWER FIX v3d (issue #3) + open-item follow-up: Tesla IR PDFs on
+    // ir.tesla.com (Akamai) were dying en masse. Akamai validates Referer +
+    // Accept on direct file fetches and rejects requests lacking a primed sensor
+    // session. With the session primed above we now send explicit Accept/Referer
+    // headers and try credentialed THEN uncredentialed. If the first pass returns
+    // nothing AND the session was not yet primed, we re-prime and retry once.
+    const inPageFetch = async (): Promise<string | null> => page.evaluate(async (target: string, originUrl: string) => {
       const toB64 = (buf: ArrayBuffer): string => {
         let binary = "";
         const bytes = new Uint8Array(buf);
@@ -639,6 +687,16 @@ async function fetchPdfViaBrowser(url: string): Promise<string> {
       };
       return (await attempt("include")) || (await attempt("omit"));
     }, url, (origin || url));
+
+    let base64: string | null = await inPageFetch();
+    if (!base64 && origin && !wafPrimed) {
+      // Re-prime once (the sensor token may have arrived late) and retry.
+      const reprimed = await primeWafSession(page, origin);
+      if (reprimed) {
+        console.log(`[Processor] Re-primed WAF session for ${origin} — retrying in-page PDF fetch for ${url}`);
+        base64 = await inPageFetch();
+      }
+    }
 
     if (!base64) {
       console.log(`[Processor] Browser-PDF in-page fetch returned no bytes for ${url}`);

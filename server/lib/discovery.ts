@@ -1,6 +1,7 @@
 import axios from "axios";
 import * as storage from "../storage.js";
 import { completeWithFallback } from "./ai-providers.js";
+import { deriveTopicLexicon } from "./topic-lexicon.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 
 const MAX_DOCS_RETURNED = 60;
@@ -989,7 +990,133 @@ async function resolveChineseLegalName(
   return out;
 }
 
-async function buildAShareFilingQueries(companyName: string, isin?: string | null): Promise<string[]> {
+/**
+ * ROBUST cninfo full-PDF resolver (open-item follow-up). The web-search snippet
+ * approach for cninfo is volatile: cninfo's listing pages are JS-driven and the
+ * snippets often point at the SPA viewer rather than the actual PDF, so the
+ * genuine annual report frequently fails to fetch (the cause of 360 Security
+ * dropping to a near-empty document set). cninfo exposes an OFFICIAL announcement
+ * query API that returns each filing's `adjunctUrl`; the genuine PDF is then a
+ * plain, static, directly-fetchable file at `https://static.cninfo.com.cn/{adjunctUrl}`.
+ * We query that API by the 6-digit board code, keep the annual-report filings,
+ * and return the direct static-PDF URLs so the discovery lane can PIN them (they
+ * fetch as ordinary PDFs through the processor's normal path). This is the
+ * robust full-PDF lane with a built-in mirror: static.cninfo.com.cn is itself a
+ * CDN mirror of the filing, and we additionally accept the dfcfw/eastmoney
+ * mirror when the announcement record exposes it.
+ *
+ * Topic-agnostic: the API is queried by issuer code/category only; no topic
+ * terms are baked in here.
+ */
+// cninfo's announcement API requires the issuer's internal orgId paired with the
+// board code (`stock="<code>,<orgId>"`). The code→orgId map is published as two
+// static JSON indexes; we fetch and cache them in-process (they are ~6k rows
+// each and change rarely).
+const CNINFO_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+let cninfoStockIndex: Map<string, string> | null = null;
+
+async function loadCninfoStockIndex(): Promise<Map<string, string>> {
+  if (cninfoStockIndex) return cninfoStockIndex;
+  const map = new Map<string, string>();
+  for (const idx of [
+    "http://www.cninfo.com.cn/new/data/szse_stock.json",
+    "http://www.cninfo.com.cn/new/data/sse_stock.json",
+  ]) {
+    try {
+      const r = await axios.get(idx, {
+        headers: { "User-Agent": CNINFO_UA, Accept: "*/*" },
+        timeout: SEARCH_TIMEOUT,
+        validateStatus: (s) => s < 500,
+      });
+      const arr: any[] = (r.data && r.data.stockList) || [];
+      for (const x of arr) {
+        if (x?.code && x?.orgId) map.set(String(x.code), String(x.orgId));
+      }
+    } catch (e: any) {
+      console.warn(`[cninfo] stock index load failed (${idx}): ${e?.message}`);
+    }
+  }
+  cninfoStockIndex = map;
+  return map;
+}
+
+async function resolveCninfoStaticPdfs(
+  companyName: string,
+  code?: string,
+): Promise<string[]> {
+  if (!code) return [];
+  let orgId: string | undefined;
+  try {
+    const index = await loadCninfoStockIndex();
+    orgId = index.get(code);
+  } catch (e: any) {
+    console.warn(`[${companyName}] cninfo orgId lookup failed: ${e?.message}`);
+  }
+  if (!orgId) {
+    console.warn(`[${companyName}] cninfo orgId not found for code ${code} — skipping API lane`);
+    return [];
+  }
+  const orgQueryUrl = "http://www.cninfo.com.cn/new/hisAnnouncement/query";
+  const pdfUrls: string[] = [];
+  try {
+    const params = new URLSearchParams({
+      stock: `${code},${orgId}`,
+      tabName: "fulltext",
+      pageSize: "30",
+      pageNum: "1",
+      column: "szse", // the orgId-keyed query works for both exchanges
+      category: "category_ndbg_szsh", // 年度报告 (annual report) category
+      plate: "szse",
+      seDate: "",
+      searchkey: "",
+      secid: "",
+      sortName: "",
+      sortType: "",
+      isHLtitle: "true",
+    });
+    const resp = await axios.post(orgQueryUrl, params.toString(), {
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": CNINFO_UA,
+        Accept: "application/json, text/plain, */*",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: "http://www.cninfo.com.cn/new/commonUrl?url=disclosure/list/notice",
+      },
+      timeout: SEARCH_TIMEOUT,
+      validateStatus: (s) => s < 500,
+    });
+    const anns: any[] = resp.data?.announcements || [];
+    for (const a of anns) {
+      const title = String(a?.announcementTitle || "");
+      const adj = String(a?.adjunctUrl || "");
+      if (!adj) continue;
+      // Keep genuine FULL annual reports; drop summaries (摘要), english versions,
+      // cancellations/corrections, and ancillary audit/inquiry attachments.
+      const isAnnual = /年度报告|年报/.test(title);
+      const isNoise = /摘要|英文|取消|更正|已取消|核查意见|问询|公告/.test(title);
+      if (!isAnnual || isNoise) continue;
+      const direct = adj.startsWith("http")
+        ? adj
+        : `https://static.cninfo.com.cn/${adj.replace(/^\/+/, "")}`;
+      pdfUrls.push(direct);
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] cninfo API resolve failed: ${e?.message}`);
+  }
+  // De-dup and cap to the most recent few (the API returns newest first).
+  const unique = Array.from(new Set(pdfUrls)).slice(0, 3);
+  if (unique.length > 0) {
+    console.log(`[${companyName}] cninfo API resolved ${unique.length} direct static-PDF annual report(s)`);
+  }
+  return unique;
+}
+
+async function buildAShareFilingQueries(
+  companyName: string,
+  isin?: string | null,
+  topicPhrases?: string[],
+): Promise<{ queries: string[]; code?: string; chineseName?: string }> {
   // Resolve the Chinese legal name + board code first — without these the
   // official-portal queries match nothing (the portals index by Chinese name).
   const { chineseName, code } = await resolveChineseLegalName(companyName, isin);
@@ -998,6 +1125,12 @@ async function buildAShareFilingQueries(companyName: string, isin?: string | nul
   }
   const queries: string[] = [];
   const cn = chineseName;
+  // TOPIC-AGNOSTIC topic phrase: prefer a framework-derived CJK/topic phrase over
+  // the previously hard-coded 人工智能. Pick the first phrase containing CJK
+  // characters if present (best for a Chinese-language query), else the first
+  // phrase. Falls back to 人工智能 only when no lexicon is threaded through.
+  const cjkPhrase = (topicPhrases || []).find((p) => /[\u4e00-\u9fff]/.test(p));
+  const topicPhraseCJK = cjkPhrase || (topicPhrases && topicPhrases[0]) || "人工智能";
   // Lead with the board-code queries: the 6-digit code is resolved reliably and
   // `site:cninfo.com.cn <code> 年度报告` returns the exact issuer's reports.
   if (code) {
@@ -1012,7 +1145,7 @@ async function buildAShareFilingQueries(companyName: string, isin?: string | nul
       `site:cninfo.com.cn ${cn} 年度报告`,
       `${cn} 年度报告 cninfo`,
       `${cn} 2024 年年度报告 filetype:pdf`,
-      `${cn} 人工智能 风险 年报`,
+      `${cn} ${topicPhraseCJK} 风险 年报`,
     );
   }
   // English-name fallbacks (low yield, but harmless) only if resolution failed.
@@ -1020,11 +1153,11 @@ async function buildAShareFilingQueries(companyName: string, isin?: string | nul
     queries.push(
       `site:cninfo.com.cn "${companyName}" 年度报告`,
       `"${companyName}" 年度报告 2024 OR 2023 filetype:pdf`,
-      `"${companyName}" 人工智能 风险 年报`,
+      `"${companyName}" ${topicPhraseCJK} 风险 年报`,
     );
     if (isin) queries.push(`"${isin}" 年度报告`);
   }
-  return queries;
+  return { queries, code, chineseName: cn };
 }
 
 /**
@@ -1053,44 +1186,42 @@ function disambiguationExclusions(companyName: string): string[] {
  * appears in risk factors, board oversight sections, and proxy statements
  * rather than ESG/sustainability reports.
  */
-function buildRegulatoryFilingQueries(companyName: string, framework: Framework): string[] {
+function buildRegulatoryFilingQueries(companyName: string, framework: Framework, topicPhrases?: string[]): string[] {
   const queries: string[] = [];
   const topic = (framework.topicDescription || framework.name || "").toLowerCase();
-  const frameworkName = (framework.name || "").toLowerCase();
 
-  // Core filing queries (always run regardless of topic)
+  // Core filing queries (always run regardless of topic). EDGAR full-text search
+  // (efts.sec.gov / sec.gov/cgi-bin/srqsb) is the authoritative way to locate a
+  // US issuer's actual 10-K/DEF 14A, so we lead with site:sec.gov queries.
   queries.push(
     `"${companyName}" 10-K annual report filetype:pdf`,
     `"${companyName}" proxy statement DEF 14A`,
     `"${companyName}" annual report 2024 OR 2023`,
     `site:sec.gov "${companyName}" 10-K`,
     `site:sec.gov "${companyName}" DEF 14A`,
+    `site:sec.gov "${companyName}" annual report 10-K filing`,
+    `"${companyName}" 20-F annual report`, // non-US filers on US exchanges
   );
 
-  // Topic-specific filing queries
-  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
-  const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
-
-  if (isAIRelated) {
+  // Topic-specific filing queries. TOPIC-AGNOSTIC: derive the search phrases from
+  // the framework's own lexicon when provided, so this works for ANY topic and
+  // catches issuers that use adjacent vocabulary (e.g. "machine learning" /
+  // "generative AI" rather than the literal "artificial intelligence"). Falls back
+  // to topic-description tokens when no lexicon is threaded through.
+  const phrases = (topicPhrases && topicPhrases.length > 0
+    ? topicPhrases
+    : topic.split(/\s+/).filter((w) => w.length > 3))
+    .map((p) => p.trim())
+    .filter(Boolean);
+  // Build an OR-group of the most distinctive phrases (cap to keep queries short).
+  const orGroup = phrases.slice(0, 4).map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(" OR ");
+  const leadPhrase = phrases[0] ? (/\s/.test(phrases[0]) ? `"${phrases[0]}"` : phrases[0]) : "";
+  if (orGroup) {
     queries.push(
-      `"${companyName}" 10-K "artificial intelligence" OR "machine learning"`,
-      `"${companyName}" proxy "artificial intelligence" OR "AI" board oversight`,
-      `"${companyName}" annual report AI strategy OR AI risk`,
-      `"${companyName}" 20-F "artificial intelligence"`, // non-US filers on US exchanges
-    );
-  } else if (isClimateRelated) {
-    queries.push(
-      `"${companyName}" 10-K climate risk OR "climate-related"`,
-      `"${companyName}" proxy climate OR sustainability oversight`,
-      `"${companyName}" annual report emissions OR net zero`,
-    );
-  } else {
-    // Generic topic in filings
-    const topicWords = topic.split(/\s+/).filter(w => w.length > 3).slice(0, 3).join(" ");
-    queries.push(
-      `"${companyName}" 10-K ${topicWords}`,
-      `"${companyName}" proxy statement ${topicWords}`,
-      `"${companyName}" annual report ${topicWords}`,
+      `"${companyName}" 10-K ${orGroup}`,
+      `"${companyName}" proxy ${orGroup} board oversight`,
+      `"${companyName}" annual report ${orGroup}`,
+      `"${companyName}" 20-F ${leadPhrase}`,
     );
   }
 
@@ -1577,6 +1708,22 @@ export async function searchCompanyDocuments(opts: {
   const seenUrls = new Set<string>();
   const laneCounts: Record<string, number> = {};
 
+  // TOPIC-AGNOSTIC: derive (cached) framework topic phrases once so the
+  // regulatory/IR/CJK query builders can target the framework's own vocabulary
+  // and its synonyms, instead of a hard-coded AI term list.
+  let topicPhrases: string[] = [];
+  try {
+    const lex = await deriveTopicLexicon({
+      frameworkId: framework.id,
+      workspaceId: framework.workspaceId,
+      topicDescription: framework.topicDescription,
+      frameworkName: framework.name,
+    });
+    topicPhrases = lex.terms;
+  } catch (lexErr: any) {
+    console.warn(`[${companyName}] Discovery topic lexicon failed: ${lexErr?.message}`);
+  }
+
   function addCandidate(result: SearchResult, lane: string) {
     if (seenUrls.has(result.link)) return;
     // Hard deny-list filter: block noise URLs before they enter the candidate pool
@@ -1737,7 +1884,7 @@ export async function searchCompanyDocuments(opts: {
   // These are critical for non-ESG topics where evidence lives in financial filings
   // rather than sustainability reports.
   console.log(`[${companyName}] Running SEC/regulatory filing search lane`);
-  const filingQueries = buildRegulatoryFilingQueries(companyName, framework);
+  const filingQueries = buildRegulatoryFilingQueries(companyName, framework, topicPhrases);
   for (const query of filingQueries) {
     const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
     for (const r of results) addCandidate(r, "regulatory");
@@ -1749,10 +1896,38 @@ export async function searchCompanyDocuments(opts: {
   // wrappers and wrong-entity US/HK filings). Keyed off CN ISIN + Chinese name.
   if (isChinaAShare(opts.isin, opts.country)) {
     console.log(`[${companyName}] Running A-share primary-filing search lane (cninfo/SSE/SZSE)`);
-    const aShareQueries = await buildAShareFilingQueries(companyName, opts.isin);
+    const { queries: aShareQueries, code: aShareCode } = await buildAShareFilingQueries(
+      companyName,
+      opts.isin,
+      topicPhrases,
+    );
     for (const query of aShareQueries) {
       const results = await webSearch(query, { num: Math.min(searchDepth, 10), gl: "cn", hl: "zh-cn" });
       for (const r of results) addCandidate(r, "a-share-filing");
+    }
+    // ROBUST full-PDF resolution: pull the genuine annual-report PDFs straight
+    // from cninfo's official announcement API and PIN them. These are direct,
+    // static, fetchable PDFs (static.cninfo.com.cn), which fixes the volatility
+    // that caused Chinese issuers (e.g. 360 Security) to lose their primary
+    // evidence when the SPA listing pages failed to fetch.
+    try {
+      const cninfoPdfs = await resolveCninfoStaticPdfs(companyName, aShareCode);
+      for (const pdfUrl of cninfoPdfs) {
+        if (!seenUrls.has(pdfUrl)) {
+          seenUrls.add(pdfUrl);
+          allCandidates.push({
+            url: pdfUrl,
+            title: `${companyName} 年度报告 (cninfo official)`,
+            snippet: "Official cninfo annual-report PDF (resolved via announcement API)",
+            lane: "a-share-cninfo-api",
+            // High priority (low number) so it survives the pre-gate cap.
+            priority: -50,
+          });
+          laneCounts["a-share-cninfo-api"] = (laneCounts["a-share-cninfo-api"] || 0) + 1;
+        }
+      }
+    } catch (cninfoErr: any) {
+      console.warn(`[${companyName}] cninfo API lane failed: ${cninfoErr?.message}`);
     }
   }
 
