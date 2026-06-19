@@ -1,5 +1,5 @@
 import * as storage from "../storage.js";
-import { completeWithFallback, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
+import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
 import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, chunkText, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { generateDocumentHash } from "./processor.js";
@@ -990,6 +990,71 @@ async function scoreSingleMeasure(opts: {
   temporalWarning?: string | null;
   scoringMode?: string;
 }): Promise<MeasureResult> {
+  const { companyName, measure, scoringMode } = opts;
+  const usePartial = scoringMode === "partial";
+
+  // Self-consistency: run N passes on the SAME provider (no silent cross-model
+  // fallback) and take the majority verdict. This bounds the residual best-effort
+  // -seed noise that drives cross-run volatility. N is env-tunable; default 3.
+  // Set SCORING_SELF_CONSISTENCY=1 to disable (single pass).
+  const passes = Math.max(1, parseInt(process.env.SCORING_SELF_CONSISTENCY || "3", 10));
+
+  if (passes === 1) {
+    return scoreSingleMeasurePass(opts);
+  }
+
+  const passResults: MeasureResult[] = [];
+  const gradedBy = new Set<string>();
+  for (let i = 0; i < passes; i++) {
+    const r = await scoreSingleMeasurePass(opts);
+    passResults.push(r);
+    if ((r as any)._gradedBy) gradedBy.add((r as any)._gradedBy);
+  }
+
+  // Majority verdict by score bucket (0 / 0.5 / 1). Ties resolve toward the
+  // HIGHER-evidence pass that has quotes, never inflating beyond what a pass found.
+  const tally = new Map<number, MeasureResult[]>();
+  for (const r of passResults) {
+    const bucket = r.score;
+    if (!tally.has(bucket)) tally.set(bucket, []);
+    tally.get(bucket)!.push(r);
+  }
+  let winningBucket = passResults[0].score;
+  let winningCount = 0;
+  for (const [bucket, rs] of tally) {
+    if (rs.length > winningCount || (rs.length === winningCount && bucket > winningBucket)) {
+      winningBucket = bucket;
+      winningCount = rs.length;
+    }
+  }
+  const winners = tally.get(winningBucket)!;
+  // Pick the winner with the richest quotes/evidence as the representative result.
+  const chosen = winners.reduce((a, b) => {
+    const aScore = a.quotes.length * 1000 + (a.evidenceSummary?.length || 0);
+    const bScore = b.quotes.length * 1000 + (b.evidenceSummary?.length || 0);
+    return bScore > aScore ? b : a;
+  });
+  const unanimous = winningCount === passes;
+  const gradedByLabel = Array.from(gradedBy).join("+") || "unknown";
+  chosen.confidence = unanimous ? "High" : winningCount >= Math.ceil(passes / 2) ? "Medium" : "Low";
+  chosen.verdictNuance = (chosen.verdictNuance ? chosen.verdictNuance + " " : "") +
+    `[Self-consistency ${winningCount}/${passes} on ${gradedByLabel}]`;
+  return chosen;
+}
+
+// Single scoring pass (one LLM call). Kept separate so the N-pass vote above can
+// reuse it. Uses completeScoring (strict same-provider retry) rather than the
+// silent cross-model fallback path.
+async function scoreSingleMeasurePass(opts: {
+  companyName: string;
+  measure: FrameworkMeasure;
+  evidenceText: string;
+  terminology?: TerminologyMap;
+  topicDescription: string;
+  provider: string;
+  temporalWarning?: string | null;
+  scoringMode?: string;
+}): Promise<MeasureResult> {
   const { companyName, measure, evidenceText, terminology, topicDescription, provider, temporalWarning, scoringMode } = opts;
 
   // Choose prompt based on scoring mode
@@ -999,7 +1064,7 @@ async function scoreSingleMeasure(opts: {
     : buildBinaryScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning });
 
   try {
-    const { text } = await completeWithFallback(provider, {
+    const { text, provider: gradedBy } = await completeScoring(provider, {
       system,
       prompt,
       json: true,
@@ -1041,7 +1106,8 @@ async function scoreSingleMeasure(opts: {
       verdict,
       verdictNuance: parsed.verdictNuance || null,
       displayOrder: measure.displayOrder,
-    };
+      _gradedBy: gradedBy,
+    } as MeasureResult & { _gradedBy?: string };
   } catch (error: any) {
     console.warn(`[${companyName}] Scoring failed for ${measure.measureId}: ${error.message}`);
     return {

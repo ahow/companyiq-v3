@@ -12,12 +12,56 @@ export interface BM25Index {
   totalDocs: number;
 }
 
+// CJK Unicode ranges: CJK Unified Ideographs, Extension A, Hiragana, Katakana,
+// Hangul syllables, and CJK compatibility. Used to detect characters that have
+// no whitespace word boundaries.
+const CJK_CHAR = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+const CJK_RUN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]+/g;
+
+/**
+ * Tokenizer with CJK support.
+ *
+ * The previous tokenizer split on whitespace only, so a Chinese/Japanese/Korean
+ * paragraph (which has no spaces) collapsed into ~1 token — BM25 term overlap with
+ * an English/translated query was ~0, so no relevant CJK chunk could ever surface
+ * (the root of the systematic zero-scoring of Chinese-listed issuers).
+ *
+ * We now: (1) keep ASCII word tokens (length > 2) as before, and (2) for every run
+ * of CJK characters, emit overlapping character BIGRAMS (and the single chars as a
+ * fallback for 1-char runs). Character n-grams are the standard, language-model-free
+ * way to make BM25 work on unsegmented CJK text and restore query/document overlap.
+ */
 export function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
+  const lower = text.toLowerCase();
+  // ASCII / Latin word tokens: replace CJK with spaces first so they don't glue
+  // onto Latin tokens, then strip punctuation and split on whitespace.
+  const asciiTokens = lower
+    .replace(CJK_RUN, " ")
     .replace(/[^\w\s]/g, " ")
     .split(/\s+/)
     .filter((t) => t.length > 2);
+
+  // CJK character-bigram tokens.
+  const cjkTokens: string[] = [];
+  const runs = lower.match(CJK_RUN);
+  if (runs) {
+    for (const run of runs) {
+      if (run.length === 1) {
+        cjkTokens.push(run);
+      } else {
+        for (let i = 0; i < run.length - 1; i++) {
+          cjkTokens.push(run.slice(i, i + 2));
+        }
+      }
+    }
+  }
+
+  return asciiTokens.concat(cjkTokens);
+}
+
+/** True if the text contains any CJK characters. */
+export function hasCJK(text: string): boolean {
+  return CJK_CHAR.test(text);
 }
 
 export function buildBM25Index(chunks: string[]): BM25Index {
@@ -172,6 +216,34 @@ const DOC_HEADER_RE = /\n*---\s*DOCUMENT:\s*([\s\S]*?)\s*---\n*/g;
 export interface Chunk {
   text: string;
   docIndex: number; // which source document this chunk came from
+  section?: string; // SEC item heading this chunk belongs to (e.g. "item1a"), if any
+}
+
+// ─── SEC Section Awareness ───────────────────────────────────────────────────
+// A 10-K is one large blob; the chunker was section-blind, so risk-factor language
+// in Item 1A competed with the whole filing under BM25 and was often crowded out
+// for risk/oversight measures. We detect SEC item headings at the start of a line
+// and tag every subsequent chunk with the current section until the next heading.
+//
+// Heading examples we match (case-insensitive, line-anchored):
+//   "Item 1A. Risk Factors", "ITEM 7. Management's Discussion", "Item 7A."
+// We normalize to a compact key like "item1a", "item7", "item7a".
+const SEC_ITEM_HEADING_RE = /^\s*item\s+(\d{1,2}[a-c]?)\b[\.\:\s\-—]/i;
+
+function normalizeSecItem(raw: string): string {
+  return "item" + raw.toLowerCase().replace(/\s+/g, "");
+}
+
+/** Detect the SEC item heading at the start of a text block, if present. */
+export function detectSecSection(block: string): string | undefined {
+  // Inspect the first few lines only — headings appear at the top of a section.
+  const head = block.split(/\n/, 6).join("\n");
+  const lines = head.split(/\n/);
+  for (const line of lines) {
+    const m = SEC_ITEM_HEADING_RE.exec(line);
+    if (m) return normalizeSecItem(m[1]);
+  }
+  return undefined;
 }
 
 function splitIntoDocuments(combinedText: string): Array<{ header: string; body: string }> {
@@ -199,23 +271,45 @@ function splitIntoDocuments(combinedText: string): Array<{ header: string; body:
   return segments;
 }
 
-/** Chunk a single text body (sentence-aware with overlap). */
-function chunkBody(text: string): string[] {
-  const chunks: string[] = [];
-  const sentences = text.split(/(?<=[.!?])\s+/);
+/**
+ * Chunk a single text body (sentence-aware with overlap), tracking the current
+ * SEC item section. We split on sentence boundaries AND newlines so that
+ * line-anchored item headings are detectable; whenever a fragment begins a new
+ * SEC item, the active section flips and subsequent chunks inherit it.
+ */
+function chunkBody(text: string): Array<{ text: string; section?: string }> {
+  const chunks: Array<{ text: string; section?: string }> = [];
+  // Split on sentence boundaries while preserving newlines as their own break so
+  // headings on their own line are seen as fragment starts.
+  const fragments = text.split(/(?<=[.!?])\s+|\n+/);
   let currentChunk = "";
+  let currentSection: string | undefined = undefined;
+  let chunkStartSection: string | undefined = undefined;
 
-  for (const sentence of sentences) {
-    if (currentChunk.length + sentence.length > CHUNK_SIZE && currentChunk.length > 0) {
-      chunks.push(currentChunk.trim());
+  const flush = () => {
+    if (currentChunk.trim()) {
+      chunks.push({ text: currentChunk.trim(), section: chunkStartSection });
+    }
+  };
+
+  for (const fragment of fragments) {
+    if (!fragment) continue;
+    // Detect a section heading at the start of this fragment.
+    const m = SEC_ITEM_HEADING_RE.exec(fragment);
+    if (m) currentSection = normalizeSecItem(m[1]);
+
+    if (currentChunk.length + fragment.length > CHUNK_SIZE && currentChunk.length > 0) {
+      flush();
       const words = currentChunk.split(/\s+/);
       const overlapWords = words.slice(-Math.floor(CHUNK_OVERLAP / 5));
-      currentChunk = overlapWords.join(" ") + " " + sentence;
+      currentChunk = overlapWords.join(" ") + " " + fragment;
+      chunkStartSection = currentSection;
     } else {
-      currentChunk += (currentChunk ? " " : "") + sentence;
+      if (currentChunk.length === 0) chunkStartSection = currentSection;
+      currentChunk += (currentChunk ? " " : "") + fragment;
     }
   }
-  if (currentChunk.trim()) chunks.push(currentChunk.trim());
+  flush();
   return chunks;
 }
 
@@ -230,7 +324,7 @@ export function chunkDocuments(combinedText: string): Chunk[] {
   const out: Chunk[] = [];
   docs.forEach((doc, docIndex) => {
     for (const c of chunkBody(doc.body)) {
-      out.push({ text: c, docIndex });
+      out.push({ text: c.text, docIndex, section: c.section });
     }
   });
   return out;
@@ -246,8 +340,41 @@ export interface EvidencePack {
   topicHits: number; // Layer D: how many topic mentions actually reached the pack
 }
 
+// ─── Per-Measure SEC Section Relevance ───────────────────────────────────────
+// Map a measure to the SEC 10-K item sections most likely to contain its evidence,
+// based on the measure's category/title. Chunks tagged with a relevant section get
+// a BM25 bonus so risk-factor (Item 1A) / MD&A (Item 7/7A) / governance (Item 10/11)
+// passages surface for the right questions instead of being crowded out by the
+// undifferentiated filing blob. Returns an empty set when no section applies (so
+// non-SEC corpora are unaffected).
+function relevantSecSections(measure: FrameworkMeasure): Set<string> {
+  const hay = `${measure.category} ${measure.title} ${measure.definition || ""}`.toLowerCase();
+  const out = new Set<string>();
+  // Risk identification / risk factors / material risks → Item 1A (and 7/7A).
+  if (/risk|threat|vulnerab|material|uncertaint|mitigat|exposure|incident|safety|harm/.test(hay)) {
+    out.add("item1a");
+    out.add("item7");
+    out.add("item7a");
+  }
+  // Strategy / management discussion / operations / investment → Item 7 (MD&A) & 1.
+  if (/strateg|management|operation|invest|deploy|adopt|business|opportunit|performance/.test(hay)) {
+    out.add("item7");
+    out.add("item1");
+  }
+  // Governance / board / oversight / committee / accountability → Item 10 & 11.
+  if (/governance|board|oversight|committee|director|accountab|ethic|policy|responsib|compliance/.test(hay)) {
+    out.add("item10");
+    out.add("item11");
+  }
+  return out;
+}
+
 // Tunables (env-overridable so behavior can be adjusted without a code change).
 const TOPIC_RELEVANCE_WEIGHT = parseFloat(process.env.RETRIEVAL_TOPIC_WEIGHT || "2.0");
+// Additive bonus applied to a chunk's blended score when its SEC section matches
+// one of the measure's relevant sections. Tuned to be comparable to the topic
+// bonus so on-section evidence is preferred without overwhelming BM25 relevance.
+const SEC_SECTION_BOOST = parseFloat(process.env.RETRIEVAL_SECTION_BOOST || "2.5");
 const MAX_CHUNKS_PER_DOC = parseInt(process.env.RETRIEVAL_MAX_CHUNKS_PER_DOC || "5", 10);
 const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_CHUNKS || "4", 10);
 
@@ -306,21 +433,27 @@ export function buildEvidencePackForMeasure(opts: {
 
   const uniqueTerms = [...new Set(queryTerms)];
 
-  // Score all chunks: BM25 relevance + an explicit topic-relevance bonus (Layer B).
-  // The topic bonus scales with the density of topic mentions in the chunk, so a
-  // chunk that actually discusses AI is preferred over generic boilerplate that
-  // merely shares query words. We compute a normalized topic signal per chunk.
+  // SEC section relevance for this measure (empty for non-SEC corpora / measures).
+  const measureSections = relevantSecSections(measure);
+
+  // Score all chunks: BM25 relevance + an explicit topic-relevance bonus (Layer B)
+  // + a SEC section bonus (Concern 2) when the chunk's tagged 10-K item matches one
+  // of the measure's relevant sections (e.g. risk measures → Item 1A). The section
+  // bonus only applies when (a) the chunk is section-tagged and (b) it is relevant,
+  // so non-SEC documents and off-section chunks are unaffected.
   const scored = chunks.map((chunk, idx) => {
     const bm25 = bm25Score(uniqueTerms, idx, bm25Index);
     const hits = countTopicHits(chunk.text, topicTerms);
     // Diminishing-returns topic bonus so a chunk doesn't win purely by repetition.
     const topicBonus = hits > 0 ? TOPIC_RELEVANCE_WEIGHT * (1 + Math.log(hits)) : 0;
+    const onSection = !!(chunk.section && measureSections.has(chunk.section));
+    const sectionBonus = onSection ? SEC_SECTION_BOOST : 0;
     return {
       idx,
       docIndex: chunk.docIndex,
       bm25,
       topicHits: hits,
-      score: bm25 + topicBonus,
+      score: bm25 + topicBonus + sectionBonus,
       text: chunk.text,
     };
   });

@@ -161,6 +161,38 @@ function looksLikeChallenge(html: string): boolean {
   );
 }
 
+/**
+ * Heuristic: does this fetched HTML look like a client-side-rendered SPA shell or
+ * a "please enable JavaScript" stub rather than the real document content?
+ *
+ * Many non-US issuer/disclosure hosts (e.g. Chinese portals such as Futubull,
+ * cninfo, SSE/SZSE, and SPA-based IR sites) return HTTP 200 with a tiny shell that
+ * hydrates content client-side. A plain HTTP fetch then yields near-empty text,
+ * which (a) fails issuer verification as "generic/empty" and (b) gets terminally
+ * rejected — a major cause of the systematic zero-scoring of Chinese-listed
+ * issuers. Detecting the shell lets us escalate to the JS-executing browser path
+ * BEFORE the content is judged, so the real (often Chinese-language) text is
+ * recovered and then handled by translation + CJK-aware retrieval downstream.
+ *
+ * We treat content as a shell when the extracted visible text is very short, OR
+ * when it contains an explicit enable-JavaScript message.
+ */
+function isLikelyJsShell(rawHtml: string, extractedText: string): boolean {
+  const t = (extractedText || "").trim();
+  const head = (rawHtml || "").slice(0, 6000).toLowerCase();
+  const enableJsMsg =
+    head.includes("enable javascript") ||
+    head.includes("please enable js") ||
+    head.includes("requires javascript") ||
+    head.includes("\u8bf7\u542f\u7528javascript") || // "please enable JavaScript" (zh)
+    head.includes("\u5f00\u542fjavascript") ||
+    head.includes("javascript\u3092\u6709\u52b9"); // (ja)
+  // Real disclosures are long; a few hundred chars of visible text after stripping
+  // scripts almost always means the body was not server-rendered.
+  const tooShort = t.length < parseInt(process.env.JS_SHELL_MIN_TEXT || "400", 10);
+  return enableJsMsg || tooShort;
+}
+
 function originOf(url: string): string | null {
   try {
     const u = new URL(url);
@@ -709,6 +741,27 @@ export async function processDocument(
           }
         } else {
           content = extractTextFromHtml(data);
+          // SPA / "enable JavaScript" shell escalation: if the server-rendered text
+          // is essentially empty (common for Chinese portals and SPA IR sites), the
+          // real content is hydrated client-side. Run the JS-executing browser path
+          // and adopt it when it returns materially more text. This recovers the
+          // (often Chinese-language) disclosure before issuer verification can
+          // reject it as an empty/generic page.
+          if (isLikelyJsShell(String(data), content)) {
+            console.log(`[Processor] HTML for ${url} looks like a JS/SPA shell (${content.length} chars) — escalating to browser render`);
+            try {
+              const rendered = await fetchWithBrowser(url);
+              if (rendered && rendered.trim().length > content.length) {
+                console.log(`[Processor] Browser render recovered ${rendered.trim().length} chars for ${url} (was ${content.length})`);
+                content = rendered;
+              }
+            } catch (shellErr: any) {
+              // Browser unavailable / failed — keep the stub (better than nothing);
+              // a transient BrowserUnavailableError leaves the URL retryable upstream.
+              if (shellErr instanceof BrowserUnavailableError) throw shellErr;
+              console.log(`[Processor] Browser render for JS shell failed (${shellErr?.message}); keeping HTTP content`);
+            }
+          }
         }
       } catch (httpError: any) {
         // Determine if browser fallback would be useful

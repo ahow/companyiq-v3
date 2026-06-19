@@ -535,6 +535,67 @@ export async function completeWithFallback(
   }
 }
 
+// ─── Scoring-Specific Completion (determinism-preserving) ───────────────────
+// During *scoring* LLM calls we must NOT silently jump to a different model
+// family on a single transient error — that is the dominant source of cross-run
+// score volatility (a one-off DeepSeek timeout flips a measure to Claude/OpenAI,
+// which grades differently). Instead we retry the SAME provider with key rotation
+// and exponential backoff. Only after the primary is exhausted do we optionally
+// allow a single controlled cross-family fallback (so the run still completes),
+// and we always return `provider` so the grader is auditable.
+//
+// Toggle: SCORING_STRICT_PROVIDER (default "true"). Set to "false" to restore the
+// old silent-fallback behaviour. SCORING_PROVIDER_RETRIES (default 4) controls how
+// many times the same provider is retried before any fallback.
+export async function completeScoring(
+  providerName: string,
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }
+): Promise<{ text: string; provider: string }> {
+  await acquireLlmSlot();
+  try {
+    const strict = (process.env.SCORING_STRICT_PROVIDER || "true").toLowerCase() !== "false";
+    if (!strict) {
+      return await completeWithFallbackInner(providerName, opts);
+    }
+    const primary = getProvider(providerName);
+    const retries = parseInt(process.env.SCORING_PROVIDER_RETRIES || "4", 10);
+    const errors: string[] = [];
+    if (primary?.isAvailable()) {
+      for (let attempt = 0; attempt < retries; attempt++) {
+        try {
+          const text = await primary.complete(opts);
+          return { text, provider: primary.name };
+        } catch (error: any) {
+          const msg = `${primary.name}(try ${attempt + 1}/${retries}): ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
+          errors.push(msg);
+          console.warn(`[AI:scoring] ${msg}`);
+          // Exponential backoff with jitter before retrying the SAME provider.
+          const backoff = Math.min(8000, 500 * Math.pow(2, attempt)) + Math.floor(Math.random() * 250);
+          await new Promise((r) => setTimeout(r, backoff));
+        }
+      }
+    } else {
+      errors.push(`${providerName}: not available`);
+    }
+    // Primary exhausted. Allow ONE controlled cross-family fallback so the run
+    // completes rather than zeroing the measure — but this is logged loudly and
+    // surfaced via the returned provider name for audit.
+    const fallbacks = getFallbackProviders(providerName);
+    for (const fallback of fallbacks) {
+      try {
+        const text = await fallback.complete(opts);
+        console.warn(`[AI:scoring] PRIMARY ${providerName} EXHAUSTED — graded by fallback ${fallback.name} (auditable variance source)`);
+        return { text, provider: fallback.name };
+      } catch (error: any) {
+        errors.push(`${fallback.name}: ${error.message || 'unknown error'}`);
+      }
+    }
+    throw new Error(`All scoring providers failed: ${errors.join(' | ')}`);
+  } finally {
+    releaseLlmSlot();
+  }
+}
+
 async function completeWithFallbackInner(
   providerName: string,
   opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }

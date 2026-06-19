@@ -448,9 +448,25 @@ async function runFetchPhase(opts: {
                 console.warn(`[${companyName}] VERIFY ERROR (${vr.reason}); no name mention — rejected: ${doc.url.slice(0, 80)}`);
                 await storage.recordFetchFailure(companyId, doc.url);
               }
+            } else if (
+              vr.verdict === "generic" &&
+              (content.trim().length < 400 || /enable javascript|requires javascript|请启用javascript|开启javascript/i.test(content))
+            ) {
+              // "generic-because-empty": the verifier could not determine the issuer
+              // because the fetched content was a near-empty / JS-required shell
+              // (common for Chinese portals & SPA IR sites whose real content is
+              // hydrated client-side). This is NOT proof the document is irrelevant
+              // — it is a FETCH problem. Mark it a retryable failure so a later pass
+              // (with the browser-render escalation) can recover the real text,
+              // instead of permanently discarding the issuer's own disclosure. This
+              // is a primary driver of the systematic zero-scoring of Chinese-listed
+              // issuers.
+              console.warn(`[${companyName}] POST-FETCH generic/empty (likely JS shell) — keeping retryable: ${doc.url.slice(0, 80)} — ${vr.reason}`);
+              await storage.recordFetchFailure(companyId, doc.url);
             } else {
-              // different_company or generic -> TERMINAL reject. Mark the row
-              // 'rejected' so it is excluded from scoring AND never retried
+              // different_company, or genuine generic (real multi-company index /
+              // industry page with substantive text) -> TERMINAL reject. Mark the
+              // row 'rejected' so it is excluded from scoring AND never retried
               // (avoids repeated re-fetch + repeated LLM verifier cost), and is
               // purged on the next re-discovery.
               const issuer = vr.detectedIssuer ? `: ${vr.detectedIssuer}` : '';
