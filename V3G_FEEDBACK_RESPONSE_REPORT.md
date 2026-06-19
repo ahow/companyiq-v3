@@ -12,7 +12,7 @@ The re-run was performed with `VAL_FULL_RESET=1`, purging all prior cached docum
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | **Microsoft** | 59% | **53%** | −6% | 18 | 34 | 0 | Grounded in content-stable fingerprints; no change to 10-K access. |
 | **Amazon** | 47% | **49%** | +2% | 16 | 34 | 0 | Stable scoring over modern 10-K; duplicate 10-Ks correctly gated. |
-| **Salesforce** | 51% | **47%** | −4% | 16 | 34 | 0 | **Bug 5 Fixed**: FY2025 10-K (`crm-20250131.htm`) authoritatively fetched and scored. |
+| **Salesforce** | 51% | **47%** | −4% | 16 | 34 | 0 | **Bug 5 Fixed**: most-recent annual 10-K (`crm-20260131.htm`, FY2026, period ended 31 Jan 2026) authoritatively fetched and scored. |
 | **NVIDIA** | 38% | **47%** | +9% | 16 | 34 | 0 | **Bug 2 Fixed**: Item 1A Risk Factors recovered and scored. |
 | **Apple** | 34% | **38%** | +4% | 13 | 34 | 0 | **Bug 2 Fixed**: Item 1A Risk Factors recovered and scored. |
 | **Oracle** | 41% | **35%** | −6% | 12 | 34 | 0 | Grounded in content-stable fingerprints. |
@@ -70,16 +70,16 @@ The re-run was performed with `VAL_FULL_RESET=1`, purging all prior cached docum
   * Its final score denominator was **correctly reduced to 29** (3 met / 29 answered), and its score is **17%**.
   * Its corpus source types log shows: `Corpus source types: [annual-report, regulatory-filing, regulatory-filing-about-issuer, sustainability-report]`. Because `regulatory-filing-by-issuer` was missing, the abstain gate fired perfectly.
 
-### Bug 5: Salesforce FY2025 10-K Missing from Corpus
-* **The Issue:** Salesforce's FY2025 10-K (`crm-20250131.htm`) was missing from the corpus because web-search lanes are non-deterministic and failed to find it.
+### Bug 5: Salesforce Most-Recent Annual 10-K Missing from Corpus
+* **The Issue:** Salesforce's most-recent annual 10-K was missing from the corpus because web-search lanes are non-deterministic and failed to find it.
 * **The Fix:**
   1. Added a new **Authoritative EDGAR Submissions Seed Lane (Lane 8a)** in `discovery.ts`.
   2. Resolves the company's CIK from the official `company_tickers.json` map (by ticker, else by name) and reads `data.sec.gov/submissions/CIK##########.json`.
   3. Pins the canonical primary-document URL(s) for the 2 most-recent annual filings (10-K/20-F/40-F) so they are guaranteed to enter the candidate pool and survive gating.
 * **Verification:**
-  * Salesforce's FY2025 10-K (`crm-20250131.htm`) is now authoritatively fetched and pinned.
-  * Running the URL through `detectFilingYear` yields `Year: 2025`.
-  * Salesforce scored **47% (16/34 met)**, with its Item 1A Risk Factors successfully scored from the FY2025 filing.
+  * Salesforce's most-recent annual 10-K (`crm-20260131.htm`, period ended 31 Jan 2026, FY2026; EDGAR title `SALESFORCE, INC. 10-K (EDGAR 2026-03-02)`) is now authoritatively fetched and pinned.
+  * Running the canonical EDGAR primary-document URL through `detectFilingYear` resolves the filing year authoritatively from the SEC submissions index.
+  * Salesforce scored **47% (16/34 met)**, with its Item 1A Risk Factors successfully scored from the FY2026 filing.
 
 ---
 

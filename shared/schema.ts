@@ -166,7 +166,7 @@ export const measureScores = pgTable("measure_scores", {
   coverage: text("coverage"),
   confidence: text("confidence").notNull().default("Low"),
   evidenceSummary: text("evidence_summary"),
-  quotes: jsonb("quotes").$type<Array<{ text: string; source: string; page?: number }>>(),
+  quotes: jsonb("quotes").$type<Array<{ text: string; source: string; sourceUrl?: string; page?: number }>>(),
   verdict: text("verdict").notNull().default("No"), // Yes | No | Partial | Insufficient evidence
   verdictNuance: text("verdict_nuance"),
   // v3e (Section 3): true when the measure could not be answered because a

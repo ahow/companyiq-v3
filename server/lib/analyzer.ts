@@ -21,7 +21,7 @@ export interface MeasureResult {
   coverage: string | null;
   confidence: string;
   evidenceSummary: string;
-  quotes: Array<{ text: string; source: string; page?: number }>;
+  quotes: Array<{ text: string; source: string; sourceUrl?: string; page?: number }>;
   verdict: "Yes" | "No" | "Partial" | "Insufficient evidence";
   verdictNuance: string | null;
   displayOrder: number;
@@ -423,10 +423,10 @@ export function verifyQuoteProvenance(
  * If the LLM returned a source that doesn't match any document title, find the
  * best match or fall back to the document where the quote text was found.
  */
-function normalizeQuoteSources(
-  quotes: Array<{ text: string; source: string; page?: number }>,
+export function normalizeQuoteSources(
+  quotes: Array<{ text: string; source: string; sourceUrl?: string; page?: number }>,
   evidenceText: string
-): Array<{ text: string; source: string; page?: number }> {
+): Array<{ text: string; source: string; sourceUrl?: string; page?: number }> {
   // Extract all document titles from the evidence text headers
   const headerPattern = /--- DOCUMENT: (.+?) \[(.+?)\] ---/g;
   const documentHeaders: Array<{ title: string; url: string; startIdx: number }> = [];
@@ -437,13 +437,20 @@ function normalizeQuoteSources(
 
   if (documentHeaders.length === 0) return quotes;
 
-  // Build a set of valid document titles for quick lookup
+  // Build a set of valid document titles + a title->url map for quick lookup
   const validTitles = new Set(documentHeaders.map(h => h.title.toLowerCase()));
+  const urlByTitle = new Map<string, string>();
+  for (const h of documentHeaders) {
+    // First header wins for a given title (avoids later duplicates overwriting)
+    if (!urlByTitle.has(h.title.toLowerCase())) urlByTitle.set(h.title.toLowerCase(), h.url);
+  }
+  const resolveUrl = (title: string): string | undefined =>
+    title ? urlByTitle.get(title.toLowerCase()) : undefined;
 
   return quotes.map(quote => {
     // Check if the source already matches a valid document title
     if (quote.source && validTitles.has(quote.source.toLowerCase())) {
-      return quote;
+      return { ...quote, sourceUrl: resolveUrl(quote.source) ?? quote.sourceUrl };
     }
 
     // Source doesn't match any document title — try to find the correct one
@@ -466,6 +473,8 @@ function normalizeQuoteSources(
           }
         }
         bestSource = containingDoc.title;
+        // Capture the authoritative URL from the containing document header
+        return { ...quote, source: bestSource, sourceUrl: containingDoc.url };
       }
     }
 
@@ -502,7 +511,7 @@ function normalizeQuoteSources(
       bestSource = documentHeaders[0].title;
     }
 
-    return { ...quote, source: bestSource };
+    return { ...quote, source: bestSource, sourceUrl: resolveUrl(bestSource) ?? quote.sourceUrl };
   });
 }
 
