@@ -927,18 +927,102 @@ function isChinaAShare(isin?: string | null, country?: string | null): boolean {
  * tends to surface news wrappers (e.g. Futubull) and wrong-entity US/HK filings
  * instead, which is why this dedicated lane is needed.
  */
-function buildAShareFilingQueries(companyName: string, isin?: string | null): string[] {
-  const queries: string[] = [
-    `site:cninfo.com.cn "${companyName}" 年度报告`,
-    `site:cninfo.com.cn "${companyName}"`,
-    `site:sse.com.cn "${companyName}" 年度报告`,
-    `site:szse.cn "${companyName}" 年度报告`,
-    `"${companyName}" 年度报告 2024 OR 2023 filetype:pdf`,
-    `"${companyName}" 人工智能 风险 年报`,
+/**
+ * Resolve a mainland-China issuer's Chinese legal name (法定名称) and 6-digit
+ * board code from its English name / ISIN via web search. This is the missing
+ * ingredient for A-share discovery: the official portals (cninfo / SSE / Sina)
+ * index filings by the CHINESE name, so an English-name `site:cninfo.com.cn`
+ * query returns nothing, whereas the Chinese-name query returns the genuine
+ * annual-report PDFs directly. Returns best-effort {chineseName, code}.
+ */
+async function resolveChineseLegalName(
+  companyName: string,
+  isin?: string | null,
+): Promise<{ chineseName?: string; code?: string }> {
+  const out: { chineseName?: string; code?: string } = {};
+  // Chinese company legal-name: greedily capture the full leading Chinese run so
+  // we get "三六零安全科技股份有限公司" rather than the generic tail
+  // "安全科技有限公司". Anchored on the legal-entity suffix.
+  const nameRe = /[\u4e00-\u9fff]{3,40}?(?:股份有限公司|有限责任公司|有限公司)/g;
+  // Names that are too generic to disambiguate an issuer (common tails only).
+  const genericNames = new Set([
+    "安全科技有限公司", "科技有限公司", "安全科技股份有限公司", "信息技术有限公司",
+    "网络科技有限公司", "技术有限公司", "软件有限公司",
+  ]);
+  // A-share board codes: 60xxxx/68xxxx (Shanghai), 00xxxx/30xxxx (Shenzhen).
+  const codeRe = /\b(6[0-9]{5}|0[0-9]{5}|3[0-9]{5})\b/;
+  const probes: string[] = [
+    `"${companyName}" 股票代码 中文`,
+    `"${companyName}" A股 年度报告`,
   ];
-  if (isin) {
-    queries.push(`"${isin}" 年度报告`);
-    queries.push(`site:cninfo.com.cn "${isin}"`);
+  if (isin) probes.unshift(`"${isin}" 年度报告 股票代码`);
+  const counts = new Map<string, number>();
+  for (const q of probes) {
+    let results: SearchResult[] = [];
+    try {
+      results = await webSearch(q, { num: 8, gl: "cn", hl: "zh-cn" });
+    } catch {
+      continue;
+    }
+    for (const r of results) {
+      const hay = `${r.title || ""} ${r.snippet || ""}`;
+      const names = hay.match(nameRe);
+      if (names) {
+        for (const nm of names) {
+          const clean = nm.replace(/[（）()]/g, "");
+          if (genericNames.has(clean) || clean.length < 6) continue; // skip generic tails
+          counts.set(clean, (counts.get(clean) || 0) + 1);
+        }
+      }
+      if (!out.code) {
+        const m = `${hay} ${r.link || ""}`.match(codeRe);
+        if (m) out.code = m[1];
+      }
+    }
+    if (counts.size > 0 && out.code) break;
+  }
+  if (counts.size > 0) {
+    // Prefer the most frequent; break ties toward the LONGEST (most complete) name.
+    out.chineseName = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0][0];
+  }
+  return out;
+}
+
+async function buildAShareFilingQueries(companyName: string, isin?: string | null): Promise<string[]> {
+  // Resolve the Chinese legal name + board code first — without these the
+  // official-portal queries match nothing (the portals index by Chinese name).
+  const { chineseName, code } = await resolveChineseLegalName(companyName, isin);
+  if (chineseName || code) {
+    console.log(`[${companyName}] A-share resolver -> name=${chineseName || "?"} code=${code || "?"}`);
+  }
+  const queries: string[] = [];
+  const cn = chineseName;
+  // Lead with the board-code queries: the 6-digit code is resolved reliably and
+  // `site:cninfo.com.cn <code> 年度报告` returns the exact issuer's reports.
+  if (code) {
+    queries.push(
+      `site:cninfo.com.cn ${code} 年度报告`,
+      `${code} ${cn || companyName} 2024 年年度报告 pdf`,
+      `site:money.finance.sina.com.cn ${code} 年度报告`,
+    );
+  }
+  if (cn) {
+    queries.push(
+      `site:cninfo.com.cn ${cn} 年度报告`,
+      `${cn} 年度报告 cninfo`,
+      `${cn} 2024 年年度报告 filetype:pdf`,
+      `${cn} 人工智能 风险 年报`,
+    );
+  }
+  // English-name fallbacks (low yield, but harmless) only if resolution failed.
+  if (!cn && !code) {
+    queries.push(
+      `site:cninfo.com.cn "${companyName}" 年度报告`,
+      `"${companyName}" 年度报告 2024 OR 2023 filetype:pdf`,
+      `"${companyName}" 人工智能 风险 年报`,
+    );
+    if (isin) queries.push(`"${isin}" 年度报告`);
   }
   return queries;
 }
@@ -1665,7 +1749,7 @@ export async function searchCompanyDocuments(opts: {
   // wrappers and wrong-entity US/HK filings). Keyed off CN ISIN + Chinese name.
   if (isChinaAShare(opts.isin, opts.country)) {
     console.log(`[${companyName}] Running A-share primary-filing search lane (cninfo/SSE/SZSE)`);
-    const aShareQueries = buildAShareFilingQueries(companyName, opts.isin);
+    const aShareQueries = await buildAShareFilingQueries(companyName, opts.isin);
     for (const query of aShareQueries) {
       const results = await webSearch(query, { num: Math.min(searchDepth, 10), gl: "cn", hl: "zh-cn" });
       for (const r of results) addCandidate(r, "a-share-filing");
