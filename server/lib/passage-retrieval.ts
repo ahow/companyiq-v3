@@ -230,6 +230,9 @@ export interface Chunk {
                     // "--- DOCUMENT: <title> [<url>] ---" header. Used to build a
                     // CONTENT-STABLE evidence fingerprint that does not collide
                     // across companies (positional docIndex/chunkIdx alone did).
+  docTitle?: string; // v3g (quote sourceUrl fix): source-document title (sans the
+                     // bracketed URL) so the evidence pack can re-emit a per-chunk
+                     // "--- DOCUMENT: <title> [<url>] ---" header for provenance.
   seqInDoc?: number; // sequential index of this chunk WITHIN its source document.
   section?: string; // SEC item heading this chunk belongs to (e.g. "item1a"), if any
 }
@@ -320,8 +323,13 @@ export function detectSecSection(block: string): string | undefined {
   return undefined;
 }
 
-function splitIntoDocuments(combinedText: string): Array<{ header: string; body: string; url?: string }> {
-  const segments: Array<{ header: string; body: string; url?: string }> = [];
+function extractDocTitleFromHeader(headerLabel: string): string {
+  // Header label looks like "<title> [<url>]"; strip the trailing bracketed URL.
+  return headerLabel.replace(/\s*\[[^\]]+\]\s*$/, "").trim() || headerLabel.trim();
+}
+
+function splitIntoDocuments(combinedText: string): Array<{ header: string; body: string; url?: string; title?: string }> {
+  const segments: Array<{ header: string; body: string; url?: string; title?: string }> = [];
   let lastIndex = 0;
   let lastHeader = "Document 1";
   let match: RegExpExecArray | null;
@@ -331,13 +339,13 @@ function splitIntoDocuments(combinedText: string): Array<{ header: string; body:
   while ((match = DOC_HEADER_RE.exec(combinedText)) !== null) {
     foundAny = true;
     const body = combinedText.slice(lastIndex, match.index);
-    if (body.trim()) segments.push({ header: lastHeader, body, url: extractDocUrlFromHeader(lastHeader) });
+    if (body.trim()) segments.push({ header: lastHeader, body, url: extractDocUrlFromHeader(lastHeader), title: extractDocTitleFromHeader(lastHeader) });
     lastHeader = (match[1] || "").trim() || `Document ${segments.length + 1}`;
     lastIndex = DOC_HEADER_RE.lastIndex;
   }
   // Trailing body after the last header (or the whole text if no headers).
   const tail = combinedText.slice(lastIndex);
-  if (tail.trim()) segments.push({ header: lastHeader, body: tail, url: extractDocUrlFromHeader(lastHeader) });
+  if (tail.trim()) segments.push({ header: lastHeader, body: tail, url: extractDocUrlFromHeader(lastHeader), title: extractDocTitleFromHeader(lastHeader) });
 
   if (!foundAny && segments.length === 0 && combinedText.trim()) {
     segments.push({ header: "Document 1", body: combinedText });
@@ -446,7 +454,7 @@ export function chunkDocuments(combinedText: string): Chunk[] {
   docs.forEach((doc, docIndex) => {
     let seqInDoc = 0;
     for (const c of chunkBody(doc.body)) {
-      out.push({ text: c.text, docIndex, docUrl: doc.url, seqInDoc, section: c.section });
+      out.push({ text: c.text, docIndex, docUrl: doc.url, docTitle: doc.title, seqInDoc, section: c.section });
       seqInDoc++;
     }
   });
@@ -793,9 +801,26 @@ export function buildEvidencePackForMeasure(opts: {
   // Preserve document order in the final text for readability.
   selected.sort((a, b) => (a.docIndex - b.docIndex) || (a.idx - b.idx));
 
+  // v3g (quote sourceUrl fix): emit a "--- DOCUMENT: <title> [<url>] ---" header
+  // whenever the source document changes, so the assembled pack carries the same
+  // provenance markers as the original corpus. Without this, normalizeQuoteSources
+  // (which regex-scans for these headers) found none in the pack and could not
+  // attach a sourceUrl, leaving quote.sourceUrl empty in the API export.
   let evidenceText = "";
   let packTopicHits = 0;
+  let lastDocIndex: number | null = null;
   for (const item of selected) {
+    const ch = chunks[item.idx];
+    if (item.docIndex !== lastDocIndex) {
+      const url = ch?.docUrl;
+      const title = ch?.docTitle || `Document ${item.docIndex + 1}`;
+      // Only emit a resolvable header when we have a URL; otherwise emit a
+      // title-only header (still parseable, just without a bracketed URL).
+      evidenceText += url
+        ? `--- DOCUMENT: ${title} [${url}] ---\n\n`
+        : `--- DOCUMENT: ${title} ---\n\n`;
+      lastDocIndex = item.docIndex;
+    }
     evidenceText += item.text + "\n\n";
     packTopicHits += item.topicHits;
   }
