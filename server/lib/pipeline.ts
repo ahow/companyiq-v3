@@ -713,6 +713,10 @@ async function runAnalyzePhase(opts: {
       verdict: m.verdict,
       verdictNuance: m.verdictNuance,
       displayOrder: m.displayOrder,
+      // v3e: persist abstain flag + evidence fingerprint for the answered-measures
+      // denominator and cross-run drift detection / verdict caching.
+      abstained: (m as any).abstained === true,
+      evidenceFingerprint: (m as any).evidenceFingerprint ?? null,
     }))
   );
 
@@ -725,15 +729,21 @@ async function runAnalyzePhase(opts: {
   // not counted as fully met here.
   const allMeasureResults = analysis.categories.flatMap((c) => c.measures);
   const measuresMet = allMeasureResults.filter((m) => m.verdict === "Yes").length;
+  // v3e (Section 3): measuresTotalCount now reflects ANSWERED measures (the
+  // denominator behind scorePercentage), so "X met of Y" is internally consistent
+  // with the displayed percentage. The full framework size and abstained count are
+  // also recorded for transparency.
+  const answeredCount = (analysis as any).answeredCount ?? measures.length;
+  const abstainedCount = (analysis as any).abstainedCount ?? 0;
   await storage.updateCompany(companyId, workspaceId, {
     totalScore: analysis.scorePercentage,
     measuresMetCount: measuresMet,
-    measuresTotalCount: measures.length,
+    measuresTotalCount: answeredCount,
     summary: analysis.summary,
     analysisStatus: "completed",
   });
 
-  console.log(`[${companyName}] Analysis complete: ${analysis.scorePercentage}% (${analysis.totalScore}/${measures.length} measures met)`);
+  console.log(`[${companyName}] Analysis complete: ${analysis.scorePercentage}% (${measuresMet} met / ${answeredCount} answered; ${abstainedCount} abstained of ${measures.length} total)`);
 
   // ─── Auto-Pin Sources ──────────────────────────────────────────────────────
   // When analysis finds evidence, auto-pin those source URLs so they're always

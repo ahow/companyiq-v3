@@ -5,6 +5,8 @@ import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from ".
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash } from "./processor.js";
 import { translateDocumentsToEnglish } from "./translation.js";
+import { corpusSourceTypes } from "./discovery.js";
+import { createHash } from "crypto";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -20,15 +22,25 @@ export interface MeasureResult {
   confidence: string;
   evidenceSummary: string;
   quotes: Array<{ text: string; source: string; page?: number }>;
-  verdict: "Yes" | "No" | "Partial";
+  verdict: "Yes" | "No" | "Partial" | "Insufficient evidence";
   verdictNuance: string | null;
   displayOrder: number;
+  // v3e (Section 3): true when the measure was abstained because a required
+  // source type was absent from the corpus (excluded from the denominator).
+  abstained?: boolean;
+  // v3e (Section 4): SHA1 of the sorted evidence-chunk ids used for this verdict.
+  evidenceFingerprint?: string | null;
 }
 
 export interface AnalysisResult {
   totalScore: number;
   scorePercentage: number;
   summary: string;
+  // v3e (Section 3): answered-measures accounting. answeredCount excludes
+  // abstained measures; scorePercentage uses answeredCount as the denominator.
+  answeredCount: number;
+  abstainedCount: number;
+  measuresTotal: number;
   categories: Array<{
     category: string;
     categoryNumber: number;
@@ -52,6 +64,9 @@ interface AnalysisSettings {
   crossVerifyEnabled: boolean;
   scoringMode: string;
   lowConfidenceHandling: string; // "keep" | "downgrade" | "flag"
+  // v3e (Section 4): verdict cache is OPT-IN BY DEFAULT (ON). Set
+  // verdict_cache_enabled="false" to force fresh scoring for variability studies.
+  verdictCacheEnabled: boolean;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -70,6 +85,7 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     crossVerifyEnabled: settings.cross_verify_enabled === "true",
     scoringMode: settings.scoring_mode || "binary",
     lowConfidenceHandling: settings.low_confidence_handling || "downgrade",
+    verdictCacheEnabled: settings.verdict_cache_enabled !== "false", // default ON
   };
 }
 
@@ -682,13 +698,43 @@ export async function analyzeCompanyMeasures(opts: {
   framework: Framework;
   measures: FrameworkMeasure[];
   temporalContext?: { withdrawals: Array<{ type: string; description: string; affectedTopics: string[]; detectedDate: string | null; confidence: string }>; temporalWarning: string | null };
+  // v3e (Section 4): per-run opt-out of the verdict cache for variability studies.
+  freshScoring?: boolean;
 }): Promise<AnalysisResult> {
-  const { workspaceId, companyName, companyId, documentTexts, documentUrls, documentTitles, framework, measures, temporalContext } = opts;
+  const { workspaceId, companyName, companyId, documentTexts, documentUrls, documentTitles, framework, measures, temporalContext, freshScoring } = opts;
 
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
 
   console.log(`[${companyName}] Starting analysis: ${measures.length} measures, ${documentTexts.length} documents`);
+
+  // v3e (Section 3): determine which broad SOURCE TYPES the corpus actually
+  // contains (topic-agnostic). Measures that declare requiredSourceTypes none of
+  // which are present will be ABSTAINED ("Insufficient evidence") rather than
+  // scored a hard "No", and excluded from the answered-measures denominator.
+  const availableSourceTypes = corpusSourceTypes(
+    (documentUrls || []).map((url, idx) => ({ url, title: documentTitles?.[idx] || "" }))
+  );
+  console.log(`[${companyName}] Corpus source types: [${Array.from(availableSourceTypes).join(", ") || "none"}]`);
+
+  // v3e (Section 4): verdict cache (opt-in, ON by default). When enabled and not
+  // explicitly bypassed via freshScoring, load any prior verdicts so measures with
+  // an IDENTICAL evidence fingerprint can reuse the prior verdict (reproducibility).
+  const verdictCacheEnabled = settings.verdictCacheEnabled && !freshScoring;
+  let priorScoresByMeasure: Map<string, any> | null = null;
+  if (verdictCacheEnabled) {
+    try {
+      const prior = await storage.getMeasureScores(companyId, framework.id);
+      if (prior && prior.length > 0) {
+        priorScoresByMeasure = new Map(prior.map((p: any) => [p.measureId, p]));
+        console.log(`[${companyName}] Verdict cache: loaded ${prior.length} prior verdict(s) for fingerprint comparison`);
+      }
+    } catch (e: any) {
+      console.warn(`[${companyName}] Verdict cache: could not load prior scores: ${e?.message}`);
+    }
+  } else {
+    console.log(`[${companyName}] Verdict cache: DISABLED (${freshScoring ? "freshScoring opt-out" : "setting off"}) — fresh scoring`);
+  }
 
   // Stage: Multilingual translation (DeepSeek). Translate only the foreign-
   // language portions of fetched documents to English BEFORE terminology,
@@ -829,6 +875,36 @@ export async function analyzeCompanyMeasures(opts: {
     const scoreMeasure = async (measure: FrameworkMeasure): Promise<MeasureResult> => {
       const evidencePack = evidencePacks.find((e) => e.measureId === measure.measureId);
       const evidenceText = evidencePack?.text || "";
+
+      // v3e (Section 3): ABSTAIN GATE. If this measure declares requiredSourceTypes
+      // and NONE of them are present in the corpus, we cannot answer it — emit an
+      // "Insufficient evidence" verdict (abstained) instead of a misleading hard
+      // "No". Abstained measures are excluded from the answered-measures denominator
+      // downstream. TOPIC-AGNOSTIC: requiredSourceTypes are framework-authored
+      // document categories, so this behaves correctly for any framework.
+      const required = ((measure as any).requiredSourceTypes as string[] | null | undefined) || [];
+      if (Array.isArray(required) && required.length > 0) {
+        const satisfied = required.some((t) => availableSourceTypes.has(t));
+        if (!satisfied) {
+          console.log(`[${companyName}] ABSTAIN ${measure.measureId}: requires [${required.join(", ")}], corpus has none`);
+          return {
+            measureId: measure.measureId,
+            title: measure.title,
+            category: measure.category,
+            categoryNumber: measure.categoryNumber,
+            score: 0,
+            coverage: "none",
+            confidence: "Low",
+            evidenceSummary: `Insufficient evidence: this measure requires source type(s) [${required.join(", ")}], none of which were found in the company's available documents. Excluded from the answered-measures denominator rather than scored "No".`,
+            quotes: [],
+            verdict: "Insufficient evidence",
+            verdictNuance: "Abstained — required source type absent from corpus (not a substantive No).",
+            displayOrder: measure.displayOrder,
+            abstained: true,
+            evidenceFingerprint: null,
+          };
+        }
+      }
 
       // Fallback: if BM25 retrieval returns < 1000 chars, use more text
       const finalEvidence = evidenceText.length < 1000 && combinedText.length > 1000
@@ -1006,6 +1082,34 @@ export async function analyzeCompanyMeasures(opts: {
         }
       }
 
+      // v3e (Section 4): stamp the evidence fingerprint onto the result so it is
+      // persisted and can be compared across runs for drift detection / caching.
+      measureResult.evidenceFingerprint = evidencePack?.fingerprint || null;
+      measureResult.abstained = false;
+
+      // v3e (Section 4): VERDICT CACHE (opt-in, ON by default). When enabled and a
+      // prior verdict exists for this company+measure with an IDENTICAL evidence
+      // fingerprint, reuse it for reproducibility. A deliberate variability re-run
+      // can opt OUT via settings.verdictCacheEnabled=false or freshScoring. Either
+      // way the freshly-computed fingerprint is persisted; drift is logged.
+      if (verdictCacheEnabled && priorScoresByMeasure) {
+        const prior = priorScoresByMeasure.get(measure.measureId);
+        const fp = measureResult.evidenceFingerprint;
+        if (prior && fp && prior.evidenceFingerprint && prior.evidenceFingerprint === fp) {
+          console.log(`[${companyName}] CACHE-HIT ${measure.measureId}: identical evidence fingerprint, reusing prior verdict ${prior.verdict}`);
+          return {
+            ...measureResult,
+            score: typeof prior.score === "number" ? prior.score : measureResult.score,
+            verdict: (prior.verdict as MeasureResult["verdict"]) || measureResult.verdict,
+            confidence: prior.confidence || measureResult.confidence,
+            evidenceSummary: prior.evidenceSummary || measureResult.evidenceSummary,
+            verdictNuance: (prior.verdictNuance || measureResult.verdictNuance || "") + " [Reused: identical evidence fingerprint]",
+          };
+        } else if (prior && fp && prior.evidenceFingerprint && prior.evidenceFingerprint !== fp) {
+          console.log(`[${companyName}] EVIDENCE-DRIFT ${measure.measureId}: fingerprint changed ${prior.evidenceFingerprint.slice(0, 8)} -> ${fp.slice(0, 8)} (re-scored)`);
+        }
+      }
+
       return measureResult;
     };
 
@@ -1017,10 +1121,22 @@ export async function analyzeCompanyMeasures(opts: {
     }
   }
 
-  // Roll up scores (works for both binary and partial mode since partial gives 0.5)
-  const maxPossibleScore = measures.length; // 1 per measure max
-  const totalScore = allResults.reduce((sum, r) => sum + r.score, 0);
-  const scorePercentage = Math.round((totalScore / maxPossibleScore) * 100);
+  // Roll up scores (works for both binary and partial mode since partial gives 0.5).
+  // v3e (Section 3): ANSWERED-MEASURES DENOMINATOR. Abstained measures
+  // ("Insufficient evidence") are excluded from BOTH numerator and denominator so
+  // a missing required source no longer drags the score down as if it were a
+  // substantive "No". scorePercentage is computed over answered measures only.
+  const abstainedResults = allResults.filter((r) => r.abstained);
+  const answeredResults = allResults.filter((r) => !r.abstained);
+  const abstainedCount = abstainedResults.length;
+  const answeredCount = answeredResults.length;
+  const measuresTotal = measures.length;
+  const totalScore = answeredResults.reduce((sum, r) => sum + r.score, 0);
+  const denominator = answeredCount > 0 ? answeredCount : 1; // avoid /0 when all abstained
+  const scorePercentage = Math.round((totalScore / denominator) * 100);
+  if (abstainedCount > 0) {
+    console.log(`[${companyName}] Answered-measures denominator: ${answeredCount}/${measuresTotal} answered, ${abstainedCount} abstained (insufficient evidence)`);
+  }
 
   // Generate summary narrative
   const summary = await generateSummaryNarrative(companyName, allResults, scorePercentage, framework);
@@ -1032,12 +1148,15 @@ export async function analyzeCompanyMeasures(opts: {
     measures: allResults.filter((r) => r.category === category),
   }));
 
-  console.log(`[${companyName}] Analysis complete: ${scorePercentage}% (${totalScore}/${maxPossibleScore})`);
+  console.log(`[${companyName}] Analysis complete: ${scorePercentage}% (${totalScore}/${answeredCount} answered; ${abstainedCount} abstained of ${measuresTotal} total)`);
 
   return {
     totalScore,
     scorePercentage,
     summary,
+    answeredCount,
+    abstainedCount,
+    measuresTotal,
     categories: categoryResults.sort((a, b) => a.categoryNumber - b.categoryNumber),
   };
 }

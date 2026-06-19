@@ -1,4 +1,5 @@
 import axios from "axios";
+import { createHash } from "crypto";
 import * as storage from "../storage.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
@@ -74,46 +75,193 @@ const MAX_PER_PERIODIC_TYPE = parseInt(process.env.DISCOVERY_MAX_PER_PERIODIC_TY
 // keep the newest N of each type rather than the newest N overall.
 function periodicFilingType(url: string, title: string): string | null {
   const s = (url + " " + title).toLowerCase();
-  if (/def.?14a|proxy.?statement|agm.?circular|notice.?of.?meeting/.test(s)) return "proxy";
+  // Proxy / governance circulars (incl. Chinese 股东大会 notices).
+  if (/def.?14a|proxy.?statement|agm.?circular|notice.?of.?meeting|股东大会|股東大會/.test(s)) return "proxy";
   if (/10-?k\b|10k|annual.?report.?on.?form.?10-?k/.test(s)) return "10-K";
   if (/20-?f\b|20f/.test(s)) return "20-F";
-  if (/annual.?report|integrated.?report/.test(s)) return "annual-report";
+  if (/40-?f\b/.test(s)) return "40-F";
+  // Annual reports across jurisdictions, incl. Chinese 年度报告/年报 and integrated reports.
+  if (/annual.?report|integrated.?report|年度报告|年度報告|年报|年報/.test(s)) return "annual-report";
   return null;
 }
 
+// ─── Source-Type Detection (v3e Section 3 + 5) ──────────────────────────────
+// TOPIC-AGNOSTIC classification of a document into broad SOURCE TYPES that a
+// framework measure can REQUIRE (via framework_measures.required_source_types).
+// These are document *categories*, never topic keywords, so the gate works for
+// any framework. A document may match several types (e.g. a 10-K is both
+// "regulatory-filing" and "10-K" and "annual-report").
+export function detectSourceTypes(url: string, title: string): Set<string> {
+  const types = new Set<string>();
+  const s = (url + " " + (title || "")).toLowerCase();
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch { /* relative/garbage */ }
+
+  // Specific periodic-filing type (10-K / 20-F / 40-F / annual-report / proxy).
+  const ptype = periodicFilingType(url, title);
+  if (ptype) types.add(ptype);
+
+  // Regulatory primary filings: official securities-regulator portals or filing
+  // shapes. Covers SEC EDGAR, cninfo/SSE/SZSE (CN), HKEX, SEDAR (CA), RNS (UK).
+  const isRegulatorHost = /(sec\.gov|cninfo\.com\.cn|sse\.com\.cn|szse\.cn|hkexnews\.hk|hkex\.com\.hk|sedarplus\.ca|sedar\.com|nationalstorage|rns-pdf|londonstockexchange)/.test(host);
+  const isRegulatoryShape = /10-?k\b|10-?q\b|8-?k\b|20-?f\b|40-?f\b|def.?14a|edgar|年度报告|年度報告|年报|annual.?report.?on.?form/.test(s);
+  if (ptype === "10-K" || ptype === "20-F" || ptype === "40-F" || ptype === "proxy" || isRegulatorHost || isRegulatoryShape) {
+    types.add("regulatory-filing");
+  }
+
+  // Sustainability / ESG / non-financial reports.
+  if (/sustainability|esg|csr|responsibility|impact.?report|tcfd|gri|climate.?report/.test(s)) {
+    types.add("sustainability-report");
+  }
+
+  // Press releases / news.
+  if (/press.?release|news|newsroom|media\b|announcement/.test(s)) types.add("press-release");
+
+  // Investor-relations material.
+  if (/investor|\bir\b|ir\.|earnings|presentation|fact.?sheet/.test(s)) types.add("investor-relations");
+
+  // Policy / governance documents on the company's own site.
+  if (/policy|governance|charter|code.?of.?conduct|framework|principles|guidelines/.test(s)) types.add("policy");
+
+  return types;
+}
+
+// Aggregate the set of source types present across a company's fetched corpus.
+export function corpusSourceTypes(docs: Array<{ url: string; title?: string | null }>): Set<string> {
+  const all = new Set<string>();
+  for (const d of docs) {
+    for (const t of detectSourceTypes(d.url, d.title || "")) all.add(t);
+  }
+  return all;
+}
+
+// In-process cache of authoritative EDGAR filing dates, keyed by 18-digit dashless
+// accession. Populated by enrichEdgarFilingDates() (Section 1) so the synchronous
+// recency gate can read authoritative years without per-call network I/O.
+const edgarFilingYearByAccession = new Map<string, number | null>();
+
+// Extract any EDGAR accession numbers (both dashed and 18-digit dashless forms)
+// present in a URL. Returns the normalized 18-digit dashless accession strings.
+export function extractEdgarAccessions(url: string): string[] {
+  const out = new Set<string>();
+  // Dashed: NNNNNNNNNN-YY-NNNNNN
+  for (const m of url.matchAll(/(\d{10})-(\d{2})-(\d{6})/g)) {
+    out.add(`${m[1]}${m[2]}${m[3]}`);
+  }
+  // Dashless 18-digit block (EDGAR archive folder form), but NOT part of a longer
+  // digit run (avoid matching arbitrary 18+ digit ids).
+  for (const m of url.matchAll(/(?<!\d)(\d{18})(?!\d)/g)) {
+    out.add(m[1]);
+  }
+  return Array.from(out);
+}
+
 // Best-effort extraction of the filing/publication year from the URL or title.
-// Handles: EDGAR accession dates (xxxxxxxxxx-YY-xxxxxx), compact period-end
-// dates (bac-20231231 / 20241231), and bare 4-digit years (2011..2026).
+// v3e (Section 1): now handles the 18-digit DASHLESS EDGAR accession form
+// (the canonical archive-folder shape, e.g. .../data/<cik>/000162828025002993/...)
+// in addition to the dashed form, compact period-end dates, and bare years.
+// PRECEDENCE: authoritative cached EDGAR date > accession-derived year >
+// compact period-end year > bare 4-digit year. Bare years are only used as a last
+// resort and we take the MAX among them; structured sources are preferred so a
+// spurious year in a title cannot inflate recency.
 export function detectFilingYear(url: string, title: string): number | null {
   const nowYear = new Date().getFullYear();
-  const candidates: number[] = [];
   const u = url.toLowerCase();
   const t = (title || "").toLowerCase();
+  const yearFromYY = (yy: number) => (yy <= (nowYear % 100) + 1 ? 2000 + yy : 1900 + yy);
+  const plausible = (y: number) => y >= 2000 && y <= nowYear + 1;
 
-  // 1) Compact period-end dates: 8 digits YYYYMMDD where YYYY is plausible.
-  for (const m of u.matchAll(/(20[0-3]\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/g)) {
-    const y = parseInt(m[1], 10);
-    if (y >= 2000 && y <= nowYear + 1) candidates.push(y);
-  }
-
-  // 2) EDGAR accession number: NNNNNNNNNN-YY-NNNNNN  (the middle 2 digits = year)
-  for (const m of u.matchAll(/\d{10}-(\d{2})-\d{6}/g)) {
-    const yy = parseInt(m[1], 10);
-    const y = yy <= (nowYear % 100) + 1 ? 2000 + yy : 1900 + yy;
-    if (y >= 2000 && y <= nowYear + 1) candidates.push(y);
-  }
-
-  // 3) Bare 4-digit years anywhere in url or title.
-  for (const src of [u, t]) {
-    for (const m of src.matchAll(/\b(20[0-3]\d)\b/g)) {
-      const y = parseInt(m[1], 10);
-      if (y >= 2000 && y <= nowYear + 1) candidates.push(y);
+  // 0) Authoritative EDGAR date, if we have pre-resolved it for an accession here.
+  for (const acc of extractEdgarAccessions(url)) {
+    if (edgarFilingYearByAccession.has(acc)) {
+      const y = edgarFilingYearByAccession.get(acc);
+      if (y != null && plausible(y)) return y; // authoritative wins outright
     }
   }
 
-  if (candidates.length === 0) return null;
-  // Prefer the most recent plausible year found (filings are named by period).
-  return Math.max(...candidates);
+  // 1) EDGAR accession-derived year (structured, authoritative-ish).
+  //    Dashed: NNNNNNNNNN-YY-NNNNNN ; Dashless 18-digit: chars 11-12 are the YY.
+  const accessionYears: number[] = [];
+  for (const m of u.matchAll(/\d{10}-(\d{2})-\d{6}/g)) {
+    const y = yearFromYY(parseInt(m[1], 10));
+    if (plausible(y)) accessionYears.push(y);
+  }
+  for (const m of u.matchAll(/(?<!\d)\d{10}(\d{2})\d{6}(?!\d)/g)) {
+    const y = yearFromYY(parseInt(m[1], 10));
+    if (plausible(y)) accessionYears.push(y);
+  }
+  if (accessionYears.length > 0) return Math.max(...accessionYears);
+
+  // 2) Compact period-end dates: 8 digits YYYYMMDD where YYYY is plausible.
+  const periodYears: number[] = [];
+  for (const m of u.matchAll(/(20[0-3]\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/g)) {
+    const y = parseInt(m[1], 10);
+    if (plausible(y)) periodYears.push(y);
+  }
+  if (periodYears.length > 0) return Math.max(...periodYears);
+
+  // 3) Bare 4-digit years anywhere in url or title (last resort).
+  const bareYears: number[] = [];
+  for (const src of [u, t]) {
+    for (const m of src.matchAll(/\b(20[0-3]\d)\b/g)) {
+      const y = parseInt(m[1], 10);
+      if (plausible(y)) bareYears.push(y);
+    }
+  }
+  if (bareYears.length === 0) return null;
+  return Math.max(...bareYears);
+}
+
+// v3e (Section 1): authoritatively resolve EDGAR filing dates for any accession
+// numbers present in the given URLs and cache them, so the synchronous recency
+// gate uses the REAL filing date rather than guessing from the URL/title. Uses
+// the public EDGAR full-text search API (efts) already relied on elsewhere. Safe
+// and best-effort: any failure simply leaves the URL on the existing heuristics.
+export async function enrichEdgarFilingDates(urls: string[]): Promise<void> {
+  const SEC_UA = process.env.SEC_USER_AGENT || "CompanyIQ Research admin@companyiq.example";
+  const pending = new Set<string>();
+  for (const url of urls) {
+    for (const acc of extractEdgarAccessions(url)) {
+      if (!edgarFilingYearByAccession.has(acc)) pending.add(acc);
+    }
+  }
+  if (pending.size === 0) return;
+  const nowYear = new Date().getFullYear();
+  for (const acc of pending) {
+    const dashed = `${acc.slice(0, 10)}-${acc.slice(10, 12)}-${acc.slice(12)}`;
+    let resolved: number | null = null;
+    for (let attempt = 0; attempt < 3 && resolved === null; attempt++) {
+      try {
+        const resp = await axios.get("https://efts.sec.gov/LATEST/search-index", {
+          params: { q: `"${dashed}"` },
+          headers: { "User-Agent": SEC_UA, Accept: "application/json" },
+          timeout: 12000,
+          validateStatus: () => true,
+        });
+        if (resp.status === 200 && resp.data?.hits?.hits?.length) {
+          const src = resp.data.hits.hits[0]._source || {};
+          const dateStr: string | undefined = src.file_date || src.filed || src.filing_date;
+          if (dateStr && /^\d{4}/.test(dateStr)) {
+            const y = parseInt(dateStr.slice(0, 4), 10);
+            if (y >= 2000 && y <= nowYear + 1) resolved = y;
+          }
+          break; // got a hit (even if no usable date) — stop retrying
+        } else if (resp.status >= 500) {
+          await new Promise((r) => setTimeout(r, 400 * (attempt + 1))); // backoff on 5xx
+          continue;
+        } else {
+          break; // 4xx / no hits — nothing to retry
+        }
+      } catch {
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
+    // Cache the result (including null) so we don't repeatedly hit a missing one.
+    edgarFilingYearByAccession.set(acc, resolved);
+    if (resolved !== null) {
+      console.log(`[recency] EDGAR authoritative date for ${dashed}: ${resolved}`);
+    }
+  }
 }
 
 /**
@@ -1424,11 +1572,23 @@ function calculatePriority(
   url: string,
   title: string,
   companyDomain: string | null,
-  framework: Framework
+  framework: Framework,
+  topicPhrases: string[] = []
 ): number {
   let priority = 0;
   const urlLower = url.toLowerCase();
   const titleLower = title.toLowerCase();
+
+  // v3e (Section 2): prefer section-taggable EDGAR HTML over the same filing's PDF.
+  // EDGAR primary documents in HTML (.htm/.html) retain the Item-heading structure
+  // our retrieval relies on (Item 1A etc.); the PDF rendering frequently flattens
+  // it. For SEC EDGAR archive URLs, boost HTML and mildly demote PDF so that when
+  // both forms of a filing are discovered, the HTML wins selection.
+  const isEdgar = /sec\.gov\/archives\/edgar/.test(urlLower);
+  if (isEdgar) {
+    if (/\.html?($|\?)/.test(urlLower)) priority -= 6;        // prefer EDGAR HTML
+    else if (/\.pdf($|\?)/.test(urlLower)) priority += 4;     // demote EDGAR PDF
+  }
 
   // On-company-domain bonus
   if (companyDomain && urlLower.includes(companyDomain)) {
@@ -1519,10 +1679,19 @@ function calculatePriority(
     if (urlLower.includes(slug)) priority += bonus;
   }
 
-  // AI keyword bonus
-  const aiKeywords = ["ai", "artificial-intelligence", "model-risk", "machine-learning"];
-  if (aiKeywords.some((k) => urlLower.includes(k))) {
-    priority -= 3;
+  // v3e (Section 5/6): TOPIC bonus, framework-derived (was a hard-coded AI list).
+  // The active framework's lexicon phrases (multilingual) are slugified and matched
+  // against the URL so on-topic documents are boosted for ANY topic, not just AI.
+  // Falls back to nothing when no lexicon was threaded through (safe no-op).
+  if (topicPhrases.length > 0) {
+    const slugs = new Set<string>();
+    for (const p of topicPhrases) {
+      const slug = p.toLowerCase().trim().replace(/\s+/g, "-");
+      if (slug.length >= 2) { slugs.add(slug); slugs.add(slug.replace(/-/g, "")); }
+    }
+    for (const slug of slugs) {
+      if (slug && urlLower.includes(slug)) { priority -= 3; break; }
+    }
   }
 
   // Third-party blog/news penalty
@@ -1673,6 +1842,11 @@ export interface DiscoveryDiagnostics {
   lanes: Record<string, number>;
   topUrls: Array<{ url: string; title: string; priority: number }>;
   coverage?: CoverageMetric;
+  // v3e (Section 4): SHA1 over the sorted set of selected document URLs. Identical
+  // discovery output => identical fingerprint, so a re-run can be detected as
+  // having found the SAME corpus (supporting reproducibility analysis). Logged for
+  // drift visibility; does NOT itself short-circuit discovery.
+  candidateFingerprint?: string;
 }
 
 export interface DiscoveryResult {
@@ -1732,7 +1906,7 @@ export async function searchCompanyDocuments(opts: {
       return;
     }
     seenUrls.add(result.link);
-    const priority = calculatePriority(result.link, result.title, companyDomain || null, framework);
+    const priority = calculatePriority(result.link, result.title, companyDomain || null, framework, topicPhrases);
     allCandidates.push({
       url: result.link,
       title: result.title,
@@ -2040,6 +2214,15 @@ export async function searchCompanyDocuments(opts: {
   // Layer A — Recency gate: trim the historical-filing flood so stale, topic-free
   // periodic filings don't dilute the corpus. Keeps newest-N-per-type within the
   // validity window; never drops non-periodic docs (policies, IR, ESG, governance).
+  // v3e (Section 1): before gating, authoritatively resolve EDGAR filing dates for
+  // any accession-bearing URLs (handles the 18-digit dashless archive form the URL
+  // heuristics previously missed), so stale 10-Ks are gated on REAL dates instead
+  // of failing open. Best-effort; failures fall back to URL/title heuristics.
+  try {
+    await enrichEdgarFilingDates(accepted.map((d) => d.url));
+  } catch (e: any) {
+    console.warn(`[${companyName}] EDGAR date enrichment skipped: ${e?.message}`);
+  }
   const { kept: recencyKept, dropped: recencyDropped } = applyRecencyGate(accepted);
   if (recencyDropped.length > 0) {
     console.log(`[${companyName}] Recency gate dropped ${recencyDropped.length} stale/duplicate periodic filings (kept ${recencyKept.length})`);
@@ -2067,6 +2250,12 @@ export async function searchCompanyDocuments(opts: {
     console.warn(`[${companyName}] Missing mandatory sources: ${coverage.missingTier1Types.join(", ")}`);
   }
 
+  // v3e (Section 4): fingerprint the selected corpus (sorted URL set) for repeatability.
+  const candidateFingerprint = createHash("sha1")
+    .update(finalDocs.map((d) => d.url).sort().join("\n"))
+    .digest("hex");
+  console.log(`[${companyName}] Discovery corpus fingerprint: ${candidateFingerprint.slice(0, 12)} (${finalDocs.length} docs)`);
+
   const diagnostics: DiscoveryDiagnostics = {
     totalCandidates: allCandidates.length,
     acceptedByGate: accepted.length,
@@ -2078,6 +2267,7 @@ export async function searchCompanyDocuments(opts: {
       priority: d.priority,
     })),
     coverage,
+    candidateFingerprint,
   };
 
   return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected };

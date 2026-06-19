@@ -98,6 +98,8 @@ export async function initializeDatabase(): Promise<void> {
         display_order INTEGER NOT NULL DEFAULT 0
       )
     `);
+    // v3e (Section 3+5): per-measure required source types (topic-agnostic gating).
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS required_source_types JSONB`);
 
     // ─── Company Lists ──────────────────────────────────────────────────────
     await db.execute(sql`
@@ -200,10 +202,15 @@ export async function initializeDatabase(): Promise<void> {
         quotes JSONB,
         verdict TEXT NOT NULL DEFAULT 'No',
         verdict_nuance TEXT,
+        abstained BOOLEAN NOT NULL DEFAULT false,
+        evidence_fingerprint TEXT,
         display_order INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       )
     `);
+    // v3e (Section 3 + 4): abstain flag + evidence fingerprint (idempotent migration).
+    await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS abstained BOOLEAN NOT NULL DEFAULT false`);
+    await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS evidence_fingerprint TEXT`);
 
     // ─── Batch Runs ─────────────────────────────────────────────────────────
     await db.execute(sql`

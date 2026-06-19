@@ -1,4 +1,5 @@
 import type { FrameworkMeasure } from "../../shared/schema.js";
+import { createHash } from "crypto";
 import type { TerminologyMap } from "./terminology-discovery.js";
 import { flattenTerms } from "./terminology-discovery.js";
 
@@ -337,7 +338,35 @@ function splitIntoDocuments(combinedText: string): Array<{ header: string; body:
  * line-anchored item headings are detectable; whenever a fragment begins a new
  * SEC item, the active section flips and subsequent chunks inherit it.
  */
-function chunkBody(text: string): Array<{ text: string; section?: string }> {
+// v3e (Section 2): PDF section-recovery. Plain-text extracted from a 10-K PDF
+// frequently loses the line structure the heading detectors rely on, so Item 1A
+// (and 7/7A) headings sit mid-line and go untagged. When a body clearly looks like
+// an SEC annual filing (canonical item titles present somewhere) but the normal
+// fragment scan would miss them, we NORMALIZE the text by inserting a newline
+// immediately before each canonical "Item NA. <Title>" heading. This makes the
+// existing, well-tested line/fragment detectors fire without changing their logic.
+// Topic-agnostic: it only restores SEC structural headings, never topic keywords.
+function recoverSecHeadingNewlines(text: string): string {
+  // Cheap pre-check: only do work if at least one canonical item title appears.
+  let hasCanonical = false;
+  for (const { re } of SEC_ITEM_TITLES) { if (re.test(text)) { hasCanonical = true; break; } }
+  if (!hasCanonical) return text;
+  let out = text;
+  // Insert a break before each canonical heading occurrence so it starts a fragment.
+  for (const { re } of SEC_ITEM_TITLES) {
+    const g = new RegExp(re.source, "gi");
+    out = out.replace(g, (m) => `\n${m}`);
+  }
+  // Also break before bare "Item NA." forms that are followed by capitalized prose
+  // (covers titles we don't enumerate), but NOT inside an obvious TOC dotted line.
+  out = out.replace(/([^\n])\s+(item[\s\u00a0]*\d{1,2}[a-c]?[\.\:][\s\u00a0]*[A-Z])/gi, "$1\n$2");
+  return out;
+}
+
+function chunkBody(rawText: string): Array<{ text: string; section?: string }> {
+  // v3e (Section 2): recover SEC item-heading line structure for PDF-extracted
+  // filings so Item 1A is taggable even when extraction flattened the headings.
+  const text = recoverSecHeadingNewlines(rawText);
   const chunks: Array<{ text: string; section?: string }> = [];
   // Split on sentence boundaries while preserving newlines as their own break so
   // headings on their own line are seen as fragment starts.
@@ -417,6 +446,10 @@ export interface EvidencePack {
   chunkCount: number;
   totalChars: number;
   topicHits: number; // Layer D: how many topic mentions actually reached the pack
+  // v3e (Section 4): SHA1 over the sorted (docIndex:chunkIdx) identifiers of the
+  // chunks selected into this pack. Identical evidence => identical fingerprint,
+  // enabling verdict caching and evidence-drift detection across runs.
+  fingerprint: string;
 }
 
 // ─── Per-Measure SEC Section Relevance ───────────────────────────────────────
@@ -429,10 +462,16 @@ export interface EvidencePack {
 function relevantSecSections(measure: FrameworkMeasure): Set<string> {
   const hay = `${measure.category} ${measure.title} ${measure.definition || ""}`.toLowerCase();
   const out = new Set<string>();
-  // Hard-pin the 9.x family (AI risk disclosure & capital allocation) to the
-  // filing sections it must come from, so the section boost + force-include below
-  // always apply even if the title/definition wording is terse.
-  if (/^9\./.test(measure.measureId)) {
+  // v3e (Section 5): TOPIC-AGNOSTIC. When a template marks a measure as requiring a
+  // periodic regulatory filing (via requiredSourceTypes), pin it to the risk/MD&A
+  // sections it must come from, so the section boost + force-include always apply
+  // regardless of topic or terse wording. This replaces the old hard-coded `9.x`
+  // (AI-shaped) pin with a declarative, framework-driven signal.
+  const reqTypes = ((measure as any).requiredSourceTypes || []) as string[];
+  const isFilingBound = reqTypes.some((t) =>
+    /regulatory|filing|10-?k|20-?f|annual|periodic/i.test(String(t)),
+  );
+  if (isFilingBound || /^9\./.test(measure.measureId)) {
     out.add("item1a");
     out.add("item7");
     out.add("item7a");
@@ -461,6 +500,13 @@ function relevantSecSections(measure: FrameworkMeasure): Set<string> {
 // top Item 1A chunk so filing-specific measures (the 9.x family) can never be
 // starved by keyword-dense non-regulatory documents.
 function requiresRegulatoryFiling(measure: FrameworkMeasure): boolean {
+  // v3e (Section 5): prefer the declarative requiredSourceTypes signal (topic-agnostic,
+  // template-driven). Fall back to the legacy text heuristic for measures that have not
+  // yet been annotated, so behavior is unchanged for un-migrated frameworks.
+  const reqTypes = ((measure as any).requiredSourceTypes || []) as string[];
+  if (reqTypes.some((t) => /regulatory|filing|10-?k|20-?f|annual|periodic/i.test(String(t)))) {
+    return true;
+  }
   const hay = `${measure.measureId} ${measure.title} ${measure.definition || ""}`.toLowerCase();
   return /^9\.|10-?k|20-?f|form\s*10|annual report|risk-?factor|risk factor|regulatory filing|securities filing/.test(hay);
 }
@@ -470,15 +516,15 @@ function requiresRegulatoryFiling(measure: FrameworkMeasure): boolean {
 // AND at least one AI/ML topic term, so we never force in an irrelevant chunk.
 function looksLike10KRiskChunk(chunkText: string, section: string | undefined, topicTerms: string[]): boolean {
   const t = chunkText.toLowerCase();
-  // Must contain at least one AI/ML topic term so we never force in an off-topic
-  // risk paragraph.
-  if (countTopicHits(chunkText, topicTerms) === 0) return false;
-  // (a) Tagged as Item 1A by the chunker (now robust to inline headings), OR
-  // (b) explicit risk-factor heading language in-window, OR
-  // (c) the chunk uses unambiguous SEC risk-factor prose. REVIEWER FIX v3d: the
-  // heading may live in a neighboring chunk, so we also accept canonical
-  // risk-factor phrasing co-occurring with risk language.
+  // v3e (Section 5): TOPIC-AGNOSTIC softening. A chunk that the chunker positively
+  // tagged as Item 1A is, by definition, the regulatory risk-factor section we want
+  // to force-include — so accept it even with zero topic hits (the topicTerms are
+  // framework-derived and may legitimately miss an issuer's idiosyncratic wording,
+  // e.g. "machine learning" vs the framework's "artificial intelligence"). For the
+  // weaker, untagged heuristics (b)/(c) we still require at least one framework topic
+  // term so we never force in an unrelated risk paragraph.
   if (section === "item1a") return true;
+  if (countTopicHits(chunkText, topicTerms) === 0) return false;
   if (/risk factors|item\s*1a/.test(t)) return true;
   const hasRiskProse = /(could|may|might)\s+(adversely|materially|negatively)\s+(affect|impact|harm)|adversely affect our|harm our business|risks (related to|associated with|relating to)|subject us to|expose us to|regulatory.{0,30}(risk|scrutiny|uncertaint)/.test(t);
   return hasRiskProse;
@@ -667,12 +713,18 @@ export function buildEvidencePackForMeasure(opts: {
     packTopicHits += item.topicHits;
   }
 
+  // v3e (Section 4): deterministic evidence fingerprint from the selected chunk
+  // identifiers (independent of selection order).
+  const chunkIds = selected.map((s) => `${s.docIndex}:${s.idx}`).sort();
+  const fingerprint = createHash("sha1").update(chunkIds.join("|")).digest("hex");
+
   return {
     measureId: measure.measureId,
     text: evidenceText.trim(),
     chunkCount: selected.length,
     totalChars: evidenceText.length,
     topicHits: packTopicHits,
+    fingerprint,
   };
 }
 
@@ -702,6 +754,7 @@ export function buildEvidencePacksForCategory(opts: {
       chunkCount: 0,
       totalChars: 0,
       topicHits: 0,
+      fingerprint: createHash("sha1").update(`empty:${m.measureId}`).digest("hex"),
     }));
   }
 

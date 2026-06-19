@@ -106,6 +106,13 @@ export const frameworkMeasures = pgTable("framework_measures", {
   definition: text("definition"),
   scoringGuidance: text("scoring_guidance"),
   evidenceKeywords: jsonb("evidence_keywords").$type<string[]>(),
+  // v3e (Section 3 + 5): per-measure declaration of which document/source TYPES
+  // are REQUIRED to answer this measure (e.g. ["regulatory-filing"], ["proxy"],
+  // ["annual-report"]). TOPIC-AGNOSTIC: the values are framework-authored source
+  // categories, NOT topic keywords. When set and none of the required types are
+  // present in the company's corpus, the measure is scored "Insufficient evidence"
+  // (abstained) rather than a hard "No". Empty/null = no requirement (default).
+  requiredSourceTypes: jsonb("required_source_types").$type<string[]>(),
   displayOrder: integer("display_order").notNull().default(0),
 }, (table) => ({
   frameworkIdx: index("measures_framework_idx").on(table.frameworkId),
@@ -160,8 +167,15 @@ export const measureScores = pgTable("measure_scores", {
   confidence: text("confidence").notNull().default("Low"),
   evidenceSummary: text("evidence_summary"),
   quotes: jsonb("quotes").$type<Array<{ text: string; source: string; page?: number }>>(),
-  verdict: text("verdict").notNull().default("No"), // Yes | No | Partial
+  verdict: text("verdict").notNull().default("No"), // Yes | No | Partial | Insufficient evidence
   verdictNuance: text("verdict_nuance"),
+  // v3e (Section 3): true when the measure could not be answered because a
+  // REQUIRED source type was absent from the corpus. Abstained measures contribute
+  // 0 to the numerator AND are excluded from the answered-measures denominator.
+  abstained: boolean("abstained").notNull().default(false),
+  // v3e (Section 4): SHA1 of the sorted evidence-chunk identifiers that produced
+  // this verdict, enabling identical-evidence verdict caching and drift logging.
+  evidenceFingerprint: text("evidence_fingerprint"),
   displayOrder: integer("display_order").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
