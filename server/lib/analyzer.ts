@@ -1,6 +1,6 @@
 import * as storage from "../storage.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
-import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, chunkText, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
+import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash } from "./processor.js";
@@ -590,8 +590,13 @@ async function summarizeDocuments(opts: {
 }): Promise<{ text: string; model: string }> {
   const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription } = opts;
 
-  // Check summary cache
-  const docHash = generateDocumentHash(documentUrls);
+  // Check summary cache. v3g: salt the cache key so the OLD header-lossy LLM
+  // summaries (which dropped document URLs) are never reused; only the new
+  // header-preserving retrieval corpus is served from cache going forward.
+  const docHash = createHash("sha256")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3g")
+    .digest("hex")
+    .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
   if (cached) {
     console.log(`[${companyName}] Using cached summary`);
@@ -652,52 +657,74 @@ async function summarizeDocuments(opts: {
     return { text: combined, model: "raw-pass" };
   }
 
-  // ─── TWO-PASS APPROACH: BM25 pre-filter + LLM summarization ─────────────────
-  // Instead of naively truncating to 120K chars, use BM25 to extract the most
-  // relevant passages from the full corpus, then summarize those.
-  const chunks = chunkText(combined);
-  const bm25Index = buildBM25Index(chunks);
-  
-  // Score all chunks against topic keywords
-  const scoredChunks = chunks.map((chunk, idx) => ({
+  // ─── HEADER-PRESERVING BM25 PRE-FILTER (v3g quote sourceUrl fix) ─────────────
+  // The corpus is too large to pass whole. PREVIOUSLY we BM25-filtered then ran an
+  // LLM "summarizer" whose output became the scoring corpus. That summary DROPPED
+  // the "--- DOCUMENT: <title> [<url>] ---" headers and paraphrased the text, which
+  // (a) made quote.sourceUrl impossible to resolve (no URL survived) and
+  // (b) degraded verbatim quote fidelity. We now select the most relevant chunks
+  // with BM25 and rebuild a corpus that RE-EMITS the document header (with URL)
+  // whenever the source document changes — preserving provenance AND verbatim text.
+  // The document-aware chunker carries docUrl/docTitle on every chunk.
+  const docChunks = chunkDocuments(combined);
+  const bm25Index = buildBM25Index(docChunks.map((c) => c.text));
+
+  const scoredChunks = docChunks.map((chunk, idx) => ({
     idx,
     score: bm25Score(allQueryTerms, idx, bm25Index),
-    text: chunk,
+    chunk,
   }));
   scoredChunks.sort((a, b) => b.score - a.score);
 
-  // Take top chunks up to 200K chars (much more than before)
-  const MAX_SUMMARIZATION_INPUT = 200000;
+  const MAX_RETRIEVAL_INPUT = 200000;
+  // Select winning chunk indices up to the budget, then RESTORE document order so
+  // the re-emitted headers group each document's chunks contiguously.
+  const selectedIdx: number[] = [];
+  let budget = 0;
+  for (const sc of scoredChunks) {
+    if (sc.score <= 0) break;
+    if (budget + sc.chunk.text.length > MAX_RETRIEVAL_INPUT) break;
+    selectedIdx.push(sc.idx);
+    budget += sc.chunk.text.length;
+  }
+  // Fallback: if BM25 found very little, take the first chunks in document order.
+  if (budget < 20000) {
+    selectedIdx.length = 0;
+    budget = 0;
+    for (let i = 0; i < docChunks.length; i++) {
+      if (budget + docChunks[i].text.length > MAX_RETRIEVAL_INPUT) break;
+      selectedIdx.push(i);
+      budget += docChunks[i].text.length;
+    }
+  }
+  selectedIdx.sort((a, b) => a - b); // document/sequence order
+
   let relevantText = "";
-  for (const chunk of scoredChunks) {
-    if (chunk.score <= 0) break;
-    if (relevantText.length + chunk.text.length > MAX_SUMMARIZATION_INPUT) break;
-    relevantText += chunk.text + "\n\n";
+  let lastDocIndex = -1;
+  for (const i of selectedIdx) {
+    const ch = docChunks[i];
+    if (ch.docIndex !== lastDocIndex) {
+      const title = ch.docTitle || `Document ${ch.docIndex + 1}`;
+      relevantText += ch.docUrl
+        ? `\n\n--- DOCUMENT: ${title} [${ch.docUrl}] ---\n\n`
+        : `\n\n--- DOCUMENT: ${title} ---\n\n`;
+      lastDocIndex = ch.docIndex;
+    }
+    relevantText += ch.text + "\n\n";
   }
 
-  // Fallback: if BM25 found very little, use first 200K of priority-sorted combined
-  if (relevantText.length < 20000) {
-    relevantText = combined.slice(0, MAX_SUMMARIZATION_INPUT);
-  }
+  console.log(`[${companyName}] Header-preserving retrieval corpus: ${relevantText.length} chars (BM25-selected from ${combined.length} total, ${selectedIdx.length} chunks)`);
 
-  console.log(`[${companyName}] Summarization input: ${relevantText.length} chars (BM25-filtered from ${combined.length} total)`);
-
-  // Summarize with cheap LLM
-  const { text: summary, provider } = await completeWithFallback("deepseek", {
-    system: `You are a document summarizer. Extract all content relevant to: ${topicDescription}. Preserve verbatim quotes, specific names, dates, committee names, and policy titles. Do not add interpretation.`,
-    prompt: `Summarize the following corporate documents for ${companyName}, focusing on content relevant to ${topicDescription}. Preserve all specific details, names, quotes, and evidence.\n\n${relevantText}`,
-    maxTokens: 16000,
-  });
-
-  // Cache the summary
+  // Cache the retrieval corpus (versioned key so old header-lossy summaries are
+  // never reused). The model tag documents the new provenance-preserving path.
   await storage.cacheSummary({
     companyId,
     documentHash: docHash,
-    summary,
-    summarizerModel: provider,
+    summary: relevantText,
+    summarizerModel: "bm25-headers-v3g",
   });
 
-  return { text: summary, model: provider };
+  return { text: relevantText, model: "bm25-headers-v3g" };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
