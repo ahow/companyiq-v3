@@ -163,7 +163,21 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                                   {m.quotes.map((q: any, idx: number) => (
                                     <blockquote key={idx} className="text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic">
                                       "{q.text}"
-                                      {q.source && <span className="text-gray-400 ml-1">— {q.source}</span>}
+                                      {q.source && (
+                                        q.sourceUrl ? (
+                                          <a
+                                            href={q.sourceUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-blue-500 hover:text-blue-700 underline ml-1"
+                                            title={q.sourceUrl}
+                                          >
+                                            — {q.source}
+                                          </a>
+                                        ) : (
+                                          <span className="text-gray-400 ml-1">— {q.source}</span>
+                                        )
+                                      )}
                                     </blockquote>
                                   ))}
                                 </div>
