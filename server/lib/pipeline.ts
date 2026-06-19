@@ -28,7 +28,7 @@
 
 import * as storage from "../storage.js";
 import { searchCompanyDocuments, type DiscoveryResult } from "./discovery.js";
-import { processDocument, inferDocumentType, PermanentFetchError } from "./processor.js";
+import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError } from "./processor.js";
 import { analyzeCompanyMeasures, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
@@ -486,6 +486,13 @@ async function runFetchPhase(opts: {
           // full timeout) on every subsequent pass.
           console.warn(`[${companyName}] Document fetch TIMEOUT (${PER_DOCUMENT_TIMEOUT_MS / 1000}s) — marking dead: ${doc.url.slice(0, 100)}`);
           await storage.recordFetchDead(companyId, doc.url);
+        } else if (error instanceof TransientFetchError) {
+          // REVIEWER FIX v3d (issue #3): browser-PDF returned empty THIS pass for a
+          // possibly-transient WAF/edge reason (e.g. ir.tesla.com Akamai). Record a
+          // retryable failure so a later pass can recover the high-value IR PDF,
+          // instead of discarding it as dead on the first miss.
+          console.warn(`[${companyName}] Transient fetch failure — keeping retryable: ${doc.url.slice(0, 100)} (${error.message})`);
+          await storage.recordFetchFailure(companyId, doc.url);
         } else if (error instanceof PermanentFetchError) {
           // 401 paywall / 403 CDN block — will not succeed on retry. Mark dead now.
           console.warn(`[${companyName}] Permanent fetch failure — marking dead: ${doc.url.slice(0, 100)} (${error.message})`);

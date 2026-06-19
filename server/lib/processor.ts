@@ -31,6 +31,22 @@ export class BrowserUnavailableError extends Error {
   }
 }
 
+// REVIEWER FIX v3d (issue #3): thrown when a direct-file/PDF fetch failed AND the
+// browser-PDF fallback RAN but returned no usable bytes THIS pass for a reason
+// that may be transient (WAF edge hiccup, HTTP/2 stream reset, intermittent 5xx
+// on Akamai-fronted IR sites like ir.tesla.com). Previously these were thrown as
+// PermanentFetchError and marked dead immediately, which silently discarded
+// high-value IR PDFs. Treating them as TRANSIENT keeps the URL retryable across
+// passes; the per-document failure cap still eventually retires a truly dead URL.
+export class TransientFetchError extends Error {
+  statusCode?: number;
+  constructor(message: string, statusCode?: number) {
+    super(message);
+    this.name = "TransientFetchError";
+    this.statusCode = statusCode;
+  }
+}
+
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -593,12 +609,12 @@ async function fetchPdfViaBrowser(url: string): Promise<string> {
       }
     }
 
-    const base64: string | null = await page.evaluate(async (target: string) => {
-      try {
-        const resp = await fetch(target, { credentials: "include" });
-        if (!resp.ok) return null;
-        const buf = await resp.arrayBuffer();
-        // Convert to base64 in chunks to avoid call-stack overflow on big files.
+    // REVIEWER FIX v3d (issue #3): Tesla IR PDFs on ir.tesla.com (Akamai) were
+    // dying en masse. Akamai validates Referer + Accept on direct file fetches,
+    // and rejects some credentialed cross-path requests. We now send explicit
+    // Accept/Referer headers and try credentialed THEN uncredentialed.
+    const base64: string | null = await page.evaluate(async (target: string, originUrl: string) => {
+      const toB64 = (buf: ArrayBuffer): string => {
         let binary = "";
         const bytes = new Uint8Array(buf);
         const chunk = 0x8000;
@@ -606,10 +622,23 @@ async function fetchPdfViaBrowser(url: string): Promise<string> {
           binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)) as any);
         }
         return btoa(binary);
-      } catch {
-        return null;
-      }
-    }, url);
+      };
+      const attempt = async (creds: RequestCredentials): Promise<string | null> => {
+        try {
+          const resp = await fetch(target, {
+            credentials: creds,
+            headers: { Accept: "application/pdf,*/*", Referer: originUrl },
+          });
+          if (!resp.ok) return null;
+          const buf = await resp.arrayBuffer();
+          if (!buf || buf.byteLength === 0) return null;
+          return toB64(buf);
+        } catch {
+          return null;
+        }
+      };
+      return (await attempt("include")) || (await attempt("omit"));
+    }, url, (origin || url));
 
     if (!base64) {
       console.log(`[Processor] Browser-PDF in-page fetch returned no bytes for ${url}`);
@@ -689,8 +718,9 @@ export async function processDocument(
           // Re-throw so the URL stays pending for a later pass instead of dead.
           if (browserErr instanceof BrowserUnavailableError) throw browserErr;
         }
-        // Browser ran but produced no usable content — genuinely permanent.
-        throw new PermanentFetchError(`PDF fetch failed (browser-PDF also failed): ${url}`);
+        // Browser ran but produced no usable content THIS pass — may be a transient
+        // WAF/edge condition on IR PDFs. Keep retryable (issue #3) instead of dead.
+        throw new TransientFetchError(`PDF fetch failed (browser-PDF empty this pass): ${url}`);
       }
       const buf = Buffer.from(data);
       // Some CDNs return a small HTML challenge/interstitial page with HTTP 200
@@ -790,8 +820,8 @@ export async function processDocument(
             if (browserErr instanceof BrowserUnavailableError) throw browserErr;
           }
           if (!content) {
-            console.log(`[Processor] Browser-PDF fetch also failed for ${url} (403), marking permanent`);
-            throw new PermanentFetchError(`403 CDN block (browser-PDF also failed): ${url}`, 403);
+            console.log(`[Processor] Browser-PDF fetch also failed for ${url} (403) — keeping retryable (transient)`);
+            throw new TransientFetchError(`403 CDN block (browser-PDF empty this pass): ${url}`, 403);
           }
         } else {
           // Timeout, 5xx, 403 on HTML page, network error — browser fallback is valuable
@@ -818,6 +848,13 @@ export async function processDocument(
     // recovers, the high-value PDF can still be fetched.
     if (error instanceof BrowserUnavailableError) {
       console.log(`[Processor] Browser temporarily unavailable for ${url} — leaving retryable`);
+      throw error;
+    }
+    // Transient PDF/edge failure (issue #3) — re-throw so the pipeline records a
+    // retryable fetch FAILURE rather than swallowing it (return "" would look like
+    // a successful empty fetch). The per-document failure cap still retires it.
+    if (error instanceof TransientFetchError) {
+      console.log(`[Processor] Transient fetch failure for ${url} — leaving retryable`);
       throw error;
     }
     console.warn(`[Processor] Failed to process ${url}: ${error.message}`);

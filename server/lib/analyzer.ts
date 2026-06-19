@@ -319,35 +319,78 @@ function extractAndParseJSON(text: string): any {
 
 // ─── Provenance Check ────────────────────────────────────────────────────────
 
-function verifyQuoteProvenance(
+export function verifyQuoteProvenance(
   quote: string,
   evidenceText: string
 ): { found: boolean; similarity: number } {
   if (!quote || !evidenceText) return { found: false, similarity: 0 };
 
-  // Normalize whitespace for comparison
-  const normalizedQuote = quote.replace(/\s+/g, " ").trim().toLowerCase();
-  const normalizedEvidence = evidenceText.replace(/\s+/g, " ").trim().toLowerCase();
+  // REVIEWER FIX v3d (issue #2): strict whitespace-only normalization punished
+  // companies that paraphrase or whose quotes differ only by punctuation
+  // (curly vs straight quotes, em-dashes, commas) — e.g. NVIDIA 1.1 got 3/3 Yes
+  // but was auto-downgraded because the quote didn't match verbatim. We now
+  // normalize punctuation AND whitespace, then accept a fuzzy match: an exact
+  // normalized substring, OR a longest-contiguous-substring covering >= 90% of
+  // the quote, OR (final fallback) a strong consecutive-word window.
+  const normalize = (s: string): string =>
+    s
+      .replace(/[\u2018\u2019\u201b\u2032]/g, "'")      // smart single quotes -> '
+      .replace(/[\u201c\u201d\u201f\u2033]/g, '"')      // smart double quotes -> "
+      .replace(/[\u2010-\u2015\u2212]/g, "-")           // various dashes -> -
+      .replace(/[\u00a0]/g, " ")                          // nbsp -> space
+      .replace(/[.,;:!?()\[\]{}"'\-—–]/g, " ")           // drop punctuation
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
 
-  // Exact match
+  const normalizedQuote = normalize(quote);
+  const normalizedEvidence = normalize(evidenceText);
+  if (!normalizedQuote) return { found: false, similarity: 0 };
+
+  // 1) Exact normalized substring.
   if (normalizedEvidence.includes(normalizedQuote)) {
     return { found: true, similarity: 1.0 };
   }
 
-  // Substring match (allow minor differences)
-  const words = normalizedQuote.split(" ");
-  if (words.length >= 5) {
-    // Check if a significant portion of consecutive words appear
-    const windowSize = Math.max(5, Math.floor(words.length * 0.6));
-    for (let i = 0; i <= words.length - windowSize; i++) {
-      const window = words.slice(i, i + windowSize).join(" ");
+  // 2) Longest contiguous substring of the quote that appears in the evidence,
+  //    measured at the character level. If it covers >= 90% of the quote, accept.
+  //    We grow a candidate window from each space-aligned start to stay O(n*m)-ish
+  //    in practice (quotes are short).
+  const qLen = normalizedQuote.length;
+  let longest = 0;
+  // Try progressively shorter prefixes/suffixes via word boundaries for speed.
+  const qWords = normalizedQuote.split(" ");
+  for (let start = 0; start < qWords.length; start++) {
+    // Extend the window as far right as still found in evidence.
+    let lo = start, hi = qWords.length;
+    let bestEnd = start;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      const cand = qWords.slice(start, mid).join(" ");
+      if (normalizedEvidence.includes(cand)) { bestEnd = mid; lo = mid; }
+      else { hi = mid - 1; }
+      if (lo === hi) break;
+    }
+    const candStr = qWords.slice(start, Math.max(bestEnd, start + 1)).join(" ");
+    if (normalizedEvidence.includes(candStr)) longest = Math.max(longest, candStr.length);
+  }
+  const coverage = qLen > 0 ? longest / qLen : 0;
+  if (coverage >= 0.9) {
+    return { found: true, similarity: coverage };
+  }
+
+  // 3) Final fallback: a strong consecutive-word window (>= 60% of words, min 5).
+  if (qWords.length >= 5) {
+    const windowSize = Math.max(5, Math.floor(qWords.length * 0.6));
+    for (let i = 0; i <= qWords.length - windowSize; i++) {
+      const window = qWords.slice(i, i + windowSize).join(" ");
       if (normalizedEvidence.includes(window)) {
-        return { found: true, similarity: 0.8 };
+        return { found: true, similarity: Math.max(0.8, coverage) };
       }
     }
   }
 
-  return { found: false, similarity: 0 };
+  return { found: false, similarity: coverage };
 }
 
 // ─── Source Normalization ────────────────────────────────────────────────────

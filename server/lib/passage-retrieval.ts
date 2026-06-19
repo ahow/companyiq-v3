@@ -231,8 +231,67 @@ export interface Chunk {
 // We normalize to a compact key like "item1a", "item7", "item7a".
 const SEC_ITEM_HEADING_RE = /^\s*item\s+(\d{1,2}[a-c]?)\b[\.\:\s\-—]/i;
 
+// REVIEWER FIX (v3d, issue #1/#4): plain-text extraction of EDGAR HTML frequently
+// renders item headings INLINE ("...the following risk factors. Item 1A. Risk
+// Factors The Company...") rather than on their own line, and may use a
+// non-breaking space ("Item\u00a01A") or no space ("Item1A"). The line-anchored
+// regex above missed all of these, so Item 1A was never tagged for several
+// large 10-Ks (Alphabet/Amazon/Oracle/Salesforce) and the force-include found no
+// candidate. We add an INLINE detector that pairs the item number with its
+// canonical section title, which is unambiguous and TOC-safe.
+//
+// Canonical 10-K item titles we anchor on (item number -> title regex):
+const SEC_ITEM_TITLES: Array<{ item: string; re: RegExp }> = [
+  { item: "item1a", re: /item[\s\u00a0]*1a\b[\.\:\s\-—]{0,3}\s*risk\s+factors/i },
+  { item: "item1b", re: /item[\s\u00a0]*1b\b[\.\:\s\-—]{0,3}\s*unresolved\s+staff/i },
+  { item: "item7a", re: /item[\s\u00a0]*7a\b[\.\:\s\-—]{0,3}\s*quantitative\s+and\s+qualitative/i },
+  { item: "item7", re: /item[\s\u00a0]*7\b[\.\:\s\-—]{0,3}\s*management['’]?s\s+discussion/i },
+  { item: "item1", re: /item[\s\u00a0]*1\b[\.\:\s\-—]{0,3}\s*business\b/i },
+  { item: "item10", re: /item[\s\u00a0]*10\b[\.\:\s\-—]{0,3}\s*directors[,\s]/i },
+  { item: "item11", re: /item[\s\u00a0]*11\b[\.\:\s\-—]{0,3}\s*executive\s+compensation/i },
+];
+
+// A line that is really a table-of-contents entry, e.g.
+//   "Item 1A. Risk Factors .......... 23"  or  "Item 1A Risk Factors 23"
+// ends in a (dotted) page number. We must NOT flip the active section on these,
+// otherwise the section tag jumps to the TOC location, not the real section body.
+const TOC_LINE_RE = /\.{2,}\s*\d+\s*$|\s\d{1,4}\s*$/;
+
 function normalizeSecItem(raw: string): string {
   return "item" + raw.toLowerCase().replace(/\s+/g, "");
+}
+
+// Detect an SEC item heading inside an arbitrary text fragment. Prefers the
+// unambiguous "item N + canonical title" inline match; falls back to a
+// line-anchored "Item N." only when that line is NOT a TOC entry. Returns the
+// FIRST (left-most) match so the active section reflects where the body begins.
+// A fragment/line that lists 2+ "Item N" tokens is almost certainly a table of
+// contents ("...Item 1 Business 4 Item 1A Risk Factors 23 Item 7..."), never a
+// real section start. We must not flip the active section on these.
+const MULTI_ITEM_RE = /item[\s\u00a0]*\d{1,2}[a-c]?\b/gi;
+function isLikelyToc(fragment: string): boolean {
+  const matches = fragment.match(MULTI_ITEM_RE);
+  if (matches && matches.length >= 2) return true;
+  return TOC_LINE_RE.test(fragment.trim());
+}
+
+function detectSecHeadingInFragment(fragment: string): string | undefined {
+  // Guard: multi-item or page-numbered lines are TOC entries, not section starts.
+  if (isLikelyToc(fragment)) return undefined;
+  // Prefer the RIGHTMOST (last) title-anchored heading in the fragment, so a real
+  // "Item 1A. Risk Factors" that follows earlier prose wins over an earlier item.
+  let best: { item: string; idx: number } | undefined;
+  for (const { item, re } of SEC_ITEM_TITLES) {
+    const m = re.exec(fragment);
+    if (m && /risk\s+factors|management|quantitative|business|directors|executive\s+compensation|unresolved/i.test(m[0])) {
+      if (!best || m.index > best.idx) best = { item, idx: m.index };
+    }
+  }
+  if (best) return best.item;
+  // Fallback: a bare "Item N." heading (non-TOC, single item).
+  const lm = SEC_ITEM_HEADING_RE.exec(fragment);
+  if (lm) return normalizeSecItem(lm[1]);
+  return undefined;
 }
 
 /** Detect the SEC item heading at the start of a text block, if present. */
@@ -293,11 +352,30 @@ function chunkBody(text: string): Array<{ text: string; section?: string }> {
     }
   };
 
-  for (const fragment of fragments) {
+  for (let fi = 0; fi < fragments.length; fi++) {
+    const fragment = fragments[fi];
     if (!fragment) continue;
-    // Detect a section heading at the start of this fragment.
-    const m = SEC_ITEM_HEADING_RE.exec(fragment);
-    if (m) currentSection = normalizeSecItem(m[1]);
+    // Detect a section heading anywhere in this fragment (inline or line-anchored,
+    // TOC-suppressed). REVIEWER FIX v3d: previously only the start-of-fragment
+    // line-anchored form was detected, which missed inline EDGAR headings. The
+    // sentence splitter also separates "Item 1A." from its title "Risk Factors"
+    // (two fragments), so we detect over a small look-ahead window that re-joins
+    // this fragment with the next one before testing the title-anchored pattern.
+    const lookAhead = (fragment + " " + (fragments[fi + 1] || "")).slice(0, 160);
+    const detected = detectSecHeadingInFragment(fragment) || detectSecHeadingInFragment(lookAhead);
+    if (detected && detected !== currentSection) {
+      // A NEW section begins here. REVIEWER FIX v3d: start a fresh chunk at the
+      // heading so each SEC item's body becomes its own retrievable, correctly
+      // tagged unit (Item 1A indexed separately), instead of being merged into a
+      // neighbouring section's chunk and mis-tagged by a later heading.
+      if (currentChunk.trim()) flush();
+      currentChunk = "";
+      currentSection = detected;
+      chunkStartSection = detected;
+    } else if (detected) {
+      currentSection = detected;
+      if (!chunkStartSection) chunkStartSection = detected;
+    }
 
     if (currentChunk.length + fragment.length > CHUNK_SIZE && currentChunk.length > 0) {
       flush();
@@ -392,9 +470,18 @@ function requiresRegulatoryFiling(measure: FrameworkMeasure): boolean {
 // AND at least one AI/ML topic term, so we never force in an irrelevant chunk.
 function looksLike10KRiskChunk(chunkText: string, section: string | undefined, topicTerms: string[]): boolean {
   const t = chunkText.toLowerCase();
-  const isRiskSection = section === "item1a" || /risk factors|item\s*1a/.test(t);
-  if (!isRiskSection) return false;
-  return countTopicHits(chunkText, topicTerms) > 0;
+  // Must contain at least one AI/ML topic term so we never force in an off-topic
+  // risk paragraph.
+  if (countTopicHits(chunkText, topicTerms) === 0) return false;
+  // (a) Tagged as Item 1A by the chunker (now robust to inline headings), OR
+  // (b) explicit risk-factor heading language in-window, OR
+  // (c) the chunk uses unambiguous SEC risk-factor prose. REVIEWER FIX v3d: the
+  // heading may live in a neighboring chunk, so we also accept canonical
+  // risk-factor phrasing co-occurring with risk language.
+  if (section === "item1a") return true;
+  if (/risk factors|item\s*1a/.test(t)) return true;
+  const hasRiskProse = /(could|may|might)\s+(adversely|materially|negatively)\s+(affect|impact|harm)|adversely affect our|harm our business|risks (related to|associated with|relating to)|subject us to|expose us to|regulatory.{0,30}(risk|scrutiny|uncertaint)/.test(t);
+  return hasRiskProse;
 }
 
 // Tunables (env-overridable so behavior can be adjusted without a code change).
@@ -412,6 +499,13 @@ const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_
 // per measure. Env-overridable so it can be tuned without a redeploy.
 const EVIDENCE_TOP_K = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "20", 10);
 const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "20000", 10);
+
+// REVIEWER FIX v3d rec #1 (augment-not-displace): for regulatory-filing measures
+// (9.x / risk-factor), the forced Item 1A chunk(s) are added on a DEDICATED extra
+// budget on top of the normal pack, so guaranteeing Item 1A never evicts other
+// supporting evidence. Force up to N chunks within EXTRA_CHARS of headroom.
+const REG_FILING_FORCE_CHUNKS = parseInt(process.env.RETRIEVAL_REG_FILING_FORCE_CHUNKS || "2", 10);
+const REG_FILING_EXTRA_CHARS = parseInt(process.env.RETRIEVAL_REG_FILING_EXTRA_CHARS || "4000", 10);
 
 export function buildEvidencePackForMeasure(opts: {
   measure: FrameworkMeasure;
@@ -506,18 +600,31 @@ export function buildEvidencePackForMeasure(opts: {
     return true;
   };
 
-  // Step 0 — Regulatory-filing guarantee (Concern 2 residual fix).
+  // Step 0 — Regulatory-filing guarantee (Concern 2 residual fix + v3d reviewer rec #1).
   // For measures that explicitly require a 10-K/20-F (the 9.x family), force the
-  // single best 10-K Item 1A risk chunk into the pack BEFORE anything else, so it
+  // best 10-K Item 1A risk chunk(s) into the pack BEFORE anything else, so they
   // can never be displaced by keyword-dense sustainability/governance documents.
+  //
+  // AUGMENT, don't DISPLACE: the forced chunks get a dedicated extra budget
+  // (REG_FILING_EXTRA_CHARS / _SLOTS) on top of the normal topK/maxChars, so
+  // guaranteeing Item 1A does NOT evict other supporting evidence for the
+  // measure (which previously caused off-target score swings on Amazon/Oracle).
   if (requiresRegulatoryFiling(measure)) {
-    const filingCandidate = scored
+    const filingCandidates = scored
       .filter((s) => looksLike10KRiskChunk(s.text, chunks[s.idx].section, topicTerms))
-      .sort((a, b) => b.score - a.score)[0];
-    if (filingCandidate && evidenceLen + filingCandidate.text.length <= maxChars) {
+      .sort((a, b) => b.score - a.score)
+      .slice(0, REG_FILING_FORCE_CHUNKS);
+    let regForcedChars = 0;
+    for (const filingCandidate of filingCandidates) {
+      if (selected.includes(filingCandidate)) continue;
+      // Allow the forced chunk to exceed the normal maxChars by up to the extra
+      // reg-filing budget; this is the "augment" allowance.
+      if (regForcedChars + filingCandidate.text.length > REG_FILING_EXTRA_CHARS) continue;
+      if (evidenceLen + filingCandidate.text.length > maxChars + REG_FILING_EXTRA_CHARS) continue;
       selected.push(filingCandidate);
       perDocCount.set(filingCandidate.docIndex, (perDocCount.get(filingCandidate.docIndex) || 0) + 1);
       evidenceLen += filingCandidate.text.length + 2;
+      regForcedChars += filingCandidate.text.length;
     }
   }
 
