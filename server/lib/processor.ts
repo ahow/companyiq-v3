@@ -143,12 +143,24 @@ async function canonicalizeSecMirrorUrl(url: string): Promise<string> {
 
   const dashed = dashAccession(acc18);
   try {
-    const resp = await axios.get("https://efts.sec.gov/LATEST/search-index", {
-      params: { q: `"${dashed}"` },
-      headers: { "User-Agent": SEC_USER_AGENT, Accept: "application/json" },
-      timeout: 15000,
-      validateStatus: (s) => s < 500,
-    });
+    // efts.sec.gov returns transient 500s under load; retry with spaced backoff
+    // (SEC fair-access ~10 req/s). A few hundred ms between tries reliably clears
+    // the 5xx, which is what recovers the remaining IR-mirror filings.
+    let resp: any = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const r = await axios.get("https://efts.sec.gov/LATEST/search-index", {
+        params: { q: `"${dashed}"` },
+        headers: { "User-Agent": SEC_USER_AGENT, Accept: "application/json" },
+        timeout: 15000,
+        validateStatus: () => true,
+      });
+      if (r.status === 200 && r.data?.hits) { resp = r; break; }
+      await new Promise((res) => setTimeout(res, 400 * (attempt + 1)));
+    }
+    if (!resp) {
+      console.warn(`[Processor] SEC mirror canonicalization: efts unavailable for ${dashed} after retries`);
+      return url;
+    }
     const hits: any[] = resp.data?.hits?.hits || [];
     // Prefer the primary document (htm) for the matching accession.
     let chosen: { cik: string; file: string } | null = null;
