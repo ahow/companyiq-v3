@@ -141,6 +141,7 @@ const DEFAULT_AI_TOPIC_TERMS = [
   "ai model", "ai models", "ai system", "ai systems", "ai tool", "ai tools",
   "ai-powered", "ai powered", "ai-driven", "ai driven", "ai capabilities",
   "algorithmic", "automation", "predictive model", "foundation model",
+  "frontier model", "transformer model", "diffusion model", "ai-enabled",
   "chatbot", "copilot", "intelligent automation", "data science",
   // Multilingual AI terms so foreign-language passages are recognized by the
   // topic floor (French, German, Spanish, Italian, Portuguese, Dutch, Nordic,
@@ -350,6 +351,14 @@ export interface EvidencePack {
 function relevantSecSections(measure: FrameworkMeasure): Set<string> {
   const hay = `${measure.category} ${measure.title} ${measure.definition || ""}`.toLowerCase();
   const out = new Set<string>();
+  // Hard-pin the 9.x family (AI risk disclosure & capital allocation) to the
+  // filing sections it must come from, so the section boost + force-include below
+  // always apply even if the title/definition wording is terse.
+  if (/^9\./.test(measure.measureId)) {
+    out.add("item1a");
+    out.add("item7");
+    out.add("item7a");
+  }
   // Risk identification / risk factors / material risks → Item 1A (and 7/7A).
   if (/risk|threat|vulnerab|material|uncertaint|mitigat|exposure|incident|safety|harm/.test(hay)) {
     out.add("item1a");
@@ -367,6 +376,25 @@ function relevantSecSections(measure: FrameworkMeasure): Set<string> {
     out.add("item11");
   }
   return out;
+}
+
+// True when a measure's definition specifically requires a regulatory annual
+// filing (10-K / 20-F / annual report risk factors). Used to force-include the
+// top Item 1A chunk so filing-specific measures (the 9.x family) can never be
+// starved by keyword-dense non-regulatory documents.
+function requiresRegulatoryFiling(measure: FrameworkMeasure): boolean {
+  const hay = `${measure.measureId} ${measure.title} ${measure.definition || ""}`.toLowerCase();
+  return /^9\.|10-?k|20-?f|form\s*10|annual report|risk-?factor|risk factor|regulatory filing|securities filing/.test(hay);
+}
+
+// Heuristic: does this chunk look like it came from a real 10-K/20-F risk-factor
+// section? We require the Item 1A section tag OR explicit risk-factor language,
+// AND at least one AI/ML topic term, so we never force in an irrelevant chunk.
+function looksLike10KRiskChunk(chunkText: string, section: string | undefined, topicTerms: string[]): boolean {
+  const t = chunkText.toLowerCase();
+  const isRiskSection = section === "item1a" || /risk factors|item\s*1a/.test(t);
+  if (!isRiskSection) return false;
+  return countTopicHits(chunkText, topicTerms) > 0;
 }
 
 // Tunables (env-overridable so behavior can be adjusted without a code change).
@@ -477,6 +505,21 @@ export function buildEvidencePackForMeasure(opts: {
     evidenceLen += item.text.length + 2;
     return true;
   };
+
+  // Step 0 — Regulatory-filing guarantee (Concern 2 residual fix).
+  // For measures that explicitly require a 10-K/20-F (the 9.x family), force the
+  // single best 10-K Item 1A risk chunk into the pack BEFORE anything else, so it
+  // can never be displaced by keyword-dense sustainability/governance documents.
+  if (requiresRegulatoryFiling(measure)) {
+    const filingCandidate = scored
+      .filter((s) => looksLike10KRiskChunk(s.text, chunks[s.idx].section, topicTerms))
+      .sort((a, b) => b.score - a.score)[0];
+    if (filingCandidate && evidenceLen + filingCandidate.text.length <= maxChars) {
+      selected.push(filingCandidate);
+      perDocCount.set(filingCandidate.docIndex, (perDocCount.get(filingCandidate.docIndex) || 0) + 1);
+      evidenceLen += filingCandidate.text.length + 2;
+    }
+  }
 
   // Step 1 — Topic floor: guarantee a few of the most topic-dense chunks are in
   // the pack whenever the corpus contains ANY topic-relevant passages. This is
