@@ -136,6 +136,7 @@ async function runFetchPhase(opts: {
     companyId,
     companyDomain: company.domain,
     isin: company.isin,
+    ticker: company.ticker,
     sector: company.sector,
     country: company.country,
     pinnedUrls: (company.pinnedDocuments as string[]) || undefined,

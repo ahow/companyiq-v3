@@ -904,6 +904,62 @@ function buildCJKQueries(companyName: string, framework: Framework): string[] {
   ];
 }
 
+// ─── A-share / China primary-filing Queries ──────────────────────────────────
+
+/**
+ * Derives the mainland-China exchange ticker from a CN ISIN when possible.
+ * CN ISINs look like CNE100000XXX. The embedded 6-digit board code is not
+ * directly recoverable from the ISIN alone, so we instead rely on the official
+ * disclosure portals (cninfo / SSE / SZSE) which index by company name. We do,
+ * however, use the ISIN itself as a high-precision search token.
+ */
+function isChinaAShare(isin?: string | null, country?: string | null): boolean {
+  if (isin && /^CNE/i.test(isin)) return true;
+  if ((country || "").toUpperCase().includes("CHINA")) return true;
+  return false;
+}
+
+/**
+ * Primary-filing lane for mainland-China (A-share) issuers. Targets the official
+ * disclosure repositories — cninfo.com.cn (巨潮资讯), sse.com.cn (上交所),
+ * szse.cn (深交所) — plus the issuer's annual report (年度报告) by name and ISIN.
+ * These are where the genuine A-share annual report lives; generic web search
+ * tends to surface news wrappers (e.g. Futubull) and wrong-entity US/HK filings
+ * instead, which is why this dedicated lane is needed.
+ */
+function buildAShareFilingQueries(companyName: string, isin?: string | null): string[] {
+  const queries: string[] = [
+    `site:cninfo.com.cn "${companyName}" 年度报告`,
+    `site:cninfo.com.cn "${companyName}"`,
+    `site:sse.com.cn "${companyName}" 年度报告`,
+    `site:szse.cn "${companyName}" 年度报告`,
+    `"${companyName}" 年度报告 2024 OR 2023 filetype:pdf`,
+    `"${companyName}" 人工智能 风险 年报`,
+  ];
+  if (isin) {
+    queries.push(`"${isin}" 年度报告`);
+    queries.push(`site:cninfo.com.cn "${isin}"`);
+  }
+  return queries;
+}
+
+/**
+ * Returns a list of KNOWN-DISTINCT entity names that share a token with the
+ * target company and must NOT be confused with it. This is the targeted fix for
+ * the "360" collision: the bare token "360" matches several unrelated issuers
+ * (Qifu / 360 DigiTech / 360 Finance / 360 ONE), so the generic pre-gate
+ * name-match would otherwise rescue their filings. Keyed conservatively off the
+ * target name so it only fires for the specific ambiguous issuers we know about.
+ */
+function disambiguationExclusions(companyName: string): string[] {
+  const n = companyName.toLowerCase();
+  // 360 Security Technology (A-share 601360) vs. the US/HK-listed "360" fintechs.
+  if (/\b360\b/.test(n) && /security|三六零|360 security/.test(n)) {
+    return ["qifu", "360 digitech", "360 finance", "qfin", "360 one", "360one", "360 digitech"];
+  }
+  return [];
+}
+
 // ─── Regulatory Filing Queries (Lane 8) ──────────────────────────────────────
 
 /**
@@ -1420,6 +1476,7 @@ export async function searchCompanyDocuments(opts: {
   companyId: number;
   companyDomain?: string | null;
   isin?: string | null;
+  ticker?: string | null;
   sector?: string | null;
   country?: string | null;
   pinnedUrls?: string[];
@@ -1602,6 +1659,19 @@ export async function searchCompanyDocuments(opts: {
     for (const r of results) addCandidate(r, "regulatory");
   }
 
+  // Lane 8b: A-share / China primary-filing lane (cninfo / SSE / SZSE)
+  // For mainland-China issuers, the genuine annual report (年度报告) lives on the
+  // official disclosure portals, not on generic web search (which surfaces news
+  // wrappers and wrong-entity US/HK filings). Keyed off CN ISIN + Chinese name.
+  if (isChinaAShare(opts.isin, opts.country)) {
+    console.log(`[${companyName}] Running A-share primary-filing search lane (cninfo/SSE/SZSE)`);
+    const aShareQueries = buildAShareFilingQueries(companyName, opts.isin);
+    for (const query of aShareQueries) {
+      const results = await webSearch(query, { num: Math.min(searchDepth, 10), gl: "cn", hl: "zh-cn" });
+      for (const r of results) addCandidate(r, "a-share-filing");
+    }
+  }
+
   // Lane 9: Investor Relations / Annual Report direct search
   // Targets investor presentations, earnings transcripts, and annual reports
   // that often contain strategy/governance disclosures missed by ESG-focused queries.
@@ -1650,8 +1720,25 @@ export async function searchCompanyDocuments(opts: {
     "glaukos", "cirrus logic", "american integrity",
   ];
 
+  // Entity-specific exclusions: distinct issuers that share an ambiguous token
+  // with the target (e.g. "360" → Qifu / 360 DigiTech / 360 Finance). These must
+  // be rejected even when the title also contains the shared token, because the
+  // generic name-match below would otherwise rescue them.
+  const excludeEntities = disambiguationExclusions(companyName);
+  const url2 = (s: string) => s.toLowerCase();
+
   const filteredCandidates = allCandidates.filter(c => {
     const titleLower = c.title.toLowerCase();
+    const haystack = titleLower + " " + url2(c.url);
+    // Hard exclude known-distinct entities sharing an ambiguous token, UNLESS
+    // the candidate is from an official A-share portal (those are issuer-correct).
+    if (excludeEntities.length > 0) {
+      const onOfficialPortal = /cninfo\.com\.cn|sse\.com\.cn|szse\.cn/.test(url2(c.url));
+      if (!onOfficialPortal && excludeEntities.some(ex => haystack.includes(ex))) {
+        laneCounts["pre-gate-disambiguated"] = (laneCounts["pre-gate-disambiguated"] || 0) + 1;
+        return false;
+      }
+    }
     // If title contains the target company name, always keep
     if (companyNameWords.some(w => titleLower.includes(w))) return true;
     // If title prominently mentions a known OTHER company, reject
@@ -1666,6 +1753,10 @@ export async function searchCompanyDocuments(opts: {
     }
     return true;
   });
+
+  if ((laneCounts["pre-gate-disambiguated"] || 0) > 0) {
+    console.log(`[${companyName}] Disambiguation removed ${laneCounts["pre-gate-disambiguated"]} wrong-entity candidates (${excludeEntities.join(", ")})`);
+  }
 
   if (filteredCandidates.length < allCandidates.length) {
     console.log(`[${companyName}] Pre-gate heuristic removed ${allCandidates.length - filteredCandidates.length} candidates mentioning other companies`);
