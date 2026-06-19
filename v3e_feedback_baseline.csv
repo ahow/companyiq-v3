@@ -1,0 +1,11 @@
+company_id,name,total_score_before,measures_met_before,status_before
+420,"SALESFORCE, INC.",62,21,completed
+853,"AMAZON.COM, INC.",50,17,completed
+553,MICROSOFT CORPORATION,47,16,completed
+1312,NVIDIA CORPORATION,41,14,completed
+552,ORACLE CORPORATION,38,13,completed
+866,APPLE INC.,32,11,completed
+2063,ALPHABET INC.,29,10,completed
+1918,"META PLATFORMS, INC.",21,7,completed
+1914,360 Security Technology Inc.,21,6,completed
+2412,"TESLA, INC.",18,6,completed
