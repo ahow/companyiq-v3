@@ -85,7 +85,12 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     crossVerifyEnabled: settings.cross_verify_enabled === "true",
     scoringMode: settings.scoring_mode || "binary",
     lowConfidenceHandling: settings.low_confidence_handling || "downgrade",
-    verdictCacheEnabled: settings.verdict_cache_enabled !== "false", // default ON
+    // v3g (Bug 1 §3 action 5): verdict cache is now OPT-IN (default OFF) until the
+    // fingerprint contract is independently re-verified. The cost of recomputing a
+    // few measures per re-run is trivial vs the risk of cross-company verdict reuse
+    // that the old positional fingerprint allowed. Set verdict_cache_enabled="true"
+    // to re-enable once the new content-stable fingerprints are confirmed unique.
+    verdictCacheEnabled: settings.verdict_cache_enabled === "true", // default OFF
   };
 }
 
@@ -834,13 +839,15 @@ export async function analyzeCompanyMeasures(opts: {
     console.log(`[${companyName}] Scoring category: ${category} (${categoryMeasures.length} measures)`);
 
     // Build evidence packs via BM25
-    let evidencePacks: Array<{ measureId: string; text: string; topicHits?: number }>;
+    let evidencePacks: Array<{ measureId: string; text: string; topicHits?: number; fingerprint?: string; fingerprintEligible?: boolean }>;
     if (settings.useBm25Retrieval) {
       evidencePacks = buildEvidencePacksForCategory({
         measures: categoryMeasures,
         combinedText,
         terminology,
         topicTerms,
+        companyId,          // v3g (Bug 1): collision-free fingerprint identity
+        frameworkId: framework.id,
       });
     } else {
       // No BM25: use full text for all measures
@@ -890,6 +897,7 @@ export async function analyzeCompanyMeasures(opts: {
           return {
             measureId: measure.measureId,
             title: measure.title,
+            definition: measure.definition,
             category: measure.category,
             categoryNumber: measure.categoryNumber,
             score: 0,
@@ -1025,6 +1033,8 @@ export async function analyzeCompanyMeasures(opts: {
               topicTerms,
               topK: DEEP_TOP_K,
               maxChars: DEEP_MAX_CHARS,
+              companyId,            // v3g (Bug 1): collision-free fingerprint identity
+              frameworkId: framework.id,
             });
             // Only re-score if the deep pass actually surfaced more topic evidence
             // than the original pack (otherwise re-scoring adds cost for no gain).
@@ -1087,16 +1097,23 @@ export async function analyzeCompanyMeasures(opts: {
       measureResult.evidenceFingerprint = evidencePack?.fingerprint || null;
       measureResult.abstained = false;
 
-      // v3e (Section 4): VERDICT CACHE (opt-in, ON by default). When enabled and a
-      // prior verdict exists for this company+measure with an IDENTICAL evidence
-      // fingerprint, reuse it for reproducibility. A deliberate variability re-run
-      // can opt OUT via settings.verdictCacheEnabled=false or freshScoring. Either
-      // way the freshly-computed fingerprint is persisted; drift is logged.
-      if (verdictCacheEnabled && priorScoresByMeasure) {
+      // v3g (Bug 1): an empty/degenerate pack is NOT cache-eligible — its sentinel
+      // fingerprint must never satisfy a cache hit.
+      const fingerprintEligible = (evidencePack as any)?.fingerprintEligible !== false;
+
+      // v3e (Section 4) / v3g (Bug 1): VERDICT CACHE (now OPT-IN, default OFF — see
+      // loadAnalysisSettings). When enabled and a prior verdict exists for this
+      // company+measure with an IDENTICAL, cache-eligible evidence fingerprint,
+      // reuse it for reproducibility. The freshly-computed fingerprint is always
+      // persisted; drift is logged.
+      if (verdictCacheEnabled && fingerprintEligible && priorScoresByMeasure) {
         const prior = priorScoresByMeasure.get(measure.measureId);
         const fp = measureResult.evidenceFingerprint;
         if (prior && fp && prior.evidenceFingerprint && prior.evidenceFingerprint === fp) {
-          console.log(`[${companyName}] CACHE-HIT ${measure.measureId}: identical evidence fingerprint, reusing prior verdict ${prior.verdict}`);
+          // v3g (Bug 1 §3 action 4): explicit, auditable cache-hit log including the
+          // matching fingerprint and the prior verdict being reused, so silent
+          // cross-entity reuse is impossible to miss in production.
+          console.log(`[${companyName}] CACHE-HIT ${measure.measureId}: fingerprint=${fp.slice(0, 12)} reusing prior verdict="${prior.verdict}" (priorScore=${prior.score})`);
           return {
             ...measureResult,
             score: typeof prior.score === "number" ? prior.score : measureResult.score,

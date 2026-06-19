@@ -215,9 +215,22 @@ const CHUNK_OVERLAP = 200;
 // which enables per-document budgeting (no single huge filing can dominate).
 const DOC_HEADER_RE = /\n*---\s*DOCUMENT:\s*([\s\S]*?)\s*---\n*/g;
 
+// v3g (Bug 1): pull the [<url>] out of a document header label so each chunk can
+// carry the stable source-document identity. Header label looks like
+// "<title> [<url>]"; the URL is the last bracketed group.
+function extractDocUrlFromHeader(headerLabel: string): string | undefined {
+  const m = headerLabel.match(/\[([^\]]+)\]\s*$/);
+  return m ? m[1].trim() : undefined;
+}
+
 export interface Chunk {
   text: string;
   docIndex: number; // which source document this chunk came from
+  docUrl?: string;  // v3g (Bug 1): stable source-document URL parsed from the
+                    // "--- DOCUMENT: <title> [<url>] ---" header. Used to build a
+                    // CONTENT-STABLE evidence fingerprint that does not collide
+                    // across companies (positional docIndex/chunkIdx alone did).
+  seqInDoc?: number; // sequential index of this chunk WITHIN its source document.
   section?: string; // SEC item heading this chunk belongs to (e.g. "item1a"), if any
 }
 
@@ -307,8 +320,8 @@ export function detectSecSection(block: string): string | undefined {
   return undefined;
 }
 
-function splitIntoDocuments(combinedText: string): Array<{ header: string; body: string }> {
-  const segments: Array<{ header: string; body: string }> = [];
+function splitIntoDocuments(combinedText: string): Array<{ header: string; body: string; url?: string }> {
+  const segments: Array<{ header: string; body: string; url?: string }> = [];
   let lastIndex = 0;
   let lastHeader = "Document 1";
   let match: RegExpExecArray | null;
@@ -318,13 +331,13 @@ function splitIntoDocuments(combinedText: string): Array<{ header: string; body:
   while ((match = DOC_HEADER_RE.exec(combinedText)) !== null) {
     foundAny = true;
     const body = combinedText.slice(lastIndex, match.index);
-    if (body.trim()) segments.push({ header: lastHeader, body });
+    if (body.trim()) segments.push({ header: lastHeader, body, url: extractDocUrlFromHeader(lastHeader) });
     lastHeader = (match[1] || "").trim() || `Document ${segments.length + 1}`;
     lastIndex = DOC_HEADER_RE.lastIndex;
   }
   // Trailing body after the last header (or the whole text if no headers).
   const tail = combinedText.slice(lastIndex);
-  if (tail.trim()) segments.push({ header: lastHeader, body: tail });
+  if (tail.trim()) segments.push({ header: lastHeader, body: tail, url: extractDocUrlFromHeader(lastHeader) });
 
   if (!foundAny && segments.length === 0 && combinedText.trim()) {
     segments.push({ header: "Document 1", body: combinedText });
@@ -431,8 +444,10 @@ export function chunkDocuments(combinedText: string): Chunk[] {
   const docs = splitIntoDocuments(combinedText);
   const out: Chunk[] = [];
   docs.forEach((doc, docIndex) => {
+    let seqInDoc = 0;
     for (const c of chunkBody(doc.body)) {
-      out.push({ text: c.text, docIndex, section: c.section });
+      out.push({ text: c.text, docIndex, docUrl: doc.url, seqInDoc, section: c.section });
+      seqInDoc++;
     }
   });
   return out;
@@ -446,10 +461,16 @@ export interface EvidencePack {
   chunkCount: number;
   totalChars: number;
   topicHits: number; // Layer D: how many topic mentions actually reached the pack
-  // v3e (Section 4): SHA1 over the sorted (docIndex:chunkIdx) identifiers of the
-  // chunks selected into this pack. Identical evidence => identical fingerprint,
-  // enabling verdict caching and evidence-drift detection across runs.
+  // v3g (Bug 1): SHA1 over an EXPLICIT, CONTENT-STABLE identity:
+  //   companyId | frameworkId | measureId | sorted(docUrl#seqInDoc#sha1(chunkText))
+  // This is unique per (company, measure) and identical only when the genuine
+  // evidence pack is identical, eliminating the cross-company positional
+  // collisions of the old (docIndex:chunkIdx) scheme.
   fingerprint: string;
+  // v3g (Bug 1): false when the pack has zero chunks (empty/degenerate). Empty
+  // packs get a per-(company,measure) sentinel fingerprint and are NOT eligible
+  // for verdict-cache reuse.
+  fingerprintEligible: boolean;
 }
 
 // ─── Per-Measure SEC Section Relevance ───────────────────────────────────────
@@ -511,6 +532,21 @@ function requiresRegulatoryFiling(measure: FrameworkMeasure): boolean {
   return /^9\.|10-?k|20-?f|form\s*10|annual report|risk-?factor|risk factor|regulatory filing|securities filing/.test(hay);
 }
 
+// v3g (Bug 2): does this document URL/title look like a regulatory ANNUAL filing
+// (10-K / 20-F / 40-F / annual report) — i.e. one that should contain an Item 1A
+// (or equivalent) risk-factors section? Topic-agnostic; URL/title shape only.
+function isRegulatoryAnnualFilingDoc(url: string | undefined, title: string | undefined): boolean {
+  const s = `${url || ""} ${title || ""}`.toLowerCase();
+  if (!s.trim()) return false;
+  // EDGAR primary-document archive shape: /archives/edgar/data/<cik>/<accession>/...
+  const isEdgarPrimary = /sec\.gov\/archives\/edgar\/data\/\d+\//.test(s) && /\.htm/.test(s) && !/index\.htm|-index\.htm/.test(s);
+  const looksAnnual = /10-?k|20-?f|40-?f|annual.?report|年度报告|年度報告|年报|年報/.test(s);
+  // <ticker>-YYYYMMDD.htm EDGAR primary docs carry no form token in the name; treat
+  // an EDGAR primary HTML document as a candidate annual filing (the recency/type
+  // layer disambiguates which period it is). This is the Bug 2/3/5 unifier.
+  return looksAnnual || isEdgarPrimary;
+}
+
 // Heuristic: does this chunk look like it came from a real 10-K/20-F risk-factor
 // section? We require the Item 1A section tag OR explicit risk-factor language,
 // AND at least one AI/ML topic term, so we never force in an irrelevant chunk.
@@ -562,6 +598,9 @@ export function buildEvidencePackForMeasure(opts: {
   topK?: number;
   maxChars?: number;
   maxChunksPerDoc?: number;
+  // v3g (Bug 1): explicit identity for a collision-free fingerprint.
+  companyId?: number | string;
+  frameworkId?: number | string;
 }): EvidencePack {
   const {
     measure,
@@ -572,6 +611,8 @@ export function buildEvidencePackForMeasure(opts: {
     topK = EVIDENCE_TOP_K,
     maxChars = EVIDENCE_MAX_CHARS,
     maxChunksPerDoc = MAX_CHUNKS_PER_DOC,
+    companyId,
+    frameworkId,
   } = opts;
 
   // Build query terms from measure title + definition + evidence keywords + terminology
@@ -656,11 +697,45 @@ export function buildEvidencePackForMeasure(opts: {
   // guaranteeing Item 1A does NOT evict other supporting evidence for the
   // measure (which previously caused off-target score swings on Amazon/Oracle).
   if (requiresRegulatoryFiling(measure)) {
-    const filingCandidates = scored
+    // Primary candidates: chunks that already read as 10-K/20-F risk-factor prose.
+    let filingCandidates = scored
       .filter((s) => looksLike10KRiskChunk(s.text, chunks[s.idx].section, topicTerms))
       .sort((a, b) => b.score - a.score)
       .slice(0, REG_FILING_FORCE_CHUNKS);
+
+    // v3g (Bug 2): DETERMINISTIC RECOVERY. The old logic could force-include
+    // NOTHING when a present 10-K's Item 1A failed to get tagged and no chunk
+    // carried explicit risk prose + a topic hit (observed on Meta/Alphabet/
+    // NVIDIA/Salesforce) — so the grader saw "no 10-K" despite the filing being
+    // in the corpus. We now identify chunks that physically belong to a
+    // regulatory ANNUAL-filing document (by docUrl/section) and GUARANTEE at
+    // least one is force-included, with a tiered fallback:
+    //   (1) item1a-tagged chunk from a reg-filing doc (best)
+    //   (2) any risk-prose chunk from a reg-filing doc
+    //   (3) the highest-BM25 chunk from a reg-filing doc (last resort)
+    const fromRegDoc = (s: (typeof scored)[number]) =>
+      isRegulatoryAnnualFilingDoc(chunks[s.idx].docUrl, undefined) || chunks[s.idx].section === "item1a";
+    const regDocChunks = scored.filter(fromRegDoc);
+    const hasRegFilingDoc = regDocChunks.length > 0;
+
+    if (filingCandidates.length === 0 && hasRegFilingDoc) {
+      const item1aFirst = regDocChunks
+        .filter((s) => chunks[s.idx].section === "item1a")
+        .sort((a, b) => b.score - a.score);
+      const riskProse = regDocChunks
+        .filter((s) => /risk factors|(could|may|might)\s+(adversely|materially|negatively)|adversely affect our|harm our business/i.test(s.text))
+        .sort((a, b) => b.score - a.score);
+      const byBm25 = [...regDocChunks].sort((a, b) => b.bm25 - a.bm25);
+      const recovered = (item1aFirst[0] || riskProse[0] || byBm25[0]);
+      const tier = item1aFirst[0] ? "item1a-tag" : riskProse[0] ? "risk-prose" : "bm25-fallback";
+      if (recovered) {
+        filingCandidates = [recovered];
+        console.log(`[reg-filing] ${measure.measureId}: Item 1A not pre-selected; RECOVERED reg-filing chunk via ${tier} (docIndex=${recovered.docIndex})`);
+      }
+    }
+
     let regForcedChars = 0;
+    let regForcedCount = 0;
     for (const filingCandidate of filingCandidates) {
       if (selected.includes(filingCandidate)) continue;
       // Allow the forced chunk to exceed the normal maxChars by up to the extra
@@ -671,6 +746,18 @@ export function buildEvidencePackForMeasure(opts: {
       perDocCount.set(filingCandidate.docIndex, (perDocCount.get(filingCandidate.docIndex) || 0) + 1);
       evidenceLen += filingCandidate.text.length + 2;
       regForcedChars += filingCandidate.text.length;
+      regForcedCount++;
+    }
+
+    // v3g (Bug 2): GRADER-SIDE ASSERTION (log-only, non-fatal). When a measure
+    // requires a regulatory filing AND such a document is present in the corpus
+    // but we STILL could not place any chunk from it into the pack, emit a loud
+    // warning so the condition is observable in production rather than silently
+    // degrading to a misleading "No".
+    if (regForcedCount === 0 && hasRegFilingDoc) {
+      console.warn(`[reg-filing][ASSERT] ${measure.measureId}: reg-filing doc present in corpus but NO filing chunk made it into the pack (budget/dedup). Pack may understate filing evidence.`);
+    } else if (regForcedCount === 0 && !hasRegFilingDoc) {
+      console.log(`[reg-filing] ${measure.measureId}: no regulatory annual-filing document in corpus (nothing to force-include)`);
     }
   }
 
@@ -713,10 +800,33 @@ export function buildEvidencePackForMeasure(opts: {
     packTopicHits += item.topicHits;
   }
 
-  // v3e (Section 4): deterministic evidence fingerprint from the selected chunk
-  // identifiers (independent of selection order).
-  const chunkIds = selected.map((s) => `${s.docIndex}:${s.idx}`).sort();
-  const fingerprint = createHash("sha1").update(chunkIds.join("|")).digest("hex");
+  // v3g (Bug 1): CONTENT-STABLE evidence fingerprint. The previous scheme hashed
+  // only positional `docIndex:chunkIdx` pairs, which are local to each company's
+  // corpus / category chunk array and carry NO company, framework, measure or
+  // document identity. Two unrelated companies whose top evidence happened to land
+  // on the same positional slots therefore produced an IDENTICAL hash (observed:
+  // one hash repeated 98× across 5 companies and all 34 measures), making the
+  // verdict cache unsafe.
+  //
+  // The new fingerprint hashes an EXPLICIT, deterministic identity:
+  //   companyId | frameworkId | measureId | sorted(docUrl # seqInDoc # sha1(chunkText))
+  // - companyId/frameworkId/measureId guarantee no cross-entity collision.
+  // - per-chunk (docUrl, seqInDoc, content-hash) makes it identical ONLY when the
+  //   genuine evidence pack is identical, independent of selection order.
+  // Empty packs are handled by the caller path; here `selected` is non-empty.
+  const ident = `c=${companyId ?? "?"}|f=${frameworkId ?? "?"}|m=${measure.measureId}`;
+  const chunkIds = selected
+    .map((s) => {
+      const ch = chunks[s.idx];
+      const docKey = ch?.docUrl || `docIndex:${s.docIndex}`;
+      const seq = ch?.seqInDoc ?? s.idx;
+      const contentHash = createHash("sha1").update(s.text).digest("hex").slice(0, 16);
+      return `${docKey}#${seq}#${contentHash}`;
+    })
+    .sort();
+  const fingerprint = createHash("sha1")
+    .update(`${ident}||${chunkIds.join("|")}`)
+    .digest("hex");
 
   return {
     measureId: measure.measureId,
@@ -725,6 +835,7 @@ export function buildEvidencePackForMeasure(opts: {
     totalChars: evidenceText.length,
     topicHits: packTopicHits,
     fingerprint,
+    fingerprintEligible: selected.length > 0,
   };
 }
 
@@ -743,18 +854,27 @@ export function buildEvidencePacksForCategory(opts: {
   topicTerms?: string[];
   topK?: number;
   maxChars?: number;
+  // v3g (Bug 1): identity for a collision-free per-(company,measure) fingerprint.
+  companyId?: number | string;
+  frameworkId?: number | string;
 }): EvidencePack[] {
-  const { measures, combinedText, terminology, topicTerms = DEFAULT_AI_TOPIC_TERMS, topK, maxChars } = opts;
+  const { measures, combinedText, terminology, topicTerms = DEFAULT_AI_TOPIC_TERMS, topK, maxChars, companyId, frameworkId } = opts;
 
   const chunks = chunkDocuments(combinedText);
   if (chunks.length === 0) {
+    // v3g (Bug 1): empty corpus -> per-(company,framework,measure) SENTINEL
+    // fingerprint, explicitly marked cache-INELIGIBLE so an empty pack can never
+    // satisfy a cache hit (and never collide with a real pack).
     return measures.map((m) => ({
       measureId: m.measureId,
       text: "",
       chunkCount: 0,
       totalChars: 0,
       topicHits: 0,
-      fingerprint: createHash("sha1").update(`empty:${m.measureId}`).digest("hex"),
+      fingerprint: createHash("sha1")
+        .update(`EMPTY_PACK|c=${companyId ?? "?"}|f=${frameworkId ?? "?"}|m=${m.measureId}`)
+        .digest("hex"),
+      fingerprintEligible: false,
     }));
   }
 
@@ -769,6 +889,8 @@ export function buildEvidencePacksForCategory(opts: {
       topicTerms,
       topK,
       maxChars,
+      companyId,
+      frameworkId,
     })
   );
 }

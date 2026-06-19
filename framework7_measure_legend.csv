@@ -1,0 +1,35 @@
+measure_id,category_number,category,title
+1.1a-ai-strategic-priority,1,AI Strategy and Integration,Does the company name AI as a stated strategic priority?
+1.1-ai-strategy-objectives,1,AI Strategy and Integration,Does the company state a formal AI strategy with defined objectives?
+1.2-ai-competitive-driver,1,AI Strategy and Integration,Is AI mentioned as a material driver of the company's competitive strategy?
+1.3-ai-technology-differentiation,1,AI Strategy and Integration,Does the company distinguish between traditional/predictive AI and generative AI in its disclosures?
+1.4-ai-regulation-readiness,1,AI Strategy and Integration,Does the company disclose readiness for emerging AI regulations?
+2.1a-ai-use-cases-qualitative,2,AI Deployment and Use Cases,Does the company reference multiple AI use cases qualitatively?
+2.1-ai-use-cases-count,2,AI Deployment and Use Cases,Does the company disclose a specific number of AI use cases (in production or piloting)?
+2.2a-ai-production-deployment,2,AI Deployment and Use Cases,Has the company stated any AI use case as in production?
+2.2-ai-production-pilot-breakdown,2,AI Deployment and Use Cases,Does the company disclose a breakdown of AI use cases by production vs pilot stage?
+2.3-ai-use-case-descriptions,2,AI Deployment and Use Cases,Does the company provide qualitative descriptions of AI use cases in key business areas?
+3.1a-ai-board-discussion,3,AI Governance and Oversight,Is AI risk or oversight discussed by the board in proxy or 10-K?
+3.1-board-oversight-ai-charter,3,AI Governance and Oversight,"Does the board (or a board committee) have an explicit, documented charter mandate for AI strategy and risk?"
+3.2-ai-leadership-accountability,3,AI Governance and Oversight,Has the company appointed a named senior executive accountable for AI?
+3.3-ai-governance-committees,3,AI Governance and Oversight,Has the company established a cross-functional AI governance/ethics committee at management level?
+3.4-ai-safety-robustness,3,AI Governance and Oversight,Does the company disclose AI safety and robustness testing practices?
+4.1a-ai-policy-internal,4,AI Policies and Ethical Considerations,Has the company referenced an internal AI policy or guidelines?
+4.1-ai-policy-published,4,AI Policies and Ethical Considerations,"Has the company published a formal AI policy, principles, or responsible-AI framework?"
+4.2-operationalisation-ai-principles,4,AI Policies and Ethical Considerations,"Does the company describe how AI principles are operationalised (controls, processes, KPIs)?"
+4.3-data-security-privacy-ai,4,AI Policies and Ethical Considerations,Does the AI policy explicitly cover data security and personal data privacy?
+4.4-third-party-ai-risk,4,AI Policies and Ethical Considerations,Does the company have a policy for managing third-party AI risks?
+5.1a-ai-kpis-qualitative,5,AI Performance and Impact Measurement,Does the company reference internally tracked AI metrics qualitatively?
+5.1-ai-kpis-quantified,5,AI Performance and Impact Measurement,Does the company disclose quantified AI-specific KPIs that it tracks internally?
+5.2a-ai-financial-impact-qualitative,5,AI Performance and Impact Measurement,Does the company qualitatively attribute revenue or cost impact to AI?
+5.2-ai-financial-impact-quantified,5,AI Performance and Impact Measurement,Does the company disclose quantified AI-attributable revenue or cost savings?
+6.1a-ai-reskilling-commitment,6,AI Talent and Workforce Development,Has the company stated a commitment to AI reskilling or upskilling?
+6.1-ai-reskilling-programme,6,AI Talent and Workforce Development,Has the company established a named workforce AI reskilling/upskilling programme?
+6.2-ai-training-headcount,6,AI Talent and Workforce Development,Does the company disclose the number of employees that completed AI training in the reporting year?
+7.1-strategic-ai-partnerships,7,AI Partnerships and Ecosystem Engagement,Has the company disclosed strategic partnerships with foundation-model providers or hyperscalers?
+8.1-ai-literacy-community,8,Community and Societal Impact,Does the company support AI literacy or digital-skills initiatives in the wider community?
+8.2-ai-public-policy-advocacy,8,Community and Societal Impact,Does the company engage in public policy advocacy related to AI ethics and governance?
+9.1-ai-risk-factor-disclosure,9,AI Risk Disclosure and Capital Allocation,"Does the company disclose AI as a material risk factor in its 10-K, 20-F or equivalent annual filing?"
+9.2-ai-capex-rd-quantified,9,AI Risk Disclosure and Capital Allocation,"Does the company quantify AI-related capex, R&D investment, or infrastructure commitment?"
+9.3-ai-business-model-risk,9,AI Risk Disclosure and Capital Allocation,Does the company disclose AI as a competitive risk to its existing business model?
+9.4-ai-incident-disclosure,9,AI Risk Disclosure and Capital Allocation,Has the company disclosed any AI-related incidents or near-misses?

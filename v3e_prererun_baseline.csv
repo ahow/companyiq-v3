@@ -1,0 +1,11 @@
+id,name,score_before,met_before,vintage_before
+420,SALESFORCE INC,44,15,batch93-v3d
+552,ORACLE CORPORATION,41,14,batch93-v3d
+553,MICROSOFT CORPORATION,44,14,batch93-v3d
+853,AMAZON.COM INC,25,8,deploy1-lexicon
+866,APPLE INC,35,12,batch93-v3d
+1312,NVIDIA CORPORATION,47,16,batch93-v3d
+1914,360 Security Technology Inc,21,6,final-deploy
+1918,META PLATFORMS INC,26,9,batch93-v3d
+2063,ALPHABET INC,26,9,batch93-v3d
+2412,TESLA INC,21,7,final-deploy

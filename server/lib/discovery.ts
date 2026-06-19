@@ -73,6 +73,22 @@ const MAX_PER_PERIODIC_TYPE = parseInt(process.env.DISCOVERY_MAX_PER_PERIODIC_TY
 
 // Patterns that identify a periodic filing and a normalized "type key" so we can
 // keep the newest N of each type rather than the newest N overall.
+// v3g (Bugs 3 & 5): authoritative EDGAR form-type per accession, populated by
+// enrichEdgarFilingDates() from the submissions API. Lets periodicFilingType
+// classify modern EDGAR primary documents (e.g. goog-20241231.htm) that carry no
+// form token in the filename — the root cause of the recency gate never grouping
+// Alphabet's stale 10-Ks and never recognising Salesforce's FY2025 10-K.
+const edgarFormByAccession = new Map<string, string | null>();
+
+function normalizeEdgarForm(form: string): string | null {
+  const f = form.toUpperCase().replace(/\s+/g, "");
+  if (/^10-?K/.test(f)) return "10-K";
+  if (/^20-?F/.test(f)) return "20-F";
+  if (/^40-?F/.test(f)) return "40-F";
+  if (/^DEF[\s]?14A|^DEFA14A/.test(f)) return "proxy";
+  return null; // 10-Q/8-K/6-K/13G etc. are not annual periodic types we gate here
+}
+
 function periodicFilingType(url: string, title: string): string | null {
   const s = (url + " " + title).toLowerCase();
   // Proxy / governance circulars (incl. Chinese 股东大会 notices).
@@ -82,6 +98,21 @@ function periodicFilingType(url: string, title: string): string | null {
   if (/40-?f\b/.test(s)) return "40-F";
   // Annual reports across jurisdictions, incl. Chinese 年度报告/年报 and integrated reports.
   if (/annual.?report|integrated.?report|年度报告|年度報告|年报|年報/.test(s)) return "annual-report";
+
+  // v3g (Bugs 3 & 5): EDGAR primary documents named only by period-end date
+  // (e.g. /Archives/edgar/data/<cik>/<accession>/goog-20241231.htm) carry no form
+  // token in the filename. Resolve the form from the authoritative per-accession
+  // form map when available; this is what lets the recency gate group + trim
+  // modern 10-Ks and what lets force-include treat the newest one as a 10-K.
+  const isEdgarPrimary = /sec\.gov\/archives\/edgar\/data\/\d+\//.test(s) && /\.htm/.test(s) && !/-index\.htm|\/index\.htm/.test(s);
+  if (isEdgarPrimary) {
+    for (const acc of extractEdgarAccessions(url)) {
+      if (edgarFormByAccession.has(acc)) {
+        const norm = edgarFormByAccession.get(acc);
+        if (norm) return norm;
+      }
+    }
+  }
   return null;
 }
 
@@ -107,6 +138,34 @@ export function detectSourceTypes(url: string, title: string): Set<string> {
   const isRegulatoryShape = /10-?k\b|10-?q\b|8-?k\b|20-?f\b|40-?f\b|def.?14a|edgar|年度报告|年度報告|年报|annual.?report.?on.?form/.test(s);
   if (ptype === "10-K" || ptype === "20-F" || ptype === "40-F" || ptype === "proxy" || isRegulatorHost || isRegulatoryShape) {
     types.add("regulatory-filing");
+
+    // v3g (Bug 4): SPLIT the regulatory-filing class by WHO the filer is. A doc on
+    // a regulator portal may be filed BY the issuer (10-K/20-F/proxy: authoritative
+    // self-disclosure) or merely ABOUT the issuer by a THIRD PARTY (SC 13D/13G &
+    // 13F beneficial-ownership, N-PORT/N-Q fund holdings, Form 3/4/5 insider
+    // trades, 6-K exhibits). The latter mention the company but are NOT the
+    // company's own narrative disclosure, so a measure that needs the issuer's
+    // 10-K must NOT be satisfied merely because an ETF's N-PORT names the company.
+    // This was the root cause of 360 Security/Meta etc. never abstaining.
+    const aboutIssuerForms = /sc[\s_-]?13[dg]\b|schedule[\s_-]?13[dg]|\b13f\b|n-?port|n-?q\b|n-?cen|form[\s_-]?[345]\b|\b6-?k\b|\bs-?8\b|prospectus|424b/i;
+    // EDGAR primary-document shape: /Archives/edgar/data/<cik>/<accession>/<file>.htm
+    // (e.g. goog-20241231.htm, crm-20250131.htm). These carry no form token in the
+    // filename but ARE the issuer's own primary filing document, so count as
+    // by-issuer (the recency/type layer disambiguates which form/period).
+    const isEdgarPrimaryDoc = /sec\.gov\/archives\/edgar\/data\/\d+\//.test(s) && /\.htm/.test(s) && !/-index\.htm|\/index\.htm/.test(s) && !aboutIssuerForms.test(s);
+    const byIssuerForms = ptype === "10-K" || ptype === "20-F" || ptype === "40-F" || ptype === "proxy" ||
+      /10-?k\b|10-?q\b|8-?k\b|20-?f\b|40-?f\b|def.?14a|annual.?report.?on.?form/.test(s) ||
+      isEdgarPrimaryDoc;
+    if (byIssuerForms && !aboutIssuerForms.test(s)) {
+      types.add("regulatory-filing-by-issuer");
+    } else if (aboutIssuerForms.test(s)) {
+      types.add("regulatory-filing-about-issuer");
+    } else {
+      // On a regulator host but neither clearly by-issuer nor a known third-party
+      // form (e.g. a bare EDGAR index page). Treat conservatively as about-issuer
+      // so it cannot satisfy a by-issuer requirement on its own.
+      types.add("regulatory-filing-about-issuer");
+    }
   }
 
   // Sustainability / ESG / non-financial reports.
@@ -229,8 +288,9 @@ export async function enrichEdgarFilingDates(urls: string[]): Promise<void> {
   const nowYear = new Date().getFullYear();
   for (const acc of pending) {
     const dashed = `${acc.slice(0, 10)}-${acc.slice(10, 12)}-${acc.slice(12)}`;
-    let resolved: number | null = null;
-    for (let attempt = 0; attempt < 3 && resolved === null; attempt++) {
+    let resolvedYear: number | null = null;
+    let resolvedForm: string | null = null;
+    for (let attempt = 0; attempt < 3 && resolvedYear === null; attempt++) {
       try {
         const resp = await axios.get("https://efts.sec.gov/LATEST/search-index", {
           params: { q: `"${dashed}"` },
@@ -243,8 +303,13 @@ export async function enrichEdgarFilingDates(urls: string[]): Promise<void> {
           const dateStr: string | undefined = src.file_date || src.filed || src.filing_date;
           if (dateStr && /^\d{4}/.test(dateStr)) {
             const y = parseInt(dateStr.slice(0, 4), 10);
-            if (y >= 2000 && y <= nowYear + 1) resolved = y;
+            if (y >= 2000 && y <= nowYear + 1) resolvedYear = y;
           }
+          // v3g (Bugs 3 & 5): also capture the authoritative FORM TYPE so modern
+          // EDGAR primary documents (date-only filenames) can be classified.
+          const formRaw: string | undefined = (Array.isArray(src.file_type) ? src.file_type[0] : src.file_type) ||
+            (Array.isArray(src.root_form) ? src.root_form[0] : src.root_form) || src.form || src.type;
+          if (formRaw) resolvedForm = normalizeEdgarForm(String(formRaw));
           break; // got a hit (even if no usable date) — stop retrying
         } else if (resp.status >= 500) {
           await new Promise((r) => setTimeout(r, 400 * (attempt + 1))); // backoff on 5xx
@@ -256,10 +321,11 @@ export async function enrichEdgarFilingDates(urls: string[]): Promise<void> {
         await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
       }
     }
-    // Cache the result (including null) so we don't repeatedly hit a missing one.
-    edgarFilingYearByAccession.set(acc, resolved);
-    if (resolved !== null) {
-      console.log(`[recency] EDGAR authoritative date for ${dashed}: ${resolved}`);
+    // Cache the results (including null) so we don't repeatedly hit a missing one.
+    edgarFilingYearByAccession.set(acc, resolvedYear);
+    edgarFormByAccession.set(acc, resolvedForm);
+    if (resolvedYear !== null || resolvedForm !== null) {
+      console.log(`[recency] EDGAR authoritative for ${dashed}: year=${resolvedYear ?? "?"} form=${resolvedForm ?? "?"}`);
     }
   }
 }
@@ -295,7 +361,7 @@ export function applyRecencyGate<T extends { url: string; title: string; priorit
     periodicByType.get(ptype)!.push({ doc, year });
   }
 
-  for (const [, entries] of periodicByType) {
+  for (const [ptype, entries] of periodicByType) {
     // Sort newest-first; unknown years sink to the bottom (treated as oldest).
     entries.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
     let keptOfType = 0;
@@ -306,7 +372,15 @@ export function applyRecencyGate<T extends { url: string; title: string; priorit
         keptOfType++;
       } else {
         dropped.push(doc);
+        // v3g (Bug 3): make every recency-gate drop explicit and auditable so a
+        // stale filing that survives (or a fresh one that is wrongly dropped) is
+        // visible in logs rather than silent.
+        const reason = !withinWindow ? `older than window (year=${year ?? "?"} < ${minYear})` : `exceeds max ${maxPerType} per ${ptype}`;
+        console.log(`[recency] DROP ${ptype} (year=${year ?? "?"}): ${reason} — ${doc.url}`);
       }
+    }
+    if (keptOfType > 0) {
+      console.log(`[recency] kept ${keptOfType}/${entries.length} of type ${ptype} (window>=${minYear}, max ${maxPerType})`);
     }
   }
 
@@ -1382,6 +1456,97 @@ function buildRegulatoryFilingQueries(companyName: string, framework: Framework,
   return queries;
 }
 
+// ─── Authoritative EDGAR Annual-Filing Seed (v3g, Bug 5) ─────────────────────
+// Web search is NON-deterministic and frequently fails to surface an issuer's
+// MOST RECENT 10-K/20-F (observed: Salesforce FY2025). The authoritative source
+// is EDGAR's structured submissions JSON, which lists every filing with its form
+// type, filing date, accession and primary document. We resolve the issuer's CIK
+// from the company-tickers map (by ticker, else by name) and then read
+// data.sec.gov/submissions/CIK##########.json to construct the canonical primary
+// -document URL for the newest annual filing. Topic- and issuer-agnostic; purely
+// additive (the URL is PINNED so it survives gating). Best-effort: any failure
+// silently leaves discovery on the existing web-search lanes.
+let secTickerMapCache: Map<string, string> | null = null; // ticker/upperName -> 10-digit CIK
+
+async function loadSecTickerMap(ua: string): Promise<Map<string, string>> {
+  if (secTickerMapCache) return secTickerMapCache;
+  const map = new Map<string, string>();
+  try {
+    const r = await axios.get("https://www.sec.gov/files/company_tickers.json", {
+      headers: { "User-Agent": ua, Accept: "application/json" },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    if (r.status === 200 && r.data && typeof r.data === "object") {
+      for (const k of Object.keys(r.data)) {
+        const row = r.data[k];
+        if (!row) continue;
+        const cik = String(row.cik_str ?? row.cik ?? "").padStart(10, "0");
+        if (row.ticker) map.set(String(row.ticker).toUpperCase(), cik);
+        if (row.title) map.set(String(row.title).toUpperCase(), cik);
+      }
+    }
+  } catch { /* best-effort */ }
+  secTickerMapCache = map;
+  return map;
+}
+
+async function resolveAuthoritativeAnnualFilings(opts: {
+  companyName: string;
+  ticker?: string | null;
+  maxFilings?: number;
+}): Promise<Array<{ url: string; form: string; date: string }>> {
+  const ua = process.env.SEC_USER_AGENT || "CompanyIQ Research admin@companyiq.example";
+  const out: Array<{ url: string; form: string; date: string }> = [];
+  try {
+    const map = await loadSecTickerMap(ua);
+    let cik: string | undefined;
+    if (opts.ticker) cik = map.get(opts.ticker.toUpperCase());
+    if (!cik) cik = map.get(opts.companyName.toUpperCase());
+    if (!cik) {
+      // Try a loose name match (strip common suffixes) against map keys.
+      const norm = opts.companyName.toUpperCase().replace(/[.,]/g, "").replace(/\b(INC|CORP|CORPORATION|CO|LTD|PLC|GROUP|HOLDINGS|COMPANY|LIMITED)\b/g, "").trim();
+      for (const [k, v] of map) { if (k.replace(/[.,]/g, "").includes(norm) && norm.length >= 4) { cik = v; break; } }
+    }
+    if (!cik) { console.log(`[${opts.companyName}] EDGAR submissions: no CIK resolved (ticker=${opts.ticker || "?"})`); return out; }
+
+    const subResp = await axios.get(`https://data.sec.gov/submissions/CIK${cik}.json`, {
+      headers: { "User-Agent": ua, Accept: "application/json" },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    if (subResp.status !== 200 || !subResp.data?.filings?.recent) {
+      console.log(`[${opts.companyName}] EDGAR submissions fetch failed (CIK ${cik}, status ${subResp.status})`);
+      return out;
+    }
+    const recent = subResp.data.filings.recent;
+    const forms: string[] = recent.form || [];
+    const accessions: string[] = recent.accessionNumber || [];
+    const primaryDocs: string[] = recent.primaryDocument || [];
+    const dates: string[] = recent.filingDate || [];
+    const cikNum = String(parseInt(cik, 10));
+    const maxFilings = opts.maxFilings ?? 2;
+    const wantForm = (f: string) => /^(10-?K|20-?F|40-?F)$/i.test(f.replace(/\s+/g, "")) && !/\/A$/i.test(f);
+    // recent arrays are sorted newest-first by EDGAR.
+    for (let i = 0; i < forms.length && out.length < maxFilings; i++) {
+      if (!wantForm(forms[i])) continue;
+      const acc18 = (accessions[i] || "").replace(/-/g, "");
+      const file = primaryDocs[i];
+      if (!acc18 || !file) continue;
+      const url = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${acc18}/${file}`;
+      out.push({ url, form: forms[i], date: dates[i] || "" });
+      // Pre-seed the authoritative form/year caches so the recency gate and
+      // force-include classify this primary document correctly straight away.
+      edgarFormByAccession.set(acc18, normalizeEdgarForm(forms[i]));
+      if (dates[i] && /^\d{4}/.test(dates[i])) edgarFilingYearByAccession.set(acc18, parseInt(dates[i].slice(0, 4), 10));
+      console.log(`[${opts.companyName}] EDGAR authoritative annual filing: ${forms[i]} ${dates[i]} -> ${url}`);
+    }
+  } catch (e: any) {
+    console.warn(`[${opts.companyName}] EDGAR submissions seed failed: ${e?.message}`);
+  }
+  return out;
+}
+
 // ─── Investor Relations Queries (Lane 9) ──────────────────────────────────────
 
 /**
@@ -2062,6 +2227,30 @@ export async function searchCompanyDocuments(opts: {
   for (const query of filingQueries) {
     const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
     for (const r of results) addCandidate(r, "regulatory");
+  }
+
+  // Lane 8a (v3g, Bug 5): AUTHORITATIVE EDGAR submissions seed. Web search misses
+  // an issuer's most-recent 10-K/20-F non-deterministically (observed: Salesforce
+  // FY2025). Resolve the CIK from EDGAR's ticker map and read the structured
+  // submissions JSON to PIN the canonical primary-document URL(s) for the newest
+  // annual filing(s). Deterministic, issuer-agnostic, additive.
+  try {
+    const annual = await resolveAuthoritativeAnnualFilings({ companyName, ticker: opts.ticker, maxFilings: 2 });
+    for (const f of annual) {
+      if (!seenUrls.has(f.url)) {
+        seenUrls.add(f.url);
+        allCandidates.push({
+          url: f.url,
+          title: `${companyName} ${f.form} (EDGAR ${f.date})`,
+          snippet: "Authoritative EDGAR primary-document filing (resolved via submissions API)",
+          lane: "edgar-submissions",
+          priority: -60, // very high so it survives the pre-gate cap
+        });
+        laneCounts["edgar-submissions"] = (laneCounts["edgar-submissions"] || 0) + 1;
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] EDGAR submissions seed lane failed: ${e?.message}`);
   }
 
   // Lane 8b: A-share / China primary-filing lane (cninfo / SSE / SZSE)
