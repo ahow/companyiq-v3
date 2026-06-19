@@ -100,6 +100,91 @@ function setCachedContent(url: string, content: string): void {
   contentCache.set(getCacheKey(url), content);
 }
 
+// ─── SEC-Mirror URL Canonicalization (browser-free WAF bypass) ───────────────
+// Many issuers serve copies of their SEC filings from an Akamai/Imperva-fronted
+// investor-relations CDN, e.g. Tesla's
+//   https://ir.tesla.com/_flysystem/s3/sec/<accession18>/<file>
+//   https://assets-ir.tesla.com/...
+// Those CDNs 403 every non-interactive client, and on a worker where Chromium
+// can't launch the browser-PDF fallback can't run either, so the genuine filing
+// is lost. But the SAME filing is always available, un-protected, on EDGAR.
+//
+// This helper detects an IR-portal `_flysystem/s3/sec/<accession>/` mirror URL,
+// resolves the subject CIK + the real primary document filename from EDGAR's
+// full-text search API (keyed only by the accession number — no per-issuer
+// config), and rewrites the URL to the canonical, plain-HTTP-fetchable EDGAR
+// document. Topic- and issuer-agnostic; benefits any issuer that mirrors EDGAR
+// filings behind a WAF. Falls back to the original URL when resolution fails.
+const secMirrorCache = new Map<string, string>();
+
+function extractMirrorAccession(url: string): string | null {
+  // Match `/_flysystem/s3/sec/<18 digits>/...` (Tesla et al.). The 18-digit run
+  // is an SEC accession number without dashes.
+  const m = url.match(/\/sec\/(\d{18})\//);
+  return m ? m[1] : null;
+}
+
+function dashAccession(acc18: string): string {
+  return `${acc18.slice(0, 10)}-${acc18.slice(10, 12)}-${acc18.slice(12)}`;
+}
+
+async function canonicalizeSecMirrorUrl(url: string): Promise<string> {
+  let acc18: string | null = null;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    // Only attempt for IR-portal mirrors, never for sec.gov itself.
+    if (host.endsWith(".sec.gov") || host === "sec.gov") return url;
+    acc18 = extractMirrorAccession(url);
+  } catch {
+    return url;
+  }
+  if (!acc18) return url;
+  if (secMirrorCache.has(url)) return secMirrorCache.get(url)!;
+
+  const dashed = dashAccession(acc18);
+  try {
+    const resp = await axios.get("https://efts.sec.gov/LATEST/search-index", {
+      params: { q: `"${dashed}"` },
+      headers: { "User-Agent": SEC_USER_AGENT, Accept: "application/json" },
+      timeout: 15000,
+      validateStatus: (s) => s < 500,
+    });
+    const hits: any[] = resp.data?.hits?.hits || [];
+    // Prefer the primary document (htm) for the matching accession.
+    let chosen: { cik: string; file: string } | null = null;
+    for (const h of hits) {
+      const id = String(h?._id || ""); // "<accession-dashed>:<file>"
+      const ciks: string[] = h?._source?.ciks || [];
+      if (!id.startsWith(dashed + ":") || ciks.length === 0) continue;
+      const file = id.slice(dashed.length + 1);
+      const cik = String(parseInt(ciks[0], 10)); // strip leading zeros
+      // Skip obvious exhibits/graphics; prefer a main filing document.
+      if (/\.(jpg|png|gif|css|js)$/i.test(file)) continue;
+      chosen = { cik, file };
+      if (/\.htm/i.test(file) && !/ex\d/i.test(file)) break; // primary htm wins
+    }
+    if (chosen) {
+      const canonical = `https://www.sec.gov/Archives/edgar/data/${chosen.cik}/${acc18}/${chosen.file}`;
+      secMirrorCache.set(url, canonical);
+      console.log(`[Processor] Canonicalized SEC mirror -> EDGAR: ${url} => ${canonical}`);
+      return canonical;
+    }
+    // Fallback: the full-submission text always exists at a deterministic path,
+    // but it still needs the CIK; if any hit carried a CIK, use the .txt bundle.
+    const anyCik = hits.find((h) => (h?._source?.ciks || []).length > 0)?._source?.ciks?.[0];
+    if (anyCik) {
+      const cik = String(parseInt(anyCik, 10));
+      const canonical = `https://www.sec.gov/Archives/edgar/data/${cik}/${acc18}/${dashed}.txt`;
+      secMirrorCache.set(url, canonical);
+      console.log(`[Processor] Canonicalized SEC mirror -> EDGAR (.txt bundle): ${url} => ${canonical}`);
+      return canonical;
+    }
+  } catch (e: any) {
+    console.warn(`[Processor] SEC mirror canonicalization failed for ${url}: ${e?.message}`);
+  }
+  return url;
+}
+
 // ─── Fetch with Retry ────────────────────────────────────────────────────────
 
 async function fetchWithRetry(
@@ -107,6 +192,9 @@ async function fetchWithRetry(
   opts: { responseType?: "arraybuffer" | "text"; maxAttempts?: number } = {}
 ): Promise<{ data: any; contentType: string }> {
   let lastError: Error | null = null;
+  // Rewrite IR-portal SEC-mirror URLs (WAF-blocked) to canonical EDGAR URLs
+  // (plain HTTP, no browser needed) BEFORE attempting the fetch.
+  url = await canonicalizeSecMirrorUrl(url);
   // Binary (PDF) fetches default to a single attempt: a WAF that hangs will hang
   // again on retry, and the retry would consume the per-document budget that the
   // browser-PDF fallback needs. Callers can override.
