@@ -908,14 +908,28 @@ export function buildEvidencePackForMeasure(opts: {
     if (spec.label === "item1a" || /annual|10-?k|item ?1a/i.test(spec.label)) {
       const QUARTERLY_RE = /quarterly report pursuant to section 13|for the quarterly period ended|\bform 10-q\b/gi;
       const ANNUAL_RE = /annual report pursuant to section 13|for the fiscal year ended|\bform 10-k\b/gi;
+      // v3j-r7 FIX (Oracle 10-Q): authoritative cover-caption discriminators (only a
+      // 10-Q co-locates FORM 10-Q with QUARTERLY REPORT PURSUANT TO SECTION 13; only
+      // a 10-K co-locates FORM 10-K with ANNUAL REPORT PURSUANT TO SECTION 13),
+      // evaluated over the JOINED document text so a chunk split does not defeat
+      // detection. Immune to a 10-Q's many "our Annual Report on Form 10-K ..."
+      // cross-references that previously inflated the annual-marker count.
+      const STRONG_Q_COVER = /form 10-q[\s\S]{0,400}quarterly report pursuant to section 13|quarterly report pursuant to section 13[\s\S]{0,400}form 10-q/i;
+      const STRONG_A_COVER = /form 10-k[\s\S]{0,400}annual report pursuant to section 13|annual report pursuant to section 13[\s\S]{0,400}form 10-k/i;
       const allIdxByDoc = new Map<number, number[]>();
       chunks.forEach((c, i) => { const a = allIdxByDoc.get(c.docIndex) || []; a.push(i); allIdxByDoc.set(c.docIndex, a); });
       for (const di of [...bodyByDoc.keys()]) {
-        let q = 0, a = 0;
-        for (const ix of (allIdxByDoc.get(di) || [])) { const t = chunks[ix].text; q += (t.match(QUARTERLY_RE) || []).length; a += (t.match(ANNUAL_RE) || []).length; }
-        if (q > 0 && q >= a) {
+        const joined = (allIdxByDoc.get(di) || []).map((ix) => chunks[ix].text).join("\n");
+        const strongQ = STRONG_Q_COVER.test(joined);
+        const strongA = !strongQ && STRONG_A_COVER.test(joined);
+        const q = (joined.match(QUARTERLY_RE) || []).length;
+        const a = (joined.match(ANNUAL_RE) || []).length;
+        // Quarterly if the 10-Q cover is present, OR (no annual cover and the marker
+        // balance leans quarterly). A definitive 10-K cover is never excluded.
+        const isQuarterly = strongQ || (!strongA && q > 0 && q >= a);
+        if (isQuarterly) {
           bodyByDoc.delete(di);
-          console.log(`[force-include] ${measure.measureId}: dropped 10-Q/quarterly doc idx=${di} (q=${q} a=${a}) from ${spec.label} candidates`);
+          console.log(`[force-include] ${measure.measureId}: dropped 10-Q/quarterly doc idx=${di} (q=${q} a=${a} strongQ=${strongQ}) from ${spec.label} candidates`);
         }
       }
     }

@@ -610,7 +610,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r5")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r7")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -831,19 +831,32 @@ async function summarizeDocuments(opts: {
     // ANNUAL marker.
     const quarterlyRe = /quarterly report pursuant to section 13|for the quarterly period ended|\bform 10-q\b/gi;
     const annualRe = /annual report pursuant to section 13|for the fiscal year ended|\bform 10-k\b/gi;
+    // v3j-r7 FIX (Oracle 10-Q): the DEFINITIVE cover page of an SEC periodic filing
+    // co-locates the form token with its statutory caption. ONLY a 10-Q carries
+    // "FORM 10-Q" next to "QUARTERLY REPORT PURSUANT TO SECTION 13"; ONLY a 10-K
+    // carries "FORM 10-K" next to "ANNUAL REPORT PURSUANT TO SECTION 13". These
+    // cover markers are authoritative and immune to body cross-references (a 10-Q's
+    // body cites "our Annual Report on Form 10-K for the fiscal year ended ..." many
+    // times, which previously inflated the annual-marker count and let Oracle's
+    // orcl-20250831 10-Q masquerade as an annual filing). We evaluate the cover
+    // markers over the JOINED document text so a chunk split between the form token
+    // and its caption does not defeat detection.
+    const strongQuarterlyCoverRe = /form 10-q[\s\S]{0,400}quarterly report pursuant to section 13|quarterly report pursuant to section 13[\s\S]{0,400}form 10-q/i;
+    const strongAnnualCoverRe = /form 10-k[\s\S]{0,400}annual report pursuant to section 13|annual report pursuant to section 13[\s\S]{0,400}form 10-k/i;
     // Map every chunk index to its document so we can scan the WHOLE document
     // (cover page included), not just the reserved Item 1A body chunks.
     const allChunkIdxByDoc = new Map<number, number[]>();
     docChunks.forEach((c, i) => { const a = allChunkIdxByDoc.get(c.docIndex) || []; a.push(i); allChunkIdxByDoc.set(c.docIndex, a); });
     const isQuarterlyDoc = (di: number): boolean => {
-      let q = 0, a = 0;
-      for (const ix of (allChunkIdxByDoc.get(di) || [])) {
-        const t = docChunks[ix].text;
-        q += (t.match(quarterlyRe) || []).length;
-        a += (t.match(annualRe) || []).length;
-      }
-      // Quarterly if it carries quarterly cover-page language and is not
-      // predominantly an annual report (10-Qs may reference the prior fiscal year).
+      const joined = (allChunkIdxByDoc.get(di) || []).map((ix) => docChunks[ix].text).join("\n");
+      // 1) Definitive 10-Q cover page => quarterly outright.
+      if (strongQuarterlyCoverRe.test(joined)) return true;
+      // 2) Definitive 10-K cover page => annual outright (never exclude).
+      if (strongAnnualCoverRe.test(joined)) return false;
+      // 3) Fallback marker balance for filings whose cover caption did not survive
+      //    (quarterly present and not dominated by annual markers).
+      const q = (joined.match(quarterlyRe) || []).length;
+      const a = (joined.match(annualRe) || []).length;
       return q > 0 && q >= a;
     };
     const cands = [...byDoc.entries()].map(([di, e]) => {
