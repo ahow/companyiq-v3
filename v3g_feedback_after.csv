@@ -1,11 +1,11 @@
-company,score,met,total,abstained
-MICROSOFT CORPORATION,53,18,34,0
-AMAZON.COM, INC.,49,16,34,0
-SALESFORCE, INC.,47,16,34,0
-NVIDIA CORPORATION,47,16,34,0
-APPLE INC.,38,13,34,0
-ORACLE CORPORATION,35,12,34,0
-META PLATFORMS, INC.,35,12,34,0
-ALPHABET INC.,29,10,34,0
-TESLA, INC.,18,6,34,0
-360 Security Technology Inc.,17,3,29,5
+company_id,name,total_score_after,points,full_met,partial_credit,abstained,answered_denominator,measures_with_quotes,total_quotes,quotes_with_sourceurl,status
+553,MICROSOFT CORPORATION,59,20,20,0,0,34,20,47,47,completed
+1312,NVIDIA CORPORATION,47,16,16,0,0,34,28,68,68,completed
+420,"SALESFORCE, INC.",46,15.5,15,1,0,34,23,59,59,completed
+552,ORACLE CORPORATION,35,12,12,0,0,34,18,36,36,completed
+853,"AMAZON.COM, INC.",35,12,12,0,0,34,19,34,34,completed
+2063,ALPHABET INC.,34,11.5,11,1,0,34,23,43,43,completed
+1918,"META PLATFORMS, INC.",28,9.5,9,1,0,34,21,40,40,completed
+866,APPLE INC.,21,7,7,0,0,34,11,20,20,completed
+2412,"TESLA, INC.",21,7,7,0,0,34,16,33,33,completed
+1914,360 Security Technology Inc.,19,5.5,4,3,5,29,12,30,30,completed
