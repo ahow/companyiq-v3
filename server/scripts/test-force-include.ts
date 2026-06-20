@@ -16,6 +16,7 @@ import {
   chunkDocuments,
   buildBM25Index,
   buildEvidencePackForMeasure,
+  computePreferredAnnualUrl,
 } from "../lib/passage-retrieval.js";
 
 const PG = process.env.PG || "";
@@ -70,14 +71,22 @@ async function main() {
     for (const cid of c.contentIds) {
       const { rows } = await client.query("SELECT content FROM document_content WHERE id=$1", [cid]);
       if (!rows.length) continue;
-      const drow = await client.query("SELECT url FROM documents WHERE content_id=$1 LIMIT 1", [cid]);
+      const drow = await client.query("SELECT url, title FROM documents WHERE content_id=$1 LIMIT 1", [cid]);
       const url = drow.rows[0]?.url || `doc-${cid}`;
+      // v3j-r9: use the REAL document title from the DB (e.g. "10-Q - SEC.gov" or
+      // "meta-20260331 - SEC.gov") so the offline corpus faithfully mirrors
+      // production. A hardcoded "10-K" title would defeat the title-based SEC
+      // form-type classifier and let a 10-Q masquerade as a 10-K.
+      const title = drow.rows[0]?.title || `Document ${cid}`;
       urlsLoaded.push(url);
       if ((c.forbidContentIds || []).includes(cid)) forbidUrls.push(url);
-      combined += `\n\n--- DOCUMENT: 10-K [${url}] ---\n\n` + (rows[0].content || "");
+      combined += `\n\n--- DOCUMENT: ${title} [${url}] ---\n\n` + (rows[0].content || "");
     }
     const chunks = chunkDocuments(combined);
     const bm25Index = buildBM25Index(chunks.map((ch) => ch.text));
+    // v3j-r9: mirror the production category path — compute the canonical annual
+    // filing once over the full chunk set and propagate it to the per-measure pack.
+    const preferredAnnualUrl = computePreferredAnnualUrl(chunks);
     const pack = buildEvidencePackForMeasure({
       measure: riskQ1,
       chunks,
@@ -85,6 +94,7 @@ async function main() {
       topicTerms: ["artificial", "intelligence", "ai", "machine", "learning", "risk"],
       companyId: c.companyId,
       frameworkId: 1,
+      preferredAnnualUrl,
     });
 
     const hasRiskProse = /(could|may|might)\s+(adversely|materially|negatively)|adversely affect our|harm our business|we (face|are subject to)/i.test(pack.text);

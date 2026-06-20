@@ -636,6 +636,25 @@ function measureRequiresProxy(measure: FrameworkMeasure): boolean {
   return /def\s*14a|proxy statement|proxy circular/.test(hay);
 }
 
+// v3j-r9 FIX (Oracle): authoritative SEC FORM-TYPE classification from the
+// DOCUMENT TITLE/URL, which survives BM25 compression intact (the body cover page
+// often does not). EDGAR documents carry an exact form-type title such as
+// "10-K - SEC.gov" / "10-Q - SEC.gov"; third-party mirrors carry "... Annual
+// Report ... Form 10-K ...". Returns "10-q" | "10-k" | undefined (unknown).
+function secFormTypeFromMeta(url: string | undefined, title: string | undefined): "10-q" | "10-k" | undefined {
+  const u = (url || "").toLowerCase();
+  const t = (title || "").toLowerCase();
+  // 1) Exact EDGAR form-type title ("10-q - sec.gov", "10-k - sec.gov").
+  if (/\b10-?q\b/.test(t) && /sec\.gov/.test(t)) return "10-q";
+  if (/\b10-?k\b/.test(t) && /sec\.gov/.test(t)) return "10-k";
+  // 2) Quarterly is explicit anywhere in title/url => 10-Q (annual reports never
+  //    say "10-Q"; a 10-K title saying "quarterly" does not occur).
+  if (/\b10-?q\b|\bquarterly report\b/.test(`${u} ${t}`)) return "10-q";
+  // 3) Annual-report / 10-K language in title (covers third-party mirrors).
+  if (/\b10-?k\b|\bannual report\b/.test(`${u} ${t}`)) return "10-k";
+  return undefined;
+}
+
 // Is this document a proxy statement (DEF 14A)? URL/title shape only.
 function isProxyDoc(url: string | undefined, title: string | undefined): boolean {
   const s = `${url || ""} ${title || ""}`.toLowerCase();
@@ -928,17 +947,23 @@ export function buildEvidencePackForMeasure(opts: {
       const allIdxByDoc = new Map<number, number[]>();
       chunks.forEach((c, i) => { const a = allIdxByDoc.get(c.docIndex) || []; a.push(i); allIdxByDoc.set(c.docIndex, a); });
       for (const di of [...bodyByDoc.keys()]) {
+        const sample = (bodyByDoc.get(di) || [])[0];
+        const ch = sample ? chunks[sample.idx] : undefined;
+        // v3j-r9 FIX (Oracle): title/URL form type FIRST (survives compression).
+        const formType = secFormTypeFromMeta(ch?.docUrl, ch?.docTitle);
         const joined = (allIdxByDoc.get(di) || []).map((ix) => chunks[ix].text).join("\n");
         const strongQ = STRONG_Q_COVER.test(joined);
         const strongA = !strongQ && STRONG_A_COVER.test(joined);
         const q = (joined.match(QUARTERLY_RE) || []).length;
         const a = (joined.match(ANNUAL_RE) || []).length;
-        // Quarterly if the 10-Q cover is present, OR (no annual cover and the marker
-        // balance leans quarterly). A definitive 10-K cover is never excluded.
-        const isQuarterly = strongQ || (!strongA && q > 0 && q >= a);
+        // Quarterly if: title says 10-Q; OR (title not 10-K AND) the 10-Q cover is
+        // present; OR (no annual cover/title AND the marker balance leans quarterly).
+        const isQuarterly =
+          formType === "10-q" ||
+          (formType !== "10-k" && (strongQ || (!strongA && q > 0 && q >= a)));
         if (isQuarterly) {
           bodyByDoc.delete(di);
-          console.log(`[force-include] ${measure.measureId}: dropped 10-Q/quarterly doc idx=${di} (q=${q} a=${a} strongQ=${strongQ}) from ${spec.label} candidates`);
+          console.log(`[force-include] ${measure.measureId}: dropped 10-Q/quarterly doc idx=${di} (form=${formType ?? "?"} q=${q} a=${a} strongQ=${strongQ}) from ${spec.label} candidates`);
         }
       }
     }
@@ -1403,12 +1428,18 @@ export function computePreferredAnnualUrl(chunks: Chunk[]): string | undefined {
   type C = { di: number; idxs: number[]; url: string; rec: number; ord: number; edgar: boolean };
   const cands: C[] = [];
   for (const [di, e] of byDoc) {
-    const joined = (allIdxByDoc.get(di) || []).map((ix) => chunks[ix].text).join("\n");
-    // Exclude 10-Q / quarterly filings via authoritative cover captions, then marker balance.
+    // v3j-r9 FIX (Oracle): classify form type from the DOCUMENT TITLE/URL FIRST
+    // (survives BM25 compression), then cover captions, then body marker balance.
+    const formType = secFormTypeFromMeta(e.url, e.title);
     let quarterly: boolean;
-    if (STRONG_Q_COVER.test(joined)) quarterly = true;
-    else if (STRONG_A_COVER.test(joined)) quarterly = false;
-    else { const q = (joined.match(QUARTERLY_RE) || []).length, a = (joined.match(ANNUAL_RE) || []).length; quarterly = q > 0 && q >= a; }
+    if (formType === "10-q") quarterly = true;
+    else if (formType === "10-k") quarterly = false;
+    else {
+      const joined = (allIdxByDoc.get(di) || []).map((ix) => chunks[ix].text).join("\n");
+      if (STRONG_Q_COVER.test(joined)) quarterly = true;
+      else if (STRONG_A_COVER.test(joined)) quarterly = false;
+      else { const q = (joined.match(QUARTERLY_RE) || []).length, a = (joined.match(ANNUAL_RE) || []).length; quarterly = q > 0 && q >= a; }
+    }
     if (quarterly) continue;
     // Exclude proxy-dominant docs (board/governance text, not Item 1A risk factors).
     let proxyHits = 0; for (const ix of e.idxs) proxyHits += (chunks[ix].text.match(strongProxyRe) || []).length;
