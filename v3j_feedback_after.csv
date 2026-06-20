@@ -1,0 +1,11 @@
+company,total_score_pct,weighted_points,fully_met,partial_credit,abstained,answered_denominator,risk_q1_verdict,risk_q1_quotes,risk_q1_source,board_q1_verdict,total_quotes,quotes_with_sourceurl
+Salesforce,53,18.0,17,2,0,34,Yes,4,EDGAR 10-K (crm-20260131),Yes,55,55
+NVIDIA,53,18.0,17,2,0,34,Yes,3,EDGAR 10-K (nvda-20260125),Yes,67,67
+Microsoft,51,17.5,17,1,0,34,Yes,4,EDGAR 10-K (msft-20250630),Yes,47,47
+Oracle,37,12.5,12,1,0,34,Yes,2,10-K (mirror),Yes,36,36
+Meta,34,11.5,11,1,0,34,Yes,4,EDGAR 10-K (meta-20251231),Yes,40,40
+Apple,32,11.0,11,0,0,34,Yes,2,EDGAR 10-K (aapl-20250927),Yes,36,36
+Alphabet,32,11.0,11,0,0,34,Yes,2,EDGAR 10-K (goog-20251231),Yes,40,40
+Amazon,32,11.0,11,0,0,34,Yes,4,EDGAR 10-K (amzn-20251231),Yes,43,43
+Tesla,24,8.0,8,0,0,34,Yes,2,EDGAR 10-K (tsla-20251231),No,31,31
+360 Security,24,7.0,6,2,0,34,Abstain,0,n/a (no US filing),Abstain,25,25
