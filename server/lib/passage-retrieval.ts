@@ -557,6 +557,12 @@ function requiresRegulatoryFiling(measure: FrameworkMeasure): boolean {
 function isRegulatoryAnnualFilingDoc(url: string | undefined, title: string | undefined): boolean {
   const s = `${url || ""} ${title || ""}`.toLowerCase();
   if (!s.trim()) return false;
+  // v3j-r3: a PROXY statement (DEF 14A) is NOT an annual filing, even though it is
+  // an EDGAR primary HTML doc and the greedy section tagger may stamp parts of it
+  // as "item1a" (it cross-references the 10-K's Item 1A and contains governance/
+  // compensation risk prose). Excluding proxies here keeps the 10-K (Item 1A) and
+  // DEF 14A (board/governance) force-include paths cleanly separated by source type.
+  if (isProxyDoc(url, title)) return false;
   // EDGAR primary-document archive shape: /archives/edgar/data/<cik>/<accession>/...
   const isEdgarPrimary = /sec\.gov\/archives\/edgar\/data\/\d+\//.test(s) && /\.htm/.test(s) && !/index\.htm|-index\.htm/.test(s);
   const looksAnnual = /10-?k|20-?f|40-?f|annual.?report|年度报告|年度報告|年报|年報/.test(s);
@@ -601,6 +607,12 @@ function looksLike10KRiskChunk(chunkText: string, section: string | undefined, t
 // table-of-contents block AND is not merely a cross-reference to Item 1A.
 function isItem1aBodyChunk(chunk: Chunk): boolean {
   if (chunk.section !== "item1a") return false;
+  // v3j-r3: reject item1a-tagged chunks whose source doc is identifiable as a PROXY
+  // by URL/title. (Proxies whose filename is a bare <ticker>-YYYYMMDD.htm are caught
+  // instead by the DOCUMENT-LEVEL proxy classifier in buildEvidencePackForMeasure,
+  // which is robust and avoids stripping genuine 10-K Item 1A chunks that merely
+  // mention "proxy"/"nominee" in passing.)
+  if (isProxyDoc(chunk.docUrl, chunk.docTitle)) return false;
   const t = chunk.text;
   if (!t || t.length < 200) return false;
   if (isLikelyToc(t)) return false;
@@ -802,10 +814,42 @@ export function buildEvidencePackForMeasure(opts: {
     });
   }
 
+  // v3j-r3: DOCUMENT-LEVEL proxy classifier, CALIBRATED on real filings. A DEF 14A
+  // whose filename is a bare <ticker>-YYYYMMDD.htm (e.g. NVIDIA nvda-20260512)
+  // passes neither URL/title nor a per-chunk proxy test reliably, yet the document
+  // as a whole is unmistakably a proxy. We count PROXY-EXCLUSIVE strong markers vs
+  // strong 10-K markers across each document's chunks. Measured separation:
+  //   proxy nvda-20260512: strongProxy=86, strong10K~1
+  //   real 10-Ks:          strongProxy 0-4, strong10K 23-58
+  // A document is proxy-dominant when it has many proxy markers AND they outweigh
+  // its 10-K markers. This is robust to filename shape and does not misclassify a
+  // 10-K that merely references its proxy a handful of times.
+  const strongProxyRe = /stockholder proposal|say-on-pay|notice of (the )?annual meeting|board of directors recommends|proxy card|voting (instructions|your shares)|broker non-votes|nominees? for (election|director)|compensation discussion and analysis/gi;
+  const strong10kRe = /item\s*1a|item\s*7\.|management's discussion and analysis|consolidated (balance sheet|statements of operations)|item\s*8\./gi;
+  const docProxyHits = new Map<number, number>();
+  const doc10kHits = new Map<number, number>();
+  for (const ch of chunks) {
+    const p = (ch.text.match(strongProxyRe) || []).length;
+    const k = (ch.text.match(strong10kRe) || []).length;
+    if (p > 0) docProxyHits.set(ch.docIndex, (docProxyHits.get(ch.docIndex) || 0) + p);
+    if (k > 0) doc10kHits.set(ch.docIndex, (doc10kHits.get(ch.docIndex) || 0) + k);
+  }
+  const isProxyDominantDoc = (docIndex: number) => {
+    const p = docProxyHits.get(docIndex) || 0;
+    const k = doc10kHits.get(docIndex) || 0;
+    return p >= 10 && p > k * 2;
+  };
+
   for (const spec of forceSpecs) {
     // All chunks whose source document matches the required type, indexed back to
     // their scored entry so we can place them with provenance + score metadata.
-    const reqDocScored = scored.filter((s) => spec.isReqDoc(chunks[s.idx]));
+    // For the ANNUAL-FILING spec, exclude proxy-dominant documents at the doc level.
+    const reqDocScored = scored.filter((s) => {
+      const ch = chunks[s.idx];
+      if (!spec.isReqDoc(ch)) return false;
+      if (spec.label === "item1a" && isProxyDominantDoc(ch.docIndex)) return false;
+      return true;
+    });
     if (reqDocScored.length === 0) {
       console.log(`[force-include] ${measure.measureId}: no ${spec.label} document in corpus (nothing to force-include)`);
       continue;
@@ -815,24 +859,84 @@ export function buildEvidencePackForMeasure(opts: {
     // Genuine body chunks only (TOC and cross-reference chunks excluded).
     const bodyScored = reqDocScored.filter((s) => spec.isGenuineBody(chunks[s.idx]));
 
-    // Choose THE BEST matching document deterministically: the docIndex with the
-    // MOST genuine body chunks (e.g. the real 10-K beats a proxy-style filing that
-    // only cross-references Item 1A, as seen on NVIDIA's nvda-20260512). Tie-break
-    // on lowest docIndex for determinism.
+    // Choose THE BEST matching document. v3j-r3 FIX: among documents that have a
+    // SUFFICIENT number of genuine body chunks, prefer the MOST RECENT filing.
+    //
+    // Why: a company's corpus often contains several years of 10-Ks. The earlier
+    // "max genuine-body-chunk count" rule could pick an OLDER 10-K (e.g. Salesforce
+    // crm-20221031) over the current one (crm-20260131) merely because the older
+    // filing chunked into more item1a pieces — causing the cited risk-factor quote
+    // to come from a stale filing, which violates the "cite the most recent filing"
+    // requirement. We still require a MINIMUM body-chunk count so a proxy-style doc
+    // that only cross-references Item 1A (e.g. NVIDIA nvda-20260512, ~0-1 genuine
+    // body chunks) cannot win on recency alone.
     const bodyByDoc = new Map<number, (typeof scored)[number][]>();
     for (const s of bodyScored) {
       const arr = bodyByDoc.get(s.docIndex) || [];
       arr.push(s);
       bodyByDoc.set(s.docIndex, arr);
     }
-    let bestDocIndex: number | undefined;
-    let bestCount = -1;
-    for (const [di, arr] of bodyByDoc) {
-      if (arr.length > bestCount || (arr.length === bestCount && (bestDocIndex === undefined || di < bestDocIndex))) {
-        bestCount = arr.length;
-        bestDocIndex = di;
+    // Recency key parsed from the doc URL/title (e.g. crm-20260131 -> 20260131,
+    // EDGAR accession date, or a 4-8 digit date token). Higher = more recent.
+    const recencyOf = (di: number): number => {
+      const sample = (bodyByDoc.get(di) || [])[0];
+      const ch = sample ? chunks[sample.idx] : undefined;
+      const hay = `${ch?.docUrl || ""} ${ch?.docTitle || ""}`;
+      let best = 0;
+      // Prefer an 8-digit YYYYMMDD token (ticker-YYYYMMDD filenames, EDGAR dates).
+      for (const m of hay.matchAll(/(20\d{6})/g)) { const v = parseInt(m[1], 10); if (v > best) best = v; }
+      if (best === 0) {
+        for (const m of hay.matchAll(/(20\d{2})[-_/]?(\d{2})?/g)) {
+          const v = parseInt((m[1] + (m[2] || "00")).padEnd(8, "0").slice(0, 8), 10);
+          if (v > best) best = v;
+        }
       }
+      return best;
+    };
+    // A document qualifies if it has at least MIN_BODY genuine body chunks, OR (when
+    // none reach that bar) it simply has the most body chunks available.
+    const maxBodyCount = Math.max(...[...bodyByDoc.values()].map((a) => a.length), 0);
+    const MIN_BODY = Math.min(FORCE_INCLUDE_CHUNKS, maxBodyCount);
+    // Prefer the authoritative EDGAR primary HTML filing over third-party PDF
+    // mirrors (e.g. fortune.com / investor-relations copies of the same 10-K),
+    // which often carry no parseable date token. Used only as a tie-break so it
+    // never overrides a genuinely more recent EDGAR filing.
+    const isEdgarPrimaryDoc = (di: number): boolean => {
+      const sample = (bodyByDoc.get(di) || [])[0];
+      const ch = sample ? chunks[sample.idx] : undefined;
+      const u = (ch?.docUrl || "").toLowerCase();
+      return /sec\.gov\/archives\/edgar\/data\/\d+\//.test(u) && /\.htm/.test(u);
+    };
+    // Two filings count as the "same period" when their parsed dates fall within
+    // this many days (coarse YYYYMMDD arithmetic). The authoritative EDGAR primary
+    // HTML copy is preferred over a third-party PDF MIRROR of the SAME 10-K (e.g.
+    // NVIDIA's EDGAR nvda-20260125 vs fortune.com .../2026-02-25 PDF, the same
+    // FY2026 filing) so citations resolve to EDGAR. A genuinely newer filing
+    // (outside the window) still wins outright on recency.
+    const SAME_PERIOD_DAYS = 150;
+    const ymdToOrdinal = (v: number): number => {
+      if (v <= 0) return 0;
+      const y = Math.floor(v / 10000), m = Math.floor((v % 10000) / 100) || 1, d = (v % 100) || 1;
+      return y * 365 + m * 30 + d; // coarse day count; adequate for windowing
+    };
+    // Build the qualifying-document list, then pick deterministically via an
+    // explicit comparator (order-independent, unlike a windowed greedy scan).
+    type DocCand = { di: number; count: number; rec: number; ord: number; edgar: boolean };
+    const cands: DocCand[] = [];
+    for (const [di, arr] of bodyByDoc) {
+      if (arr.length < MIN_BODY) continue;
+      const rec = recencyOf(di);
+      cands.push({ di, count: arr.length, rec, ord: ymdToOrdinal(rec), edgar: isEdgarPrimaryDoc(di) });
     }
+    cands.sort((a, b) => {
+      const samePeriod = Math.abs(a.ord - b.ord) <= SAME_PERIOD_DAYS;
+      if (!samePeriod) return b.rec - a.rec;            // clearly newer wins
+      if (a.edgar !== b.edgar) return a.edgar ? -1 : 1; // same period: EDGAR beats mirror
+      if (a.rec !== b.rec) return b.rec - a.rec;        // then newer
+      if (a.count !== b.count) return b.count - a.count;// then more body chunks
+      return a.di - b.di;                               // then lowest docIndex
+    });
+    const bestDocIndex: number | undefined = cands.length ? cands[0].di : undefined;
 
     // Candidate body chunks from the best document. v3j-r2 FIX: select by TOPIC
     // RELEVANCE, not raw document position. The earlier position-based pick took
@@ -851,7 +955,7 @@ export function buildEvidencePackForMeasure(opts: {
     // the corpus + measure query) and topic-agnostic (works for any measure via
     // its own query terms), while actually surfacing on-topic evidence.
     let forceCandidates: (typeof scored)[number][] = [];
-    if (bestDocIndex !== undefined && bestCount > 0) {
+    if (bestDocIndex !== undefined && (bodyByDoc.get(bestDocIndex)?.length || 0) > 0) {
       const bodyChunks = (bodyByDoc.get(bestDocIndex) || []).slice();
       const byPosition = bodyChunks
         .slice()
@@ -1095,3 +1199,10 @@ export function computeCorpusTopicStats(combinedText: string, topicTerms: string
 }
 
 export { DEFAULT_AI_TOPIC_TERMS };
+
+// Exposed for offline diagnostics/tests only (not used by the analyzer).
+export const __testHooks = {
+  isItem1aBodyChunk,
+  isRegulatoryAnnualFilingDoc,
+  isProxyDoc,
+};
