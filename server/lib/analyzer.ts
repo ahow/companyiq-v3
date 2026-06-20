@@ -610,7 +610,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3k-r3")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3k-r4")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -819,7 +819,22 @@ async function summarizeDocuments(opts: {
       for (const ix of e.idxs) proxyHits += (docChunks[ix].text.match(strongProxyRe) || []).length;
       return { di, idxs: e.idxs, url: e.url, title: e.title, rec: dateOf(e.url + " " + e.title), edgar: isEdgarPrimary(e.url), proxyDom: proxyHits >= 10 };
     }).filter((c) => !c.proxyDom);
-    cands.sort((a, b) => (b.rec - a.rec) || ((a.edgar?0:1) - (b.edgar?0:1)) || (b.idxs.length - a.idxs.length) || (a.di - b.di));
+    // v3k-r4 FIX (NVIDIA): when two filings fall in the SAME period (<=150 days
+    // apart) they are the same annual filing in different sources (e.g. the EDGAR
+    // primary nvda-20260125.htm vs the fortune.com .../2026-02-25 PDF mirror of the
+    // SAME FY2026 10-K). Prefer the canonical EDGAR-primary HTML so the reserved
+    // Item 1A and downstream citations resolve to EDGAR, not a third-party mirror.
+    // A genuinely newer filing (outside the window) still wins outright on recency.
+    const SAME_PERIOD_DAYS = 150;
+    const ord = (v: number): number => { if (v <= 0) return 0; const y = Math.floor(v/10000), mo = Math.floor((v%10000)/100)||1, da = (v%100)||1; return y*365 + mo*30 + da; };
+    cands.sort((a, b) => {
+      const samePeriod = Math.abs(ord(a.rec) - ord(b.rec)) <= SAME_PERIOD_DAYS;
+      if (!samePeriod) return b.rec - a.rec;             // clearly newer wins
+      if (a.edgar !== b.edgar) return a.edgar ? -1 : 1;  // same period: EDGAR beats mirror
+      if (a.rec !== b.rec) return b.rec - a.rec;         // then newer
+      if (a.idxs.length !== b.idxs.length) return b.idxs.length - a.idxs.length; // then more body chunks
+      return a.di - b.di;
+    });
     if (cands.length > 0) {
       const best = cands[0];
       // Reserve earliest body chunks (document order) up to the Item 1A sub-budget.
