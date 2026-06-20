@@ -610,7 +610,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r12")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3k-r13")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);

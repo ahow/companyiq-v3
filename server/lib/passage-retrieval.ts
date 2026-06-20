@@ -947,13 +947,24 @@ export function buildEvidencePackForMeasure(opts: {
     // then sees "AI only in a shareholder proposal". We detect strong proxy markers
     // across each candidate document's body chunks and drop any document whose proxy
     // marker count dominates (>=10), mirroring the upstream item1a-reserve guard.
-    const STRONG_PROXY_RE = /stockholder proposal|say-on-pay|notice of (the )?annual meeting|proxy card|broker non-votes|nominees? for (election|director)|compensation discussion and analysis/gi;
-    for (const [di, arr] of [...bodyByDoc.entries()]) {
-      let proxyHits = 0;
-      for (const s of arr) proxyHits += (chunks[s.idx].text.match(STRONG_PROXY_RE) || []).length;
-      if (proxyHits >= 10) {
-        bodyByDoc.delete(di);
-        console.log(`[force-include] ${measure.measureId}: dropped proxy-dominant doc idx=${di} (${proxyHits} proxy markers) from ${spec.label} candidates`);
+    //
+    // v3k-r13 FIX (Microsoft 3.1a Board Q1 regression): this proxy-dominant drop is
+    // an ANNUAL-FILING (Item 1A) anti-contamination guard ONLY. For the `proxy`
+    // spec (measures whose requiredSourceTypes includes "proxy", e.g. Board Q1
+    // 3.1a), a proxy-dominant DEF 14A is EXACTLY the required source document — it
+    // must NOT be dropped. Dropping it here previously left 3.1a with 0 proxy
+    // chunks and a No/0-quote verdict despite the canonical EDGAR DEF 14A being in
+    // corpus. Gate the drop to the item1a spec so proxy-required measures keep their
+    // DEF 14A. (The 10-Q/quarterly drop below is already correctly item1a-gated.)
+    if (spec.label === "item1a") {
+      const STRONG_PROXY_RE = /stockholder proposal|say-on-pay|notice of (the )?annual meeting|proxy card|broker non-votes|nominees? for (election|director)|compensation discussion and analysis/gi;
+      for (const [di, arr] of [...bodyByDoc.entries()]) {
+        let proxyHits = 0;
+        for (const s of arr) proxyHits += (chunks[s.idx].text.match(STRONG_PROXY_RE) || []).length;
+        if (proxyHits >= 10) {
+          bodyByDoc.delete(di);
+          console.log(`[force-include] ${measure.measureId}: dropped proxy-dominant doc idx=${di} (${proxyHits} proxy markers) from ${spec.label} candidates`);
+        }
       }
     }
     // v3j-r5 FIX (Meta/Oracle): drop 10-Q / QUARTERLY-report documents from the
@@ -1205,6 +1216,71 @@ export function buildEvidencePackForMeasure(opts: {
       // Required document present but we could not place any chunk — a real failure
       // the worker invariant will catch.
       console.warn(`[force-include][ASSERT] ${measure.measureId}: ${spec.label} doc present in corpus but NO body chunk placed (budget/dedup). Invariant should flag this run.`);
+    }
+  }
+
+  // Step 0b — v3k-r13 SOFT ANNUAL-FILING FLOOR (generalises the v3i Bug 2 fix to
+  // measures WITHOUT a hard requiredSourceTypes constraint).
+  //
+  // Root cause (validator v3k Section 3.3, Alphabet 1.1a): the deterministic
+  // force-include above only fires for measures whose requiredSourceTypes declares
+  // an annual filing or proxy. Measures such as 1.1a-ai-strategic-priority and the
+  // 2.x use-case family have requiredSourceTypes=None, so the canonical 10-K is
+  // never GUARANTEED into their evidence pack — even though the strategic-priority /
+  // use-case language lives squarely in the 10-K (Item 1 / Item 1A / MD&A). For
+  // Alphabet, goog-20251231.htm was in corpus and force-included into 9.1/1.3/1.4/
+  // 9.3, but 1.1a received 0 quotes because nothing surfaced the 10-K into ITS pack.
+  //
+  // Fix: when (a) no item1a force-include already fired for this measure, (b) the
+  // measure is NOT proxy-required (governance measures must anchor on the proxy,
+  // not the 10-K), and (c) the corpus contains the preferred annual filing chosen
+  // once over the full corpus (reservedAnnualUrl), GUARANTEE the single most
+  // topic-dense genuine Item 1A body chunk from that preferred annual filing. This
+  // is a 1-chunk soft floor on the dedicated extra budget: it surfaces the 10-K
+  // into strategy/use-case measures without displacing other evidence and without
+  // contaminating proxy/governance measures. Fully deterministic (pure function of
+  // corpus + measure topic terms + the upstream-chosen preferredAnnualUrl).
+  if (
+    forceIncludedCount === 0 &&
+    !measureRequiresProxy(measure) &&
+    preferredAnnualUrl
+  ) {
+    const normUrl2 = (u: string | undefined): string => (u || "").split(/[?#]/)[0].toLowerCase();
+    const prefNorm2 = normUrl2(preferredAnnualUrl);
+    // Genuine Item 1A body chunks belonging to the preferred annual filing only.
+    const floorCands = scored.filter((s) => {
+      const ch = chunks[s.idx];
+      if (normUrl2(ch.docUrl) !== prefNorm2) return false;
+      return isItem1aBodyChunk(ch);
+    });
+    if (floorCands.length > 0) {
+      const topicCountOf2 = (c: (typeof scored)[number]): number => {
+        const t = (chunks[c.idx].text || "").toLowerCase();
+        let n = 0;
+        for (const term of topicTerms) {
+          if (!term) continue;
+          const re = new RegExp(`\\b${term.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g");
+          n += (t.match(re) || []).length;
+        }
+        return n;
+      };
+      // Prefer the most topic-dense body chunk; fall back to the earliest by position.
+      const ranked = floorCands
+        .map((c) => ({ c, tc: topicCountOf2(c) }))
+        .sort((a, b) =>
+          (b.tc - a.tc) ||
+          (b.c.score - a.c.score) ||
+          ((chunks[a.c.idx].seqInDoc ?? a.c.idx) - (chunks[b.c.idx].seqInDoc ?? b.c.idx))
+        );
+      const pick = ranked[0].c;
+      if (!selected.includes(pick) && (evidenceLen + pick.text.length <= maxChars + FORCE_INCLUDE_EXTRA_CHARS)) {
+        selected.push(pick);
+        perDocCount.set(pick.docIndex, (perDocCount.get(pick.docIndex) || 0) + 1);
+        evidenceLen += pick.text.length + 2;
+        forceIncludedCount++;
+        forceIncludedDocUrl = forceIncludedDocUrl || chunks[pick.idx].docUrl;
+        console.log(`[force-include][soft-floor] ${measure.measureId}: GUARANTEED 1 Item 1A body chunk (topicHits=${ranked[0].tc}) from preferred annual filing ${(chunks[pick.idx].docUrl || "").slice(0, 70)} (non-proxy measure, no hard requirement)`);
+      }
     }
   }
 
