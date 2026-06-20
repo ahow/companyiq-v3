@@ -1475,6 +1475,16 @@ export function computePreferredAnnualUrl(chunks: Chunk[]): string | undefined {
       else { const q = (joined.match(QUARTERLY_RE) || []).length, a = (joined.match(ANNUAL_RE) || []).length; quarterly = q > 0 && q >= a; }
     }
     if (quarterly) continue;
+    // v3j-r11 FIX (NVIDIA): exclude DEF 14A proxy statements outright via their
+    // cover/caption over the JOINED doc text. NVIDIA's proxy nvda-20260512.htm has
+    // a bare <ticker>-YYYYMMDD EDGAR URL (so secFormTypeFromMeta returns undefined),
+    // a newer period date than the 10-K, and only header references to Item 1A; it
+    // must never be reserved/forced as the annual filing.
+    {
+      const joinedAll = (allIdxByDoc.get(di) || []).map((ix) => chunks[ix].text).join("\n");
+      const STRONG_PROXY_COVER = /\bdef[\s\u00a0]*14a\b|proxy statement pursuant to section 14\(a\)|notice of (?:20\d{2} )?annual meeting of (?:stockholders|shareholders)/i;
+      if (!STRONG_A_COVER.test(joinedAll) && STRONG_PROXY_COVER.test(joinedAll)) continue;
+    }
     // Exclude proxy-dominant docs (board/governance text, not Item 1A risk factors).
     let proxyHits = 0; for (const ix of e.idxs) proxyHits += (chunks[ix].text.match(strongProxyRe) || []).length;
     if (proxyHits >= 10) continue;

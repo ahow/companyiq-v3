@@ -610,7 +610,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r10")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r11")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -847,6 +847,26 @@ async function summarizeDocuments(opts: {
     // (cover page included), not just the reserved Item 1A body chunks.
     const allChunkIdxByDoc = new Map<number, number[]>();
     docChunks.forEach((c, i) => { const a = allChunkIdxByDoc.get(c.docIndex) || []; a.push(i); allChunkIdxByDoc.set(c.docIndex, a); });
+    // v3j-r11 FIX (NVIDIA): EXCLUDE DEF 14A proxy statements from annual-filing
+    // selection. A proxy (e.g. nvda-20260512.htm) has an EDGAR -YYYYMMDD.htm URL
+    // that matches the annual shape, a period date NEWER than the latest 10-K
+    // (nvda-20260125), and 20+ "annual report"/"form 10-k" cross-references (a proxy
+    // discusses the fiscal year and incorporates the 10-K by reference), so it beat
+    // the genuine 10-K on recency and the reserve guaranteed proxy chunks that have
+    // only a HEADER reference to Item 1A, never the risk-factor body -> grader
+    // returned No/0 quotes. The prior `proxyDom` guard counted boilerplate only over
+    // the doc's Item 1A body chunks, of which a proxy has ~none, so it never tripped.
+    // The DEFINITIVE proxy signal is the cover/EDGAR form line "DEF 14A" or the
+    // statutory caption "Proxy Statement Pursuant to Section 14(a)"; we scan the
+    // WHOLE joined document text (cover page included).
+    const strongProxyCoverRe = /\bdef[\s\u00a0]*14a\b|proxy statement pursuant to section 14\(a\)|notice of (?:20\d{2} )?annual meeting of (?:stockholders|shareholders)/i;
+    const isProxyDoc = (di: number): boolean => {
+      const joined = (allChunkIdxByDoc.get(di) || []).map((ix) => docChunks[ix].text).join("\n");
+      // A genuine 10-K never carries the DEF 14A cover/caption; if a strong 10-K
+      // cover is present, trust it over an incidental proxy cross-reference.
+      if (strongAnnualCoverRe.test(joined)) return false;
+      return strongProxyCoverRe.test(joined);
+    };
     const isQuarterlyDoc = (di: number): boolean => {
       const joined = (allChunkIdxByDoc.get(di) || []).map((ix) => docChunks[ix].text).join("\n");
       // 1) Definitive 10-Q cover page => quarterly outright.
@@ -862,9 +882,10 @@ async function summarizeDocuments(opts: {
     const cands = [...byDoc.entries()].map(([di, e]) => {
       let proxyHits = 0;
       for (const ix of e.idxs) proxyHits += (docChunks[ix].text.match(strongProxyRe) || []).length;
-      return { di, idxs: e.idxs, url: e.url, title: e.title, rec: dateOf(e.url + " " + e.title), edgar: isEdgarPrimary(e.url), proxyDom: proxyHits >= 10, quarterly: isQuarterlyDoc(di) };
+      return { di, idxs: e.idxs, url: e.url, title: e.title, rec: dateOf(e.url + " " + e.title), edgar: isEdgarPrimary(e.url), proxyDom: proxyHits >= 10, proxy: isProxyDoc(di), quarterly: isQuarterlyDoc(di) };
     }).filter((c) => {
       if (c.proxyDom) return false;
+      if (c.proxy) { console.log(`[${companyName}] [item1a-reserve] excluded DEF 14A proxy doc ${c.url.slice(0,60)} from annual-filing candidates`); return false; }
       if (c.quarterly) { console.log(`[${companyName}] [item1a-reserve] excluded 10-Q/quarterly doc ${c.url.slice(0,60)} from annual-filing candidates`); return false; }
       return true;
     });
