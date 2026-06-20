@@ -603,14 +603,14 @@ async function summarizeDocuments(opts: {
   documentUrls: string[];
   documentTitles?: string[];
   topicDescription: string;
-}): Promise<{ text: string; model: string }> {
+}): Promise<{ text: string; model: string; reservedAnnualUrl?: string }> {
   const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription } = opts;
 
   // Check summary cache. v3g: salt the cache key so the OLD header-lossy LLM
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r11")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r12")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -766,6 +766,12 @@ async function summarizeDocuments(opts: {
   // non-proxy) annual filing FIRST, with a dedicated sub-budget, regardless of
   // BM25 score or document order. This guarantees Item 1A always reaches the pool.
   const ITEM1A_RESERVE_CHARS = parseInt(process.env.RETRIEVAL_ITEM1A_RESERVE_CHARS || "90000", 10);
+  // v3j-r12 FIX (NVIDIA): the URL of the annual filing chosen by THIS reserve is the
+  // single source of truth for which document the per-measure force-include should
+  // anchor on. The category builder otherwise re-derives it on the COMPRESSED corpus
+  // (where the proxy's DEF 14A cover page may not survive, defeating content guards)
+  // and can pick the wrong doc. We capture it here and thread it downstream.
+  let reservedAnnualUrl: string | undefined;
   try {
     const isEdgarPrimary = (u: string) => /sec\.gov\/archives\/edgar\/data\/\d+\//.test((u||"").toLowerCase()) && /\.htm/.test((u||"").toLowerCase());
     const isAnnualFiling = (u: string, t: string) => {
@@ -919,6 +925,7 @@ async function summarizeDocuments(opts: {
         if (reserved + docChunks[ix].text.length > ITEM1A_RESERVE_CHARS) continue;
         if (!selectedSet.has(ix)) { selectedSet.add(ix); budget += docChunks[ix].text.length; reserved += docChunks[ix].text.length; }
       }
+      reservedAnnualUrl = best.url || undefined;
       console.log(`[${companyName}] [item1a-reserve] reserved ${reserved} chars (${ordered.length} body chunks avail) from ${best.url.slice(0,70)}`);
     } else {
       console.log(`[${companyName}] [item1a-reserve] no genuine Item 1A body chunks found among annual filings`);
@@ -971,7 +978,7 @@ async function summarizeDocuments(opts: {
     summarizerModel: "bm25-headers-v3k",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3k" };
+  return { text: relevantText, model: "bm25-headers-v3k", reservedAnnualUrl };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
@@ -1056,6 +1063,11 @@ export async function analyzeCompanyMeasures(opts: {
   const totalChars = workingTexts.reduce((sum, t) => sum + t.length, 0);
   let combinedText: string;
   let summarizerModel: string;
+  // v3j-r12 FIX (NVIDIA): the annual-filing URL chosen by the upstream item1a-reserve
+  // (over the full uncompressed corpus). Threaded into the category/deep pack builders
+  // so the per-measure force-include anchors on the SAME doc, not a compressed-view
+  // re-derivation that a DEF 14A proxy could win.
+  let reservedAnnualUrl: string | undefined;
 
   if (settings.useBm25Retrieval && totalChars <= settings.bm25SkipSummarizationBelowChars) {
     // BM25-skip path: use raw text directly with document title headers
@@ -1077,7 +1089,8 @@ export async function analyzeCompanyMeasures(opts: {
     });
     combinedText = result.text;
     summarizerModel = result.model;
-    console.log(`[${companyName}] Summarized via ${summarizerModel} (${combinedText.length} chars)`);
+    reservedAnnualUrl = result.reservedAnnualUrl;
+    console.log(`[${companyName}] Summarized via ${summarizerModel} (${combinedText.length} chars)${reservedAnnualUrl ? ` reservedAnnual=${reservedAnnualUrl.slice(0,70)}` : ""}`);
   }
 
   // Layer B/D — derive the framework's topic lexicon and measure how much
@@ -1131,6 +1144,10 @@ export async function analyzeCompanyMeasures(opts: {
         topicTerms,
         companyId,          // v3g (Bug 1): collision-free fingerprint identity
         frameworkId: framework.id,
+        // v3j-r12 FIX (NVIDIA): anchor the per-measure annual-filing force-include on
+        // the SAME document the upstream item1a-reserve chose, instead of re-deriving
+        // it on the compressed corpus (where a DEF 14A proxy could win).
+        reservedAnnualUrl,
       });
     } else {
       // No BM25: use full text for all measures
@@ -1320,7 +1337,8 @@ export async function analyzeCompanyMeasures(opts: {
               frameworkId: framework.id,
               // v3j-r7 FIX (Oracle): keep the deep-read pass anchored on the same
               // canonical EDGAR annual filing as the category pass.
-              preferredAnnualUrl: computePreferredAnnualUrl(deepChunks),
+              // v3j-r12 FIX (NVIDIA): prefer the upstream-reserved URL when available.
+              preferredAnnualUrl: reservedAnnualUrl || computePreferredAnnualUrl(deepChunks),
             });
             // Only re-score if the deep pass actually surfaced more topic evidence
             // than the original pack (otherwise re-scoring adds cost for no gain).

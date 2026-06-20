@@ -1360,8 +1360,13 @@ export function buildEvidencePacksForCategory(opts: {
   // v3g (Bug 1): identity for a collision-free per-(company,measure) fingerprint.
   companyId?: number | string;
   frameworkId?: number | string;
+  // v3j-r12 FIX (NVIDIA): the annual-filing URL chosen by the upstream
+  // item1a-reserve over the FULL (uncompressed) corpus. When provided it is the
+  // single source of truth and overrides the compressed-view re-derivation, so a
+  // DEF 14A proxy whose cover page did not survive compression cannot win.
+  reservedAnnualUrl?: string;
 }): EvidencePack[] {
-  const { measures, combinedText, terminology, topicTerms = DEFAULT_AI_TOPIC_TERMS, topK, maxChars, companyId, frameworkId } = opts;
+  const { measures, combinedText, terminology, topicTerms = DEFAULT_AI_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl } = opts;
 
   const chunks = chunkDocuments(combinedText);
   if (chunks.length === 0) {
@@ -1389,7 +1394,7 @@ export function buildEvidencePacksForCategory(opts: {
   // chunk set so every filing-bound measure anchors on the SAME authoritative
   // document (the EDGAR-primary 10-K), rather than re-deriving per measure from a
   // compressed view where a third-party PDF mirror could win.
-  const preferredAnnualUrl = computePreferredAnnualUrl(chunks);
+  const preferredAnnualUrl = reservedAnnualUrl || computePreferredAnnualUrl(chunks);
 
   return measures.map((measure) =>
     buildEvidencePackForMeasure({
