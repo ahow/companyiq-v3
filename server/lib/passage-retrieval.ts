@@ -659,8 +659,8 @@ const REG_FILING_EXTRA_CHARS = parseInt(process.env.RETRIEVAL_REG_FILING_EXTRA_C
 // dedicated extra character budget reserved for them (separate from the normal
 // pack budget so the guarantee never evicts other supporting evidence). N=3 per
 // the validator's Section 2.4 prescription.
-const FORCE_INCLUDE_CHUNKS = parseInt(process.env.RETRIEVAL_FORCE_INCLUDE_CHUNKS || "3", 10);
-const FORCE_INCLUDE_EXTRA_CHARS = parseInt(process.env.RETRIEVAL_FORCE_INCLUDE_EXTRA_CHARS || "7000", 10);
+const FORCE_INCLUDE_CHUNKS = parseInt(process.env.RETRIEVAL_FORCE_INCLUDE_CHUNKS || "4", 10);
+const FORCE_INCLUDE_EXTRA_CHARS = parseInt(process.env.RETRIEVAL_FORCE_INCLUDE_EXTRA_CHARS || "9000", 10);
 
 export function buildEvidencePackForMeasure(opts: {
   measure: FrameworkMeasure;
@@ -834,16 +834,43 @@ export function buildEvidencePackForMeasure(opts: {
       }
     }
 
-    // Candidate body chunks from the best document, ordered by DOCUMENT POSITION
-    // (seqInDoc) so we take the EARLIEST genuine Risk-Factors body — the start of
-    // the section, which is the most representative — rather than whatever the
-    // measure query happened to rank highest.
+    // Candidate body chunks from the best document. v3j-r2 FIX: select by TOPIC
+    // RELEVANCE, not raw document position. The earlier position-based pick took
+    // the OPENING of Item 1A (generic competitive/preamble risk), which for an
+    // AI-specific measure (e.g. 9.1) does NOT contain the AI risk paragraphs that
+    // appear deeper in a 100k+ char section — so the grader correctly returned
+    // "No AI in risk factors" even though the section is full of AI risk language.
+    //
+    // New contract: from the best document's GENUINE body chunks, guarantee
+    //   (a) ONE positional anchor — the earliest body chunk — for section context
+    //       and stable provenance, PLUS
+    //   (b) the top (N-1) body chunks by BLENDED RELEVANCE SCORE (BM25 + topic +
+    //       section bonus), so the measure-relevant (e.g. AI) risk paragraphs are
+    //       always force-included.
+    // De-duplicated and capped at N. This is still deterministic (pure function of
+    // the corpus + measure query) and topic-agnostic (works for any measure via
+    // its own query terms), while actually surfacing on-topic evidence.
     let forceCandidates: (typeof scored)[number][] = [];
     if (bestDocIndex !== undefined && bestCount > 0) {
-      forceCandidates = (bodyByDoc.get(bestDocIndex) || [])
+      const bodyChunks = (bodyByDoc.get(bestDocIndex) || []).slice();
+      const byPosition = bodyChunks
         .slice()
-        .sort((a, b) => (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx))
-        .slice(0, FORCE_INCLUDE_CHUNKS);
+        .sort((a, b) => (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx));
+      const byScore = bodyChunks
+        .slice()
+        .sort((a, b) => b.score - a.score || (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx));
+      const picked: (typeof scored)[number][] = [];
+      const pushUnique = (c: (typeof scored)[number]) => {
+        if (!picked.includes(c)) picked.push(c);
+      };
+      // (a) positional anchor: earliest genuine body chunk (section opening).
+      if (byPosition.length > 0) pushUnique(byPosition[0]);
+      // (b) fill remaining slots with the most measure-relevant body chunks.
+      for (const c of byScore) {
+        if (picked.length >= FORCE_INCLUDE_CHUNKS) break;
+        pushUnique(c);
+      }
+      forceCandidates = picked.slice(0, FORCE_INCLUDE_CHUNKS);
     } else {
       // Fallback: no chunk passed the strict genuine-body test (rare). Take the
       // earliest item1a/required-doc chunks by position so SOMETHING from the
@@ -883,7 +910,7 @@ export function buildEvidencePackForMeasure(opts: {
     }
 
     if (forceIncludedCount > 0) {
-      console.log(`[force-include] ${measure.measureId}: GUARANTEED ${forceIncludedCount} genuine ${spec.label} body chunk(s) from ${forceIncludedDocUrl || "(doc)"} (position-based, query-independent)`);
+      console.log(`[force-include] ${measure.measureId}: GUARANTEED ${forceIncludedCount} genuine ${spec.label} body chunk(s) from ${forceIncludedDocUrl || "(doc)"} (1 positional anchor + top-by-relevance; deterministic)`);
     } else {
       // Required document present but we could not place any chunk — a real failure
       // the worker invariant will catch.

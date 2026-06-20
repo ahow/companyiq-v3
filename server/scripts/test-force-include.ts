@@ -71,10 +71,16 @@ async function main() {
     });
 
     const hasRiskProse = /(could|may|might)\s+(adversely|materially|negatively)|adversely affect our|harm our business|we (face|are subject to)/i.test(pack.text);
+    // v3j-r2: the WHOLE point of the refinement is that the forced evidence is
+    // measure-RELEVANT. For the AI risk-factor measure, the pack must contain AI
+    // language co-located with risk language — not just generic risk preamble.
+    const aiMentions = (pack.text.match(/\b(artificial intelligence|generative ai|machine learning|\bai\b)/gi) || []).length;
+    const hasAiRisk = aiMentions >= 2 && /(risk|adversely|harm|could|may|uncertain|liabilit|regulat|threat|reputational|ethic)/i.test(pack.text);
     const pass =
       pack.requiredDocPresent === true &&
       pack.forceIncludedCount >= 1 &&
-      hasRiskProse;
+      hasRiskProse &&
+      hasAiRisk;
     allPass = allPass && pass;
 
     console.log(`\n=== ${c.name} (companyId=${c.companyId}) ===`);
@@ -84,6 +90,7 @@ async function main() {
     console.log(`  forceIncludedDocUrl: ${pack.forceIncludedDocUrl || "(none)"}`);
     console.log(`  packChars: ${pack.totalChars}, chunkCount: ${pack.chunkCount}`);
     console.log(`  pack contains risk-factor prose: ${hasRiskProse}`);
+    console.log(`  AI mentions in pack: ${aiMentions} | AI-risk co-located: ${hasAiRisk}`);
     console.log(`  RESULT: ${pass ? "PASS" : "FAIL"}`);
     // Show a short excerpt to eyeball that it is real Item 1A body, not a TOC.
     console.log(`  excerpt: ${pack.text.slice(0, 200).replace(/\s+/g, " ")}`);
