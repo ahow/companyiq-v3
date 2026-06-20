@@ -1,6 +1,6 @@
 import * as storage from "../storage.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
-import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
+import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash } from "./processor.js";
@@ -610,7 +610,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r7")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r8")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -1297,6 +1297,9 @@ export async function analyzeCompanyMeasures(opts: {
               maxChars: DEEP_MAX_CHARS,
               companyId,            // v3g (Bug 1): collision-free fingerprint identity
               frameworkId: framework.id,
+              // v3j-r7 FIX (Oracle): keep the deep-read pass anchored on the same
+              // canonical EDGAR annual filing as the category pass.
+              preferredAnnualUrl: computePreferredAnnualUrl(deepChunks),
             });
             // Only re-score if the deep pass actually surfaced more topic evidence
             // than the original pack (otherwise re-scoring adds cost for no gain).

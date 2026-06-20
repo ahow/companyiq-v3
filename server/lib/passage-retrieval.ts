@@ -686,6 +686,14 @@ export function buildEvidencePackForMeasure(opts: {
   // v3g (Bug 1): explicit identity for a collision-free fingerprint.
   companyId?: number | string;
   frameworkId?: number | string;
+  // v3j-r7 FIX (Oracle): the canonical annual-filing URL chosen ONCE at the
+  // category level (over the full chunk set, with the robust cover-caption
+  // quarterly exclusion + EDGAR-primary preference). When set, the per-measure
+  // force-include anchors on THIS document outright, so every filing-bound measure
+  // cites the same authoritative EDGAR 10-K instead of independently re-deriving a
+  // winner from the compressed per-measure chunk view (where the cover page may not
+  // survive and a third-party PDF mirror could win).
+  preferredAnnualUrl?: string;
 }): EvidencePack {
   const {
     measure,
@@ -698,6 +706,7 @@ export function buildEvidencePackForMeasure(opts: {
     maxChunksPerDoc = MAX_CHUNKS_PER_DOC,
     companyId,
     frameworkId,
+    preferredAnnualUrl,
   } = opts;
 
   // Build query terms from measure title + definition + evidence keywords + terminology
@@ -990,7 +999,24 @@ export function buildEvidencePackForMeasure(opts: {
       const rec = recencyOf(di);
       cands.push({ di, count: arr.length, rec, ord: ymdToOrdinal(rec), edgar: isEdgarPrimaryDoc(di) });
     }
+    // v3j-r7 FIX (Oracle): normalize a URL for preferred-doc matching (strip query
+    // string / fragment so a ?ref=... suffix does not defeat equality).
+    const normUrl = (u: string | undefined): string => (u || "").split(/[?#]/)[0].toLowerCase();
+    const preferredNorm = normUrl(preferredAnnualUrl);
+    const docUrlOf = (di: number): string => {
+      const first = (bodyByDoc.get(di) || [])[0];
+      return first ? (chunks[first.idx].docUrl || "") : "";
+    };
     cands.sort((a, b) => {
+      // v3j-r7 FIX (Oracle): the category-level canonical annual filing wins
+      // OUTRIGHT. This makes every filing-bound measure anchor on the SAME
+      // authoritative EDGAR 10-K chosen once over the full corpus, instead of
+      // re-deriving from the compressed per-measure view where a PDF mirror could win.
+      if (preferredNorm) {
+        const aPref = normUrl(docUrlOf(a.di)) === preferredNorm;
+        const bPref = normUrl(docUrlOf(b.di)) === preferredNorm;
+        if (aPref !== bPref) return aPref ? -1 : 1;
+      }
       // v3j-r5 FIX (Oracle): a DATELESS third-party mirror (rec=0, e.g. the
       // stocklight.com nyse-orcl-2025-10K PDF with no parseable YYYYMMDD) must never
       // outrank a DATED EDGAR-primary filing of the SAME annual report. Treat a
@@ -1300,6 +1326,12 @@ export function buildEvidencePacksForCategory(opts: {
 
   const bm25Index = buildBM25Index(chunks.map((c) => c.text));
 
+  // v3j-r7 FIX (Oracle): choose the canonical annual filing ONCE over the full
+  // chunk set so every filing-bound measure anchors on the SAME authoritative
+  // document (the EDGAR-primary 10-K), rather than re-deriving per measure from a
+  // compressed view where a third-party PDF mirror could win.
+  const preferredAnnualUrl = computePreferredAnnualUrl(chunks);
+
   return measures.map((measure) =>
     buildEvidencePackForMeasure({
       measure,
@@ -1311,8 +1343,92 @@ export function buildEvidencePacksForCategory(opts: {
       maxChars,
       companyId,
       frameworkId,
+      preferredAnnualUrl,
     })
   );
+}
+
+/**
+ * v3j-r7 FIX (Oracle): pick the canonical annual-filing URL from the full chunk
+ * set, using the SAME authoritative cover-caption discriminators and EDGAR-primary
+ * + recency comparator as the upstream item1a-reserve. Returns undefined when no
+ * genuine Item 1A annual filing is present.
+ *
+ * Why this exists: the per-measure force-include used to re-derive a "best annual
+ * filing" from the COMPRESSED per-measure chunk view, where the 10-K cover page
+ * often does not survive and a dateless third-party PDF mirror (e.g. stocklight)
+ * could outrank the genuine EDGAR 10-K. Computing the winner once over the full,
+ * uncompressed chunk set and propagating it makes every measure cite the same SEC
+ * primary document.
+ */
+export function computePreferredAnnualUrl(chunks: Chunk[]): string | undefined {
+  const isEdgarPrimary = (u: string): boolean =>
+    /sec\.gov\/archives\/edgar\/data\/\d+\//.test((u || "").toLowerCase()) && /\.htm/.test((u || "").toLowerCase());
+  const isAnnualFiling = (u: string, t: string): boolean => {
+    const s = `${u || ""} ${t || ""}`.toLowerCase();
+    return /sec\.gov\/archives\/edgar/.test((u || "").toLowerCase()) || /\b(10-?k|20-?f|40-?f)\b/.test(s) || /-\d{8}\.htm/.test((u || "").toLowerCase());
+  };
+  const validYmd = (v: number): boolean => {
+    if (v < 19900101 || v > 20401231) return false;
+    const mo = Math.floor((v % 10000) / 100), da = v % 100;
+    return mo >= 1 && mo <= 12 && da >= 1 && da <= 31;
+  };
+  const dateOf = (s: string): number => {
+    const hay = (s || "").toLowerCase(); let best = 0;
+    for (const m of hay.matchAll(/[a-z]+-?(20\d{6})\.(?:htm|pdf)/g)) { const v = parseInt(m[1], 10); if (validYmd(v) && v > best) best = v; }
+    if (best === 0) for (const m of hay.matchAll(/(20\d{2})-(\d{2})-(\d{2})/g)) { const v = parseInt(m[1] + m[2] + m[3], 10); if (validYmd(v) && v > best) best = v; }
+    if (best === 0) for (const m of hay.matchAll(/(20\d{6})/g)) { const v = parseInt(m[1], 10); if (validYmd(v) && v > best) best = v; }
+    if (best === 0) for (const m of hay.matchAll(/\b(20[12]\d)\b/g)) { const v = parseInt(m[1] + "0000", 10); if (v > best) best = v; }
+    return best;
+  };
+  const ymdToOrdinal = (v: number): number => { if (v <= 0) return 0; const y = Math.floor(v / 10000), m = Math.floor((v % 10000) / 100) || 1, d = (v % 100) || 1; return y * 365 + m * 30 + d; };
+  const STRONG_Q_COVER = /form 10-q[\s\S]{0,400}quarterly report pursuant to section 13|quarterly report pursuant to section 13[\s\S]{0,400}form 10-q/i;
+  const STRONG_A_COVER = /form 10-k[\s\S]{0,400}annual report pursuant to section 13|annual report pursuant to section 13[\s\S]{0,400}form 10-k/i;
+  const QUARTERLY_RE = /quarterly report pursuant to section 13|for the quarterly period ended|\bform 10-q\b/gi;
+  const ANNUAL_RE = /annual report pursuant to section 13|for the fiscal year ended|\bform 10-k\b/gi;
+  const strongProxyRe = /stockholder proposal|say-on-pay|notice of (the )?annual meeting|proxy card|broker non-votes|nominees? for (election|director)|compensation discussion and analysis/gi;
+
+  // Genuine Item 1A body chunks per doc, restricted to annual-filing docs.
+  const byDoc = new Map<number, { idxs: number[]; url: string; title: string }>();
+  const allIdxByDoc = new Map<number, number[]>();
+  chunks.forEach((c, i) => { const a = allIdxByDoc.get(c.docIndex) || []; a.push(i); allIdxByDoc.set(c.docIndex, a); });
+  chunks.forEach((c, i) => {
+    if (!isItem1aBodyChunk(c)) return;
+    if (!isAnnualFiling(c.docUrl || "", c.docTitle || "")) return;
+    const e = byDoc.get(c.docIndex) || { idxs: [], url: c.docUrl || "", title: c.docTitle || "" };
+    e.idxs.push(i); byDoc.set(c.docIndex, e);
+  });
+  if (byDoc.size === 0) return undefined;
+
+  type C = { di: number; idxs: number[]; url: string; rec: number; ord: number; edgar: boolean };
+  const cands: C[] = [];
+  for (const [di, e] of byDoc) {
+    const joined = (allIdxByDoc.get(di) || []).map((ix) => chunks[ix].text).join("\n");
+    // Exclude 10-Q / quarterly filings via authoritative cover captions, then marker balance.
+    let quarterly: boolean;
+    if (STRONG_Q_COVER.test(joined)) quarterly = true;
+    else if (STRONG_A_COVER.test(joined)) quarterly = false;
+    else { const q = (joined.match(QUARTERLY_RE) || []).length, a = (joined.match(ANNUAL_RE) || []).length; quarterly = q > 0 && q >= a; }
+    if (quarterly) continue;
+    // Exclude proxy-dominant docs (board/governance text, not Item 1A risk factors).
+    let proxyHits = 0; for (const ix of e.idxs) proxyHits += (chunks[ix].text.match(strongProxyRe) || []).length;
+    if (proxyHits >= 10) continue;
+    const rec = dateOf(`${e.url} ${e.title}`);
+    cands.push({ di, idxs: e.idxs, url: e.url, rec, ord: ymdToOrdinal(rec), edgar: isEdgarPrimary(e.url) });
+  }
+  if (cands.length === 0) return undefined;
+  const SAME_PERIOD_DAYS = 150;
+  cands.sort((a, b) => {
+    const aDateless = a.rec === 0, bDateless = b.rec === 0;
+    if (aDateless !== bDateless) return aDateless ? 1 : -1;
+    const samePeriod = Math.abs(a.ord - b.ord) <= SAME_PERIOD_DAYS || aDateless;
+    if (!samePeriod) return b.rec - a.rec;
+    if (a.edgar !== b.edgar) return a.edgar ? -1 : 1;
+    if (a.rec !== b.rec) return b.rec - a.rec;
+    if (a.idxs.length !== b.idxs.length) return b.idxs.length - a.idxs.length;
+    return a.di - b.di;
+  });
+  return cands[0].url || undefined;
 }
 
 /**
