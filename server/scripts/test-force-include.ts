@@ -29,6 +29,9 @@ const CASES: Array<{ companyId: number; name: string; contentIds: number[] }> = 
   { companyId: 1918, name: "META", contentIds: [156982] },
   { companyId: 553, name: "MICROSOFT", contentIds: [214934] },
   { companyId: 1312, name: "NVIDIA", contentIds: [207834, 207831, 145440, 123581] },
+  // Apple: current 10-K aapl-20250927 (197105) has only ~12 AI mentions across 66
+  // body chunks — proves the sparse-AI topic guarantee surfaces an AI-bearing chunk.
+  { companyId: 866, name: "APPLE", contentIds: [197105] },
 ];
 
 // The Risk Q1 measure, annotated with a requiredSourceTypes constraint so the

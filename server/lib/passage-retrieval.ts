@@ -876,6 +876,24 @@ export function buildEvidencePackForMeasure(opts: {
       arr.push(s);
       bodyByDoc.set(s.docIndex, arr);
     }
+    // v3k FIX (NVIDIA): exclude PROXY-DOMINANT documents by CONTENT, not just URL.
+    // NVIDIA's proxy nvda-20260512.htm has a bare EDGAR <ticker>-YYYYMMDD URL that
+    // does NOT look like a proxy by filename, yet the greedy section tagger stamps
+    // ~128 of its chunks as item1a (it cross-references the 10-K's Item 1A amid
+    // shareholder-proposal / say-on-pay / director-nominee prose). Because its date
+    // token (May) is newer than the real 10-K (Jan), it wins recency and the grader
+    // then sees "AI only in a shareholder proposal". We detect strong proxy markers
+    // across each candidate document's body chunks and drop any document whose proxy
+    // marker count dominates (>=10), mirroring the upstream item1a-reserve guard.
+    const STRONG_PROXY_RE = /stockholder proposal|say-on-pay|notice of (the )?annual meeting|proxy card|broker non-votes|nominees? for (election|director)|compensation discussion and analysis/gi;
+    for (const [di, arr] of [...bodyByDoc.entries()]) {
+      let proxyHits = 0;
+      for (const s of arr) proxyHits += (chunks[s.idx].text.match(STRONG_PROXY_RE) || []).length;
+      if (proxyHits >= 10) {
+        bodyByDoc.delete(di);
+        console.log(`[force-include] ${measure.measureId}: dropped proxy-dominant doc idx=${di} (${proxyHits} proxy markers) from ${spec.label} candidates`);
+      }
+    }
     // Recency key parsed from the doc URL/title (e.g. crm-20260131 -> 20260131,
     // EDGAR accession date, or a 4-8 digit date token). Higher = more recent.
     const recencyOf = (di: number): number => {
@@ -963,13 +981,41 @@ export function buildEvidencePackForMeasure(opts: {
       const byScore = bodyChunks
         .slice()
         .sort((a, b) => b.score - a.score || (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx));
+      // v3k FIX (Apple): when the measure's risk language is SPARSE and scattered
+      // (Apple's Item 1A has only ~12 AI mentions across 66 body chunks), the
+      // positional anchor + top-by-BM25 picks could all miss the AI-bearing chunk,
+      // so the grader saw only the section heading and returned No. Rank body chunks
+      // by COUNT OF MEASURE TOPIC TERMS first, and GUARANTEE the single most
+      // topic-dense body chunk is force-included whenever any chunk mentions the
+      // topic at all. This surfaces the on-topic risk paragraph even when it is rare.
+      const topicCountOf = (c: (typeof scored)[number]): number => {
+        const t = (chunks[c.idx].text || "").toLowerCase();
+        let n = 0;
+        for (const term of topicTerms) {
+          if (!term) continue;
+          const re = new RegExp(`\\b${term.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g");
+          n += (t.match(re) || []).length;
+        }
+        return n;
+      };
+      const byTopic = bodyChunks
+        .slice()
+        .map((c) => ({ c, tc: topicCountOf(c) }))
+        .filter((x) => x.tc > 0)
+        .sort((a, b) => b.tc - a.tc || b.c.score - a.c.score);
       const picked: (typeof scored)[number][] = [];
       const pushUnique = (c: (typeof scored)[number]) => {
         if (!picked.includes(c)) picked.push(c);
       };
       // (a) positional anchor: earliest genuine body chunk (section opening).
       if (byPosition.length > 0) pushUnique(byPosition[0]);
-      // (b) fill remaining slots with the most measure-relevant body chunks.
+      // (b) GUARANTEE the most topic-dense body chunk (the on-topic risk paragraph).
+      if (byTopic.length > 0) pushUnique(byTopic[0].c);
+      // (c) fill remaining slots: prefer additional topic-bearing chunks, then BM25.
+      for (const x of byTopic) {
+        if (picked.length >= FORCE_INCLUDE_CHUNKS) break;
+        pushUnique(x.c);
+      }
       for (const c of byScore) {
         if (picked.length >= FORCE_INCLUDE_CHUNKS) break;
         pushUnique(c);
