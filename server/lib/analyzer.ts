@@ -594,7 +594,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3g")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3g2")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -676,28 +676,44 @@ async function summarizeDocuments(opts: {
   }));
   scoredChunks.sort((a, b) => b.score - a.score);
 
-  const MAX_RETRIEVAL_INPUT = 200000;
+  // v3g-fix: this is the CANDIDATE POOL for the downstream per-measure BM25 packs
+  // (buildEvidencePacksForCategory), NOT the text sent to the grader. The grader
+  // only ever sees ~20k-char per-measure packs selected from this pool. The prior
+  // 200k cap was too small for the largest filers (Amazon/Apple/Alphabet): relevant
+  // AI passages for some measures fell outside the window and never reached the
+  // per-measure BM25, producing spurious "No / 0 quotes". Because enlarging the pool
+  // does NOT enlarge the grading prompt, we set it close to the whole-corpus
+  // threshold (600k) so coverage matches the old LLM-summary path while keeping the
+  // header-preserving, verbatim output. Env-tunable.
+  const MAX_RETRIEVAL_INPUT = parseInt(process.env.RETRIEVAL_CORPUS_MAX_CHARS || "560000", 10);
   // Select winning chunk indices up to the budget, then RESTORE document order so
   // the re-emitted headers group each document's chunks contiguously.
-  const selectedIdx: number[] = [];
+  // v3g-fix: PRIORITISE high-BM25 chunks, but do NOT stop the pool at the first
+  // zero-score chunk. Many measures' evidence lives in prose that lacks the AI
+  // query terms (governance/committee/proxy boilerplate), which scores 0 on BM25;
+  // discarding it starved measures on large filers. Instead we fill the (generous)
+  // budget with the remaining chunks in document order, so the candidate pool stays
+  // broad. The downstream per-measure BM25 then picks the right ~20k for each
+  // question. Use a Set to avoid double-adding.
+  const selectedSet = new Set<number>();
   let budget = 0;
   for (const sc of scoredChunks) {
-    if (sc.score <= 0) break;
+    if (sc.score <= 0) continue;
     if (budget + sc.chunk.text.length > MAX_RETRIEVAL_INPUT) break;
-    selectedIdx.push(sc.idx);
+    selectedSet.add(sc.idx);
     budget += sc.chunk.text.length;
   }
-  // Fallback: if BM25 found very little, take the first chunks in document order.
-  if (budget < 20000) {
-    selectedIdx.length = 0;
-    budget = 0;
+  // Fill remaining budget with any not-yet-selected chunks in document order so the
+  // pool covers low/zero-BM25 passages too (coverage parity with the old summary).
+  if (budget < MAX_RETRIEVAL_INPUT) {
     for (let i = 0; i < docChunks.length; i++) {
-      if (budget + docChunks[i].text.length > MAX_RETRIEVAL_INPUT) break;
-      selectedIdx.push(i);
+      if (selectedSet.has(i)) continue;
+      if (budget + docChunks[i].text.length > MAX_RETRIEVAL_INPUT) continue;
+      selectedSet.add(i);
       budget += docChunks[i].text.length;
     }
   }
-  selectedIdx.sort((a, b) => a - b); // document/sequence order
+  const selectedIdx: number[] = [...selectedSet].sort((a, b) => a - b); // document/sequence order
 
   let relevantText = "";
   let lastDocIndex = -1;
@@ -721,10 +737,10 @@ async function summarizeDocuments(opts: {
     companyId,
     documentHash: docHash,
     summary: relevantText,
-    summarizerModel: "bm25-headers-v3g",
+    summarizerModel: "bm25-headers-v3g2",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3g" };
+  return { text: relevantText, model: "bm25-headers-v3g2" };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
