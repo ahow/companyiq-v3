@@ -896,19 +896,24 @@ export function buildEvidencePackForMeasure(opts: {
     }
     // Recency key parsed from the doc URL/title (e.g. crm-20260131 -> 20260131,
     // EDGAR accession date, or a 4-8 digit date token). Higher = more recent.
+    // v3k-r3 FIX: robust, VALIDATED date parsing (matches analyzer.ts). The prior
+    // loose "20\d{2}" fallback turned Apple's a201610-k9242016.htm accession folder
+    // into a spurious 2030 date, so a stale filing won recency. Prefer the canonical
+    // <name>-YYYYMMDD.(htm|pdf) document-name date, then a validated 8-digit token.
+    const validYmd = (v: number): boolean => {
+      if (v < 19900101 || v > 20401231) return false;
+      const mo = Math.floor((v % 10000) / 100), da = v % 100;
+      return mo >= 1 && mo <= 12 && da >= 1 && da <= 31;
+    };
     const recencyOf = (di: number): number => {
       const sample = (bodyByDoc.get(di) || [])[0];
       const ch = sample ? chunks[sample.idx] : undefined;
-      const hay = `${ch?.docUrl || ""} ${ch?.docTitle || ""}`;
+      const hay = `${ch?.docUrl || ""} ${ch?.docTitle || ""}`.toLowerCase();
       let best = 0;
-      // Prefer an 8-digit YYYYMMDD token (ticker-YYYYMMDD filenames, EDGAR dates).
-      for (const m of hay.matchAll(/(20\d{6})/g)) { const v = parseInt(m[1], 10); if (v > best) best = v; }
-      if (best === 0) {
-        for (const m of hay.matchAll(/(20\d{2})[-_/]?(\d{2})?/g)) {
-          const v = parseInt((m[1] + (m[2] || "00")).padEnd(8, "0").slice(0, 8), 10);
-          if (v > best) best = v;
-        }
-      }
+      for (const m of hay.matchAll(/[a-z]+-?(20\d{6})\.(?:htm|pdf)/g)) { const v = parseInt(m[1], 10); if (validYmd(v) && v > best) best = v; }
+      if (best === 0) for (const m of hay.matchAll(/(20\d{2})-(\d{2})-(\d{2})/g)) { const v = parseInt(m[1] + m[2] + m[3], 10); if (validYmd(v) && v > best) best = v; }
+      if (best === 0) for (const m of hay.matchAll(/(20\d{6})/g)) { const v = parseInt(m[1], 10); if (validYmd(v) && v > best) best = v; }
+      if (best === 0) for (const m of hay.matchAll(/\b(20[12]\d)\b/g)) { const v = parseInt(m[1] + "0000", 10); if (v > best) best = v; }
       return best;
     };
     // A document qualifies if it has at least MIN_BODY genuine body chunks, OR (when

@@ -610,7 +610,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3k")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3k-r3")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -787,7 +787,32 @@ async function summarizeDocuments(opts: {
     });
     // Pick the best annual filing: prefer non-proxy, most recent (YYYYMMDD token),
     // then EDGAR-primary, then most body chunks.
-    const dateOf = (s: string) => { let b = 0; for (const m of (s||"").matchAll(/(20\d{6})/g)) { const v = parseInt(m[1],10); if (v>b) b=v; } for (const m of (s||"").matchAll(/(20\d{2})[-_/]?(\d{2})?/g)) { const v = parseInt(((m[1]+(m[2]||"00")).padEnd(8,"0")).slice(0,8),10); if (v>b) b=v; } return b; };
+    // v3k-r3 FIX: derive the filing date ROBUSTLY. The prior regex matched any
+    // "20\d{2}" substring, so Apple's 2016 10-K filename a201610-k9242016.htm with
+    // accession folder ...016020309 produced a SPURIOUS 2030 date that beat the
+    // real aapl-20250927, and the grader received the 8-year-old filing. We now:
+    //   1) prefer the canonical EDGAR/IR document-name date <name>-YYYYMMDD.(htm|pdf)
+    //      or a yyyy-mm-dd token in the path (the true period-end / filing date);
+    //   2) only then fall back to a VALIDATED 8-digit YYYYMMDD (month<=12, day<=31)
+    //      to reject accession-number garbage like 20300000.
+    const validYmd = (v: number): boolean => {
+      if (v < 19900101 || v > 20401231) return false;
+      const mo = Math.floor((v % 10000) / 100), da = v % 100;
+      return mo >= 1 && mo <= 12 && da >= 1 && da <= 31;
+    };
+    const dateOf = (s: string) => {
+      const hay = (s || "").toLowerCase();
+      // (1) canonical filing-document name: ...-YYYYMMDD.htm/.pdf
+      let best = 0;
+      for (const m of hay.matchAll(/[a-z]+-?(20\d{6})\.(?:htm|pdf)/g)) { const v = parseInt(m[1], 10); if (validYmd(v) && v > best) best = v; }
+      // (1b) yyyy-mm-dd anywhere in the path (IR PDF mirrors)
+      if (best === 0) for (const m of hay.matchAll(/(20\d{2})-(\d{2})-(\d{2})/g)) { const v = parseInt(m[1] + m[2] + m[3], 10); if (validYmd(v) && v > best) best = v; }
+      // (2) validated bare 8-digit token
+      if (best === 0) for (const m of hay.matchAll(/(20\d{6})/g)) { const v = parseInt(m[1], 10); if (validYmd(v) && v > best) best = v; }
+      // (3) last-resort year only (avoids accession garbage by capping month/day to 00)
+      if (best === 0) for (const m of hay.matchAll(/\b(20[12]\d)\b/g)) { const v = parseInt(m[1] + "0000", 10); if (v > best) best = v; }
+      return best;
+    };
     const strongProxyRe = /stockholder proposal|say-on-pay|notice of (the )?annual meeting|proxy card|broker non-votes|nominees? for (election|director)|compensation discussion and analysis/gi;
     const cands = [...byDoc.entries()].map(([di, e]) => {
       let proxyHits = 0;
