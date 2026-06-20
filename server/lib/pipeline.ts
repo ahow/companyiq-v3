@@ -696,28 +696,42 @@ async function runAnalyzePhase(opts: {
 
   await storage.clearMeasureScores(companyId);
 
+  // v3j (Obs 3.2): the deterministic force-include path is otherwise invisible to
+  // downstream validators. We surface it WITHOUT a schema migration by tagging the
+  // already-persisted quotes JSONB: any quote whose sourceUrl matches the measure's
+  // forceIncludedDocUrl is annotated forceInclude=true. The /api/companies/:id
+  // payload returns quotes verbatim, so validators can confirm the path fired.
+  const normUrl = (u?: string) => (u || "").trim().toLowerCase().replace(/[#?].*$/, "").replace(/\/$/, "");
   const scoreRows = analysis.categories.flatMap((cat) =>
-    cat.measures.map((m) => ({
-      companyId,
-      frameworkId: framework.id,
-      measureId: m.measureId,
-      category: m.category,
-      categoryNumber: m.categoryNumber,
-      title: m.title,
-      definition: m.definition,
-      score: m.score,
-      coverage: m.coverage,
-      confidence: m.confidence,
-      evidenceSummary: m.evidenceSummary,
-      quotes: m.quotes,
-      verdict: m.verdict,
-      verdictNuance: m.verdictNuance,
-      displayOrder: m.displayOrder,
-      // v3e: persist abstain flag + evidence fingerprint for the answered-measures
-      // denominator and cross-run drift detection / verdict caching.
-      abstained: (m as any).abstained === true,
-      evidenceFingerprint: (m as any).evidenceFingerprint ?? null,
-    }))
+    cat.measures.map((m) => {
+      const fiUrl = normUrl((m as any).forceIncludedDocUrl);
+      const fiCount = (m as any).forceIncludedCount ?? 0;
+      const quotes = (m.quotes || []).map((q) => {
+        const fromForced = fiCount > 0 && !!fiUrl && normUrl((q as any).sourceUrl) === fiUrl;
+        return fromForced ? { ...q, forceInclude: true } : q;
+      });
+      return {
+        companyId,
+        frameworkId: framework.id,
+        measureId: m.measureId,
+        category: m.category,
+        categoryNumber: m.categoryNumber,
+        title: m.title,
+        definition: m.definition,
+        score: m.score,
+        coverage: m.coverage,
+        confidence: m.confidence,
+        evidenceSummary: m.evidenceSummary,
+        quotes,
+        verdict: m.verdict,
+        verdictNuance: m.verdictNuance,
+        displayOrder: m.displayOrder,
+        // v3e: persist abstain flag + evidence fingerprint for the answered-measures
+        // denominator and cross-run drift detection / verdict caching.
+        abstained: (m as any).abstained === true,
+        evidenceFingerprint: (m as any).evidenceFingerprint ?? null,
+      };
+    })
   );
 
   await storage.createMeasureScores(scoreRows);

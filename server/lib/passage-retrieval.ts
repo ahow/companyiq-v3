@@ -894,6 +894,31 @@ export function buildEvidencePackForMeasure(opts: {
         console.log(`[force-include] ${measure.measureId}: dropped proxy-dominant doc idx=${di} (${proxyHits} proxy markers) from ${spec.label} candidates`);
       }
     }
+    // v3j-r5 FIX (Meta/Oracle): drop 10-Q / QUARTERLY-report documents from the
+    // annual-filing (Item 1A) candidate set. A 10-Q's EDGAR URL has the same
+    // -YYYYMMDD.htm shape as a 10-K and its period date is NEWER than the latest
+    // 10-K, so without this guard the force-include anchors on the quarterly filing
+    // (which has no Item 1A risk-factor section) instead of the annual 10-K. We
+    // detect the form type from COVER-PAGE language present in the document's own
+    // chunks (scanning ALL chunks of the doc, since the cover page is a separate
+    // chunk from the Item 1A body) -- a 10-Q says "quarterly report pursuant to
+    // section 13" / "for the quarterly period ended", a 10-K says "annual report
+    // pursuant to section 13" / "for the fiscal year ended". Only applied to the
+    // annual-filing spec (not the proxy spec).
+    if (spec.label === "item1a" || /annual|10-?k|item ?1a/i.test(spec.label)) {
+      const QUARTERLY_RE = /quarterly report pursuant to section 13|for the quarterly period ended|\bform 10-q\b/gi;
+      const ANNUAL_RE = /annual report pursuant to section 13|for the fiscal year ended|\bform 10-k\b/gi;
+      const allIdxByDoc = new Map<number, number[]>();
+      chunks.forEach((c, i) => { const a = allIdxByDoc.get(c.docIndex) || []; a.push(i); allIdxByDoc.set(c.docIndex, a); });
+      for (const di of [...bodyByDoc.keys()]) {
+        let q = 0, a = 0;
+        for (const ix of (allIdxByDoc.get(di) || [])) { const t = chunks[ix].text; q += (t.match(QUARTERLY_RE) || []).length; a += (t.match(ANNUAL_RE) || []).length; }
+        if (q > 0 && q >= a) {
+          bodyByDoc.delete(di);
+          console.log(`[force-include] ${measure.measureId}: dropped 10-Q/quarterly doc idx=${di} (q=${q} a=${a}) from ${spec.label} candidates`);
+        }
+      }
+    }
     // Recency key parsed from the doc URL/title (e.g. crm-20260131 -> 20260131,
     // EDGAR accession date, or a 4-8 digit date token). Higher = more recent.
     // v3k-r3 FIX: robust, VALIDATED date parsing (matches analyzer.ts). The prior
@@ -952,7 +977,18 @@ export function buildEvidencePackForMeasure(opts: {
       cands.push({ di, count: arr.length, rec, ord: ymdToOrdinal(rec), edgar: isEdgarPrimaryDoc(di) });
     }
     cands.sort((a, b) => {
-      const samePeriod = Math.abs(a.ord - b.ord) <= SAME_PERIOD_DAYS;
+      // v3j-r5 FIX (Oracle): a DATELESS third-party mirror (rec=0, e.g. the
+      // stocklight.com nyse-orcl-2025-10K PDF with no parseable YYYYMMDD) must never
+      // outrank a DATED EDGAR-primary filing of the SAME annual report. Treat a
+      // dated EDGAR primary as preferred whenever the other candidate is dateless,
+      // so citations resolve to the canonical SEC HTML rather than a PDF mirror.
+      const aDateless = a.rec === 0, bDateless = b.rec === 0;
+      if (aDateless !== bDateless) {
+        // Prefer the dated candidate, unless the dated one is NOT EDGAR and the
+        // dateless one IS EDGAR (rare); default to preferring the dated filing.
+        return aDateless ? 1 : -1;
+      }
+      const samePeriod = Math.abs(a.ord - b.ord) <= SAME_PERIOD_DAYS || aDateless; // dateless => treat as same period for EDGAR tie-break
       if (!samePeriod) return b.rec - a.rec;            // clearly newer wins
       if (a.edgar !== b.edgar) return a.edgar ? -1 : 1; // same period: EDGAR beats mirror
       if (a.rec !== b.rec) return b.rec - a.rec;        // then newer

@@ -610,7 +610,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3k-r4")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3j-r5")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -814,11 +814,47 @@ async function summarizeDocuments(opts: {
       return best;
     };
     const strongProxyRe = /stockholder proposal|say-on-pay|notice of (the )?annual meeting|proxy card|broker non-votes|nominees? for (election|director)|compensation discussion and analysis/gi;
+    // v3j-r5 FIX (Meta/Oracle): EXCLUDE 10-Q / quarterly reports from annual-filing
+    // selection. A 10-Q's EDGAR URL (e.g. meta-20260331.htm, period 2026-03-31)
+    // matches the -YYYYMMDD.htm / edgar-archive shape just like a 10-K, and its
+    // period date is NEWER than the most recent 10-K (meta-20251231), so the
+    // recency sort picked the QUARTERLY filing and the grader narrated a 10-Q as
+    // "the most recent annual filing" -- Item 1A risk factors live in the 10-K, not
+    // the 10-Q. URL/title alone cannot distinguish them for issuers whose EDGAR
+    // titles are a bare "meta-YYYYMMDD - SEC.gov", so we detect the form type from
+    // the COVER-PAGE language carried in the document's own chunks: a 10-Q says
+    // "QUARTERLY REPORT PURSUANT TO SECTION 13" / "for the quarterly period ended",
+    // a 10-K says "ANNUAL REPORT PURSUANT TO SECTION 13" / "for the fiscal year
+    // ended". We aggregate these markers across ALL of a candidate document's
+    // chunks (the cover page is its own chunk, distinct from the Item 1A body) and
+    // drop any document whose QUARTERLY markers are present without a stronger
+    // ANNUAL marker.
+    const quarterlyRe = /quarterly report pursuant to section 13|for the quarterly period ended|\bform 10-q\b/gi;
+    const annualRe = /annual report pursuant to section 13|for the fiscal year ended|\bform 10-k\b/gi;
+    // Map every chunk index to its document so we can scan the WHOLE document
+    // (cover page included), not just the reserved Item 1A body chunks.
+    const allChunkIdxByDoc = new Map<number, number[]>();
+    docChunks.forEach((c, i) => { const a = allChunkIdxByDoc.get(c.docIndex) || []; a.push(i); allChunkIdxByDoc.set(c.docIndex, a); });
+    const isQuarterlyDoc = (di: number): boolean => {
+      let q = 0, a = 0;
+      for (const ix of (allChunkIdxByDoc.get(di) || [])) {
+        const t = docChunks[ix].text;
+        q += (t.match(quarterlyRe) || []).length;
+        a += (t.match(annualRe) || []).length;
+      }
+      // Quarterly if it carries quarterly cover-page language and is not
+      // predominantly an annual report (10-Qs may reference the prior fiscal year).
+      return q > 0 && q >= a;
+    };
     const cands = [...byDoc.entries()].map(([di, e]) => {
       let proxyHits = 0;
       for (const ix of e.idxs) proxyHits += (docChunks[ix].text.match(strongProxyRe) || []).length;
-      return { di, idxs: e.idxs, url: e.url, title: e.title, rec: dateOf(e.url + " " + e.title), edgar: isEdgarPrimary(e.url), proxyDom: proxyHits >= 10 };
-    }).filter((c) => !c.proxyDom);
+      return { di, idxs: e.idxs, url: e.url, title: e.title, rec: dateOf(e.url + " " + e.title), edgar: isEdgarPrimary(e.url), proxyDom: proxyHits >= 10, quarterly: isQuarterlyDoc(di) };
+    }).filter((c) => {
+      if (c.proxyDom) return false;
+      if (c.quarterly) { console.log(`[${companyName}] [item1a-reserve] excluded 10-Q/quarterly doc ${c.url.slice(0,60)} from annual-filing candidates`); return false; }
+      return true;
+    });
     // v3k-r4 FIX (NVIDIA): when two filings fall in the SAME period (<=150 days
     // apart) they are the same annual filing in different sources (e.g. the EDGAR
     // primary nvda-20260125.htm vs the fortune.com .../2026-02-25 PDF mirror of the
@@ -828,7 +864,12 @@ async function summarizeDocuments(opts: {
     const SAME_PERIOD_DAYS = 150;
     const ord = (v: number): number => { if (v <= 0) return 0; const y = Math.floor(v/10000), mo = Math.floor((v%10000)/100)||1, da = (v%100)||1; return y*365 + mo*30 + da; };
     cands.sort((a, b) => {
-      const samePeriod = Math.abs(ord(a.rec) - ord(b.rec)) <= SAME_PERIOD_DAYS;
+      // v3j-r5 FIX (Oracle): a DATELESS third-party mirror (rec=0) must never outrank
+      // a DATED filing of the SAME annual report, so citations resolve to the
+      // canonical EDGAR HTML rather than a PDF mirror (e.g. stocklight.com).
+      const aDateless = a.rec === 0, bDateless = b.rec === 0;
+      if (aDateless !== bDateless) return aDateless ? 1 : -1;
+      const samePeriod = Math.abs(ord(a.rec) - ord(b.rec)) <= SAME_PERIOD_DAYS || aDateless;
       if (!samePeriod) return b.rec - a.rec;             // clearly newer wins
       if (a.edgar !== b.edgar) return a.edgar ? -1 : 1;  // same period: EDGAR beats mirror
       if (a.rec !== b.rec) return b.rec - a.rec;         // then newer

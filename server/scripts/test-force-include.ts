@@ -21,17 +21,25 @@ import {
 const PG = process.env.PG || "";
 
 // company_id -> { name, 10-K content_id(s) }. Multiple ids allowed (we concat).
-const CASES: Array<{ companyId: number; name: string; contentIds: number[] }> = [
+const CASES: Array<{ companyId: number; name: string; contentIds: number[]; mustForceEdgar?: boolean; forbidContentIds?: number[] }> = [
   // Salesforce: include BOTH the current 10-K (crm-20260131 -> 235179) AND an OLD
   // one (crm-20221031 -> 173439) so the test proves recency-aware doc selection.
   { companyId: 420, name: "SALESFORCE", contentIds: [235179, 173439] },
   { companyId: 853, name: "AMAZON", contentIds: [215829] },
-  { companyId: 1918, name: "META", contentIds: [156982] },
+  // META v3j-r5: include the FY2025 10-K (meta-20251231 -> 156982) AND the NEWER
+  // Q1-FY2026 10-Q (meta-20260331 -> 157001). The 10-Q's period date is newer, so
+  // without the quarterly-exclusion the selector would force-include the 10-Q
+  // (which has no Item 1A). Assert the forced provenance is the 10-K's EDGAR URL.
+  { companyId: 1918, name: "META", contentIds: [156982, 157001], mustForceEdgar: true, forbidContentIds: [157001] },
   { companyId: 553, name: "MICROSOFT", contentIds: [214934] },
   { companyId: 1312, name: "NVIDIA", contentIds: [207834, 207831, 145440, 123581] },
   // Apple: current 10-K aapl-20250927 (197105) has only ~12 AI mentions across 66
   // body chunks — proves the sparse-AI topic guarantee surfaces an AI-bearing chunk.
   { companyId: 866, name: "APPLE", contentIds: [197105] },
+  // ORACLE v3j-r5: EDGAR 10-K (orcl-20250531 -> 205686) + NEWER 10-Q
+  // (orcl-20250831 -> 235143) + dateless stocklight PDF mirrors (110896/41019).
+  // Assert the forced provenance is the EDGAR 10-K, not the 10-Q nor the PDF mirror.
+  { companyId: 552, name: "ORACLE", contentIds: [205686, 235143, 110896, 41019], mustForceEdgar: true, forbidContentIds: [235143, 110896, 41019] },
 ];
 
 // The Risk Q1 measure, annotated with a requiredSourceTypes constraint so the
@@ -58,12 +66,14 @@ async function main() {
     // document preceded by a "--- DOCUMENT: <title> [<url>] ---" header.
     let combined = "";
     const urlsLoaded: string[] = [];
+    const forbidUrls: string[] = [];
     for (const cid of c.contentIds) {
       const { rows } = await client.query("SELECT content FROM document_content WHERE id=$1", [cid]);
       if (!rows.length) continue;
       const drow = await client.query("SELECT url FROM documents WHERE content_id=$1 LIMIT 1", [cid]);
       const url = drow.rows[0]?.url || `doc-${cid}`;
       urlsLoaded.push(url);
+      if ((c.forbidContentIds || []).includes(cid)) forbidUrls.push(url);
       combined += `\n\n--- DOCUMENT: 10-K [${url}] ---\n\n` + (rows[0].content || "");
     }
     const chunks = chunkDocuments(combined);
@@ -99,12 +109,20 @@ async function main() {
     const forcedIsNewest = !pack.forceIncludedDocUrl || urlsLoaded.length < 2 ||
       pack.forceIncludedDocUrl === newestUrl ||
       Math.abs(ord(dateOf(pack.forceIncludedDocUrl)) - ord(dateOf(newestUrl))) <= 150;
+    // v3j-r5 assertions: the forced provenance must NOT be a 10-Q or PDF mirror,
+    // and (when required) must be the canonical EDGAR HTML primary.
+    const fu = (pack.forceIncludedDocUrl || "").toLowerCase();
+    const notForbidden = !forbidUrls.some((u) => fu && u.toLowerCase() === fu);
+    const isEdgarPrimary = /sec\.gov\/archives\/edgar\/data\/\d+\//.test(fu) && /\.htm/.test(fu);
+    const edgarOk = !c.mustForceEdgar || isEdgarPrimary;
     const pass =
       pack.requiredDocPresent === true &&
       pack.forceIncludedCount >= 1 &&
       hasRiskProse &&
       hasAiRisk &&
-      forcedIsNewest;
+      forcedIsNewest &&
+      notForbidden &&
+      edgarOk;
     allPass = allPass && pass;
 
     console.log(`\n=== ${c.name} (companyId=${c.companyId}) ===`);
@@ -116,6 +134,7 @@ async function main() {
     console.log(`  pack contains risk-factor prose: ${hasRiskProse}`);
     console.log(`  AI mentions in pack: ${aiMentions} | AI-risk co-located: ${hasAiRisk}`);
     console.log(`  newest filing in corpus: ${newestUrl || "(n/a)"} | forced-is-newest: ${forcedIsNewest}`);
+    if (forbidUrls.length) console.log(`  forbidden (10-Q/mirror) not forced: ${notForbidden} | mustForceEdgar: ${!!c.mustForceEdgar} -> edgarOk: ${edgarOk}`);
     console.log(`  RESULT: ${pass ? "PASS" : "FAIL"}`);
     // Show a short excerpt to eyeball that it is real Item 1A body, not a TOC.
     console.log(`  excerpt: ${pack.text.slice(0, 200).replace(/\s+/g, " ")}`);
