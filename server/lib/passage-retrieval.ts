@@ -292,6 +292,22 @@ function isLikelyToc(fragment: string): boolean {
   return TOC_LINE_RE.test(fragment.trim());
 }
 
+// v3j-r10 FIX (Oracle Item 1A): an item title that appears MID-PROSE after a
+// cross-reference connective ("...as well as our discussion in Item 7 Management's
+// Discussion and Analysis...", "see Item 1A", "described in Item 7", "refer to
+// Item 8") is a CROSS-REFERENCE, not a section start. Oracle's real Item 1A body
+// opens with such a reference to Item 7, which previously caused the whole opening
+// chunk (and the AI risk factor a few sentences later) to be mis-tagged `item7`,
+// so the Item-1A reserve/force-include never saw the genuine AI risk passage and
+// the grader returned No/0 quotes. We reject a title match whose immediately
+// preceding words are a reference connective.
+const XREF_CONNECTIVE_RE = /\b(in|see|under|within|to|of|discussion in|described in|set forth in|refer to|referred to in|pursuant to|as well as (?:our|the)?\s*discussion in|included (?:elsewhere )?in|contained in)\s*$/i;
+function isCrossReferenceAt(fragment: string, idx: number): boolean {
+  // Look at up to ~40 chars immediately preceding the matched item title.
+  const before = fragment.slice(Math.max(0, idx - 40), idx);
+  return XREF_CONNECTIVE_RE.test(before.replace(/[\s\u00a0]+$/, "") + " ");
+}
+
 function detectSecHeadingInFragment(fragment: string): string | undefined {
   // Guard: multi-item or page-numbered lines are TOC entries, not section starts.
   if (isLikelyToc(fragment)) return undefined;
@@ -301,6 +317,8 @@ function detectSecHeadingInFragment(fragment: string): string | undefined {
   for (const { item, re } of SEC_ITEM_TITLES) {
     const m = re.exec(fragment);
     if (m && /risk\s+factors|management|quantitative|business|directors|executive\s+compensation|unresolved/i.test(m[0])) {
+      // v3j-r10: skip in-prose cross-references ("...discussion in Item 7 ...").
+      if (isCrossReferenceAt(fragment, m.index)) continue;
       if (!best || m.index > best.idx) best = { item, idx: m.index };
     }
   }
@@ -373,14 +391,30 @@ function recoverSecHeadingNewlines(text: string): string {
   for (const { re } of SEC_ITEM_TITLES) { if (re.test(text)) { hasCanonical = true; break; } }
   if (!hasCanonical) return text;
   let out = text;
+  // v3j-r10 FIX (Oracle): do NOT break before an item title that is an in-prose
+  // CROSS-REFERENCE ("...as well as our discussion in Item 7 Management's
+  // Discussion..."). Inserting a newline there would split the connective from
+  // the title, defeating the downstream xref guard and mis-flipping the active
+  // section (Oracle's Item 1A body opens with such a reference to Item 7, which
+  // previously buried the AI risk factor under an `item7` tag).
+  const breakBeforeIfHeading = (whole: string, offset: number, full: string): string => {
+    const before = full.slice(Math.max(0, offset - 40), offset);
+    if (XREF_CONNECTIVE_RE.test(before.replace(/[\s\u00a0]+$/, "") + " ")) return whole; // keep inline
+    return `\n${whole}`;
+  };
   // Insert a break before each canonical heading occurrence so it starts a fragment.
   for (const { re } of SEC_ITEM_TITLES) {
     const g = new RegExp(re.source, "gi");
-    out = out.replace(g, (m) => `\n${m}`);
+    out = out.replace(g, breakBeforeIfHeading as unknown as (substring: string, ...args: any[]) => string);
   }
   // Also break before bare "Item NA." forms that are followed by capitalized prose
-  // (covers titles we don't enumerate), but NOT inside an obvious TOC dotted line.
-  out = out.replace(/([^\n])\s+(item[\s\u00a0]*\d{1,2}[a-c]?[\.\:][\s\u00a0]*[A-Z])/gi, "$1\n$2");
+  // (covers titles we don't enumerate), but NOT inside an obvious TOC dotted line,
+  // and NOT when preceded by a cross-reference connective.
+  out = out.replace(/([^\n])(\s+)(item[\s\u00a0]*\d{1,2}[a-c]?[\.\:][\s\u00a0]*[A-Z])/gi, (whole, p1, _sp, p3, offset, full) => {
+    const before = (full as string).slice(Math.max(0, offset - 40), offset + (p1 as string).length);
+    if (XREF_CONNECTIVE_RE.test(before.replace(/[\s\u00a0]+$/, "") + " ")) return whole;
+    return `${p1}\n${p3}`;
+  });
   return out;
 }
 
