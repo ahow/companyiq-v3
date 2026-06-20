@@ -594,7 +594,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3g2")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3g3")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -615,21 +615,49 @@ async function summarizeDocuments(opts: {
   ];
   const allQueryTerms = [...new Set([...topicKeywords, ...aiKeywords])];
 
-  // Score each document by keyword density
-  interface DocEntry { text: string; url: string; score: number; idx: number }
+  // v3g-fix: TYPE-AWARE document prioritisation. The previous pure keyword-density
+  // ranking let a long, AI-keyword-dense ESG/sustainability PDF (e.g. Apple's
+  // Environmental Progress Report) dominate the top slots and consume the corpus
+  // budget, pushing the 10-K and proxy — where the actual AI governance/strategy
+  // evidence lives — out of the pool. We classify each document by TYPE and give a
+  // strong structural priority to authoritative filings and dedicated AI/governance
+  // pages, while CAPPING the keyword-density contribution so no single long PDF can
+  // crowd out the primary disclosures.
+  type DocClass = "regulatory" | "proxy" | "ai-governance" | "sustainability" | "other";
+  const classifyDoc = (url: string, title: string): DocClass => {
+    const u = (url || "").toLowerCase();
+    const t = (title || "").toLowerCase();
+    // SEC primary filings: EDGAR archives path, ticker-dated primary docs, or form tokens
+    if (/sec\.gov\/archives\/edgar/.test(u) || /\b(10-?k|20-?f|40-?f)\b/.test(u + " " + t) || /-\d{8}\.htm/.test(u)) return "regulatory";
+    if (/proxy|def.?14a/.test(u + " " + t)) return "proxy";
+    if (/(responsible|trustworthy)[-_ ]?ai|ai[-_ ]?(governance|principles|ethics|policy|safety|framework)|\bai-governance\b/.test(u + " " + t)) return "ai-governance";
+    if (/environment|sustainab|esg|csr|climate|carbon/.test(u + " " + t)) return "sustainability";
+    return "other";
+  };
+  // Structural priority weights (dominate keyword density, which is capped below).
+  const CLASS_BOOST: Record<DocClass, number> = {
+    regulatory: 100000,
+    proxy: 90000,
+    "ai-governance": 80000,
+    other: 1000,
+    sustainability: 500, // keyword-dense but rarely the primary AI-disclosure source
+  };
+  interface DocEntry { text: string; url: string; score: number; idx: number; cls: DocClass }
   const docEntries: DocEntry[] = documentTexts.map((text, idx) => {
     const lower = text.toLowerCase();
-    let score = 0;
+    let density = 0;
     for (const term of allQueryTerms) {
-      // Count occurrences (capped at 10 per term to avoid over-weighting)
       const regex = new RegExp(`\\b${term}\\b`, "gi");
       const matches = lower.match(regex);
-      score += Math.min(matches?.length || 0, 10);
+      density += Math.min(matches?.length || 0, 10);
     }
-    // Boost documents from the company's own domain or with AI in URL
     const url = documentUrls[idx] || "";
-    if (/ai|ethics|responsible|governance|policy/i.test(url)) score += 50;
-    return { text, url, score, idx };
+    const title = documentTitles?.[idx] || "";
+    const cls = classifyDoc(url, title);
+    // Keyword density is CAPPED so it only breaks ties WITHIN a class, never
+    // overrides the structural class priority above.
+    const score = CLASS_BOOST[cls] + Math.min(density, 800) + (/ai|ethics|responsible|governance|policy/i.test(url) ? 200 : 0);
+    return { text, url, score, idx, cls };
   });
 
   // Sort by relevance score descending
@@ -637,17 +665,24 @@ async function summarizeDocuments(opts: {
 
   console.log(`[${companyName}] Document priority ordering (top 5):`);
   for (const d of docEntries.slice(0, 5)) {
-    console.log(`  score=${d.score} ${d.url.slice(0, 60)}`);
+    console.log(`  [${d.cls}] score=${d.score} ${d.url.slice(0, 60)}`);
   }
 
-  // Combine documents in priority order with caps
-  const RAW_PASS_CAP_DEFAULT = 120000;
-  const RAW_PASS_CAP_PROXY = 200000;
+  // Combine documents in priority order with CLASS-AWARE caps. Regulatory filings
+  // and proxies (where the primary AI disclosures live) get the largest cap so
+  // Item 1A / governance sections survive; sustainability PDFs get a smaller cap so
+  // a single long ESG report cannot consume the budget at the expense of filings.
+  const CAP_BY_CLASS: Record<DocClass, number> = {
+    regulatory: 260000,
+    proxy: 220000,
+    "ai-governance": 160000,
+    other: 120000,
+    sustainability: 90000,
+  };
 
   let combined = "";
   for (const entry of docEntries) {
-    const isProxy = /proxy|def.?14a|annual.?report|20-f|40-f/i.test(entry.url);
-    const cap = isProxy ? RAW_PASS_CAP_PROXY : RAW_PASS_CAP_DEFAULT;
+    const cap = CAP_BY_CLASS[entry.cls];
     const docTitle = documentTitles?.[entry.idx] || entry.url;
     combined += `\n\n--- DOCUMENT: ${docTitle} [${entry.url}] ---\n\n` + entry.text.slice(0, cap);
   }
@@ -737,10 +772,10 @@ async function summarizeDocuments(opts: {
     companyId,
     documentHash: docHash,
     summary: relevantText,
-    summarizerModel: "bm25-headers-v3g2",
+    summarizerModel: "bm25-headers-v3g3",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3g2" };
+  return { text: relevantText, model: "bm25-headers-v3g3" };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
