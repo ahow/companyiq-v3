@@ -115,6 +115,25 @@ async function main() {
     const notForbidden = !forbidUrls.some((u) => fu && u.toLowerCase() === fu);
     const isEdgarPrimary = /sec\.gov\/archives\/edgar\/data\/\d+\//.test(fu) && /\.htm/.test(fu);
     const edgarOk = !c.mustForceEdgar || isEdgarPrimary;
+    // v3j-r6 assertion (Oracle mirror suppression): when EDGAR is required, the
+    // ASSEMBLED PACK TEXT must not contain any forbidden third-party mirror URL
+    // header. The grader can only cite a sourceUrl that appears in the pack, so a
+    // clean pack guarantees EDGAR-only citations. We check the explicit forbidden
+    // URLs AND a generic third-party mirror host blocklist.
+    const packLower = (pack.text || "").toLowerCase();
+    const MIRROR_HOSTS = /(stocklight\.com|fintel\.io|annualreports\.com|last10k\.com|bamsec\.com|sec\.report|wisesheets\.io|quartr|fortune\.com\/company-assets)/i;
+    // Only flag NON-EDGAR forbidden URLs (true third-party mirrors). An EDGAR
+    // forbidden URL (e.g. the 10-Q orcl-20250831 / meta-20260331) legitimately may
+    // still appear in the pack as a same-company secondary doc; the mirror-suppression
+    // targets only third-party mirror hosts, and the 10-Q is excluded from FORCING
+    // (asserted separately via notForbidden), not from the pack entirely.
+    const forbiddenUrlInPack = forbidUrls.some((u) => {
+      if (!u) return false;
+      if (/sec\.gov\/archives\/edgar\/data/i.test(u)) return false; // EDGAR forbidden = 10-Q, not a mirror
+      return packLower.includes(u.toLowerCase());
+    });
+    const mirrorHostInPack = !!c.mustForceEdgar && MIRROR_HOSTS.test(packLower);
+    const noForbiddenInPack = !forbiddenUrlInPack && !mirrorHostInPack;
     const pass =
       pack.requiredDocPresent === true &&
       pack.forceIncludedCount >= 1 &&
@@ -122,7 +141,8 @@ async function main() {
       hasAiRisk &&
       forcedIsNewest &&
       notForbidden &&
-      edgarOk;
+      edgarOk &&
+      noForbiddenInPack;
     allPass = allPass && pass;
 
     console.log(`\n=== ${c.name} (companyId=${c.companyId}) ===`);
@@ -135,6 +155,7 @@ async function main() {
     console.log(`  AI mentions in pack: ${aiMentions} | AI-risk co-located: ${hasAiRisk}`);
     console.log(`  newest filing in corpus: ${newestUrl || "(n/a)"} | forced-is-newest: ${forcedIsNewest}`);
     if (forbidUrls.length) console.log(`  forbidden (10-Q/mirror) not forced: ${notForbidden} | mustForceEdgar: ${!!c.mustForceEdgar} -> edgarOk: ${edgarOk}`);
+    if (c.mustForceEdgar) console.log(`  no forbidden/mirror URL in pack text: ${noForbiddenInPack} (mirrorHostInPack=${mirrorHostInPack})`);
     console.log(`  RESULT: ${pass ? "PASS" : "FAIL"}`);
     // Show a short excerpt to eyeball that it is real Item 1A body, not a TOC.
     console.log(`  excerpt: ${pack.text.slice(0, 200).replace(/\s+/g, " ")}`);

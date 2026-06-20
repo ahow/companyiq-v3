@@ -1138,6 +1138,42 @@ export function buildEvidencePackForMeasure(opts: {
     if (selected.length >= topK || evidenceLen >= maxChars) break;
   }
 
+  // v3j-r6 FIX (Oracle): EVIDENCE-PACK MIRROR SUPPRESSION. The same annual filing
+  // frequently exists in the corpus as BOTH the canonical EDGAR HTML primary AND one
+  // or more third-party PDF mirrors (e.g. stocklight.com nyse-orcl-2025-10K.pdf). The
+  // force-include correctly anchors on EDGAR, but mirror chunks still enter the pack
+  // via the topic floor / score fill, and the grader then quotes the PDF mirror —
+  // leaving citations pointing at a non-authoritative source. When the pack already
+  // contains an EDGAR-primary annual-filing chunk, drop any OTHER selected chunk that
+  // is a third-party mirror of an annual filing, so the grader can only cite EDGAR.
+  // Surgical: only annual-filing mirror chunks are removed; everything else is kept.
+  {
+    const THIRD_PARTY_MIRROR_HOSTS = /(stocklight\.com|fintel\.io|annualreports\.com|last10k\.com|bamsec\.com|sec\.report|wisesheets\.io|quartr|fortune\.com\/company-assets)/i;
+    const isEdgarPrimaryUrl = (u: string) => /sec\.gov\/archives\/edgar\/data\/\d+\//.test(u) && /\.htm/.test(u);
+    const urlOf = (it: typeof selected[number]) => (chunks[it.idx]?.docUrl || "").toLowerCase();
+    // Does the pack already contain a genuine EDGAR-primary annual-filing chunk?
+    const hasEdgarAnnual = selected.some((it) => {
+      const u = urlOf(it);
+      return isEdgarPrimaryUrl(u) && isRegulatoryAnnualFilingDoc(chunks[it.idx]?.docUrl, chunks[it.idx]?.docTitle);
+    });
+    if (hasEdgarAnnual) {
+      const before = selected.length;
+      const filtered = selected.filter((it) => {
+        const u = urlOf(it);
+        const isMirror = THIRD_PARTY_MIRROR_HOSTS.test(u);
+        const isAnnual = isRegulatoryAnnualFilingDoc(chunks[it.idx]?.docUrl, chunks[it.idx]?.docTitle);
+        // Drop only third-party MIRRORS of an ANNUAL filing; keep EDGAR + all non-annual docs.
+        return !(isMirror && isAnnual && !isEdgarPrimaryUrl(u));
+      });
+      const dropped = before - filtered.length;
+      if (dropped > 0) {
+        console.log(`[mirror-suppress] ${measure.measureId}: dropped ${dropped} third-party annual-filing mirror chunk(s); EDGAR primary retained for citation`);
+        selected.length = 0;
+        selected.push(...filtered);
+      }
+    }
+  }
+
   // Preserve document order in the final text for readability.
   selected.sort((a, b) => (a.docIndex - b.docIndex) || (a.idx - b.idx));
 
