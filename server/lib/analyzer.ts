@@ -610,7 +610,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3g3")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3k")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -688,9 +688,16 @@ async function summarizeDocuments(opts: {
   // and proxies (where the primary AI disclosures live) get the largest cap so
   // Item 1A / governance sections survive; sustainability PDFs get a smaller cap so
   // a single long ESG report cannot consume the budget at the expense of filings.
+  // v3k: the regulatory cap was 260k, but a current 10-K can exceed that
+  // (Amazon FY2025 = 307k chars). Truncating at 260k could cut the Item 1A AI
+  // risk paragraphs that appear deep in the filing, which is the upstream half of
+  // Bug 2 (the per-measure force-include can only recover what survives here).
+  // Raise the regulatory cap so a single primary annual filing is never truncated;
+  // proxy similarly raised. Sustainability stays small so one long ESG PDF cannot
+  // crowd out the filings.
   const CAP_BY_CLASS: Record<DocClass, number> = {
-    regulatory: 260000,
-    proxy: 220000,
+    regulatory: 480000,
+    proxy: 360000,
     "ai-governance": 160000,
     other: 120000,
     sustainability: 90000,
@@ -748,9 +755,67 @@ async function summarizeDocuments(opts: {
   // question. Use a Set to avoid double-adding.
   const selectedSet = new Set<number>();
   let budget = 0;
+
+  // ─── v3k UPSTREAM GUARANTEE: reserve the current annual filing's Item 1A ──────
+  // The per-measure force-include (passage-retrieval.ts) can only recover Item 1A
+  // chunks that EXIST in this retrieval corpus. For the largest filers (e.g.
+  // Amazon: 3.6M chars across 82 docs) the 10-K's risk-factor chunks could lose
+  // the 560k BM25 budget competition and never reach the per-measure stage, so the
+  // grader saw "no 10-K in evidence" and returned No/0 quotes. Here we RESERVE the
+  // genuine Item 1A body chunks of the single best (most recent, EDGAR-primary,
+  // non-proxy) annual filing FIRST, with a dedicated sub-budget, regardless of
+  // BM25 score or document order. This guarantees Item 1A always reaches the pool.
+  const ITEM1A_RESERVE_CHARS = parseInt(process.env.RETRIEVAL_ITEM1A_RESERVE_CHARS || "90000", 10);
+  try {
+    const isEdgarPrimary = (u: string) => /sec\.gov\/archives\/edgar\/data\/\d+\//.test((u||"").toLowerCase()) && /\.htm/.test((u||"").toLowerCase());
+    const isAnnualFiling = (u: string, t: string) => {
+      const s = ((u||"") + " " + (t||"")).toLowerCase();
+      return /sec\.gov\/archives\/edgar/.test((u||"").toLowerCase()) || /\b(10-?k|20-?f|40-?f)\b/.test(s) || /-\d{8}\.htm/.test((u||"").toLowerCase());
+    };
+    // A chunk is a genuine Item 1A BODY chunk if section-tagged item1a and it is
+    // neither a table-of-contents line nor a pure cross-reference.
+    const looksToc = (txt: string) => /\.{4,}\s*\d+\b/.test(txt) || (txt.match(/item\s+\d+[a-z]?\b/gi) || []).length >= 4;
+    const isItem1aBody = (c: Chunk) => c.section === "item1a" && !looksToc(c.text) && c.text.length > 240;
+    // Group candidate body chunks by source document.
+    const byDoc = new Map<number, { idxs: number[]; url: string; title: string }>();
+    docChunks.forEach((c, i) => {
+      if (!isItem1aBody(c)) return;
+      if (!isAnnualFiling(c.docUrl || "", c.docTitle || "")) return;
+      const e = byDoc.get(c.docIndex) || { idxs: [], url: c.docUrl || "", title: c.docTitle || "" };
+      e.idxs.push(i);
+      byDoc.set(c.docIndex, e);
+    });
+    // Pick the best annual filing: prefer non-proxy, most recent (YYYYMMDD token),
+    // then EDGAR-primary, then most body chunks.
+    const dateOf = (s: string) => { let b = 0; for (const m of (s||"").matchAll(/(20\d{6})/g)) { const v = parseInt(m[1],10); if (v>b) b=v; } for (const m of (s||"").matchAll(/(20\d{2})[-_/]?(\d{2})?/g)) { const v = parseInt(((m[1]+(m[2]||"00")).padEnd(8,"0")).slice(0,8),10); if (v>b) b=v; } return b; };
+    const strongProxyRe = /stockholder proposal|say-on-pay|notice of (the )?annual meeting|proxy card|broker non-votes|nominees? for (election|director)|compensation discussion and analysis/gi;
+    const cands = [...byDoc.entries()].map(([di, e]) => {
+      let proxyHits = 0;
+      for (const ix of e.idxs) proxyHits += (docChunks[ix].text.match(strongProxyRe) || []).length;
+      return { di, idxs: e.idxs, url: e.url, title: e.title, rec: dateOf(e.url + " " + e.title), edgar: isEdgarPrimary(e.url), proxyDom: proxyHits >= 10 };
+    }).filter((c) => !c.proxyDom);
+    cands.sort((a, b) => (b.rec - a.rec) || ((a.edgar?0:1) - (b.edgar?0:1)) || (b.idxs.length - a.idxs.length) || (a.di - b.di));
+    if (cands.length > 0) {
+      const best = cands[0];
+      // Reserve earliest body chunks (document order) up to the Item 1A sub-budget.
+      const ordered = best.idxs.slice().sort((x, y) => (docChunks[x].seqInDoc ?? x) - (docChunks[y].seqInDoc ?? y));
+      let reserved = 0;
+      for (const ix of ordered) {
+        if (reserved + docChunks[ix].text.length > ITEM1A_RESERVE_CHARS) continue;
+        if (!selectedSet.has(ix)) { selectedSet.add(ix); budget += docChunks[ix].text.length; reserved += docChunks[ix].text.length; }
+      }
+      console.log(`[${companyName}] [item1a-reserve] reserved ${reserved} chars (${ordered.length} body chunks avail) from ${best.url.slice(0,70)}`);
+    } else {
+      console.log(`[${companyName}] [item1a-reserve] no genuine Item 1A body chunks found among annual filings`);
+    }
+  } catch (e) {
+    console.warn(`[${companyName}] [item1a-reserve] skipped: ${(e as Error).message}`);
+  }
+
   for (const sc of scoredChunks) {
     if (sc.score <= 0) continue;
     if (budget + sc.chunk.text.length > MAX_RETRIEVAL_INPUT) break;
+    if (selectedSet.has(sc.idx)) continue;
     selectedSet.add(sc.idx);
     budget += sc.chunk.text.length;
   }
@@ -788,10 +853,10 @@ async function summarizeDocuments(opts: {
     companyId,
     documentHash: docHash,
     summary: relevantText,
-    summarizerModel: "bm25-headers-v3g3",
+    summarizerModel: "bm25-headers-v3k",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3g3" };
+  return { text: relevantText, model: "bm25-headers-v3k" };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
