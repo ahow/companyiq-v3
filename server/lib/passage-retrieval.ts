@@ -479,6 +479,17 @@ export interface EvidencePack {
   // packs get a per-(company,measure) sentinel fingerprint and are NOT eligible
   // for verdict-cache reuse.
   fingerprintEligible: boolean;
+  // v3j (Bug 2 deterministic force-include): how many chunks in this pack were
+  // GUARANTEED into it by the source-type-aware force-include path (e.g. genuine
+  // Item 1A body chunks for a 10-K-bound measure), regardless of retriever score.
+  // The worker uses this to assert the invariant: every filing-bound measure whose
+  // required document is present in corpus MUST have forceIncludedCount >= 1.
+  forceIncludedCount: number;
+  // Provenance for QA: the source-document URL the forced chunks came from (if any).
+  forceIncludedDocUrl?: string;
+  // True when the corpus contained a document matching this measure's required
+  // source type (so a missing force-include is a real failure, not "nothing to do").
+  requiredDocPresent: boolean;
 }
 
 // ─── Per-Measure SEC Section Relevance ───────────────────────────────────────
@@ -574,6 +585,52 @@ function looksLike10KRiskChunk(chunkText: string, section: string | undefined, t
   return hasRiskProse;
 }
 
+// ___ v3j (Bug 2): DETERMINISTIC source-type-aware force-include helpers ___
+//
+// Root cause of the partial Bug-2 fix (validator v3i): the prior force-include
+// chose the Item 1A chunk that ranked highest under the PER-MEASURE BM25 query.
+// For Risk Q1 the highest-scoring item1a-tagged chunk was frequently the TABLE
+// OF CONTENTS block or a CROSS-REFERENCE -- both tagged item1a and mentioning
+// "Risk Factors" but containing no actual risk-factor body prose -- so the grader
+// saw no real disclosure and returned No / 0 quotes even though the 10-K Item 1A
+// body was in the corpus. We now force-include GENUINE Item 1A BODY chunks by
+// document POSITION, independent of the measure's query, so every filing-bound
+// measure sees the same real Risk Factors text regardless of its phrasing.
+
+// A chunk is a genuine Item 1A BODY chunk when it is item1a-tagged AND is not a
+// table-of-contents block AND is not merely a cross-reference to Item 1A.
+function isItem1aBodyChunk(chunk: Chunk): boolean {
+  if (chunk.section !== "item1a") return false;
+  const t = chunk.text;
+  if (!t || t.length < 200) return false;
+  if (isLikelyToc(t)) return false;
+  const isCrossRefOnly =
+    /(see|refer to|described in|discussed in|set forth in|contained in)[^.]{0,60}item[\s\u00a0]*1a/i.test(t) &&
+    !/(could|may|might|would)\s+(adversely|materially|negatively|significantly)?\s*(affect|impact|harm|reduce|impair)|adversely affect our|harm our (business|reputation)|subject us to|expose us to|we (face|are subject to|may be unable)/i.test(t);
+  if (isCrossRefOnly) return false;
+  return true;
+}
+
+// Does this measure require a regulatory ANNUAL filing (10-K/20-F -> Item 1A)?
+function measureRequiresAnnualFiling(measure: FrameworkMeasure): boolean {
+  return requiresRegulatoryFiling(measure);
+}
+
+// Does this measure require a PROXY statement (DEF 14A -> board/governance)?
+function measureRequiresProxy(measure: FrameworkMeasure): boolean {
+  const reqTypes = ((measure as any).requiredSourceTypes || []) as string[];
+  if (reqTypes.some((t) => /proxy|def.?14a|14a/i.test(String(t)))) return true;
+  const hay = `${measure.measureId} ${measure.title} ${measure.definition || ""}`.toLowerCase();
+  return /def\s*14a|proxy statement|proxy circular/.test(hay);
+}
+
+// Is this document a proxy statement (DEF 14A)? URL/title shape only.
+function isProxyDoc(url: string | undefined, title: string | undefined): boolean {
+  const s = `${url || ""} ${title || ""}`.toLowerCase();
+  if (!s.trim()) return false;
+  return /def.?14a|\bproxy\b|proxy.?statement|notice of annual meeting/.test(s);
+}
+
 // Tunables (env-overridable so behavior can be adjusted without a code change).
 const TOPIC_RELEVANCE_WEIGHT = parseFloat(process.env.RETRIEVAL_TOPIC_WEIGHT || "2.0");
 // Additive bonus applied to a chunk's blended score when its SEC section matches
@@ -596,6 +653,14 @@ const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || 
 // supporting evidence. Force up to N chunks within EXTRA_CHARS of headroom.
 const REG_FILING_FORCE_CHUNKS = parseInt(process.env.RETRIEVAL_REG_FILING_FORCE_CHUNKS || "2", 10);
 const REG_FILING_EXTRA_CHARS = parseInt(process.env.RETRIEVAL_REG_FILING_EXTRA_CHARS || "4000", 10);
+
+// v3j (Bug 2 deterministic force-include): number of GENUINE Item 1A body chunks
+// to guarantee into a 10-K-bound measure's pack by document position, and the
+// dedicated extra character budget reserved for them (separate from the normal
+// pack budget so the guarantee never evicts other supporting evidence). N=3 per
+// the validator's Section 2.4 prescription.
+const FORCE_INCLUDE_CHUNKS = parseInt(process.env.RETRIEVAL_FORCE_INCLUDE_CHUNKS || "3", 10);
+const FORCE_INCLUDE_EXTRA_CHARS = parseInt(process.env.RETRIEVAL_FORCE_INCLUDE_EXTRA_CHARS || "7000", 10);
 
 export function buildEvidencePackForMeasure(opts: {
   measure: FrameworkMeasure;
@@ -695,77 +760,134 @@ export function buildEvidencePackForMeasure(opts: {
     return true;
   };
 
-  // Step 0 — Regulatory-filing guarantee (Concern 2 residual fix + v3d reviewer rec #1).
-  // For measures that explicitly require a 10-K/20-F (the 9.x family), force the
-  // best 10-K Item 1A risk chunk(s) into the pack BEFORE anything else, so they
-  // can never be displaced by keyword-dense sustainability/governance documents.
+  // Step 0 — v3j DETERMINISTIC, DOCUMENT-ANCHORED, POSITION-BASED force-include.
   //
-  // AUGMENT, don't DISPLACE: the forced chunks get a dedicated extra budget
-  // (REG_FILING_EXTRA_CHARS / _SLOTS) on top of the normal topK/maxChars, so
-  // guaranteeing Item 1A does NOT evict other supporting evidence for the
-  // measure (which previously caused off-target score swings on Amazon/Oracle).
-  if (requiresRegulatoryFiling(measure)) {
-    // Primary candidates: chunks that already read as 10-K/20-F risk-factor prose.
-    let filingCandidates = scored
-      .filter((s) => looksLike10KRiskChunk(s.text, chunks[s.idx].section, topicTerms))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, REG_FILING_FORCE_CHUNKS);
+  // (Replaces the v3g query-ranked recovery, which selected the highest-BM25
+  // item1a-tagged chunk for the measure — frequently the TOC block or a
+  // cross-reference — so Salesforce/Meta/Amazon Risk Q1 saw no real Item 1A body
+  // and scored No / 0 quotes despite the 10-K being in the corpus.)
+  //
+  // The new contract (validator v3i Section 2.4): when a measure requires a given
+  // source type AND the corpus contains a matching document, GUARANTEE the top-N
+  // GENUINE body chunks from THE BEST matching document into the pack — chosen by
+  // DOCUMENT POSITION (earliest body chunks first), independent of the measure's
+  // BM25 query. This makes Risk Q1–Q4 all see the same real Risk Factors text
+  // regardless of phrasing, and is topic-agnostic so it generalises to any future
+  // measure with a hard requiredSourceTypes constraint (e.g. Board Q1 → DEF 14A).
+  let forceIncludedCount = 0;
+  let forceIncludedDocUrl: string | undefined;
+  let requiredDocPresent = false;
 
-    // v3g (Bug 2): DETERMINISTIC RECOVERY. The old logic could force-include
-    // NOTHING when a present 10-K's Item 1A failed to get tagged and no chunk
-    // carried explicit risk prose + a topic hit (observed on Meta/Alphabet/
-    // NVIDIA/Salesforce) — so the grader saw "no 10-K" despite the filing being
-    // in the corpus. We now identify chunks that physically belong to a
-    // regulatory ANNUAL-filing document (by docUrl/section) and GUARANTEE at
-    // least one is force-included, with a tiered fallback:
-    //   (1) item1a-tagged chunk from a reg-filing doc (best)
-    //   (2) any risk-prose chunk from a reg-filing doc
-    //   (3) the highest-BM25 chunk from a reg-filing doc (last resort)
-    const fromRegDoc = (s: (typeof scored)[number]) =>
-      isRegulatoryAnnualFilingDoc(chunks[s.idx].docUrl, undefined) || chunks[s.idx].section === "item1a";
-    const regDocChunks = scored.filter(fromRegDoc);
-    const hasRegFilingDoc = regDocChunks.length > 0;
+  // Resolve which (document predicate, genuine-body predicate) applies to this
+  // measure based on its required source type. Annual filing → Item 1A body;
+  // proxy → any substantive proxy body chunk.
+  type ForceSpec = {
+    label: string;
+    isReqDoc: (c: Chunk) => boolean;
+    isGenuineBody: (c: Chunk) => boolean;
+  };
+  const forceSpecs: ForceSpec[] = [];
+  if (measureRequiresAnnualFiling(measure)) {
+    forceSpecs.push({
+      label: "item1a",
+      isReqDoc: (c) => isRegulatoryAnnualFilingDoc(c.docUrl, c.docTitle) || c.section === "item1a",
+      isGenuineBody: (c) => isItem1aBodyChunk(c),
+    });
+  }
+  if (measureRequiresProxy(measure)) {
+    forceSpecs.push({
+      label: "proxy",
+      isReqDoc: (c) => isProxyDoc(c.docUrl, c.docTitle),
+      isGenuineBody: (c) => isProxyDoc(c.docUrl, c.docTitle) && !!c.text && c.text.length >= 200 && !isLikelyToc(c.text),
+    });
+  }
 
-    if (filingCandidates.length === 0 && hasRegFilingDoc) {
-      const item1aFirst = regDocChunks
-        .filter((s) => chunks[s.idx].section === "item1a")
-        .sort((a, b) => b.score - a.score);
-      const riskProse = regDocChunks
-        .filter((s) => /risk factors|(could|may|might)\s+(adversely|materially|negatively)|adversely affect our|harm our business/i.test(s.text))
-        .sort((a, b) => b.score - a.score);
-      const byBm25 = [...regDocChunks].sort((a, b) => b.bm25 - a.bm25);
-      const recovered = (item1aFirst[0] || riskProse[0] || byBm25[0]);
-      const tier = item1aFirst[0] ? "item1a-tag" : riskProse[0] ? "risk-prose" : "bm25-fallback";
-      if (recovered) {
-        filingCandidates = [recovered];
-        console.log(`[reg-filing] ${measure.measureId}: Item 1A not pre-selected; RECOVERED reg-filing chunk via ${tier} (docIndex=${recovered.docIndex})`);
+  for (const spec of forceSpecs) {
+    // All chunks whose source document matches the required type, indexed back to
+    // their scored entry so we can place them with provenance + score metadata.
+    const reqDocScored = scored.filter((s) => spec.isReqDoc(chunks[s.idx]));
+    if (reqDocScored.length === 0) {
+      console.log(`[force-include] ${measure.measureId}: no ${spec.label} document in corpus (nothing to force-include)`);
+      continue;
+    }
+    requiredDocPresent = true;
+
+    // Genuine body chunks only (TOC and cross-reference chunks excluded).
+    const bodyScored = reqDocScored.filter((s) => spec.isGenuineBody(chunks[s.idx]));
+
+    // Choose THE BEST matching document deterministically: the docIndex with the
+    // MOST genuine body chunks (e.g. the real 10-K beats a proxy-style filing that
+    // only cross-references Item 1A, as seen on NVIDIA's nvda-20260512). Tie-break
+    // on lowest docIndex for determinism.
+    const bodyByDoc = new Map<number, (typeof scored)[number][]>();
+    for (const s of bodyScored) {
+      const arr = bodyByDoc.get(s.docIndex) || [];
+      arr.push(s);
+      bodyByDoc.set(s.docIndex, arr);
+    }
+    let bestDocIndex: number | undefined;
+    let bestCount = -1;
+    for (const [di, arr] of bodyByDoc) {
+      if (arr.length > bestCount || (arr.length === bestCount && (bestDocIndex === undefined || di < bestDocIndex))) {
+        bestCount = arr.length;
+        bestDocIndex = di;
       }
     }
 
-    let regForcedChars = 0;
-    let regForcedCount = 0;
-    for (const filingCandidate of filingCandidates) {
-      if (selected.includes(filingCandidate)) continue;
-      // Allow the forced chunk to exceed the normal maxChars by up to the extra
-      // reg-filing budget; this is the "augment" allowance.
-      if (regForcedChars + filingCandidate.text.length > REG_FILING_EXTRA_CHARS) continue;
-      if (evidenceLen + filingCandidate.text.length > maxChars + REG_FILING_EXTRA_CHARS) continue;
-      selected.push(filingCandidate);
-      perDocCount.set(filingCandidate.docIndex, (perDocCount.get(filingCandidate.docIndex) || 0) + 1);
-      evidenceLen += filingCandidate.text.length + 2;
-      regForcedChars += filingCandidate.text.length;
-      regForcedCount++;
+    // Candidate body chunks from the best document, ordered by DOCUMENT POSITION
+    // (seqInDoc) so we take the EARLIEST genuine Risk-Factors body — the start of
+    // the section, which is the most representative — rather than whatever the
+    // measure query happened to rank highest.
+    let forceCandidates: (typeof scored)[number][] = [];
+    if (bestDocIndex !== undefined && bestCount > 0) {
+      forceCandidates = (bodyByDoc.get(bestDocIndex) || [])
+        .slice()
+        .sort((a, b) => (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx))
+        .slice(0, FORCE_INCLUDE_CHUNKS);
+    } else {
+      // Fallback: no chunk passed the strict genuine-body test (rare). Take the
+      // earliest item1a/required-doc chunks by position so SOMETHING from the
+      // required document is guaranteed, but log it as a degraded path.
+      const byDoc = new Map<number, (typeof scored)[number][]>();
+      for (const s of reqDocScored) {
+        const arr = byDoc.get(s.docIndex) || [];
+        arr.push(s);
+        byDoc.set(s.docIndex, arr);
+      }
+      let fbDoc: number | undefined; let fbCount = -1;
+      for (const [di, arr] of byDoc) {
+        if (arr.length > fbCount || (arr.length === fbCount && (fbDoc === undefined || di < fbDoc))) { fbCount = arr.length; fbDoc = di; }
+      }
+      if (fbDoc !== undefined) {
+        forceCandidates = (byDoc.get(fbDoc) || [])
+          .slice()
+          .sort((a, b) => (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx))
+          .slice(0, FORCE_INCLUDE_CHUNKS);
+        console.warn(`[force-include][DEGRADED] ${measure.measureId}: ${spec.label} doc present but no genuine body chunk passed filters; forcing ${forceCandidates.length} positional chunk(s) from docIndex=${fbDoc}`);
+      }
     }
 
-    // v3g (Bug 2): GRADER-SIDE ASSERTION (log-only, non-fatal). When a measure
-    // requires a regulatory filing AND such a document is present in the corpus
-    // but we STILL could not place any chunk from it into the pack, emit a loud
-    // warning so the condition is observable in production rather than silently
-    // degrading to a misleading "No".
-    if (regForcedCount === 0 && hasRegFilingDoc) {
-      console.warn(`[reg-filing][ASSERT] ${measure.measureId}: reg-filing doc present in corpus but NO filing chunk made it into the pack (budget/dedup). Pack may understate filing evidence.`);
-    } else if (regForcedCount === 0 && !hasRegFilingDoc) {
-      console.log(`[reg-filing] ${measure.measureId}: no regulatory annual-filing document in corpus (nothing to force-include)`);
+    // Place the forced chunks on a DEDICATED extra budget so the guarantee never
+    // evicts other supporting evidence (augment, don't displace).
+    let forcedChars = 0;
+    for (const cand of forceCandidates) {
+      if (selected.includes(cand)) { forceIncludedCount++; forceIncludedDocUrl = forceIncludedDocUrl || chunks[cand.idx].docUrl; continue; }
+      if (forcedChars + cand.text.length > FORCE_INCLUDE_EXTRA_CHARS && forceIncludedCount > 0) continue;
+      if (evidenceLen + cand.text.length > maxChars + FORCE_INCLUDE_EXTRA_CHARS) continue;
+      selected.push(cand);
+      perDocCount.set(cand.docIndex, (perDocCount.get(cand.docIndex) || 0) + 1);
+      evidenceLen += cand.text.length + 2;
+      forcedChars += cand.text.length;
+      forceIncludedCount++;
+      forceIncludedDocUrl = forceIncludedDocUrl || chunks[cand.idx].docUrl;
+    }
+
+    if (forceIncludedCount > 0) {
+      console.log(`[force-include] ${measure.measureId}: GUARANTEED ${forceIncludedCount} genuine ${spec.label} body chunk(s) from ${forceIncludedDocUrl || "(doc)"} (position-based, query-independent)`);
+    } else {
+      // Required document present but we could not place any chunk — a real failure
+      // the worker invariant will catch.
+      console.warn(`[force-include][ASSERT] ${measure.measureId}: ${spec.label} doc present in corpus but NO body chunk placed (budget/dedup). Invariant should flag this run.`);
     }
   }
 
@@ -861,6 +983,9 @@ export function buildEvidencePackForMeasure(opts: {
     topicHits: packTopicHits,
     fingerprint,
     fingerprintEligible: selected.length > 0,
+    forceIncludedCount,
+    forceIncludedDocUrl,
+    requiredDocPresent,
   };
 }
 
@@ -900,6 +1025,8 @@ export function buildEvidencePacksForCategory(opts: {
         .update(`EMPTY_PACK|c=${companyId ?? "?"}|f=${frameworkId ?? "?"}|m=${m.measureId}`)
         .digest("hex"),
       fingerprintEligible: false,
+      forceIncludedCount: 0,
+      requiredDocPresent: false,
     }));
   }
 

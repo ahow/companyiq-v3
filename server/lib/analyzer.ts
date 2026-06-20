@@ -30,6 +30,13 @@ export interface MeasureResult {
   abstained?: boolean;
   // v3e (Section 4): SHA1 of the sorted evidence-chunk ids used for this verdict.
   evidenceFingerprint?: string | null;
+  // v3j (Bug 2): force-include provenance, used for the run-level invariant that
+  // every filing-bound measure whose required document is present in corpus must
+  // have had at least one genuine body chunk force-included. Transient (not
+  // persisted to measure_scores).
+  forceIncludedCount?: number;
+  requiredDocPresent?: boolean;
+  forceIncludedDocUrl?: string;
 }
 
 export interface AnalysisResult {
@@ -46,6 +53,15 @@ export interface AnalysisResult {
     categoryNumber: number;
     measures: MeasureResult[];
   }>;
+  // v3j (Bug 2): run-level force-include invariant result. ok=false means at
+  // least one filing-bound measure whose required document was present in the
+  // corpus failed to receive any genuine forced body chunk — a real regression
+  // the portfolio run should gate on.
+  forceIncludeInvariant?: {
+    ok: boolean;
+    checked: number;
+    violations: Array<{ measureId: string; reason: string }>;
+  };
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -926,7 +942,7 @@ export async function analyzeCompanyMeasures(opts: {
     console.log(`[${companyName}] Scoring category: ${category} (${categoryMeasures.length} measures)`);
 
     // Build evidence packs via BM25
-    let evidencePacks: Array<{ measureId: string; text: string; topicHits?: number; fingerprint?: string; fingerprintEligible?: boolean }>;
+    let evidencePacks: Array<{ measureId: string; text: string; topicHits?: number; fingerprint?: string; fingerprintEligible?: boolean; forceIncludedCount?: number; requiredDocPresent?: boolean; forceIncludedDocUrl?: string }>;
     if (settings.useBm25Retrieval) {
       evidencePacks = buildEvidencePacksForCategory({
         measures: categoryMeasures,
@@ -1169,6 +1185,11 @@ export async function analyzeCompanyMeasures(opts: {
                 deepResult.coverage = deepPack.topicHits >= 3 ? "full" : deepPack.topicHits >= 1 ? "partial" : coverageLabel;
                 deepResult.verdictNuance = (deepResult.verdictNuance || "") +
                   " [Deep-read pass: re-scored on expanded evidence]";
+                // v3j: the adopted deep pack ran its own force-include; use its
+                // provenance so the invariant reflects what actually scored.
+                deepResult.forceIncludedCount = (deepPack as any).forceIncludedCount ?? 0;
+                deepResult.requiredDocPresent = (deepPack as any).requiredDocPresent ?? false;
+                deepResult.forceIncludedDocUrl = (deepPack as any).forceIncludedDocUrl;
                 measureResult = deepResult;
               }
             }
@@ -1183,6 +1204,15 @@ export async function analyzeCompanyMeasures(opts: {
       // persisted and can be compared across runs for drift detection / caching.
       measureResult.evidenceFingerprint = evidencePack?.fingerprint || null;
       measureResult.abstained = false;
+
+      // v3j (Bug 2): carry force-include provenance for the run-level invariant.
+      // If the deep-read pass adopted its own pack, prefer that pack's numbers
+      // (set on the deepPack above); otherwise use the normal pack's.
+      if (measureResult.forceIncludedCount === undefined) {
+        measureResult.forceIncludedCount = (evidencePack as any)?.forceIncludedCount ?? 0;
+        measureResult.requiredDocPresent = (evidencePack as any)?.requiredDocPresent ?? false;
+        measureResult.forceIncludedDocUrl = (evidencePack as any)?.forceIncludedDocUrl;
+      }
 
       // v3g (Bug 1): an empty/degenerate pack is NOT cache-eligible — its sentinel
       // fingerprint must never satisfy a cache hit.
@@ -1242,6 +1272,33 @@ export async function analyzeCompanyMeasures(opts: {
     console.log(`[${companyName}] Answered-measures denominator: ${answeredCount}/${measuresTotal} answered, ${abstainedCount} abstained (insufficient evidence)`);
   }
 
+  // ─── v3j (Bug 2): RUN-LEVEL FORCE-INCLUDE INVARIANT ─────────────────────────
+  // For every NON-abstained measure whose required document WAS present in the
+  // corpus, at least one genuine body chunk MUST have been force-included. If a
+  // required document is present but nothing was forced, the deterministic
+  // guarantee failed (the exact Bug-2 regression). We collect violations, log
+  // them loudly, and surface them so the worker can gate the portfolio run.
+  const fiViolations: Array<{ measureId: string; reason: string }> = [];
+  let fiChecked = 0;
+  for (const r of allResults) {
+    if (r.abstained) continue;
+    if (r.requiredDocPresent) {
+      fiChecked++;
+      if (!r.forceIncludedCount || r.forceIncludedCount < 1) {
+        fiViolations.push({
+          measureId: r.measureId,
+          reason: `required document present in corpus but forceIncludedCount=${r.forceIncludedCount ?? 0}`,
+        });
+      }
+    }
+  }
+  const forceIncludeInvariant = { ok: fiViolations.length === 0, checked: fiChecked, violations: fiViolations };
+  if (!forceIncludeInvariant.ok) {
+    console.error(`[${companyName}][invariant][FAIL] force-include invariant violated for ${fiViolations.length} measure(s): ${fiViolations.map((v) => v.measureId).join(", ")}`);
+  } else {
+    console.log(`[${companyName}][invariant][OK] force-include invariant satisfied (${fiChecked} filing-bound measure(s) with required doc present all received forced body chunks)`);
+  }
+
   // Generate summary narrative
   const summary = await generateSummaryNarrative(companyName, allResults, scorePercentage, framework);
 
@@ -1262,6 +1319,7 @@ export async function analyzeCompanyMeasures(opts: {
     abstainedCount,
     measuresTotal,
     categories: categoryResults.sort((a, b) => a.categoryNumber - b.categoryNumber),
+    forceIncludeInvariant,
   };
 }
 

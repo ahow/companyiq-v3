@@ -745,6 +745,32 @@ async function runAnalyzePhase(opts: {
 
   console.log(`[${companyName}] Analysis complete: ${analysis.scorePercentage}% (${measuresMet} met / ${answeredCount} answered; ${abstainedCount} abstained of ${measures.length} total)`);
 
+  // ─── v3j (Bug 2): RECORD FORCE-INCLUDE INVARIANT VIOLATIONS ─────────────────
+  // The analyzer asserts that every filing-bound measure whose required document
+  // was present in the corpus received at least one genuine forced body chunk.
+  // A violation is the exact Bug-2 regression (e.g. Salesforce Risk Q1 saw no
+  // real Item 1A body). We persist violations to processing_errors so a portfolio
+  // run is auditable and can be gated, without aborting this company's other
+  // (valid) scores.
+  const fiInvariant = (analysis as any).forceIncludeInvariant as
+    | { ok: boolean; checked: number; violations: Array<{ measureId: string; reason: string }> }
+    | undefined;
+  if (fiInvariant && !fiInvariant.ok) {
+    console.error(`[${companyName}][invariant][FAIL] ${fiInvariant.violations.length} force-include violation(s): ${fiInvariant.violations.map((v) => `${v.measureId} (${v.reason})`).join("; ")}`);
+    try {
+      await storage.logProcessingError({
+        companyId,
+        companyName,
+        stage: "score",
+        error: `Force-include invariant violated for ${fiInvariant.violations.length} measure(s): ${fiInvariant.violations.map((v) => `${v.measureId} [${v.reason}]`).join("; ")}`,
+      });
+    } catch (e: any) {
+      console.warn(`[${companyName}] Failed to record force-include invariant violation: ${e?.message}`);
+    }
+  } else if (fiInvariant) {
+    console.log(`[${companyName}][invariant][OK] force-include satisfied for ${fiInvariant.checked} filing-bound measure(s)`);
+  }
+
   // ─── Auto-Pin Sources ──────────────────────────────────────────────────────
   // When analysis finds evidence, auto-pin those source URLs so they're always
   // re-checked in future runs (ensures consistency across iterations).
