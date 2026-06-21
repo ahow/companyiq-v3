@@ -820,6 +820,112 @@ async function runAnalyzePhase(opts: {
   return analysis;
 }
 
+// ─── Auto-Reexamination Gate (v3k-r15) ──────────────────────────────────────
+// A company can "complete" with an EMPTY or thin corpus for two very different
+// reasons:
+//   (1) FETCH-COVERAGE ARTIFACT — its primary filings were discovered but the
+//       fetches failed (timeouts, Chromium fork exhaustion during a degraded
+//       window, transient CDN blocks). The score understates true disclosure.
+//   (2) LEGITIMATE NO-DISCLOSURE — a substantial corpus was fetched and read,
+//       but it genuinely contains no qualifying AI-governance content.
+// Only (1) warrants a re-examination. The gate below fires ONLY when the
+// persisted fetch-coverage diagnostics flag thin/degraded retrieval AND the
+// usable corpus is small, and it is strictly bounded so it can never loop.
+const AUTO_REEXAM_MAX = parseInt(process.env.AUTO_REEXAM_MAX || "2", 10);
+const AUTO_REEXAM_MAX_CHARS = parseInt(process.env.AUTO_REEXAM_MAX_CHARS || "100000", 10);
+
+/**
+ * Decide whether a just-finalized company should be automatically re-examined
+ * because its corpus was degraded by fetch failures (NOT a legitimate zero).
+ * Returns true if a re-examination was enqueued (caller should treat the run as
+ * superseded), false if the result should stand as-is.
+ */
+async function maybeAutoReexamine(opts: {
+  company: Company;
+  framework: Framework;
+  workspaceId: number;
+  totalScore: number;
+}): Promise<boolean> {
+  const { company, framework, workspaceId } = opts;
+  const companyId = company.id;
+  const companyName = company.name;
+  try {
+    // Re-read the company to get the freshly-persisted diagnostics + score.
+    const fresh = await storage.getCompanyById(companyId, workspaceId);
+    const diag = (fresh?.discoveryDiagnostics as any) || {};
+    const coverage = diag.fetchCoverage || null;
+    const reexam = diag.autoReexam || { count: 0 };
+    const score = typeof fresh?.totalScore === "number" ? fresh.totalScore : opts.totalScore;
+
+    // GUARD 1 — only ever consider a (near-)zero result. A scored company has
+    // demonstrably usable evidence and must never be churned.
+    if (score > 0) return false;
+
+    // GUARD 2 — bounded retries: never loop.
+    if ((reexam.count || 0) >= AUTO_REEXAM_MAX) {
+      console.log(`[${companyName}] Auto-reexam SKIPPED: retry budget exhausted (${reexam.count}/${AUTO_REEXAM_MAX})`);
+      return false;
+    }
+
+    // GUARD 3 — the result must look like a FETCH-COVERAGE ARTIFACT, not a
+    // legitimate no-disclosure zero. Two independent conditions must hold:
+    //   (a) the fetch-coverage diagnostics already flagged thin/degraded
+    //       retrieval (most docs dead, low fetch ratio, or a dead primary
+    //       filing) — this is the same `lowEvidence` signal surfaced in the UI;
+    //   (b) the USABLE corpus is small (< AUTO_REEXAM_MAX_CHARS). A large corpus
+    //       (e.g. a 3.6M-char filer) is never a fetch failure even if many
+    //       ancillary URLs went dead, so it is treated as a legitimate zero.
+    const corpusChars = await storage.getCorpusCharCount(companyId);
+    const degradedRetrieval = !!coverage && coverage.lowEvidence === true;
+    const thinCorpus = corpusChars < AUTO_REEXAM_MAX_CHARS;
+
+    if (!degradedRetrieval || !thinCorpus) {
+      console.log(
+        `[${companyName}] Auto-reexam SKIPPED: legitimate zero ` +
+          `(corpusChars=${corpusChars}, lowEvidence=${coverage?.lowEvidence ?? "n/a"}, ` +
+          `fetchRatio=${coverage?.fetchRatio ?? "n/a"}, dead=${coverage?.documentsDead ?? "n/a"})`
+      );
+      return false;
+    }
+
+    // All guards passed — this is a fetch-coverage artifact. Record the bounded
+    // retry in discoveryDiagnostics (no migration) and enqueue a fresh run that
+    // forces re-discovery + re-fetch of the previously-dead documents.
+    const nextCount = (reexam.count || 0) + 1;
+    await storage.updateCompany(companyId, workspaceId, {
+      discoveryDiagnostics: {
+        ...diag,
+        autoReexam: {
+          count: nextCount,
+          lastTriggeredAt: new Date().toISOString(),
+          reason: `degraded fetch coverage: ${coverage.documentsFetched}/${coverage.documentsDiscovered} fetched, ` +
+            `${coverage.documentsDead} dead, ratio ${coverage.fetchRatio}, corpusChars ${corpusChars}`,
+        },
+      } as any,
+    });
+
+    const enq = await storage.enqueueReexamination({
+      companyId,
+      companyName,
+      frameworkId: framework.id,
+      workspaceId,
+    });
+    if (enq) {
+      console.warn(
+        `[${companyName}] AUTO-REEXAM TRIGGERED (${nextCount}/${AUTO_REEXAM_MAX}): ` +
+          `corpusChars=${corpusChars}, fetchRatio=${coverage.fetchRatio}, ` +
+          `dead=${coverage.documentsDead}/${coverage.documentsDiscovered} ` +
+          `-> re-enqueued as batch ${enq.batchId}, job ${enq.jobId} (skipFetch=false)`
+      );
+      return true;
+    }
+    return false;
+  } catch (err: any) {
+    console.warn(`[${companyName}] Auto-reexam check failed (non-fatal): ${err.message}`);
+    return false;
+  }
+}
+
 // ─── Combined Pipeline (both phases in sequence) ────────────────────────────
 
 export async function runAnalysisPipeline(opts: PipelineOptions): Promise<PipelineResult> {
@@ -848,6 +954,21 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
             totalScore: 0,
             summary: "No documents could be fetched for analysis.",
           });
+          // Auto-reexamination gate: if this empty corpus is a fetch-coverage
+          // artifact (degraded retrieval, thin corpus) and the bounded retry
+          // budget remains, enqueue a fresh re-discovery+re-fetch run. We then
+          // return success:true so the worker does NOT also fire its generic
+          // retry (which would reuse the same empty corpus) and the originating
+          // batch counter advances cleanly. The re-exam runs as its own batch.
+          const reexamined = await maybeAutoReexamine({ company, framework, workspaceId, totalScore: 0 });
+          if (reexamined) {
+            return {
+              success: true,
+              documentsProcessed: 0,
+              documentsFresh: fetchResult.totalAccepted,
+              documentsCached: 0,
+            };
+          }
           return {
             success: false,
             error: "No documents could be fetched",
@@ -877,6 +998,15 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
 
       const elapsed = Math.round((Date.now() - pipelineStart) / 1000);
       console.log(`[${companyName}] Pipeline completed in ${elapsed}s`);
+
+      // Auto-reexamination gate on the NORMAL completion path: a company can
+      // finish with >0 fetched docs yet a 0% score because the few docs that
+      // fetched were ancillary while the primary filings died. If the corpus is
+      // thin AND fetch coverage was flagged degraded, re-examine (bounded). A
+      // large, genuinely-zero corpus is left untouched.
+      if ((analysis.scorePercentage ?? 0) <= 0) {
+        await maybeAutoReexamine({ company, framework, workspaceId, totalScore: 0 });
+      }
 
       return {
         success: true,

@@ -364,6 +364,24 @@ export async function getFetchedDocuments(companyId: number) {
   }>;
 }
 
+/**
+ * Total character count of the company's USABLE corpus (all `ok` documents,
+ * COALESCE-joined to deduplicated content). This is the decisive signal that
+ * lets the auto-reexamination gate distinguish a fetch-coverage artifact (thin
+ * corpus because key docs died) from a LEGITIMATE zero (a large real corpus
+ * that simply contains no qualifying disclosure). A 3.6M-char corpus is never a
+ * fetch failure, regardless of how many ancillary URLs went `dead`.
+ */
+export async function getCorpusCharCount(companyId: number): Promise<number> {
+  const rows = await db.execute(sql`
+    SELECT COALESCE(SUM(length(COALESCE(dc.content, d.content))), 0) AS total
+    FROM documents d
+    LEFT JOIN document_content dc ON dc.id = d.content_id
+    WHERE d.company_id = ${companyId} AND d.fetch_status = 'ok'
+  `);
+  return Number((rows.rows[0] as any)?.total || 0);
+}
+
 export async function upsertDocument(data: { companyId: number; url: string; title?: string; type: string; gateVerdict: string; gateReason?: string }) {
   const [doc] = await db
     .insert(schema.documents)
@@ -749,6 +767,64 @@ export async function cancelBatchRun(batchId: number) {
 export async function createAnalysisJobs(jobs: Array<{ workspaceId: number; batchId: number; companyId: number; companyName: string; frameworkId: number }>) {
   if (jobs.length === 0) return [];
   return db.insert(schema.analysisJobs).values(jobs).returning();
+}
+
+/**
+ * Auto-reexamination enqueue (v3k-r15).
+ *
+ * Triggered by the pipeline's corpus-health gate when a company completed with a
+ * fetch-coverage-DEGRADED corpus (most key docs `dead`, thin retrieval) rather
+ * than a legitimate no-disclosure zero. It schedules a FRESH, self-contained
+ * single-job batch that forces a full re-discovery + re-fetch (skipFetch=false)
+ * so the previously-`dead` documents are re-attempted.
+ *
+ * Design notes that keep this safe alongside the in-flight portfolio run:
+ *  - It creates its OWN batch_runs row (totalJobs=1), so it never perturbs the
+ *    counters of the large portfolio batch the company originally belonged to.
+ *  - It clears pending/dead/rejected docs (clearDiscoveredDocuments) so the next
+ *    fetch phase genuinely re-discovers, instead of reusing the empty corpus.
+ *  - The caller is responsible for the bounded-retry accounting in
+ *    discoveryDiagnostics.autoReexam; this function only does the enqueue.
+ */
+export async function enqueueReexamination(opts: {
+  companyId: number;
+  companyName: string;
+  frameworkId: number;
+  workspaceId: number;
+}): Promise<{ batchId: number; jobId: number } | null> {
+  const { companyId, companyName, frameworkId, workspaceId } = opts;
+
+  // Dedicated single-job batch so portfolio batch counters are untouched.
+  const [batch] = await db
+    .insert(schema.batchRuns)
+    .values({ workspaceId, frameworkId, totalJobs: 1 })
+    .returning();
+  if (!batch) return null;
+
+  const [job] = await db
+    .insert(schema.analysisJobs)
+    .values({ workspaceId, batchId: batch.id, companyId, companyName, frameworkId })
+    .returning();
+  if (!job) return null;
+
+  // Force a genuine re-fetch: purge prior pending/dead/rejected docs so the next
+  // fetch phase re-discovers and re-attempts the previously-dead URLs. Successful
+  // (`ok`) docs are preserved by clearDiscoveredDocuments.
+  await clearDiscoveredDocuments(companyId);
+  await clearMeasureScores(companyId);
+  await updateCompany(companyId, workspaceId, { analysisStatus: "idle" });
+
+  // Push onto the BullMQ queue with skipFetch=false. Dynamic import avoids a
+  // circular module dependency (queue -> worker type) at load time.
+  const { getQueue } = await import("./queue.js");
+  const q = getQueue();
+  await q.add(
+    `reexam-${batch.id}-${companyId}`,
+    { jobId: job.id, companyId, frameworkId, batchId: batch.id, workspaceId, skipFetch: false },
+    { priority: 1, jobId: `reexam-company-${companyId}-batch-${batch.id}` }
+  );
+
+  return { batchId: batch.id, jobId: job.id };
 }
 
 export async function claimJob(jobId: number) {
