@@ -1247,26 +1247,44 @@ export function buildEvidencePackForMeasure(opts: {
   ) {
     const normUrl2 = (u: string | undefined): string => (u || "").split(/[?#]/)[0].toLowerCase();
     const prefNorm2 = normUrl2(preferredAnnualUrl);
-    // Genuine Item 1A body chunks belonging to the preferred annual filing only.
+    // v3k-r14 FIX (Alphabet 1.1a / Microsoft 7.1 live miss): the r13 floor only
+    // considered Item 1A (Risk Factors) body chunks. But strategic-priority (1.1a),
+    // use-case (2.x) and partnership/operations (7.x) language lives in Item 1
+    // (Business) and Item 7 (MD&A), NOT Item 1A. Re-chunking of the compressed
+    // combinedText can also re-tag or drop the section marker, so an Item-1A-only
+    // predicate found ZERO candidates live and the 10-K never reached 1.1a/7.1.
+    // Broaden the floor to ANY substantive body chunk of the preferred annual
+    // filing (reject only TOC / pure cross-reference / tiny fragments), then REQUIRE
+    // the chunk to actually mention the measure topic (topicHits > 0) so the floor
+    // only fires when the 10-K genuinely discusses AI for THIS measure. Still a
+    // 1-chunk, purely-additive, deterministic soft floor.
+    const topicCountOf2 = (idx: number): number => {
+      const t = (chunks[idx].text || "").toLowerCase();
+      let n = 0;
+      for (const term of topicTerms) {
+        if (!term) continue;
+        const re = new RegExp(`\\b${term.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g");
+        n += (t.match(re) || []).length;
+      }
+      return n;
+    };
+    const isSubstantiveBody = (ch: Chunk): boolean => {
+      const t = ch.text || "";
+      if (t.length < 200) return false;
+      if (isLikelyToc(t)) return false;
+      return true;
+    };
     const floorCands = scored.filter((s) => {
       const ch = chunks[s.idx];
       if (normUrl2(ch.docUrl) !== prefNorm2) return false;
-      return isItem1aBodyChunk(ch);
+      if (isProxyDoc(ch.docUrl, ch.docTitle)) return false; // never let a proxy satisfy the annual floor
+      if (!isSubstantiveBody(ch)) return false;
+      return topicCountOf2(s.idx) > 0; // only surface the 10-K when it discusses the topic
     });
     if (floorCands.length > 0) {
-      const topicCountOf2 = (c: (typeof scored)[number]): number => {
-        const t = (chunks[c.idx].text || "").toLowerCase();
-        let n = 0;
-        for (const term of topicTerms) {
-          if (!term) continue;
-          const re = new RegExp(`\\b${term.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g");
-          n += (t.match(re) || []).length;
-        }
-        return n;
-      };
-      // Prefer the most topic-dense body chunk; fall back to the earliest by position.
+      // Prefer the most topic-dense body chunk; fall back to BM25 score then position.
       const ranked = floorCands
-        .map((c) => ({ c, tc: topicCountOf2(c) }))
+        .map((c) => ({ c, tc: topicCountOf2(c.idx) }))
         .sort((a, b) =>
           (b.tc - a.tc) ||
           (b.c.score - a.c.score) ||
@@ -1279,7 +1297,7 @@ export function buildEvidencePackForMeasure(opts: {
         evidenceLen += pick.text.length + 2;
         forceIncludedCount++;
         forceIncludedDocUrl = forceIncludedDocUrl || chunks[pick.idx].docUrl;
-        console.log(`[force-include][soft-floor] ${measure.measureId}: GUARANTEED 1 Item 1A body chunk (topicHits=${ranked[0].tc}) from preferred annual filing ${(chunks[pick.idx].docUrl || "").slice(0, 70)} (non-proxy measure, no hard requirement)`);
+        console.log(`[force-include][soft-floor] ${measure.measureId}: GUARANTEED 1 annual-filing body chunk (section=${chunks[pick.idx].section ?? "?"}, topicHits=${ranked[0].tc}) from preferred annual filing ${(chunks[pick.idx].docUrl || "").slice(0, 70)} (non-proxy measure, no hard requirement)`);
       }
     }
   }
