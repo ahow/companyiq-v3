@@ -9,9 +9,16 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL environment variable is required");
 }
 
+// PG pool size is environment-driven so we can scale worker replicas safely.
+// Railway Postgres has max_connections=100; with N worker replicas the total
+// pool demand is N * PG_POOL_MAX (plus the app service). Keep N*PG_POOL_MAX
+// comfortably under ~90. e.g. 8 replicas * 10 = 80. Each replica only runs
+// WORKER_CONCURRENCY jobs at a time, so 10 connections/replica is ample.
+const PG_POOL_MAX = parseInt(process.env.PG_POOL_MAX || "20", 10);
+
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: 20,
+  max: PG_POOL_MAX,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
 });
