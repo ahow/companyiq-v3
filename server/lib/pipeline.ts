@@ -261,10 +261,20 @@ async function runFetchPhase(opts: {
     }
   }
 
-  // Save discovery diagnostics (includes coverage metric)
-  await storage.updateCompany(companyId, workspaceId, {
-    discoveryDiagnostics: discoveryResult.diagnostics as any,
-  });
+  // Save discovery diagnostics (includes coverage metric).
+  // IMPORTANT: preserve the bounded-retry counter (autoReexam) that lives in the
+  // SAME jsonb column. A re-examination run re-enters the fetch phase, and if we
+  // blindly overwrote discoveryDiagnostics here we would wipe autoReexam.count
+  // back to 0 every pass — defeating the bound and risking an infinite retry
+  // loop. Read-merge so the counter survives across re-fetches.
+  {
+    const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+    const merged: any = { ...discoveryResult.diagnostics };
+    if (priorDiag.autoReexam) merged.autoReexam = priorDiag.autoReexam;
+    await storage.updateCompany(companyId, workspaceId, {
+      discoveryDiagnostics: merged,
+    });
+  }
 
   // Log coverage level for monitoring
   const coverage = discoveryResult.diagnostics.coverage;
