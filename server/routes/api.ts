@@ -11,6 +11,44 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 // All API routes require workspace context
 apiRouter.use(requireWorkspace);
 
+// ─── QA Worklist ────────────────────────────────────────────────────────────
+// Residual companies that exhausted bounded auto-re-examination and are flagged
+// for human review (discoveryDiagnostics.qaFlag.flagged = true). Read-only.
+apiRouter.get("/qa/worklist", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const companies = await storage.getCompanies(workspaceId);
+    const items = companies
+      .filter((c: any) => {
+        const d = c.discoveryDiagnostics;
+        return d && typeof d === "object" && d.qaFlag && d.qaFlag.flagged === true;
+      })
+      .map((c: any) => {
+        const d = c.discoveryDiagnostics || {};
+        const fc = d.fetchCoverage || {};
+        return {
+          id: c.id,
+          name: c.name,
+          analysisStatus: c.analysisStatus,
+          totalScore: c.totalScore,
+          qaReason: d.qaFlag?.reason ?? null,
+          flaggedAt: d.qaFlag?.flaggedAt ?? null,
+          autoReexamAttempts: d.autoReexam?.count ?? 0,
+          reconcileAttempts: d.reconcile?.count ?? 0,
+          documentsDiscovered: fc.documentsDiscovered ?? null,
+          documentsFetched: fc.documentsFetched ?? null,
+          documentsDead: fc.documentsDead ?? null,
+          fetchRatio: fc.fetchRatio ?? null,
+          lowEvidence: fc.lowEvidence ?? null,
+        };
+      })
+      .sort((a: any, b: any) => (a.documentsFetched ?? 0) - (b.documentsFetched ?? 0));
+    res.json({ count: items.length, items });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Companies ──────────────────────────────────────────────────────────────
 
 apiRouter.get("/companies", async (req: Request, res: Response) => {

@@ -20,6 +20,7 @@
 import crypto from "crypto";
 import { initializeDatabase } from "./db.js";
 import { startWorker, stopWorker } from "./worker.js";
+import { startReconciler, stopReconciler } from "./reconciler.js";
 
 // ─── Log Noise Filter ───────────────────────────────────────────────────────
 // Mirror the web server's PDF.js noise filter so the worker (which does the
@@ -61,6 +62,7 @@ process.on("uncaughtException", (err: any) => {
 async function gracefulShutdown(signal: string) {
   console.log(`[Worker-Main] Received ${signal} — shutting down worker gracefully...`);
   try {
+    stopReconciler();
     await stopWorker();
   } catch (e: any) {
     console.warn(`[Worker-Main] Worker shutdown error (non-fatal): ${e?.message}`);
@@ -84,6 +86,13 @@ initializeDatabase().then(async () => {
   const workerId = `worker-${crypto.randomUUID().slice(0, 8)}`;
   console.log(`[Worker-Main] Starting standalone worker ${workerId} (concurrency=${process.env.WORKER_CONCURRENCY || "10"}, maxBrowsers=${process.env.MAX_CONCURRENT_BROWSER || "2"})`);
   startWorker(workerId);
+
+  // Periodic stall reconciler — prevents companies from silently stalling as
+  // incomplete (DB<->queue desync) and surfaces quality zeros for QA. Owned by
+  // the worker service only (single queue consumer). Disable with RECONCILE_ENABLED=false.
+  if (process.env.RECONCILE_ENABLED !== "false") {
+    startReconciler();
+  }
 
   // Lightweight heartbeat so the service shows liveness in logs.
   setInterval(() => {

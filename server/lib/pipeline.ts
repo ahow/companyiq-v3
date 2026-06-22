@@ -841,7 +841,7 @@ async function runAnalyzePhase(opts: {
 // Only (1) warrants a re-examination. The gate below fires ONLY when the
 // persisted fetch-coverage diagnostics flag thin/degraded retrieval AND the
 // usable corpus is small, and it is strictly bounded so it can never loop.
-const AUTO_REEXAM_MAX = parseInt(process.env.AUTO_REEXAM_MAX || "2", 10);
+const AUTO_REEXAM_MAX = parseInt(process.env.AUTO_REEXAM_MAX || "3", 10);
 const AUTO_REEXAM_MAX_CHARS = parseInt(process.env.AUTO_REEXAM_MAX_CHARS || "100000", 10);
 
 /**
