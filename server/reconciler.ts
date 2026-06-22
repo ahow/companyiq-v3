@@ -33,7 +33,7 @@
  * never deletes `ok` documents or alters analysis methodology.
  */
 
-import { db } from "./db.js";
+import { db, pool } from "./db.js";
 import { sql } from "drizzle-orm";
 import * as storage from "./storage.js";
 import { getQueue } from "./queue.js";
@@ -52,11 +52,28 @@ const QA_THIN_CHARS = parseInt(process.env.AUTO_REEXAM_MAX_CHARS || "100000", 10
 // The reconciler reuses discoveryDiagnostics.autoReexam.count so retries from
 // either mechanism count toward the SAME bound and can never stack past it.
 const AUTO_REEXAM_MAX = parseInt(process.env.AUTO_REEXAM_MAX || "3", 10);
+// Kill switch: when set to "false"/"0", the reconciler never schedules passes.
+const RECONCILE_ENABLED = !/^(false|0|no|off)$/i.test(process.env.RECONCILE_ENABLED || "true");
+// Postgres advisory-lock key. The reconciler runs inside EVERY worker replica
+// (8 of them). To avoid a thundering herd of duplicate re-examinations, a pass
+// only proceeds on the ONE replica that wins this transaction-scoped advisory
+// lock; the others skip the pass entirely. Arbitrary stable 32-bit key.
+const RECONCILE_LOCK_KEY = parseInt(process.env.RECONCILE_LOCK_KEY || "918273645", 10);
 
 let running = false;
 let timer: NodeJS.Timeout | null = null;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** True if the company already has a non-terminal job in the DB (pending/claimed).
+ *  Belt-and-suspenders against duplicate enqueues even within the leader pass. */
+async function hasActiveDbJob(companyId: number): Promise<boolean> {
+  const r = await db.execute(sql`
+    SELECT 1 FROM analysis_jobs
+    WHERE company_id = ${companyId} AND status IN ('pending','claimed') LIMIT 1
+  `);
+  return r.rows.length > 0;
+}
 
 /** Set of companyIds that currently have a live (waiting/active/delayed/prioritized) BullMQ job. */
 async function liveQueueCompanyIds(): Promise<Set<number>> {
@@ -110,14 +127,45 @@ async function flagForQa(company: any, reason: string): Promise<void> {
 
 // ─── Core reconcile pass ─────────────────────────────────────────────────────
 
-export async function reconcileOnce(): Promise<{
+type ReconcileStats = {
   syncedCompleted: number;
   recovered: number;
   exhaustedFailed: number;
   qaFlagged: number;
   batchesClosed: number;
-}> {
-  const stats = { syncedCompleted: 0, recovered: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0 };
+  skipped?: boolean; // true when this replica did not win the leader lock
+};
+
+/**
+ * Public entry point. Acquires a Postgres session-level advisory lock so that
+ * across all worker replicas, at most ONE reconcile pass runs at a time. If the
+ * lock is already held (another replica is mid-pass), this call returns
+ * immediately with skipped=true and does NO work — preventing the multi-replica
+ * thundering herd of duplicate re-examinations.
+ */
+export async function reconcileOnce(): Promise<ReconcileStats> {
+  const empty: ReconcileStats = { syncedCompleted: 0, recovered: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0, skipped: true };
+  // Advisory locks are DATABASE-GLOBAL: whoever holds the key (on any connection)
+  // blocks all other holders. We therefore hold the lock on a single dedicated
+  // client for the whole pass (so lock + unlock are guaranteed same-connection,
+  // safe under a pooled driver), while the pass itself uses the shared pool.
+  const client = await pool.connect();
+  let got = false;
+  try {
+    const r = await client.query("SELECT pg_try_advisory_lock($1) AS got", [RECONCILE_LOCK_KEY]);
+    got = r.rows?.[0]?.got === true;
+    if (!got) return empty; // another replica is the leader for this tick
+    return await reconcilePass();
+  } finally {
+    if (got) {
+      try { await client.query("SELECT pg_advisory_unlock($1)", [RECONCILE_LOCK_KEY]); } catch { /* connection may be gone; lock auto-releases on disconnect */ }
+    }
+    client.release();
+  }
+}
+
+async function reconcilePass(): Promise<ReconcileStats> {
+  const stats: ReconcileStats = { syncedCompleted: 0, recovered: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0 };
   const live = await liveQueueCompanyIds();
 
   // ── 1) Orphaned jobs / companies: claimed jobs idle beyond threshold, OR
@@ -153,6 +201,10 @@ export async function reconcileOnce(): Promise<{
       console.log(`[Reconciler] Synced company ${companyId} (${row.name}) to completed (results already present)`);
       continue;
     }
+
+    // Already has a fresh job enqueued (e.g. by a previous pass or the pipeline)
+    // => do not stack another. Idempotency guard against duplicate recovery.
+    if (await hasActiveDbJob(companyId)) continue;
 
     // Genuinely incomplete => bounded auto-recovery.
     const diag = getDiag(company);
@@ -216,7 +268,8 @@ export async function reconcileOnce(): Promise<{
   `);
   for (const row of zeros.rows as any[]) {
     const companyId = Number(row.id);
-    if (live.has(companyId)) continue; // a re-exam is already in flight
+    if (live.has(companyId)) continue; // a re-exam is already in flight (BullMQ)
+    if (await hasActiveDbJob(companyId)) continue; // a re-exam is already enqueued (DB)
     const diag = (row.discovery_diagnostics && typeof row.discovery_diagnostics === "object") ? { ...row.discovery_diagnostics } : {};
     if (diag?.qaFlag?.flagged) continue; // already exhausted + flagged
     const fc = diag?.fetchCoverage;
@@ -299,12 +352,17 @@ export async function reconcileOnce(): Promise<{
 
 export function startReconciler(): void {
   if (timer) return;
-  console.log(`[Reconciler] Starting (interval=${RECONCILE_INTERVAL_MS}ms, stuckThreshold=${STUCK_THRESHOLD_MIN}min, maxAttempts=${RECONCILE_MAX})`);
+  if (!RECONCILE_ENABLED) {
+    console.log("[Reconciler] Disabled via RECONCILE_ENABLED=false; not scheduling any passes.");
+    return;
+  }
+  console.log(`[Reconciler] Starting (interval=${RECONCILE_INTERVAL_MS}ms, stuckThreshold=${STUCK_THRESHOLD_MIN}min, maxAttempts=${RECONCILE_MAX}, lockKey=${RECONCILE_LOCK_KEY})`);
   const tick = async () => {
-    if (running) return; // never overlap passes
+    if (running) return; // never overlap passes within THIS replica
     running = true;
     try {
       const s = await reconcileOnce();
+      if (s.skipped) return; // another replica is the leader for this tick
       const total = s.syncedCompleted + s.recovered + s.exhaustedFailed + s.qaFlagged + s.batchesClosed;
       if (total > 0) {
         console.log(`[Reconciler] pass done: synced=${s.syncedCompleted} recovered=${s.recovered} exhausted=${s.exhaustedFailed} qaFlagged=${s.qaFlagged} batchesClosed=${s.batchesClosed}`);
@@ -315,7 +373,8 @@ export function startReconciler(): void {
       running = false;
     }
   };
-  // First pass after a short delay so the worker finishes booting.
+  // First pass after a short delay so the worker finishes booting. The advisory
+  // lock ensures only one replica actually executes even if all fire at once.
   timer = setInterval(() => { void tick(); }, RECONCILE_INTERVAL_MS);
   setTimeout(() => { void tick(); }, 30_000);
 }
