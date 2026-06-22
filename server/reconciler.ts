@@ -203,11 +203,16 @@ export async function reconcileOnce(): Promise<{
   //      gate uses (so the two mechanisms share one budget). Once the budget is
   //      exhausted we QA-flag it (and stop), so it surfaces in the worklist
   //      without ever looping. Legitimate large/clean zeros are never touched.
+  // NOTE: framework_id lives on analysis_jobs, not companies. Derive it from the
+  // company's most recent job so we can re-enqueue against the right framework.
   const zeros = await db.execute(sql`
-    SELECT id, workspace_id, name, framework_id, discovery_diagnostics
-    FROM companies
-    WHERE analysis_status = 'completed'
-      AND COALESCE(total_score, 0) <= 0
+    SELECT c.id, c.workspace_id, c.name, c.discovery_diagnostics,
+           (SELECT j.framework_id FROM analysis_jobs j
+              WHERE j.company_id = c.id
+              ORDER BY j.id DESC LIMIT 1) AS framework_id
+    FROM companies c
+    WHERE c.analysis_status = 'completed'
+      AND COALESCE(c.total_score, 0) <= 0
   `);
   for (const row of zeros.rows as any[]) {
     const companyId = Number(row.id);
@@ -225,6 +230,13 @@ export async function reconcileOnce(): Promise<{
     if (!company) continue;
 
     const reexam = diag.autoReexam || { count: 0 };
+    if (row.framework_id == null) {
+      // No job history => cannot determine framework; flag for QA rather than guess.
+      await flagForQa(company, `quality zero with no analysis_job history (cannot determine framework)`);
+      stats.qaFlagged++;
+      console.log(`[Reconciler] QA-flagged company ${companyId} (${row.name}): quality zero, no job history`);
+      continue;
+    }
     const frameworkId = Number(row.framework_id);
 
     // Budget exhausted => QA-flag and stop retrying.
