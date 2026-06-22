@@ -1,5 +1,5 @@
 import { pgTable, serial, text, integer, boolean, timestamp, real, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 // ─── Users & Workspaces ─────────────────────────────────────────────────────
 
@@ -52,6 +52,11 @@ export const companies = pgTable("companies", {
 }, (table) => ({
   workspaceIdx: index("companies_workspace_idx").on(table.workspaceId),
   statusIdx: index("companies_status_idx").on(table.workspaceId, table.analysisStatus),
+  // Finding 1 fix: structurally prevent duplicate securities. One row per
+  // (workspace, normalized ISIN). Partial so rows without an ISIN are unaffected.
+  isinUniq: uniqueIndex("companies_ws_isin_uniq")
+    .on(table.workspaceId, sql`upper(trim(${table.isin}))`)
+    .where(sql`${table.isin} is not null and trim(${table.isin}) <> ''`),
 }));
 
 // ─── Company Lists (Workspace-Scoped) ──────────────────────────────────────

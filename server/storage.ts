@@ -1214,6 +1214,30 @@ export async function getCompanyByName(name: string, workspaceId: number) {
   return company || null;
 }
 
+// ─── Company Lookup by ISIN (normalized) ───────────────────────────────────
+// Finding 1 fix: the prior ingest dedup matched only on an exact, case-sensitive
+// company NAME, so the same security re-uploaded under a different casing
+// ("Citigroup Inc." vs "CITIGROUP INC") was inserted as a brand-new row, creating
+// duplicate ISINs with divergent scores. Identity is the ISIN, so we match on the
+// normalized ISIN (UPPER(TRIM(isin))) within the workspace. Returns the oldest
+// matching row (lowest id) so dedup is stable when historical duplicates exist.
+export async function getCompanyByIsin(isin: string, workspaceId: number) {
+  const norm = (isin || "").trim().toUpperCase();
+  if (!norm) return null;
+  const [company] = await db
+    .select()
+    .from(schema.companies)
+    .where(
+      and(
+        eq(schema.companies.workspaceId, workspaceId),
+        sql`upper(trim(${schema.companies.isin})) = ${norm}`
+      )
+    )
+    .orderBy(asc(schema.companies.id))
+    .limit(1);
+  return company || null;
+}
+
 // ─── Framework Editor Operations ───────────────────────────────────────────
 export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; isShared: boolean }>) {
   await db.update(schema.frameworks).set(updates as any).where(eq(schema.frameworks.id, frameworkId));

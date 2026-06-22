@@ -372,22 +372,39 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
       const name = findCol(row, "NAME", "name", "Name", "company", "Company", "COMPANY", "Company Name", "company_name");
       if (!name) continue;
 
-      // Check for existing company with same name in this workspace
-      const existing = await storage.getCompanyByName(name, workspaceId);
-      if (existing) {
-        skipped.push(name);
-        created.push(existing);
-        continue;
-      }
-
       const isin = findCol(row, "ISIN", "isin", "Type", "type", "Identifier", "ID");
       const sector = findCol(row, "LEVEL2 SECTOR NAME", "LEVEL3 SECTOR NAME", "sector", "Sector", "SECTOR", "Industry", "industry");
       const country = findCol(row, "GEOGRAPHIC DESCR.", "GEOGRAPHIC DESCR", "country", "Country", "COUNTRY", "Geography", "Region");
       const domain = findCol(row, "domain", "Domain", "DOMAIN", "website", "Website", "URL", "url");
 
+      // Finding 1 fix: dedup on IDENTITY (normalized ISIN) first, then fall back to
+      // exact-name match only when no ISIN is supplied. This prevents the same
+      // security being re-inserted as a duplicate row under a different name casing
+      // (e.g. "Citigroup Inc." vs "CITIGROUP INC"). When a match is found we UPDATE
+      // the existing row's metadata (so re-uploads keep names/sectors fresh) rather
+      // than creating a new row, and we never touch its analysis state.
+      const normIsin = (isin || "").trim();
+      let existing = normIsin ? await storage.getCompanyByIsin(normIsin, workspaceId) : null;
+      if (!existing) existing = await storage.getCompanyByName(name, workspaceId);
+      if (existing) {
+        // Refresh metadata in place without disturbing analysis status/scores.
+        const patch: any = {};
+        if (name && name !== existing.name) patch.name = name;
+        if (sector && sector !== existing.sector) patch.sector = sector;
+        if (country && country !== existing.country) patch.country = country;
+        if (domain && domain !== existing.domain) patch.domain = domain;
+        if (normIsin && normIsin !== (existing.isin || "")) patch.isin = normIsin;
+        if (Object.keys(patch).length > 0) {
+          try { existing = await storage.updateCompany(existing.id, workspaceId, patch); } catch { /* keep existing on patch failure */ }
+        }
+        skipped.push(name);
+        created.push(existing);
+        continue;
+      }
+
       const company = await storage.createCompany({
         name,
-        isin: isin || null,
+        isin: normIsin || null,
         sector: sector || null,
         country: country || null,
         domain: domain || null,
