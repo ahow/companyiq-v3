@@ -50,6 +50,13 @@ const PER_DOCUMENT_TIMEOUT_MS = parseInt(process.env.PER_DOCUMENT_TIMEOUT_MS || 
 // unaffected — the same fetch+verify runs per doc, just overlapped.
 const INCOMPANY_FETCH_CONCURRENCY = parseInt(process.env.INCOMPANY_FETCH_CONCURRENCY || "4", 10);
 
+// Usable-corpus threshold (chars) below which a (near-)zero result may be a
+// fetch-coverage artifact. Declared at module top because it is referenced both
+// by the fetch-coverage lowEvidence computation (Phase 1) and the auto-reexam
+// gate (post-analysis) — keeping a single source of truth and avoiding a TDZ
+// reference from the earlier fetch-coverage block.
+const AUTO_REEXAM_MAX_CHARS = parseInt(process.env.AUTO_REEXAM_MAX_CHARS || "100000", 10);
+
 export interface PipelineOptions {
   company: Company;
   framework: Framework;
@@ -573,7 +580,20 @@ async function runFetchPhase(opts: {
     // Did any Tier-1 (primary filing) document fail to fetch?
     const deadDocs = finalDocs.filter(d => d.fetchStatus === "dead");
     const deadTier1 = deadDocs.some(d => /10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy.?statement/i.test((d.url + " " + (d.title || "")).toLowerCase()));
-    const lowEvidence = totalFetched < 3 || fetchRatio < 0.5 || (deadTier1 && fetchRatio < 0.7);
+    // Raw fetch-coverage weakness (discovery links that failed). Retained for
+    // transparency, but NOT sufficient on its own to declare low evidence.
+    const fetchWeakness = totalFetched < 3 || fetchRatio < 0.5 || (deadTier1 && fetchRatio < 0.7);
+    // Corpus-aware low-evidence: a result is only genuinely low-evidence if the
+    // USABLE corpus we actually retrieved is thin. A large corpus (e.g. a
+    // multi-million-char filer) is never low-evidence even when many ancillary
+    // discovery links went dead — those dead links don't reduce the evidence we
+    // have. This keeps `lowEvidence` consistent with the auto-reexam thin-corpus
+    // gate (AUTO_REEXAM_MAX_CHARS) so a company can never be lowEvidence=true yet
+    // simultaneously skipped as a "thick corpus" legitimate zero.
+    let corpusChars = 0;
+    try { corpusChars = await storage.getCorpusCharCount(companyId); } catch { /* non-fatal */ }
+    const corpusThin = corpusChars < AUTO_REEXAM_MAX_CHARS;
+    const lowEvidence = fetchWeakness && corpusThin;
     const existingDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
     await storage.updateCompany(companyId, workspaceId, {
       discoveryDiagnostics: {
@@ -584,13 +604,18 @@ async function runFetchPhase(opts: {
           documentsDiscovered: totalDiscovered,
           fetchRatio: Math.round(fetchRatio * 100) / 100,
           deadPrimaryFiling: deadTier1,
+          corpusChars,
+          corpusThin,
+          fetchWeakness,
           lowEvidence,
           budgetExceeded: fetchBudgetExceeded,
         },
       } as any,
     });
     if (lowEvidence) {
-      console.warn(`[${companyName}] LOW EVIDENCE: only ${totalFetched}/${totalDiscovered} docs fetched (ratio ${Math.round(fetchRatio * 100)}%${deadTier1 ? ', a primary filing failed to fetch' : ''}) — score may understate true disclosure`);
+      console.warn(`[${companyName}] LOW EVIDENCE: only ${totalFetched}/${totalDiscovered} docs fetched (ratio ${Math.round(fetchRatio * 100)}%${deadTier1 ? ', a primary filing failed to fetch' : ''}), thin corpus (${corpusChars} chars) — score may understate true disclosure`);
+    } else if (fetchWeakness && !corpusThin) {
+      console.log(`[${companyName}] Fetch-coverage weak (ratio ${Math.round(fetchRatio * 100)}%) but corpus is substantial (${corpusChars} chars) — NOT flagged low-evidence`);
     }
   } catch (covErr: any) {
     console.warn(`[${companyName}] Failed to persist fetch-coverage diagnostics (non-fatal): ${covErr.message}`);
@@ -842,7 +867,7 @@ async function runAnalyzePhase(opts: {
 // persisted fetch-coverage diagnostics flag thin/degraded retrieval AND the
 // usable corpus is small, and it is strictly bounded so it can never loop.
 const AUTO_REEXAM_MAX = parseInt(process.env.AUTO_REEXAM_MAX || "3", 10);
-const AUTO_REEXAM_MAX_CHARS = parseInt(process.env.AUTO_REEXAM_MAX_CHARS || "100000", 10);
+// AUTO_REEXAM_MAX_CHARS declared at module top (shared with fetch-coverage block).
 
 /**
  * Decide whether a just-finalized company should be automatically re-examined
