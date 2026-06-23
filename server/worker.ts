@@ -289,6 +289,17 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       const missingTier1 = diagnostics?.coverage?.missingTier1Types || [];
       // Fetch-coverage signal (how much discovered evidence was actually read).
       const fetchCoverage = diagnostics?.fetchCoverage || null;
+      // v3l (CORPUS_DRIFT_REDESIGN_V3 §4): run manifest / ranker provenance so the
+      // saved snapshot and shared link carry determinism evidence.
+      const manifest = {
+        pipelineVersion: "v3l-r1",
+        gitSha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || undefined,
+        candidatePoolFingerprint: diagnostics?.candidatePoolFingerprint ?? undefined,
+        finalCorpusFingerprint: diagnostics?.finalCorpusFingerprint ?? diagnostics?.candidateFingerprint ?? undefined,
+        rankerDiagnostics: diagnostics?.rankerDiagnostics ?? undefined,
+        nearDupCollapsedGroups: diagnostics?.nearDupCollapsedGroups ?? undefined,
+        capUsed: diagnostics?.capUsed ?? undefined,
+      };
 
       resultsData.push({
         companyId: company.id,
@@ -306,6 +317,7 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         documentsDiscovered: fetchCoverage?.documentsDiscovered ?? undefined,
         fetchRatio: fetchCoverage?.fetchRatio ?? undefined,
         lowEvidence: fetchCoverage?.lowEvidence ?? undefined,
+        manifest,
         sourceDocuments,
         measureScores: scores.map(s => ({
           measureId: s.measureId,

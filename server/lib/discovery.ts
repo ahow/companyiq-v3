@@ -3,6 +3,14 @@ import { createHash } from "crypto";
 import * as storage from "../storage.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
+import {
+  computeRankSignals,
+  compareSignals,
+  collapseNearDuplicates,
+  computeRankerDiagnostics,
+  type RankSignals,
+  type ComputeOpts,
+} from "./ranking.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 
 const MAX_DOCS_RETURNED = 60;
@@ -790,6 +798,9 @@ interface DiscoveryCandidate {
   snippet: string;
   lane: string;
   priority: number;
+  /** v3l: layered ranking signals (authorityClass, fineScore, urlHash). Set
+   *  by the final selection step; absent on raw candidates. */
+  rank?: RankSignals;
 }
 
 function buildGeneralQueries(companyName: string, framework: Framework): string[] {
@@ -2012,6 +2023,24 @@ export interface DiscoveryDiagnostics {
   // having found the SAME corpus (supporting reproducibility analysis). Logged for
   // drift visibility; does NOT itself short-circuit discovery.
   candidateFingerprint?: string;
+  // v3l (CORPUS_DRIFT_REDESIGN_V3 §4): SHA1 over the sorted set of ALL gated
+  // candidate URLs BEFORE the cap. Lets a reviewer distinguish "different
+  // candidate pool" (world drift) from "same pool, different cut" (pipeline).
+  candidatePoolFingerprint?: string;
+  // v3l: alias of candidateFingerprint for clarity in the manifest; SHA1 of the
+  // KEPT (post-cap) URL set. Identical => scoring should be identical.
+  finalCorpusFingerprint?: string;
+  // v3l §4: direct measure of whether the ranker is working in production.
+  rankerDiagnostics?: {
+    distinctPrioritiesInTop20: number;
+    largestTieCountPreUrlHash: number;
+    urlhashDecisionFraction: number;
+    totalDocs: number;
+  };
+  // v3l §2.1: how many near-duplicate groups were collapsed before ranking.
+  nearDupCollapsedGroups?: number;
+  // v3l: the cap applied to this run (MAX_DOCS_RETURNED at selection time).
+  capUsed?: number;
 }
 
 export interface DiscoveryResult {
@@ -2418,28 +2447,69 @@ export async function searchCompanyDocuments(opts: {
   }
   const recencyFiltered = recencyKept;
 
-  // Tier-based re-ranking: boost Tier 1 and Tier 2 documents to ensure they
-  // are included even if their raw priority score is lower than ESG reports.
-  for (const doc of recencyFiltered) {
-    const tier = classifyDocumentTier(doc.url, doc.title);
-    if (tier === 1) doc.priority -= 15; // Strong boost for mandatory filings
-    else if (tier === 2) doc.priority -= 7; // Moderate boost for priority disclosures
-    // Tier 3 stays as-is; Tier 4 should already be filtered by deny list
+  // ── v3l RANKING (CORPUS_DRIFT_REDESIGN_V3) ──────────────────────────────────
+  // Replaces the old integer tier-boost + `.sort((a,b)=>a.priority-b.priority)`
+  // (which collapsed onto a coarse integer lattice and produced large tie
+  // clusters → non-deterministic .slice()). The new ranker uses a deterministic
+  // floating-point layered key: authorityClass ASC → fineScore DESC → urlHash ASC.
+  const nativeNonLatinMarket = !!(localeProfile && /Japanese|Chinese|Korean/.test(localeProfile.lang));
+  const rankOptsFor = (d: DiscoveryCandidate): ComputeOpts => ({
+    companyDomain: effectiveDomain || companyDomain || null,
+    topicPhrases,
+    nativeNonLatinMarket,
+  });
+
+  // §4: candidate-pool fingerprint over the FULL gated set BEFORE the cap, so
+  // "different pool" (world drift) is distinguishable from "same pool, different
+  // cut" (pipeline effect) in the manifest.
+  const candidatePoolFingerprint = createHash("sha1")
+    .update(recencyFiltered.map((d) => d.url).sort().join("\n"))
+    .digest("hex");
+
+  // §2.1: collapse near-duplicates BEFORE ranking (authority-class winner).
+  const collapse = collapseNearDuplicates(recencyFiltered, rankOptsFor);
+  if (collapse.collapsedGroups > 0) {
+    console.log(`[${companyName}] Near-dup collapse: removed ${collapse.removed.length} docs across ${collapse.collapsedGroups} groups`);
   }
 
-  // Sort by priority and cap
-  const finalDocs = recencyFiltered
-    .sort((a, b) => a.priority - b.priority)
-    .slice(0, MAX_DOCS_RETURNED);
+  // Caution C: best-effort, bounded HEAD size probe — ONLY on the post-collapse
+  // set (never the pre-gate 180), tight timeout, 0-byte fallback. Off by default
+  // via env to avoid added latency at portfolio scale unless explicitly enabled.
+  const sizeByUrl = new Map<string, number | null>();
+  if (process.env.DISCOVERY_SIZE_PROBE === "true") {
+    await Promise.all(collapse.kept.slice(0, MAX_DOCS_RETURNED * 2).map(async (d) => {
+      try {
+        const r = await axios.head(d.url, { timeout: 500, maxRedirects: 2, validateStatus: () => true });
+        const len = parseInt(String(r.headers["content-length"] || ""), 10);
+        sizeByUrl.set(d.url, Number.isFinite(len) ? len : null);
+      } catch { sizeByUrl.set(d.url, null); }
+    }));
+  }
+
+  // Compute layered signals and sort with the deterministic comparator.
+  const rankedKept = collapse.kept.map((doc) => {
+    const signals = computeRankSignals(doc, { ...rankOptsFor(doc), sizeBytes: sizeByUrl.get(doc.url) ?? null });
+    doc.rank = signals;
+    return { doc, signals };
+  });
+  rankedKept.sort((a, b) => compareSignals(a.signals, b.signals));
+
+  // §4: ranker diagnostics on the full ranked list (pre-cap) — the production
+  // health signal for whether ranking specificity is actually working.
+  const rankerDiagnostics = computeRankerDiagnostics(rankedKept);
+
+  const finalDocs = rankedKept.slice(0, MAX_DOCS_RETURNED).map((r) => r.doc);
 
   // Compute coverage metric
   const coverage = computeCoverageMetric(finalDocs);
   console.log(`[${companyName}] Coverage: ${coverage.coverageLevel} (Tier1: ${coverage.tier1Count}, Tier2: ${coverage.tier2Count}, Tier3: ${coverage.tier3Count})`);
+  console.log(`[${companyName}] Ranker: distinctTop20=${rankerDiagnostics.distinctPrioritiesInTop20} largestTie=${rankerDiagnostics.largestTieCountPreUrlHash} urlHashFrac=${rankerDiagnostics.urlhashDecisionFraction.toFixed(3)}`);
   if (coverage.missingTier1Types.length > 0) {
     console.warn(`[${companyName}] Missing mandatory sources: ${coverage.missingTier1Types.join(", ")}`);
   }
 
-  // v3e (Section 4): fingerprint the selected corpus (sorted URL set) for repeatability.
+  // §4: final-corpus fingerprint (sorted KEPT URL set). Identical => scoring
+  // should be identical. Retained as `candidateFingerprint` for back-compat.
   const candidateFingerprint = createHash("sha1")
     .update(finalDocs.map((d) => d.url).sort().join("\n"))
     .digest("hex");
@@ -2453,10 +2523,15 @@ export async function searchCompanyDocuments(opts: {
     topUrls: finalDocs.slice(0, 20).map((d) => ({
       url: d.url,
       title: d.title,
-      priority: d.priority,
+      priority: d.rank ? d.rank.fineScore : d.priority,
     })),
     coverage,
     candidateFingerprint,
+    candidatePoolFingerprint,
+    finalCorpusFingerprint: candidateFingerprint,
+    rankerDiagnostics,
+    nearDupCollapsedGroups: collapse.collapsedGroups,
+    capUsed: MAX_DOCS_RETURNED,
   };
 
   return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected };
@@ -2501,9 +2576,24 @@ export async function searchCompanyDocumentsWithEnsemble(opts: {
     }
   }
 
-  const finalDocs = allDocs
-    .sort((a, b) => a.priority - b.priority)
-    .slice(0, MAX_DOCS_RETURNED);
+  // v3l: each doc already carries its layered `.rank` signals from the per-pass
+  // selection in searchCompanyDocuments(). Re-sort the merged union with the SAME
+  // deterministic comparator (authorityClass ASC → fineScore DESC → urlHash ASC),
+  // recomputing signals defensively for any doc missing them.
+  const ensembleRankOpts: ComputeOpts = {
+    companyDomain: effectiveDomain || opts.companyDomain || null,
+  };
+  const rankedAll = allDocs.map((doc) => ({
+    doc,
+    signals: doc.rank ?? computeRankSignals(doc, ensembleRankOpts),
+  }));
+  rankedAll.sort((a, b) => compareSignals(a.signals, b.signals));
+  const finalDocs = rankedAll.slice(0, MAX_DOCS_RETURNED).map((r) => r.doc);
+
+  const ensembleRankerDiagnostics = computeRankerDiagnostics(rankedAll);
+  const ensembleFinalFingerprint = createHash("sha1")
+    .update(finalDocs.map((d) => d.url).sort().join("\n"))
+    .digest("hex");
 
   return {
     documents: finalDocs,
@@ -2515,8 +2605,12 @@ export async function searchCompanyDocumentsWithEnsemble(opts: {
       topUrls: finalDocs.slice(0, 20).map((d) => ({
         url: d.url,
         title: d.title,
-        priority: d.priority,
+        priority: d.rank ? d.rank.fineScore : d.priority,
       })),
+      candidateFingerprint: ensembleFinalFingerprint,
+      finalCorpusFingerprint: ensembleFinalFingerprint,
+      rankerDiagnostics: ensembleRankerDiagnostics,
+      capUsed: MAX_DOCS_RETURNED,
     },
     effectiveDomain,
     domainAutoDetected,
