@@ -194,17 +194,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
     // Check if batch is complete
     if (result.success) {
       const batchRow = await storage.incrementBatchCompleted(batchId) as any;
-      if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
-        console.log("[Worker] Batch " + batchId + " complete: " + batchRow.completed_jobs + " completed, " + batchRow.failed_jobs + " failed");
-        await storage.completeBatchRun(batchId);
-        setTimeout(async () => {
-          try {
-            await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
-          } catch (err: any) {
-            console.error("[Worker] Failed to save results for batch " + batchId + ": " + err.message);
-          }
-        }, 60000);
-      }
+      await maybeHandleBatchCompletion(batchRow, batchId, frameworkId, workspaceId);
     } else if (result.error !== "Cancelled") {
       // For failed jobs (final failure only), check if batch is now complete
       if (currentAttempt >= MAX_RETRY_ATTEMPTS || !isRetriableError(result.error || "")) {
@@ -213,17 +203,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
           const { sql } = await import("drizzle-orm");
           const batchResult = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`);
           const batchRow = batchResult.rows[0] as any;
-          if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
-            console.log("[Worker] Batch " + batchId + " complete: " + batchRow.completed_jobs + " completed, " + batchRow.failed_jobs + " failed");
-            await storage.completeBatchRun(batchId);
-            setTimeout(async () => {
-              try {
-                await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
-              } catch (err: any) {
-                console.error("[Worker] Failed to save results for batch " + batchId + ": " + err.message);
-              }
-            }, 60000);
-          }
+          await maybeHandleBatchCompletion(batchRow, batchId, frameworkId, workspaceId);
         } catch (checkErr: any) {
           console.error("[Worker] Failed to check batch completion: " + checkErr.message);
         }
@@ -248,23 +228,115 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
         const { sql } = await import("drizzle-orm");
         const batchResult = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`);
         const batchRow = batchResult.rows[0] as any;
-        if (batchRow && (Number(batchRow.completed_jobs) + Number(batchRow.failed_jobs) >= Number(batchRow.total_jobs))) {
-          console.log("[Worker] Batch " + batchId + " complete (from catch): " + batchRow.completed_jobs + " completed, " + batchRow.failed_jobs + " failed");
-          await storage.completeBatchRun(batchId);
-          setTimeout(async () => {
-            try {
-              await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, batchRow.list_id ? Number(batchRow.list_id) : undefined);
-            } catch (err: any) {
-              console.error("[Worker] Failed to save results for batch " + batchId + ": " + err.message);
-            }
-          }, 60000);
-        }
+        await maybeHandleBatchCompletion(batchRow, batchId, frameworkId, workspaceId);
       } catch (checkErr: any) {
         console.error("[Worker] Failed to check batch completion after error: " + checkErr.message);
       }
     }
     return { success: false, error: error.message, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
+}
+
+// ─── Batch Completion Review Gate ────────────────────────────────────────────
+//
+// When a batch finishes (all jobs terminal), we DO NOT auto-save results to the
+// Results page if there are terminal failures. Instead the batch enters
+// `pending_review` and a `batch_review` system alert is raised so the user can
+// either re-examine the failed companies or discard them and finalise. Batches
+// with zero terminal failures auto-finalise (save) exactly as before.
+//
+// This is invoked from all batch-completion sites. It is idempotent: it only
+// acts when the batch has just reached the terminal job count and is still in a
+// non-terminal status (running). Concurrent callers are guarded by
+// `finalizingBatches`.
+const finalizingBatches = new Set<number>();
+
+async function maybeHandleBatchCompletion(
+  batchRow: any,
+  batchId: number,
+  frameworkId: number,
+  workspaceId: number,
+): Promise<void> {
+  if (!batchRow) return;
+  const completed = Number(batchRow.completed_jobs);
+  const failed = Number(batchRow.failed_jobs);
+  const total = Number(batchRow.total_jobs);
+  if (completed + failed < total) return; // not done yet
+
+  // Only the first caller that observes a still-active batch proceeds.
+  const status = String(batchRow.status || "");
+  if (status === "completed" || status === "pending_review" || status === "cancelled") return;
+  if (finalizingBatches.has(batchId)) return;
+  finalizingBatches.add(batchId);
+
+  try {
+    const listId = batchRow.list_id ? Number(batchRow.list_id) : undefined;
+
+    if (failed > 0) {
+      // ── Option (a): pause for review, do NOT save ──
+      console.log(
+        "[Worker] Batch " + batchId + " finished with " + failed +
+        " terminal failure(s) — entering pending_review (results NOT saved)",
+      );
+      await storage.setBatchRunStatus(batchId, "pending_review");
+
+      // Build a concise failure list for the alert payload.
+      let failedList: Array<{ companyId: number; companyName: string; error: string }> = [];
+      try {
+        failedList = await storage.getFailedJobsForBatch(batchId);
+      } catch (e: any) {
+        console.warn("[Worker] Could not load failed jobs for batch " + batchId + ": " + e.message);
+      }
+      const names = failedList.slice(0, 5).map(f => f.companyName).filter(Boolean);
+      const more = failedList.length > names.length ? " +" + (failedList.length - names.length) + " more" : "";
+      const msg =
+        "Batch #" + batchId + " finished with " + failed + " failed compan" +
+        (failed === 1 ? "y" : "ies") + " (" + completed + " succeeded). Review before saving to Results" +
+        (names.length ? ": " + names.join(", ") + more : ".");
+      try {
+        await storage.setSystemAlert({
+          kind: "batch_review",
+          provider: String(batchId),
+          message: msg,
+        });
+      } catch (e: any) {
+        console.warn("[Worker] Could not raise batch_review alert: " + e.message);
+      }
+      return;
+    }
+
+    // ── Zero failures: finalise + save exactly as before ──
+    console.log(
+      "[Worker] Batch " + batchId + " complete with no failures: " + completed + " succeeded — finalising",
+    );
+    await storage.completeBatchRun(batchId);
+    setTimeout(async () => {
+      try {
+        await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
+      } catch (err: any) {
+        console.error("[Worker] Failed to save results for batch " + batchId + ": " + err.message);
+      }
+    }, 60000);
+  } finally {
+    finalizingBatches.delete(batchId);
+  }
+}
+
+/**
+ * Explicit finalisation used by the review endpoints' "discard & finalise" path.
+ * Marks the batch completed and saves results immediately (no 60s delay).
+ */
+export async function finalizeBatchAndSave(
+  batchId: number,
+  frameworkId: number,
+  workspaceId: number,
+  listId?: number,
+): Promise<void> {
+  await storage.completeBatchRun(batchId);
+  await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
+  try {
+    await storage.clearSystemAlert("batch_review", String(batchId));
+  } catch { /* non-fatal */ }
 }
 
 // ─── Batch Results Saving ───────────────────────────────────────────────────

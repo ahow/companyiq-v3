@@ -736,6 +736,27 @@ export async function getActiveBatchRun(workspaceId: number) {
   return batch || null;
 }
 
+/** Most recent batch awaiting review (status = pending_review) for a workspace. */
+export async function getLatestReviewableBatch(workspaceId: number) {
+  const [batch] = await db
+    .select()
+    .from(schema.batchRuns)
+    .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "pending_review")))
+    .orderBy(desc(schema.batchRuns.startedAt))
+    .limit(1);
+  return batch || null;
+}
+
+/** Get a single batch run by id (workspace-scoped). */
+export async function getBatchRunById(batchId: number, workspaceId: number) {
+  const [batch] = await db
+    .select()
+    .from(schema.batchRuns)
+    .where(and(eq(schema.batchRuns.id, batchId), eq(schema.batchRuns.workspaceId, workspaceId)))
+    .limit(1);
+  return batch || null;
+}
+
 export async function incrementBatchCompleted(batchId: number) {
   const [batch] = await db.execute(sql`
     UPDATE batch_runs SET completed_jobs = completed_jobs + 1
@@ -756,6 +777,79 @@ export async function incrementBatchFailed(batchId: number) {
 
 export async function completeBatchRun(batchId: number) {
   await db.update(schema.batchRuns).set({ status: "completed", completedAt: new Date() }).where(eq(schema.batchRuns.id, batchId));
+}
+
+/** Set an arbitrary batch status (e.g. "pending_review", "running"). */
+export async function setBatchRunStatus(batchId: number, status: string) {
+  await db.execute(sql`UPDATE batch_runs SET status = ${status} WHERE id = ${batchId}`);
+}
+
+/** Return the terminal-failed jobs (company + error) for a batch. */
+export async function getFailedJobsForBatch(
+  batchId: number,
+): Promise<Array<{ companyId: number; companyName: string; error: string }>> {
+  const r = await db.execute(sql`
+    SELECT company_id, company_name, last_error
+    FROM analysis_jobs
+    WHERE batch_id = ${batchId} AND status = 'failed'
+    ORDER BY company_name ASC
+  `);
+  return (r.rows as any[]).map(row => ({
+    companyId: Number(row.company_id),
+    companyName: String(row.company_name || ""),
+    error: String(row.last_error || ""),
+  }));
+}
+
+/**
+ * Reset the terminal-failed jobs of a batch back to `pending` (attempts=0,
+ * cleared error/worker/claim) so they can be re-enqueued. Also resets the
+ * affected companies' analysisStatus to idle and decrements the batch's
+ * failed_jobs counter by the number reset. Returns the jobs to re-enqueue.
+ */
+export async function requeueFailedJobsForBatch(
+  batchId: number,
+): Promise<Array<{ id: number; companyId: number; companyName: string; frameworkId: number; workspaceId: number }>> {
+  // Capture the failed jobs first (with all fields needed to re-enqueue).
+  const failed = await db.execute(sql`
+    SELECT id, company_id, company_name, framework_id, workspace_id
+    FROM analysis_jobs
+    WHERE batch_id = ${batchId} AND status = 'failed'
+  `);
+  const rows = failed.rows as any[];
+  if (rows.length === 0) return [];
+
+  // Reset those jobs to pending.
+  await db.execute(sql`
+    UPDATE analysis_jobs SET
+      status = 'pending',
+      attempts = 0,
+      last_error = NULL,
+      worker_id = NULL,
+      claimed_at = NULL
+    WHERE batch_id = ${batchId} AND status = 'failed'
+  `);
+
+  // Reset affected companies to idle so the UI reflects re-processing.
+  const companyIds = rows.map(r => Number(r.company_id));
+  await db.execute(sql`
+    UPDATE companies SET analysis_status = 'idle'
+    WHERE id = ANY(${companyIds})
+  `);
+
+  // Decrement the batch failed counter by the number we just reset.
+  await db.execute(sql`
+    UPDATE batch_runs SET failed_jobs = GREATEST(0, failed_jobs - ${rows.length})
+    WHERE id = ${batchId}
+  `);
+
+  return rows.map(r => ({
+    id: Number(r.id),
+    companyId: Number(r.company_id),
+    companyName: String(r.company_name || ""),
+    frameworkId: Number(r.framework_id),
+    workspaceId: Number(r.workspace_id),
+  }));
 }
 
 export async function cancelBatchRun(batchId: number) {

@@ -3,7 +3,7 @@ import multer from "multer";
 import * as storage from "../storage.js";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { addBatchJobs, removeBatchJobs, getQueueStats } from "../queue.js";
-import { cancelBatch } from "../worker.js";
+import { cancelBatch, finalizeBatchAndSave } from "../worker.js";
 
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -598,6 +598,19 @@ apiRouter.post("/analyze", async (req: Request, res: Response) => {
           total: existingActive.totalJobs,
         });
       }
+      // Also block while a batch awaits review — the user must resolve it
+      // (re-examine or discard & finalise) before starting a new full run.
+      const pendingReview = await storage.getLatestReviewableBatch(workspaceId);
+      if (pendingReview) {
+        return res.status(409).json({
+          error: "A previous batch is awaiting review. Resolve it before starting a new analysis.",
+          pendingReview: true,
+          batchId: pendingReview.id,
+          failed: pendingReview.failedJobs,
+          completed: pendingReview.completedJobs,
+          total: pendingReview.totalJobs,
+        });
+      }
     }
 
     // Create batch run
@@ -640,8 +653,33 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
     const { workspaceId } = getSessionContext(req);
     const batch = await storage.getActiveBatchRun(workspaceId);
 
+    // A batch awaiting review is reported via the `review` field so the
+    // dashboard can show the review banner even though it is not "running".
+    let review: any = null;
+    try {
+      const rb = await storage.getLatestReviewableBatch(workspaceId);
+      if (rb) {
+        const reviewAlert = await storage.getActiveSystemAlert("batch_review");
+        let failures: Array<{ companyId: number; name: string; error: string }> = [];
+        try {
+          const raw = await storage.getFailedJobsForBatch(rb.id);
+          failures = raw.map(f => ({ companyId: f.companyId, name: f.companyName, error: f.error }));
+        } catch { /* non-fatal */ }
+        review = {
+          batchId: rb.id,
+          completed: rb.completedJobs,
+          failed: rb.failedJobs,
+          failedCount: rb.failedJobs ?? failures.length,
+          total: rb.totalJobs,
+          failures,
+          message: reviewAlert?.message,
+          since: reviewAlert?.created_at,
+        };
+      }
+    } catch { /* non-fatal */ }
+
     if (!batch) {
-      return res.json({ running: false, completed: 0, total: 0, failed: 0 });
+      return res.json({ running: false, completed: 0, total: 0, failed: 0, review });
     }
 
     // Surface any active system alert (e.g. API credit exhaustion) so the
@@ -660,6 +698,7 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       total: batch.totalJobs,
       paused: !!alert,
       alert,
+      review,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -683,6 +722,82 @@ apiRouter.post("/system/alerts/resume", async (req: Request, res: Response) => {
     const { kind } = req.body || {};
     await storage.clearSystemAlert(kind || "credit_exhaustion");
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Batch Completion Review Gate ─────────────────────────────────────────────
+// When a batch finishes with terminal failures it enters `pending_review` and
+// nothing is saved to the Results page until the user resolves it here.
+
+// GET the batch awaiting review (with the full failed-company list + errors).
+apiRouter.get("/batch/review", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const batch = await storage.getLatestReviewableBatch(workspaceId);
+    if (!batch) return res.json({ pendingReview: false });
+    const failures = await storage.getFailedJobsForBatch(batch.id);
+    res.json({
+      pendingReview: true,
+      batchId: batch.id,
+      completed: batch.completedJobs,
+      failed: batch.failedJobs,
+      total: batch.totalJobs,
+      failures,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Re-examine the failed companies: reset their jobs to pending, re-enqueue into
+// the SAME batch, flip the batch back to `running`, clear the review alert.
+apiRouter.post("/batch/review/reexamine", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const batch = await storage.getLatestReviewableBatch(workspaceId);
+    if (!batch) return res.status(404).json({ error: "No batch awaiting review." });
+
+    // Reset failed jobs -> pending (also resets companies + decrements counter).
+    const jobs = await storage.requeueFailedJobsForBatch(batch.id);
+    if (jobs.length === 0) {
+      // Nothing actually failed (race) — just finalise.
+      await finalizeBatchAndSave(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
+      return res.json({ success: true, reexamined: 0, finalised: true });
+    }
+
+    // Clear any stale BullMQ keys for this batch, then re-enqueue the failures.
+    try { await removeBatchJobs(batch.id); } catch { /* non-fatal */ }
+    const queueJobs = jobs.map((j) => ({
+      jobId: j.id,
+      companyId: j.companyId,
+      frameworkId: j.frameworkId,
+      batchId: batch.id,
+      workspaceId,
+    }));
+    await addBatchJobs(queueJobs, workspaceId, batch.id);
+
+    // Flip batch back to running and clear the review alert.
+    await storage.setBatchRunStatus(batch.id, "running");
+    try { await storage.clearSystemAlert("batch_review", String(batch.id)); } catch { /* non-fatal */ }
+
+    res.json({ success: true, reexamined: jobs.length, batchId: batch.id });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Discard the failures and finalise: save results (completed companies only) to
+// the Results page and clear the review alert.
+apiRouter.post("/batch/review/finalize", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const batch = await storage.getLatestReviewableBatch(workspaceId);
+    if (!batch) return res.status(404).json({ error: "No batch awaiting review." });
+
+    await finalizeBatchAndSave(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
+    res.json({ success: true, finalised: true, batchId: batch.id });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

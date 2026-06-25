@@ -19,6 +19,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newCompany, setNewCompany] = useState({ name: "", isin: "", sector: "", country: "", domain: "" });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [reviewExpanded, setReviewExpanded] = useState(false);
 
   const { data: companiesData, isLoading } = useQuery({
     queryKey: ["companies"],
@@ -110,6 +111,24 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     mutationFn: () => api.resumeSystem("credit_exhaustion"),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["batchStatus"] }),
     onError: (error: any) => alert(`Resume failed: ${error.message}`),
+  });
+
+  const reexamineMutation = useMutation({
+    mutationFn: () => api.reexamineFailures(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+    },
+    onError: (error: any) => alert(`Re-examine failed: ${error.message}`),
+  });
+
+  const finalizeMutation = useMutation({
+    mutationFn: () => api.finalizeBatchReview(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+    },
+    onError: (error: any) => alert(`Finalise failed: ${error.message}`),
   });
 
   const resetCompanyMutation = useMutation({
@@ -282,6 +301,70 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
             >
               <RotateCcw className="w-3 h-3" /> Resume
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Batch completion review gate */}
+      {batchStatus?.review && (
+        <div className="bg-orange-50 border border-orange-300 rounded-lg p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-orange-900">
+                  Batch finished with {batchStatus.review.failedCount} failed{" "}
+                  {batchStatus.review.failedCount === 1 ? "company" : "companies"} — review required
+                </p>
+                <p className="text-xs text-orange-800 mt-1">
+                  Results have <strong>not</strong> been saved yet. Re-examine the failures, or discard them and finalise the batch to publish results.
+                </p>
+                {batchStatus.review.failures && batchStatus.review.failures.length > 0 && (
+                  <div className="mt-2">
+                    <button
+                      onClick={() => setReviewExpanded((v) => !v)}
+                      className="text-xs text-orange-700 underline hover:text-orange-900"
+                    >
+                      {reviewExpanded ? "Hide" : "Show"} failed companies
+                    </button>
+                    {reviewExpanded && (
+                      <ul className="mt-1 max-h-48 overflow-y-auto text-xs text-orange-800 list-disc list-inside space-y-0.5">
+                        {batchStatus.review.failures.map((f: any) => (
+                          <li key={f.id ?? f.companyId ?? f.name}>
+                            {f.name || f.companyName || `Company #${f.companyId ?? f.id}`}
+                            {f.error ? ` — ${f.error}` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-col gap-2 flex-shrink-0">
+              <button
+                onClick={() => reexamineMutation.mutate()}
+                disabled={reexamineMutation.isPending || finalizeMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50"
+              >
+                <RotateCcw className="w-3 h-3" /> Re-examine Failures
+              </button>
+              <button
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Discard ${batchStatus.review?.failedCount} failed companies and finalise the batch? This saves all successful results to the Results page and cannot be undone.`
+                    )
+                  ) {
+                    finalizeMutation.mutate();
+                  }
+                }}
+                disabled={reexamineMutation.isPending || finalizeMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1 text-sm bg-white border border-orange-400 text-orange-700 rounded hover:bg-orange-100 disabled:opacity-50"
+              >
+                <XCircle className="w-3 h-3" /> Discard &amp; Finalise
+              </button>
+            </div>
           </div>
         </div>
       )}

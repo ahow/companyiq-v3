@@ -80,6 +80,9 @@ export const api = {
   getSystemAlerts: () => request("/system/alerts"),
   resumeSystem: (kind: string = "credit_exhaustion") =>
     request("/system/alerts/resume", { method: "POST", body: JSON.stringify({ kind }) }),
+  getBatchReview: () => request("/batch/review"),
+  reexamineFailures: () => request("/batch/review/reexamine", { method: "POST" }),
+  finalizeBatchReview: () => request("/batch/review/finalize", { method: "POST" }),
 
   // Results
   getResults: () => request("/results"),
