@@ -318,6 +318,25 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ─── System Alerts ────────────────────────────────────────────────────────
+    // Cross-process, cross-replica alert state (e.g. API credit exhaustion).
+    // One active row per `kind` is the convention; `active=false` rows are kept
+    // for history. Read by the dashboard via /batch/status to render a banner.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS system_alerts (
+        id SERIAL PRIMARY KEY,
+        kind TEXT NOT NULL,
+        provider TEXT,
+        message TEXT NOT NULL,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_system_alerts_active ON system_alerts(kind, active)
+    `);
+
     // ─── Analysis Results Snapshots ─────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS analysis_results (

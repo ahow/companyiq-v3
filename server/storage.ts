@@ -1086,6 +1086,71 @@ export async function setSetting(workspaceId: number, key: string, value: string
     });
 }
 
+// ─── System Alerts (cross-process; e.g. API credit exhaustion) ───────────────
+
+export interface SystemAlert {
+  id: number;
+  kind: string;
+  provider: string | null;
+  message: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Raise (or refresh) an active alert of a given kind. Idempotent: if an active
+ * alert of the same kind already exists, its message/provider/updated_at are
+ * refreshed rather than inserting a duplicate.
+ */
+export async function setSystemAlert(opts: { kind: string; provider?: string; message: string; active?: boolean }): Promise<void> {
+  const { kind, provider = null, message } = opts;
+  const existing = await db.execute(sql`
+    SELECT id FROM system_alerts WHERE kind = ${kind} AND active = TRUE ORDER BY id DESC LIMIT 1
+  `);
+  if (existing.rows.length > 0) {
+    const id = (existing.rows[0] as any).id;
+    await db.execute(sql`
+      UPDATE system_alerts SET message = ${message}, provider = ${provider}, updated_at = NOW() WHERE id = ${id}
+    `);
+  } else {
+    await db.execute(sql`
+      INSERT INTO system_alerts (kind, provider, message, active) VALUES (${kind}, ${provider}, ${message}, TRUE)
+    `);
+  }
+}
+
+/** Clear (deactivate) active alerts of a kind, optionally scoped to a provider. */
+export async function clearSystemAlert(kind: string, provider?: string): Promise<void> {
+  if (provider) {
+    await db.execute(sql`
+      UPDATE system_alerts SET active = FALSE, updated_at = NOW() WHERE kind = ${kind} AND active = TRUE AND (provider = ${provider} OR provider IS NULL)
+    `);
+  } else {
+    await db.execute(sql`
+      UPDATE system_alerts SET active = FALSE, updated_at = NOW() WHERE kind = ${kind} AND active = TRUE
+    `);
+  }
+}
+
+/** Return the most recent active alert of a kind, or null. */
+export async function getActiveSystemAlert(kind: string): Promise<SystemAlert | null> {
+  const r = await db.execute(sql`
+    SELECT id, kind, provider, message, active, created_at, updated_at
+    FROM system_alerts WHERE kind = ${kind} AND active = TRUE ORDER BY id DESC LIMIT 1
+  `);
+  return (r.rows[0] as any) || null;
+}
+
+/** Return all active alerts (any kind). */
+export async function getActiveSystemAlerts(): Promise<SystemAlert[]> {
+  const r = await db.execute(sql`
+    SELECT id, kind, provider, message, active, created_at, updated_at
+    FROM system_alerts WHERE active = TRUE ORDER BY id DESC
+  `);
+  return r.rows as any[];
+}
+
 // ─── Processing Errors ──────────────────────────────────────────────────────
 
 export async function logProcessingError(data: { workspaceId?: number; companyId?: number; companyName?: string; stage?: string; error?: string }) {

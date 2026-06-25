@@ -106,6 +106,12 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["batchStatus"] }),
   });
 
+  const resumeMutation = useMutation({
+    mutationFn: () => api.resumeSystem("credit_exhaustion"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["batchStatus"] }),
+    onError: (error: any) => alert(`Resume failed: ${error.message}`),
+  });
+
   const resetCompanyMutation = useMutation({
     mutationFn: (id: number) => api.resetCompany(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["companies"] }),
@@ -252,6 +258,33 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
           </p>
         </div>
       </div>
+
+      {/* Credit-exhaustion / system pause alert */}
+      {batchStatus?.alert && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-amber-900">
+                  Processing paused — API credit exhausted{batchStatus.alert.provider ? ` (${batchStatus.alert.provider})` : ""}
+                </p>
+                <p className="text-xs text-amber-800 mt-1">{batchStatus.alert.message}</p>
+                <p className="text-[11px] text-amber-700 mt-1">
+                  Jobs are safely re-queued (no progress lost). They resume automatically once credit is detected, or click Resume after topping up.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => resumeMutation.mutate()}
+              disabled={resumeMutation.isPending}
+              className="flex items-center gap-1 px-3 py-1 text-sm bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50 flex-shrink-0"
+            >
+              <RotateCcw className="w-3 h-3" /> Resume
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Batch Progress */}
       {batchStatus?.running && (

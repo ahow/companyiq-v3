@@ -15,6 +15,7 @@ import { runAnalysisPipeline, type PipelineResult } from "./lib/pipeline.js";
 import * as storage from "./storage.js";
 import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
+import { isCreditAlertActive } from "./lib/credit-breaker.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -75,6 +76,27 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
   const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch } = job.data;
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
+
+  // CREDIT BREAKER PAUSE: if a credit-exhaustion alert is active system-wide, do
+  // NOT process (which would burn time/credits on 402s). Re-queue this job with a
+  // delay so that once credit is topped up — and the breaker auto-clears on a
+  // successful probe — the job resumes automatically. We DO NOT mark it failed or
+  // claim it, so no progress/attempt is lost.
+  if (process.env.CREDIT_PAUSE_ENABLED !== "false" && await isCreditAlertActive()) {
+    if (!(cancelledBatches.has(batchId) || isBatchCancelledCached(batchId))) {
+      const delayMs = parseInt(process.env.CREDIT_PAUSE_REQUEUE_MS || "60000", 10);
+      try {
+        const { getQueue } = await import("./queue.js");
+        const q = getQueue();
+        const jobIdStr = "batch-" + batchId + "-company-" + companyId + "-creditpause-" + Date.now();
+        await q.add("analysis-creditpause-" + batchId + "-" + companyId, job.data, { delay: delayMs, priority: 1, jobId: jobIdStr });
+        console.warn("[Worker] CREDIT PAUSE active — job " + jobId + " re-queued with " + delayMs + "ms delay (not processed, no credits spent)");
+      } catch (err: any) {
+        console.error("[Worker] Credit-pause re-enqueue failed for job " + jobId + ": " + err.message);
+      }
+    }
+    return { success: false, error: "Paused: credit exhausted", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+  }
 
   // Check if batch was cancelled. Authoritative (async) check against Redis so
   // that a cancel issued on the web service is honored by every worker replica,

@@ -77,6 +77,9 @@ export const api = {
     request("/analyze", { method: "POST", body: JSON.stringify(data) }),
   getBatchStatus: () => request("/batch/status"),
   cancelBatch: () => request("/batch/cancel", { method: "POST" }),
+  getSystemAlerts: () => request("/system/alerts"),
+  resumeSystem: (kind: string = "credit_exhaustion") =>
+    request("/system/alerts/resume", { method: "POST", body: JSON.stringify({ kind }) }),
 
   // Results
   getResults: () => request("/results"),

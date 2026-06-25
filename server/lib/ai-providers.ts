@@ -1,5 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import axios from "axios";
+import {
+  isCreditExhaustionError,
+  recordCreditExhaustion,
+  resetProvider,
+  isProviderTripped,
+  shouldProbe,
+  raiseCreditAlert,
+  clearCreditAlert,
+  CreditExhaustedError,
+} from "./credit-breaker.js";
 
 // ─── Key Collection Helper ───────────────────────────────────────────────────
 
@@ -561,18 +571,50 @@ export async function completeScoring(
     const retries = parseInt(process.env.SCORING_PROVIDER_RETRIES || "4", 10);
     const errors: string[] = [];
     if (primary?.isAvailable()) {
-      for (let attempt = 0; attempt < retries; attempt++) {
-        try {
-          const text = await primary.complete(opts);
-          return { text, provider: primary.name };
-        } catch (error: any) {
-          const msg = `${primary.name}(try ${attempt + 1}/${retries}): ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
-          errors.push(msg);
-          console.warn(`[AI:scoring] ${msg}`);
-          // Exponential backoff with jitter before retrying the SAME provider.
-          const backoff = Math.min(8000, 500 * Math.pow(2, attempt)) + Math.floor(Math.random() * 250);
-          await new Promise((r) => setTimeout(r, backoff));
+      // CREDIT BREAKER: if the primary is already tripped for credit exhaustion,
+      // do not hammer it with full retries. Allow a single throttled probe per
+      // cooldown so a top-up is auto-detected; otherwise skip straight to the
+      // fallback so the run still completes (and the breaker remains raised).
+      const trippedNow = isProviderTripped(primary.name);
+      const allowPrimary = !trippedNow || shouldProbe(primary.name);
+      const effectiveRetries = trippedNow ? 1 : retries; // probe once when tripped
+      if (allowPrimary) {
+        for (let attempt = 0; attempt < effectiveRetries; attempt++) {
+          try {
+            const text = await primary.complete(opts);
+            // Success: clear any credit breaker/alert for this provider (recovery).
+            if (isProviderTripped(primary.name)) {
+              resetProvider(primary.name);
+              void clearCreditAlert(primary.name);
+              console.warn(`[AI:scoring] Credit breaker CLEARED for ${primary.name} — primary call succeeded`);
+            }
+            return { text, provider: primary.name };
+          } catch (error: any) {
+            const isCredit = isCreditExhaustionError(error);
+            const msg = `${primary.name}(try ${attempt + 1}/${effectiveRetries})${isCredit ? " [CREDIT]" : ""}: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
+            errors.push(msg);
+            console.warn(`[AI:scoring] ${msg}`);
+            if (isCredit) {
+              // Credit exhaustion cannot be fixed by retrying. Record it; if this
+              // trips the breaker, raise the shared alert and stop retrying the
+              // primary immediately.
+              const newlyTripped = recordCreditExhaustion(primary.name);
+              if (newlyTripped) {
+                void raiseCreditAlert(
+                  primary.name,
+                  `${primary.name} API credit/quota exhausted (HTTP 402). Scoring paused to avoid wasted calls. Top up the ${primary.name} account to resume.`
+                );
+                console.error(`[AI:scoring] CREDIT BREAKER TRIPPED for ${primary.name} — raising alert and pausing primary scoring`);
+              }
+              break; // do not keep retrying a 402
+            }
+            // Non-credit transient error: exponential backoff before retry.
+            const backoff = Math.min(8000, 500 * Math.pow(2, attempt)) + Math.floor(Math.random() * 250);
+            await new Promise((r) => setTimeout(r, backoff));
+          }
         }
+      } else {
+        errors.push(`${primary.name}: credit breaker tripped (probe throttled)`);
       }
     } else {
       errors.push(`${providerName}: not available`);

@@ -583,6 +583,23 @@ apiRouter.post("/analyze", async (req: Request, res: Response) => {
       .then((d) => console.log(`[PlatformSources] Auto-detect at batch start: ${d.filter(x => x.added).length} new, ${d.length} qualifying (>=3 companies)`))
       .catch((e) => console.warn(`[PlatformSources] Auto-detect failed (non-fatal): ${e?.message || e}`));
 
+    // SINGLE-ACTIVE-BATCH GUARD: prevent duplicate full-fleet batches caused by
+    // double-submit / retried requests. If a batch is already running for this
+    // workspace, refuse to spawn another and return the existing one. This is the
+    // root-cause fix for the 667/668/669 duplicate-batch backlog.
+    if (process.env.SINGLE_ACTIVE_BATCH !== "false") {
+      const existingActive = await storage.getActiveBatchRun(workspaceId);
+      if (existingActive && existingActive.status === "running") {
+        return res.status(409).json({
+          error: "A batch is already running for this workspace.",
+          alreadyRunning: true,
+          batchId: existingActive.id,
+          completed: existingActive.completedJobs,
+          total: existingActive.totalJobs,
+        });
+      }
+    }
+
     // Create batch run
     const batch = await storage.createBatchRun(workspaceId, frameworkId, companies.length, listId);
 
@@ -627,13 +644,45 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       return res.json({ running: false, completed: 0, total: 0, failed: 0 });
     }
 
+    // Surface any active system alert (e.g. API credit exhaustion) so the
+    // dashboard can render a banner without an extra request.
+    let alert: any = null;
+    try {
+      const a = await storage.getActiveSystemAlert("credit_exhaustion");
+      if (a) alert = { kind: a.kind, provider: a.provider, message: a.message, since: a.created_at };
+    } catch { /* non-fatal */ }
+
     res.json({
       running: batch.status === "running",
       batchId: batch.id,
       completed: batch.completedJobs,
       failed: batch.failedJobs,
       total: batch.totalJobs,
+      paused: !!alert,
+      alert,
     });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Dedicated alerts endpoint (all active alerts) for the dashboard banner.
+apiRouter.get("/system/alerts", async (_req: Request, res: Response) => {
+  try {
+    const alerts = await storage.getActiveSystemAlerts();
+    res.json({ alerts });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manually clear a credit-exhaustion alert (e.g. after confirming a top-up).
+// This resumes paused processing on the next worker tick.
+apiRouter.post("/system/alerts/resume", async (req: Request, res: Response) => {
+  try {
+    const { kind } = req.body || {};
+    await storage.clearSystemAlert(kind || "credit_exhaustion");
+    res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
