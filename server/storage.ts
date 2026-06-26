@@ -811,15 +811,19 @@ export async function requeueFailedJobsForBatch(
   batchId: number,
 ): Promise<Array<{ id: number; companyId: number; companyName: string; frameworkId: number; workspaceId: number }>> {
   // Capture the failed jobs first (with all fields needed to re-enqueue).
+  // We also pick up jobs already left in `pending` for a batch awaiting review:
+  // a previously-interrupted re-examine may have flipped a job to `pending`
+  // without re-enqueueing it (so it is stuck out-of-queue). Including them here
+  // makes the operation safely idempotent/retryable.
   const failed = await db.execute(sql`
     SELECT id, company_id, company_name, framework_id, workspace_id
     FROM analysis_jobs
-    WHERE batch_id = ${batchId} AND status = 'failed'
+    WHERE batch_id = ${batchId} AND status IN ('failed', 'pending')
   `);
   const rows = failed.rows as any[];
   if (rows.length === 0) return [];
 
-  // Reset those jobs to pending.
+  // Reset those jobs to a clean pending state.
   await db.execute(sql`
     UPDATE analysis_jobs SET
       status = 'pending',
@@ -827,15 +831,20 @@ export async function requeueFailedJobsForBatch(
       last_error = NULL,
       worker_id = NULL,
       claimed_at = NULL
-    WHERE batch_id = ${batchId} AND status = 'failed'
+    WHERE batch_id = ${batchId} AND status IN ('failed', 'pending')
   `);
 
   // Reset affected companies to idle so the UI reflects re-processing.
-  const companyIds = rows.map(r => Number(r.company_id));
-  await db.execute(sql`
-    UPDATE companies SET analysis_status = 'idle'
-    WHERE id = ANY(${companyIds})
-  `);
+  // Use Drizzle's inArray() so the IN-list is built correctly regardless of
+  // length. (A raw `id = ANY(${companyIds})` mis-binds a single-element JS
+  // array as a scalar in Postgres -> "malformed array literal".)
+  const companyIds = rows.map(r => Number(r.company_id)).filter(n => Number.isFinite(n));
+  if (companyIds.length > 0) {
+    await db
+      .update(schema.companies)
+      .set({ analysisStatus: "idle" })
+      .where(inArray(schema.companies.id, companyIds));
+  }
 
   // Decrement the batch failed counter by the number we just reset.
   await db.execute(sql`
