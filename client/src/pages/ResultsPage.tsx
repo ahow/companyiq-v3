@@ -20,8 +20,18 @@ export default function ResultsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["results"] }),
   });
 
-  const handleExportCSV = (result: any) => {
-    const rows = result.resultsData || [];
+  const handleExportCSV = async (result: any) => {
+    // The list endpoint returns metadata only; fetch the full snapshot on demand.
+    let rows = result.resultsData || [];
+    if (rows.length === 0) {
+      try {
+        const full = await api.getResultById(result.id);
+        rows = full?.resultsData || [];
+      } catch (e) {
+        alert("Could not load full results for export. Please try again.");
+        return;
+      }
+    }
     if (rows.length === 0) return;
 
     // Get all unique measure titles from the first row that has measureScores

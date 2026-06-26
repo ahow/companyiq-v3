@@ -1378,6 +1378,37 @@ export async function getAnalysisResults(workspaceId: number) {
   return db.select().from(schema.analysisResults).where(eq(schema.analysisResults.workspaceId, workspaceId)).orderBy(desc(schema.analysisResults.createdAt));
 }
 
+// Metadata-only list (excludes the potentially huge results_data JSONB) so the
+// Results page loads fast and reliably regardless of how large any single saved
+// snapshot is. The full results_data is fetched on demand via getAnalysisResultById.
+export async function getAnalysisResultsMeta(workspaceId: number) {
+  return db
+    .select({
+      id: schema.analysisResults.id,
+      workspaceId: schema.analysisResults.workspaceId,
+      batchId: schema.analysisResults.batchId,
+      frameworkId: schema.analysisResults.frameworkId,
+      frameworkName: schema.analysisResults.frameworkName,
+      listName: schema.analysisResults.listName,
+      companiesCount: schema.analysisResults.companiesCount,
+      averageScore: schema.analysisResults.averageScore,
+      shareToken: schema.analysisResults.shareToken,
+      createdAt: schema.analysisResults.createdAt,
+    })
+    .from(schema.analysisResults)
+    .where(eq(schema.analysisResults.workspaceId, workspaceId))
+    .orderBy(desc(schema.analysisResults.createdAt));
+}
+
+// Full single result including results_data, fetched on demand (e.g. CSV export).
+export async function getAnalysisResultById(id: number, workspaceId: number) {
+  const [row] = await db
+    .select()
+    .from(schema.analysisResults)
+    .where(and(eq(schema.analysisResults.id, id), eq(schema.analysisResults.workspaceId, workspaceId)));
+  return row || null;
+}
+
 export async function deleteAnalysisResult(id: number, workspaceId: number) {
   await db.delete(schema.analysisResults).where(and(eq(schema.analysisResults.id, id), eq(schema.analysisResults.workspaceId, workspaceId)));
 }

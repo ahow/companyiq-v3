@@ -339,6 +339,30 @@ export async function finalizeBatchAndSave(
   } catch { /* non-fatal */ }
 }
 
+/**
+ * Save a results snapshot for a batch WITHOUT changing its status. Used as a
+ * safeguard when a batch is cancelled, so any completed companies are still
+ * preserved on the Results page rather than discarded. Idempotent: skips if a
+ * snapshot already exists for the batch.
+ */
+export async function saveBatchSnapshot(
+  batchId: number,
+  frameworkId: number,
+  workspaceId: number,
+  listId?: number,
+): Promise<boolean> {
+  try {
+    const existing = await storage.getAnalysisResultsMeta(workspaceId);
+    if (existing.some((r: any) => r.batchId === batchId)) return false;
+    await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
+    const after = await storage.getAnalysisResultsMeta(workspaceId);
+    return after.some((r: any) => r.batchId === batchId);
+  } catch (err: any) {
+    console.error("[Worker] saveBatchSnapshot failed for batch " + batchId + ": " + err.message);
+    return false;
+  }
+}
+
 // ─── Batch Results Saving ───────────────────────────────────────────────────
 
 // Guard against concurrent saves for the same batch

@@ -86,6 +86,7 @@ export const api = {
 
   // Results
   getResults: () => request("/results"),
+  getResultById: (id: number) => request(`/results/${id}`),
 
   // Settings
   getSettings: () => request("/settings"),

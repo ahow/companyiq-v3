@@ -3,7 +3,7 @@ import multer from "multer";
 import * as storage from "../storage.js";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { addBatchJobs, removeBatchJobs, getQueueStats } from "../queue.js";
-import { cancelBatch, finalizeBatchAndSave } from "../worker.js";
+import { cancelBatch, finalizeBatchAndSave, saveBatchSnapshot } from "../worker.js";
 
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -840,12 +840,18 @@ apiRouter.post("/batch/cancel", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
     const batch = await storage.getActiveBatchRun(workspaceId);
+    let snapshotSaved = false;
     if (batch) {
       cancelBatch(batch.id);
       await removeBatchJobs(batch.id);
+      // Safeguard: preserve any completed companies on the Results page before
+      // cancelling, so cancellation never silently discards finished work.
+      try {
+        snapshotSaved = await saveBatchSnapshot(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
+      } catch { /* non-fatal */ }
       await storage.cancelBatchRun(batch.id);
     }
-    res.json({ success: true });
+    res.json({ success: true, snapshotSaved });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -880,8 +886,24 @@ apiRouter.get("/env-check", async (req: Request, res: Response) => {
 apiRouter.get("/results", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
-    const results = await storage.getAnalysisResults(workspaceId);
+    // Metadata only — excludes the large results_data blob so the list always
+    // loads quickly regardless of snapshot size. Full data via GET /results/:id.
+    const results = await storage.getAnalysisResultsMeta(workspaceId);
     res.json(results);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Full single result (includes results_data). Used on demand for CSV export.
+apiRouter.get("/results/:id", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id." });
+    const row = await storage.getAnalysisResultById(id, workspaceId);
+    if (!row) return res.status(404).json({ error: "Result not found." });
+    res.json(row);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
