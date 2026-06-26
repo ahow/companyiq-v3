@@ -653,6 +653,11 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
     const { workspaceId } = getSessionContext(req);
     const batch = await storage.getActiveBatchRun(workspaceId);
 
+    // Honest "is anything actually running" summary (in-flight work + ETA),
+    // distinguishing a portfolio batch run from a 1-company re-examination.
+    let activeRun: any = null;
+    try { activeRun = await storage.getActiveRunSummary(workspaceId); } catch { /* non-fatal */ }
+
     // A batch awaiting review is reported via the `review` field so the
     // dashboard can show the review banner even though it is not "running".
     let review: any = null;
@@ -679,7 +684,9 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
     } catch { /* non-fatal */ }
 
     if (!batch) {
-      return res.json({ running: false, completed: 0, total: 0, failed: 0, review });
+      // Even with no `running` batch row, there may be genuine in-flight work
+      // (e.g. re-exam jobs). `activeRun` reflects that truthfully.
+      return res.json({ running: !!activeRun, completed: 0, total: 0, failed: 0, review, activeRun });
     }
 
     // Surface any active system alert (e.g. API credit exhaustion) so the
@@ -691,7 +698,9 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
     } catch { /* non-fatal */ }
 
     res.json({
-      running: batch.status === "running",
+      // Only report running when there is genuinely in-flight work, not merely
+      // a stale `running` batch row.
+      running: !!activeRun,
       batchId: batch.id,
       completed: batch.completedJobs,
       failed: batch.failedJobs,
@@ -699,6 +708,7 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       paused: !!alert,
       alert,
       review,
+      activeRun,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

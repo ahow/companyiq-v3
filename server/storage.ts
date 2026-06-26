@@ -736,6 +736,77 @@ export async function getActiveBatchRun(workspaceId: number) {
   return batch || null;
 }
 
+/**
+ * Honest "is anything actually running" summary for the dashboard.
+ *
+ * The legacy indicator simply checked for any batch_run row in status
+ * 'running', which spins forever when stale/orphaned batches linger. Instead we
+ * look at the actual in-flight WORK (analysis_jobs in 'claimed' or 'pending'
+ * belonging to running batches) and summarise it:
+ *   - kind: 'batch' (a multi-company portfolio run) vs 'reexam' (a 1-company
+ *           re-examination), chosen from the dominant running batch by total_jobs.
+ *   - startedAt: when that dominant run began.
+ *   - total / completed / failed: counters for that dominant run.
+ *   - inFlight: number of jobs currently claimed across ALL running batches.
+ *   - pending: number of jobs still queued across ALL running batches.
+ *   - etaSeconds: estimate = remaining_jobs / observed completion rate, where the
+ *           rate is derived from how many jobs of the dominant batch completed
+ *           since it started. Null when not yet estimable.
+ * Returns null when there is genuinely no in-flight work.
+ */
+export async function getActiveRunSummary(workspaceId: number): Promise<{
+  kind: "batch" | "reexam";
+  batchId: number;
+  startedAt: string | null;
+  total: number;
+  completed: number;
+  failed: number;
+  inFlight: number;
+  pending: number;
+  etaSeconds: number | null;
+} | null> {
+  // In-flight work across ALL running batches for this workspace.
+  const work = await db.execute(sql`
+    SELECT
+      COUNT(*) FILTER (WHERE j.status = 'claimed')::int AS in_flight,
+      COUNT(*) FILTER (WHERE j.status = 'pending')::int AS pending
+    FROM analysis_jobs j
+    JOIN batch_runs b ON b.id = j.batch_id
+    WHERE b.workspace_id = ${workspaceId} AND b.status = 'running'
+  `);
+  const inFlight = Number((work.rows[0] as any)?.in_flight || 0);
+  const pending = Number((work.rows[0] as any)?.pending || 0);
+  if (inFlight + pending === 0) return null; // nothing genuinely running
+
+  // Dominant running batch = the one with the most total_jobs (the real
+  // portfolio run, not a 1-company re-exam that happens to be newer).
+  const [dom] = await db
+    .select()
+    .from(schema.batchRuns)
+    .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "running")))
+    .orderBy(desc(schema.batchRuns.totalJobs), desc(schema.batchRuns.startedAt))
+    .limit(1);
+  if (!dom) return null;
+
+  const total = Number(dom.totalJobs || 0);
+  const completed = Number(dom.completedJobs || 0);
+  const failed = Number(dom.failedJobs || 0);
+  const startedAt = dom.startedAt ? new Date(dom.startedAt).toISOString() : null;
+  const kind: "batch" | "reexam" = total <= 1 ? "reexam" : "batch";
+
+  // ETA: remaining / rate. Rate = done-so-far / elapsed-seconds.
+  let etaSeconds: number | null = null;
+  const done = completed + failed;
+  const remaining = Math.max(0, total - done);
+  if (dom.startedAt && done > 0 && remaining > 0) {
+    const elapsedSec = Math.max(1, (Date.now() - new Date(dom.startedAt).getTime()) / 1000);
+    const ratePerSec = done / elapsedSec;
+    if (ratePerSec > 0) etaSeconds = Math.round(remaining / ratePerSec);
+  }
+
+  return { kind, batchId: dom.id, startedAt, total, completed, failed, inFlight, pending, etaSeconds };
+}
+
 /** Most recent batch awaiting review (status = pending_review) for a workspace. */
 export async function getLatestReviewableBatch(workspaceId: number) {
   const [batch] = await db
@@ -896,6 +967,33 @@ export async function enqueueReexamination(opts: {
   workspaceId: number;
 }): Promise<{ batchId: number; jobId: number } | null> {
   const { companyId, companyName, frameworkId, workspaceId } = opts;
+
+  // ── Idempotency guard ──────────────────────────────────────────────────────
+  // Do NOT create a new re-exam batch if this company already has an active
+  // (pending/claimed) job in ANY still-active batch. Without this, repeated
+  // triggers (reconciler passes, double-clicks, overlapping recovery paths)
+  // spawn parallel single-company batches for the SAME company (observed in
+  // production: Oriental Land had batches 729 AND 743). Returning the existing
+  // batch/job makes the operation safely repeatable.
+  try {
+    const existing = await db.execute(sql`
+      SELECT j.id AS job_id, j.batch_id
+      FROM analysis_jobs j
+      JOIN batch_runs b ON b.id = j.batch_id
+      WHERE j.company_id = ${companyId}
+        AND j.status IN ('pending','claimed')
+        AND b.status IN ('running','pending_review')
+      ORDER BY j.id DESC
+      LIMIT 1
+    `);
+    if (existing.rows.length > 0) {
+      const r = existing.rows[0] as any;
+      console.log(`[enqueueReexamination] Company ${companyId} already has active job ${r.job_id} in batch ${r.batch_id}; skipping duplicate batch creation`);
+      return { batchId: Number(r.batch_id), jobId: Number(r.job_id) };
+    }
+  } catch (e: any) {
+    console.warn(`[enqueueReexamination] Dedup check failed (proceeding): ${e?.message}`);
+  }
 
   // Dedicated single-job batch so portfolio batch counters are untouched.
   const [batch] = await db

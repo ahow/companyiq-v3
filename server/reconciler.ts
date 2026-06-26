@@ -44,6 +44,11 @@ const RECONCILE_INTERVAL_MS = parseInt(process.env.RECONCILE_INTERVAL_MS || "300
 // orphaned. MUST exceed the worst-case pipeline runtime (≈35 min) to avoid
 // reconciling a job that is simply slow-but-alive.
 const STUCK_THRESHOLD_MIN = parseInt(process.env.RECONCILE_STUCK_MIN || "40", 10);
+// Stale-claim reaper threshold (§0). A `claimed` job older than this with no live
+// queue entry is released back to `pending` in its own batch. Defaults to the
+// same 40 min as STUCK_THRESHOLD_MIN so a merely-slow-but-alive job (worst-case
+// pipeline ≈35 min) is never reaped; override with RECONCILE_REAP_CLAIM_MIN.
+const REAP_CLAIM_MIN = parseInt(process.env.RECONCILE_REAP_CLAIM_MIN || String(STUCK_THRESHOLD_MIN), 10);
 const RECONCILE_MAX = parseInt(process.env.RECONCILE_MAX || "3", 10);
 // Quality-zero thresholds (mirror the in-pipeline auto-reexam gate exactly so
 // the reconciler and the pipeline share ONE budget and ONE definition).
@@ -167,6 +172,70 @@ export async function reconcileOnce(): Promise<ReconcileStats> {
 async function reconcilePass(): Promise<ReconcileStats> {
   const stats: ReconcileStats = { syncedCompleted: 0, recovered: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0 };
   const live = await liveQueueCompanyIds();
+
+  // ── 0) Stale-claim reaper: release orphaned `claimed` jobs back to `pending`
+  //       IN PLACE (same batch) so the worker re-claims them, instead of letting
+  //       them block their batch from ever reaching the completion/review gate.
+  //
+  //  Targets ONLY jobs that are: claimed past REAP_CLAIM_MIN, belong to a
+  //  MULTI-company batch still `running`, have no live BullMQ entry, and whose
+  //  company has no results yet. Single-company (re-exam) batches are left to
+  //  §1, which handles them with the bounded recovery/QA path. Re-queueing in
+  //  place (not new batches) is what prevents the single-company batch
+  //  proliferation observed in production. Attempts are NOT incremented here so a
+  //  worker that died mid-claim doesn't burn the retry budget for a job it never
+  //  actually got to run; §1 still bounds genuinely unprocessable companies.
+  try {
+    const staleClaims = await db.execute(sql`
+      SELECT j.id AS job_id, j.company_id, j.batch_id, j.attempts,
+             j.framework_id, j.workspace_id,
+             (SELECT COUNT(*) FROM measure_scores ms
+                WHERE ms.company_id = j.company_id AND ms.framework_id = j.framework_id) AS has_scores
+      FROM analysis_jobs j
+      JOIN batch_runs b ON b.id = j.batch_id
+      WHERE j.status = 'claimed'
+        AND j.claimed_at < NOW() - INTERVAL '${sql.raw(String(REAP_CLAIM_MIN))} minutes'
+        AND b.status = 'running'
+        AND b.total_jobs > 1
+        AND j.id = (SELECT MAX(id) FROM analysis_jobs j2 WHERE j2.company_id = j.company_id)
+    `);
+    let reaped = 0;
+    for (const row of staleClaims.rows as any[]) {
+      const companyId = Number(row.company_id);
+      if (live.has(companyId)) continue;            // still genuinely in-flight
+      if (Number(row.has_scores) > 0) continue;     // results exist => leave for §1 sync-to-completed
+      if (Number(row.attempts) >= 3) continue;      // exhausted => leave for §1 to fail+QA
+      // Release back to pending in the SAME batch and re-enqueue onto the queue.
+      await db.execute(sql`
+        UPDATE analysis_jobs SET status='pending', claimed_at=NULL
+        WHERE id=${Number(row.job_id)} AND status='claimed'
+      `);
+      try {
+        const { getQueue } = await import("./queue.js");
+        const q = getQueue();
+        await q.add(
+          `reap-${row.batch_id}-${companyId}`,
+          {
+            jobId: Number(row.job_id),
+            companyId,
+            frameworkId: Number(row.framework_id),
+            batchId: Number(row.batch_id),
+            workspaceId: Number(row.workspace_id),
+            skipFetch: false,
+          },
+          // Unique jobId per reap pass so a re-claim isn't deduped against a
+          // stale BullMQ id from a previous pass.
+          { priority: 2, jobId: `reap-job-${row.job_id}-${Date.now()}` }
+        );
+      } catch (e: any) {
+        console.warn(`[Reconciler] Reaper could not re-enqueue job ${row.job_id} (will rely on worker poll): ${e?.message}`);
+      }
+      reaped++;
+    }
+    if (reaped > 0) console.log(`[Reconciler] Stale-claim reaper released ${reaped} orphaned job(s) back to pending in-place`);
+  } catch (e: any) {
+    console.warn(`[Reconciler] Stale-claim reaper error (non-fatal): ${e?.message}`);
+  }
 
   // ── 1) Orphaned jobs / companies: claimed jobs idle beyond threshold, OR
   //       companies stuck in fetching/analyzing beyond threshold, with NO live job.
@@ -325,7 +394,7 @@ async function reconcilePass(): Promise<ReconcileStats> {
 
   // ── 3) Close batches whose jobs are all terminal but status is still 'running'.
   const openBatches = await db.execute(sql`
-    SELECT b.id,
+    SELECT b.id, b.framework_id, b.workspace_id, b.list_id,
            COUNT(*) FILTER (WHERE j.status='completed') AS comp,
            COUNT(*) FILTER (WHERE j.status='failed') AS fail,
            COUNT(*) AS tot,
@@ -333,16 +402,54 @@ async function reconcilePass(): Promise<ReconcileStats> {
     FROM batch_runs b
     JOIN analysis_jobs j ON j.batch_id = b.id
     WHERE b.status = 'running'
-    GROUP BY b.id
+    GROUP BY b.id, b.framework_id, b.workspace_id, b.list_id
     HAVING COUNT(*) FILTER (WHERE j.status IN ('pending','claimed')) = 0
   `);
   for (const row of openBatches.rows as any[]) {
+    const batchId = Number(row.id);
+    const comp = Number(row.comp);
+    const fail = Number(row.fail);
+    // Persist the reconciled counters first.
     await db.execute(sql`
-      UPDATE batch_runs SET completed_jobs=${Number(row.comp)}, failed_jobs=${Number(row.fail)},
-        status='completed', completed_at=NOW() WHERE id=${Number(row.id)}
+      UPDATE batch_runs SET completed_jobs=${comp}, failed_jobs=${fail} WHERE id=${batchId}
     `);
+
+    if (fail > 0) {
+      // ── Review gate (mirrors worker maybeHandleBatchCompletion option-a) ──
+      // A batch with terminal failures MUST NOT be silently completed/saved.
+      // Route it to pending_review and raise the same batch_review alert so the
+      // dashboard surfaces it for the user to re-examine or discard.
+      await storage.setBatchRunStatus(batchId, "pending_review");
+      try {
+        let failedList: Array<{ companyName: string }> = [];
+        try { failedList = await storage.getFailedJobsForBatch(batchId) as any; } catch { /* non-fatal */ }
+        const names = failedList.slice(0, 5).map(f => f.companyName).filter(Boolean);
+        const more = failedList.length > names.length ? " +" + (failedList.length - names.length) + " more" : "";
+        const msg =
+          "Batch #" + batchId + " finished with " + fail + " failed compan" +
+          (fail === 1 ? "y" : "ies") + " (" + comp + " succeeded). Review before saving to Results" +
+          (names.length ? ": " + names.join(", ") + more : ".");
+        await storage.setSystemAlert({ kind: "batch_review", provider: String(batchId), message: msg });
+      } catch (e: any) {
+        console.warn(`[Reconciler] Could not raise batch_review alert for batch ${batchId}: ${e?.message}`);
+      }
+      stats.batchesClosed++;
+      console.log(`[Reconciler] Batch ${batchId} -> pending_review: ${comp} completed, ${fail} failed`);
+      continue;
+    }
+
+    // ── Zero failures: complete + save results (reuse the worker's finaliser to
+    //    keep one save path). Dynamic import avoids a load-time circular dep. ──
+    try {
+      const { finalizeBatchAndSave } = await import("./worker.js");
+      await finalizeBatchAndSave(batchId, Number(row.framework_id), Number(row.workspace_id), row.list_id != null ? Number(row.list_id) : undefined);
+    } catch (e: any) {
+      // Fallback: at least mark it completed so it doesn't spin forever.
+      await db.execute(sql`UPDATE batch_runs SET status='completed', completed_at=NOW() WHERE id=${batchId}`);
+      console.warn(`[Reconciler] finalizeBatchAndSave failed for batch ${batchId} (${e?.message}); marked completed without save`);
+    }
     stats.batchesClosed++;
-    console.log(`[Reconciler] Closed batch ${row.id}: ${row.comp} completed, ${row.fail} failed`);
+    console.log(`[Reconciler] Closed batch ${batchId}: ${comp} completed, 0 failed (results saved)`);
   }
 
   return stats;

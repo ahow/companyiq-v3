@@ -11,6 +11,29 @@ interface DashboardPageProps {
   onViewCompany: (id: number) => void;
 }
 
+// ── Status-indicator helpers ────────────────────────────────────────────────
+/** Human-readable elapsed/started label, e.g. "started 12:04 (8m ago)". */
+function formatStarted(startedAt?: string | null): string {
+  if (!startedAt) return "";
+  const start = new Date(startedAt);
+  if (isNaN(start.getTime())) return "";
+  const t = start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const mins = Math.max(0, Math.round((Date.now() - start.getTime()) / 60000));
+  const ago = mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
+  return `started ${t} (${ago})`;
+}
+
+/** Human-readable ETA from seconds, e.g. "~12 min remaining". */
+function formatEta(etaSeconds?: number | null): string {
+  if (etaSeconds == null || !isFinite(etaSeconds) || etaSeconds <= 0) return "";
+  if (etaSeconds < 90) return "~1 min remaining";
+  const mins = Math.round(etaSeconds / 60);
+  if (mins < 60) return `~${mins} min remaining`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `~${h}h ${m}m remaining`;
+}
+
 export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -370,14 +393,28 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
       )}
 
       {/* Batch Progress */}
-      {batchStatus?.running && (
+      {batchStatus?.running && (() => {
+        // Prefer the honest activeRun summary; fall back to legacy flat fields.
+        const run = batchStatus.activeRun;
+        const isReexam = run?.kind === "reexam";
+        const total = run?.total ?? batchStatus.total ?? 0;
+        const completed = run?.completed ?? batchStatus.completed ?? 0;
+        const failed = run?.failed ?? batchStatus.failed ?? 0;
+        const inFlight = run?.inFlight ?? 0;
+        const pending = run?.pending ?? 0;
+        const done = completed + failed;
+        const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+        const started = formatStarted(run?.startedAt);
+        const eta = formatEta(run?.etaSeconds);
+        const title = isReexam ? "Re-examination running" : "Batch analysis running";
+        return (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
               <span className="text-sm font-medium text-blue-800">
-                Batch Analysis Running: {batchStatus.completed}/{batchStatus.total} completed
-                {batchStatus.failed > 0 && `, ${batchStatus.failed} failed`}
+                {title}{total > 1 ? `: ${completed}/${total} completed` : ""}
+                {failed > 0 && `, ${failed} failed`}
               </span>
             </div>
             <button
@@ -387,17 +424,25 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
               <Square className="w-3 h-3" /> Cancel
             </button>
           </div>
-          <div className="w-full bg-blue-200 rounded-full h-2">
-            <div
-              className="bg-blue-600 h-2 rounded-full transition-all"
-              style={{ width: `${((batchStatus.completed + (batchStatus.failed || 0)) / batchStatus.total) * 100}%` }}
-            />
+          {total > 1 && (
+            <div className="w-full bg-blue-200 rounded-full h-2">
+              <div
+                className="bg-blue-600 h-2 rounded-full transition-all"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-blue-700 mt-1.5">
+            {started && <span>{started}</span>}
+            {eta && <span className="font-medium">{eta}</span>}
+            <span>{inFlight} processing{pending > 0 ? ` · ${pending} queued` : ""}</span>
           </div>
           {batchStatus.currentCompany && (
             <p className="text-xs text-blue-600 mt-1">Currently: {batchStatus.currentCompany}</p>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Analysis Configuration */}
       <div className="bg-white rounded-lg border p-4">
