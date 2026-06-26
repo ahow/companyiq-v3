@@ -87,6 +87,8 @@ export const api = {
   // Results
   getResults: () => request("/results"),
   getResultById: (id: number) => request(`/results/${id}`),
+  bulkDeleteResults: (ids: number[]) =>
+    request("/results/bulk-delete", { method: "POST", body: JSON.stringify({ ids }) }),
 
   // Settings
   getSettings: () => request("/settings"),

@@ -1,6 +1,7 @@
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { Download, Share2, Trash2 } from "lucide-react";
+import { Download, Share2, Trash2, X, CheckSquare } from "lucide-react";
 
 export default function ResultsPage() {
   const queryClient = useQueryClient();
@@ -15,10 +16,65 @@ export default function ResultsPage() {
     queryFn: api.getLists,
   });
 
+  // ── Multi-select state ──────────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  const allIds: number[] = useMemo(
+    () => (resultsList as any[]).map((r: any) => r.id),
+    [resultsList]
+  );
+  const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.has(id));
+  const someSelected = selectedIds.size > 0 && !allSelected;
+
+  const toggleOne = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelectedIds((prev) => {
+      if (allIds.length > 0 && allIds.every((id) => prev.has(id))) return new Set();
+      return new Set(allIds);
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const selectSingleCompany = () => {
+    const ids = (resultsList as any[])
+      .filter((r: any) => (r.companiesCount ?? 0) === 1)
+      .map((r: any) => r.id);
+    setSelectedIds(new Set(ids));
+  };
+
   const deleteResultMutation = useMutation({
     mutationFn: (id: number) => api.request(`/results/${id}`, { method: "DELETE" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["results"] }),
   });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: number[]) => api.bulkDeleteResults(ids),
+    onSuccess: () => {
+      clearSelection();
+      queryClient.invalidateQueries({ queryKey: ["results"] });
+    },
+  });
+
+  const handleBulkDelete = () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    if (
+      confirm(
+        `Delete ${ids.length} selected result${ids.length === 1 ? "" : "s"}? This cannot be undone.`
+      )
+    ) {
+      bulkDeleteMutation.mutate(ids);
+    }
+  };
 
   const handleExportCSV = async (result: any) => {
     // The list endpoint returns metadata only; fetch the full snapshot on demand.
@@ -204,9 +260,7 @@ export default function ResultsPage() {
 
   // Derive list name from the result's batch if available
   const getListName = (result: any) => {
-    // Try to find the list name from the results data or batch info
     if (result.listName) return result.listName;
-    // Fallback: check if we can derive from the list of known lists
     return "—";
   };
 
@@ -223,20 +277,78 @@ export default function ResultsPage() {
     return Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length);
   };
 
+  const singleCompanyCount = useMemo(
+    () => (resultsList as any[]).filter((r: any) => (r.companiesCount ?? 0) === 1).length,
+    [resultsList]
+  );
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">Saved Results</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Completed analyses are automatically saved here. Download as a spreadsheet or share as a JSON link.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Saved Results</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Completed analyses are automatically saved here. Download as a spreadsheet or share as a JSON link.
+          </p>
+        </div>
+        {resultsList.length > 0 && (
+          <div className="flex items-center gap-2 shrink-0">
+            {singleCompanyCount > 0 && (
+              <button
+                onClick={selectSingleCompany}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200 rounded hover:bg-gray-100"
+                title="Select all results that contain only one company"
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                Select single-company ({singleCompanyCount})
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Selection action bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between gap-4 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-blue-900">
+              {selectedIds.size} selected
+            </span>
+            <button
+              onClick={clearSelection}
+              className="inline-flex items-center gap-1 text-xs text-blue-700 hover:text-blue-900"
+            >
+              <X className="w-3.5 h-3.5" /> Clear
+            </button>
+          </div>
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkDeleteMutation.isPending}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-60"
+          >
+            <Trash2 className="w-4 h-4" />
+            {bulkDeleteMutation.isPending ? "Deleting…" : `Delete selected (${selectedIds.size})`}
+          </button>
+        </div>
+      )}
 
       {resultsList.length > 0 ? (
         <div className="bg-white rounded-lg border overflow-hidden">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
+                <th className="w-10 px-4 py-3 text-left">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelected;
+                    }}
+                    onChange={toggleAll}
+                    title={allSelected ? "Deselect all" : "Select all"}
+                  />
+                </th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Framework Template</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Company List</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Companies</th>
@@ -249,8 +361,17 @@ export default function ResultsPage() {
             <tbody className="divide-y divide-gray-100">
               {resultsList.map((result: any) => {
                 const avgScore = getAvgScore(result);
+                const isSelected = selectedIds.has(result.id);
                 return (
-                  <tr key={result.id} className="hover:bg-gray-50">
+                  <tr key={result.id} className={isSelected ? "bg-blue-50" : "hover:bg-gray-50"}>
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        checked={isSelected}
+                        onChange={() => toggleOne(result.id)}
+                      />
+                    </td>
                     <td className="px-4 py-3 text-sm font-medium text-gray-900">
                       {result.frameworkName}
                     </td>

@@ -1413,6 +1413,18 @@ export async function deleteAnalysisResult(id: number, workspaceId: number) {
   await db.delete(schema.analysisResults).where(and(eq(schema.analysisResults.id, id), eq(schema.analysisResults.workspaceId, workspaceId)));
 }
 
+// Bulk-delete multiple saved results in a single query, scoped to the workspace
+// so a user can only ever delete their own results. Returns the count removed.
+export async function deleteAnalysisResults(ids: number[], workspaceId: number): Promise<number> {
+  const validIds = (ids || []).filter((n) => Number.isFinite(n));
+  if (validIds.length === 0) return 0;
+  const deleted = await db
+    .delete(schema.analysisResults)
+    .where(and(inArray(schema.analysisResults.id, validIds), eq(schema.analysisResults.workspaceId, workspaceId)))
+    .returning({ id: schema.analysisResults.id });
+  return deleted.length;
+}
+
 // ─── Terminology Cache ──────────────────────────────────────────────────────
 
 export async function getCachedTerminology(companyId: number, frameworkId: number) {

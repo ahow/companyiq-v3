@@ -909,6 +909,24 @@ apiRouter.get("/results/:id", async (req: Request, res: Response) => {
   }
 });
 
+// Bulk-delete multiple saved results in one request. Scoped to the workspace so
+// a user can only ever delete their own results. Defined BEFORE "/results/:id"
+// so the literal path takes precedence over the param route.
+apiRouter.post("/results/bulk-delete", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const rawIds = (req.body && req.body.ids) || [];
+    const ids: number[] = Array.isArray(rawIds)
+      ? rawIds.map((n: any) => parseInt(String(n), 10)).filter((n: number) => Number.isFinite(n))
+      : [];
+    if (ids.length === 0) return res.status(400).json({ error: "No valid result ids provided." });
+    const deleted = await storage.deleteAnalysisResults(ids, workspaceId);
+    res.json({ success: true, deleted });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 apiRouter.delete("/results/:id", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
