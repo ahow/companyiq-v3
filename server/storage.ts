@@ -818,6 +818,15 @@ export async function getLatestReviewableBatch(workspaceId: number) {
   return batch || null;
 }
 
+/** How many batches are awaiting review (status = pending_review) for a workspace. */
+export async function countReviewableBatches(workspaceId: number): Promise<number> {
+  const r = await db.execute(sql`
+    SELECT COUNT(*)::int AS n FROM batch_runs
+    WHERE workspace_id = ${workspaceId} AND status = 'pending_review'
+  `);
+  return Number((r.rows[0] as any)?.n || 0);
+}
+
 /** Get a single batch run by id (workspace-scoped). */
 export async function getBatchRunById(batchId: number, workspaceId: number) {
   const [batch] = await db

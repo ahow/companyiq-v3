@@ -338,6 +338,11 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                 <p className="text-sm font-semibold text-orange-900">
                   Batch finished with {batchStatus.review.failedCount} failed{" "}
                   {batchStatus.review.failedCount === 1 ? "company" : "companies"} — review required
+                  {batchStatus.review.reviewableCount > 1 && (
+                    <span className="ml-1 font-normal">
+                      (1 of {batchStatus.review.reviewableCount} batches awaiting review)
+                    </span>
+                  )}
                 </p>
                 <p className="text-xs text-orange-800 mt-1">
                   Results have <strong>not</strong> been saved yet. Re-examine the failures, or discard them and finalise the batch to publish results.

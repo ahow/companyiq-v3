@@ -665,6 +665,8 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       const rb = await storage.getLatestReviewableBatch(workspaceId);
       if (rb) {
         const reviewAlert = await storage.getActiveSystemAlert("batch_review");
+        let reviewableCount = 1;
+        try { reviewableCount = await storage.countReviewableBatches(workspaceId); } catch { /* non-fatal */ }
         let failures: Array<{ companyId: number; name: string; error: string }> = [];
         try {
           const raw = await storage.getFailedJobsForBatch(rb.id);
@@ -677,6 +679,7 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
           failedCount: rb.failedJobs ?? failures.length,
           total: rb.totalJobs,
           failures,
+          reviewableCount,
           message: reviewAlert?.message,
           since: reviewAlert?.created_at,
         };
