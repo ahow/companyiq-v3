@@ -816,6 +816,26 @@ apiRouter.post("/batch/review/finalize", async (req: Request, res: Response) => 
   }
 });
 
+// Admin recovery: force-save the analysis_results snapshot for a specific batch
+// that completed work but was never finalised (e.g. cancelled large batches).
+// Rebuilds the snapshot from the intact company + measure_scores data using the
+// same save path as a normal finalisation, so the Results page shows it.
+apiRouter.post("/batch/:batchId/recover-results", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const batchId = parseInt(String(req.params.batchId), 10);
+    if (!Number.isFinite(batchId)) return res.status(400).json({ error: "Invalid batchId." });
+    const batch = await storage.getBatchRunById(batchId, workspaceId);
+    if (!batch) return res.status(404).json({ error: "Batch not found in this workspace." });
+    await finalizeBatchAndSave(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
+    const saved = await storage.getAnalysisResults(workspaceId);
+    const row = saved.find((r: any) => r.batchId === batchId);
+    res.json({ success: true, batchId, saved: !!row, companiesCount: row?.companiesCount ?? null, averageScore: row?.averageScore ?? null });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 apiRouter.post("/batch/cancel", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
