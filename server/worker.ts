@@ -380,6 +380,12 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
     if (!framework) return;
 
+    // Full list of framework measures, used to back-fill any measure that has no
+    // measure_scores row for a company so EVERY company in the saved snapshot
+    // carries ALL measures (missing ones explicitly score 0 / "No" / no evidence).
+    const allMeasures = await storage.getFrameworkMeasures(frameworkId);
+    const measureCount = allMeasures.length;
+
     // Get companies from this specific batch's jobs
     const { db } = await import("./db.js");
     const { sql } = await import("drizzle-orm");
@@ -437,16 +443,7 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         lowEvidence: fetchCoverage?.lowEvidence ?? undefined,
         manifest,
         sourceDocuments,
-        measureScores: scores.map(s => ({
-          measureId: s.measureId,
-          title: s.title || "",
-          category: s.category || "",
-          score: s.score,
-          verdict: s.verdict || undefined,
-          confidence: s.confidence || "Low",
-          evidenceSummary: s.evidenceSummary || undefined,
-          quotes: s.quotes || [],
-        })),
+        measureScores: buildFullMeasureScores(allMeasures, scores),
       });
     }
 
@@ -503,8 +500,113 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
     });
 
     console.log("[Worker] Saved analysis results for batch " + batchId + " (" + resultsData.length + " companies, avg " + avgScore + "%)");
+
+    // ── Reconciliation guarantee ──────────────────────────────────────────
+    // Every company in the batch must be accounted for as either SAVED (in the
+    // snapshot) or terminally FAILED. saved + failed must equal the batch total.
+    // Also assert every saved company carries the full measure set.
+    try {
+      await reconcileBatchSave(batchId, resultsData, measureCount);
+    } catch (e: any) {
+      console.warn("[Worker] Reconciliation check error for batch " + batchId + ": " + e.message);
+    }
   } catch (error: any) {
     console.error("[Worker] Failed to save analysis results for batch " + batchId + ": " + error.message);
+  }
+}
+
+/**
+ * Merge a company's measure_scores rows against the FULL framework measure list
+ * so the saved record always contains EVERY measure. Measures with no score row
+ * are emitted explicitly at score 0 / verdict "No" / no evidence, flagged with
+ * `backfilled: true` for transparency. Never fabricates evidence.
+ */
+function buildFullMeasureScores(allMeasures: any[], scores: any[]): any[] {
+  const byId = new Map<string, any>();
+  for (const s of scores) byId.set(String(s.measureId), s);
+  return allMeasures.map((m: any) => {
+    const s = byId.get(String(m.measureId));
+    if (s) {
+      return {
+        measureId: s.measureId,
+        title: s.title || m.title || "",
+        category: s.category || m.category || "",
+        score: s.score,
+        verdict: s.verdict || undefined,
+        confidence: s.confidence || "Low",
+        evidenceSummary: s.evidenceSummary || undefined,
+        quotes: s.quotes || [],
+      };
+    }
+    // Back-filled: measure was not scored for this company (no data) — include it
+    // explicitly rather than silently dropping it.
+    return {
+      measureId: m.measureId,
+      title: m.title || "",
+      category: m.category || "",
+      score: 0,
+      verdict: "No",
+      confidence: "Low",
+      evidenceSummary: undefined,
+      quotes: [],
+      backfilled: true,
+    };
+  });
+}
+
+/**
+ * Post-save reconciliation. Confirms saved + terminally-failed = total batch
+ * jobs, and that every saved company has the full measure set. Records a
+ * `batch_reconcile` system alert when the numbers don't add up so the
+ * discrepancy is surfaced rather than hidden.
+ */
+async function reconcileBatchSave(batchId: number, resultsData: any[], measureCount: number): Promise<void> {
+  const { db } = await import("./db.js");
+  const { sql } = await import("drizzle-orm");
+  const counts = await db.execute(sql`
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+      COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+      COUNT(*) FILTER (WHERE status NOT IN ('completed','failed'))::int AS open
+    FROM analysis_jobs WHERE batch_id = ${batchId}
+  `);
+  const r: any = counts.rows[0] || {};
+  const total = Number(r.total || 0);
+  const completed = Number(r.completed || 0);
+  const failed = Number(r.failed || 0);
+  const open = Number(r.open || 0);
+  const saved = resultsData.length;
+
+  // Measure-completeness: every saved company must carry all framework measures.
+  const incomplete = measureCount > 0
+    ? resultsData.filter(c => !Array.isArray(c.measureScores) || c.measureScores.length !== measureCount)
+    : [];
+
+  const balanced = (saved + failed === total) && open === 0;
+  const measuresOk = incomplete.length === 0;
+
+  console.log(
+    "[Reconcile] batch " + batchId + ": total=" + total + " saved=" + saved +
+    " failed=" + failed + " open=" + open + " | saved+failed=" + (saved + failed) +
+    (balanced ? " OK" : " MISMATCH") +
+    " | measures/company=" + measureCount + " incomplete=" + incomplete.length +
+    (measuresOk ? " OK" : " MISMATCH"),
+  );
+
+  if (!balanced || !measuresOk) {
+    const parts: string[] = [];
+    if (!balanced) parts.push("saved(" + saved + ")+failed(" + failed + ")!=total(" + total + ")" + (open ? ", open=" + open : ""));
+    if (!measuresOk) parts.push(incomplete.length + " compan" + (incomplete.length === 1 ? "y" : "ies") + " missing measures");
+    try {
+      await storage.setSystemAlert({
+        kind: "batch_reconcile",
+        provider: String(batchId),
+        message: "Batch #" + batchId + " reconciliation mismatch: " + parts.join("; "),
+      });
+    } catch { /* non-fatal */ }
+  } else {
+    try { await storage.clearSystemAlert("batch_reconcile", String(batchId)); } catch { /* non-fatal */ }
   }
 }
 
