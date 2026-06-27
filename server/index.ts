@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import compression from "compression";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
@@ -81,6 +82,10 @@ app.use(cors({
   origin: process.env.NODE_ENV === "production" ? undefined : "http://localhost:5173",
   credentials: true,
 }));
+// gzip/deflate responses. Large JSON payloads (e.g. consolidated share
+// snapshots of 2000+ companies) are highly repetitive text and compress ~10-20x,
+// turning a ~100MB response into a few MB so it transfers within proxy limits.
+app.use(compression());
 app.use(express.json({ limit: "50mb" }));
 app.use(sessionMiddleware);
 

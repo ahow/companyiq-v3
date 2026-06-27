@@ -26,6 +26,9 @@ importers:
       cheerio:
         specifier: ^1.0.0
         version: 1.2.0
+      compression:
+        specifier: ^1.8.1
+        version: 1.8.1
       connect-pg-simple:
         specifier: ^10.0.0
         version: 10.0.0
@@ -78,6 +81,9 @@ importers:
       '@types/bcryptjs':
         specifier: ^2.4.6
         version: 2.4.6
+      '@types/compression':
+        specifier: ^1.8.1
+        version: 1.8.1
       '@types/connect-pg-simple':
         specifier: ^7.0.3
         version: 7.0.3
@@ -1068,6 +1074,9 @@ packages:
   '@types/body-parser@1.19.6':
     resolution: {integrity: sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==}
 
+  '@types/compression@1.8.1':
+    resolution: {integrity: sha512-kCFuWS0ebDbmxs0AXYn6e2r2nrGAb5KwQhknjSPSPgJcGd8+HVSILlUyFhGqML2gk39HcG7D1ydW9/qpYkN00Q==}
+
   '@types/connect-pg-simple@7.0.3':
     resolution: {integrity: sha512-NGCy9WBlW2bw+J/QlLnFZ9WjoGs6tMo3LAut6mY4kK+XHzue//lpNVpAvYRpIwM969vBRAM2Re0izUvV6kt+NA==}
 
@@ -1385,6 +1394,14 @@ packages:
   commander@4.1.1:
     resolution: {integrity: sha512-NOKm8xhkzAjzFx8B2v5OAHT+u5pRQc2UCa2Vq9jYL/31o2wi9mxBA7LIFs3sV5VSC49z6pEhfbMULvShKj26WA==}
     engines: {node: '>= 6'}
+
+  compressible@2.0.18:
+    resolution: {integrity: sha512-AF3r7P5dWxL8MxyITRMlORQNaOA2IkAFaTr4k7BUumjPtRpGDTZpl0Pb1XCO6JeDCBdp126Cgs9sMxqSjgYyRg==}
+    engines: {node: '>= 0.6'}
+
+  compression@1.8.1:
+    resolution: {integrity: sha512-9mAqGPHLakhCLeNyxPkK4xVo746zQ/czLH1Ky+vkitMnWfWZps8r0qXuwhwizagCRttsL4lfG4pIOvaWLpAP0w==}
+    engines: {node: '>= 0.8.0'}
 
   concat-stream@1.6.2:
     resolution: {integrity: sha512-27HBghJxjiZtIk3Ycvn/4kbJk/1uZuJFfuPEns6LaEvpvG1f0hTea8lilrouyo9mVc2GWdcEZ8OLoGmSADlrCw==}
@@ -2110,6 +2127,10 @@ packages:
 
   negotiator@0.6.3:
     resolution: {integrity: sha512-+EUsqGPLsM+j/zdChZjsnX51g4XrHFOIXwfnCVPGlQk/k5giakcKsuxCObBRu6DSm9opw/O6slWbJdghQM4bBg==}
+    engines: {node: '>= 0.6'}
+
+  negotiator@0.6.4:
+    resolution: {integrity: sha512-myRT3DiWPHqho5PrJaIRyaMv2kgYf0mUVgBNOYMuCH5Ki1yEiQaf/ZJuQ62nvpc44wL5WDbTX7yGJi1Neevw8w==}
     engines: {node: '>= 0.6'}
 
   netmask@2.1.1:
@@ -3405,6 +3426,11 @@ snapshots:
       '@types/connect': 3.4.38
       '@types/node': 22.19.19
 
+  '@types/compression@1.8.1':
+    dependencies:
+      '@types/express': 5.0.6
+      '@types/node': 22.19.19
+
   '@types/connect-pg-simple@7.0.3':
     dependencies:
       '@types/express': 5.0.6
@@ -3755,6 +3781,22 @@ snapshots:
       delayed-stream: 1.0.0
 
   commander@4.1.1: {}
+
+  compressible@2.0.18:
+    dependencies:
+      mime-db: 1.52.0
+
+  compression@1.8.1:
+    dependencies:
+      bytes: 3.1.2
+      compressible: 2.0.18
+      debug: 2.6.9
+      negotiator: 0.6.4
+      on-headers: 1.1.0
+      safe-buffer: 5.2.1
+      vary: 1.1.2
+    transitivePeerDependencies:
+      - supports-color
 
   concat-stream@1.6.2:
     dependencies:
@@ -4502,6 +4544,8 @@ snapshots:
   nanoid@3.3.12: {}
 
   negotiator@0.6.3: {}
+
+  negotiator@0.6.4: {}
 
   netmask@2.1.1: {}
 

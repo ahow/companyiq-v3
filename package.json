@@ -16,6 +16,7 @@
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.34.0",
     "cheerio": "^1.0.0",
+    "compression": "^1.8.1",
     "connect-pg-simple": "^10.0.0",
     "cors": "^2.8.5",
     "drizzle-orm": "^0.38.3",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/compression": "^1.8.1",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",

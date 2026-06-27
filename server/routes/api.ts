@@ -941,20 +941,87 @@ apiRouter.delete("/results/:id", async (req: Request, res: Response) => {
 apiRouter.get("/results/:id/share", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid result id." });
+
+    // ?format=summary (default) -> lightweight per-company scores, browser-friendly.
+    // ?format=full            -> complete dataset incl. measures/quotes/sources, streamed.
+    const format = String(req.query.format || "summary").toLowerCase();
+    const wantFull = format === "full";
+
     // Public share endpoint - returns the results data as JSON
     const { db } = await import("./db.js");
     const { sql } = await import("drizzle-orm");
-    const [result] = await db.execute(sql`SELECT * FROM analysis_results WHERE id = ${id}`).then(r => r.rows) as any[];
+
+    // Cache for 5 min at the edge; payload is immutable per id+format.
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+
+    if (!wantFull) {
+      // Default summary view. Project ONLY the light per-company fields *inside Postgres*
+      // via jsonb_array_elements + jsonb_build_object, so the ~100MB results_data blob is
+      // never loaded into the app. For 2,440 companies this is ~0.5MB instead of ~100MB.
+      const r = await db.execute(sql`
+        SELECT
+          ar.id, ar.framework_name, ar.list_name, ar.companies_count,
+          ar.average_score, ar.created_at,
+          COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'companyName', e->>'companyName',
+              'isin',        e->>'isin',
+              'sector',      e->>'sector',
+              'country',     e->>'country',
+              'totalScore',  e->'totalScore',
+              'measuresMetCount',   e->'measuresMetCount',
+              'measuresTotalCount', e->'measuresTotalCount',
+              'coverageLevel',      e->>'coverageLevel'
+            ))
+            FROM jsonb_array_elements(ar.results_data) e
+          ), '[]'::jsonb) AS summary
+        FROM analysis_results ar WHERE ar.id = ${id}
+      `).then((x: any) => x.rows) as any[];
+      const row = r[0];
+      if (!row) return res.status(404).json({ error: "Result not found" });
+      return res.json({
+        id: row.id,
+        frameworkName: row.framework_name,
+        listName: row.list_name,
+        companiesCount: row.companies_count,
+        averageScore: row.average_score,
+        createdAt: row.created_at,
+        format: "summary",
+        note: "Summary view. Append ?format=full for the complete dataset (measures, quotes, sources).",
+        results: row.summary || [],
+      });
+    }
+
+    // Full export. Load the blob once, then stream the JSON so we never re-buffer a second
+    // ~100MB copy. Compression middleware gzips this on the wire (~100MB -> a few MB).
+    const [result] = await db.execute(sql`SELECT * FROM analysis_results WHERE id = ${id}`).then((x: any) => x.rows) as any[];
     if (!result) return res.status(404).json({ error: "Result not found" });
-    res.json({
+    const rows: any[] = Array.isArray(result.results_data) ? result.results_data : [];
+    const meta = {
+      id: result.id,
       frameworkName: result.framework_name,
       listName: result.list_name,
       companiesCount: result.companies_count,
+      averageScore: result.average_score,
       createdAt: result.created_at,
-      results: result.results_data,
-    });
+      format: "full",
+    };
+    res.write('{');
+    for (const [k, v] of Object.entries(meta)) {
+      res.write(JSON.stringify(k) + ':' + JSON.stringify(v) + ',');
+    }
+    res.write('"results":[');
+    for (let i = 0; i < rows.length; i++) {
+      if (i > 0) res.write(',');
+      res.write(JSON.stringify(rows[i]));
+    }
+    res.write(']}');
+    return res.end();
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) return res.status(500).json({ error: error.message });
+    try { res.end(); } catch {}
   }
 });
 
