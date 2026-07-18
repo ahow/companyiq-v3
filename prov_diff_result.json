@@ -1,0 +1,2116 @@
+{
+  "summary": [
+    {
+      "company": "amazon",
+      "v3j_reserved": "",
+      "v3k_reserved": "",
+      "tally": {
+        "SUPPRESSED?": 25,
+        "GAINED_PRIMARY": 6,
+        "SAME": 2,
+        "CHANGED": 1
+      }
+    },
+    {
+      "company": "oracle",
+      "v3j_reserved": "",
+      "v3k_reserved": "",
+      "tally": {
+        "SUPPRESSED?": 34
+      }
+    },
+    {
+      "company": "meta",
+      "v3j_reserved": "",
+      "v3k_reserved": "",
+      "tally": {
+        "GAINED_PRIMARY": 14,
+        "ENFORCED": 7,
+        "SUPPRESSED?": 13
+      }
+    },
+    {
+      "company": "salesforce",
+      "v3j_reserved": "",
+      "v3k_reserved": "",
+      "tally": {
+        "SUPPRESSED?": 26,
+        "ENFORCED": 6,
+        "GAINED_PRIMARY": 2
+      }
+    },
+    {
+      "company": "alphabet",
+      "v3j_reserved": "",
+      "v3k_reserved": "",
+      "tally": {
+        "SUPPRESSED?": 21,
+        "GAINED_PRIMARY": 10,
+        "ENFORCED": 3
+      }
+    }
+  ],
+  "detail": {
+    "amazon": [
+      {
+        "measureId": "1.1-ai-strategy-objectives",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+          "dropped OTHER https://www.stocktitan.net/sec-filings/AMZN/def-14a-amazon-com-inc-definitive-proxy-statement-0223e31377e8.html",
+          "dropped OTHER https://aws.amazon.com/blogs/security/why-policy-in-amazon-bedrock-agentcore-chose-cedar-for-securing-agentic-workflows/",
+          "gained https://aws.amazon.com/blogs/machine-learning/can-your-governance-keep-pace-with-your-ai-ambitions-ai-risk-intelligence-in-the-agentic-era/",
+          "gained https://docs.aws.amazon.com/whitepapers/latest/aws-caf-for-ai/governance-perspective-managing-an-aiml-driven-organization.html",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm",
+          "gained https://aws.amazon.com/ai/responsible-ai/"
+        ]
+      },
+      {
+        "measureId": "1.1a-ai-strategic-priority",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000109690625000526/nlpc_px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000089102003000462/v87444sc13gza.htm",
+          "gained https://aws.amazon.com/blogs/machine-learning/responsible-ai-for-the-payments-industry-part-1/"
+        ]
+      },
+      {
+        "measureId": "1.2-ai-competitive-driver",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "gained https://aws.amazon.com/blogs/machine-learning/can-your-governance-keep-pace-with-your-ai-ambitions-ai-risk-intelligence-in-the-agentic-era/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1394096/000121465919003296/d58193px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm"
+        ]
+      },
+      {
+        "measureId": "1.3-ai-technology-differentiation",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000089102003000462/v87444sc13gza.htm",
+          "gained https://aws.amazon.com/blogs/enterprise-strategy/responsible-ai-from-principles-to-production/"
+        ]
+      },
+      {
+        "measureId": "1.4-ai-regulation-readiness",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465924045910/tm2329302d4_def14a.htm",
+          "gained https://aws.amazon.com/blogs/security/enabling-ai-adoption-at-scale-through-enterprise-risk-management-framework-part-2/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm"
+        ]
+      },
+      {
+        "measureId": "2.1-ai-use-cases-count",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/introducing-aws-ai-service-cards-a-new-resource-to-enhance-transparency-and-advance-responsible-ai/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/considerations-for-addressing-the-core-dimensions-of-responsible-ai-for-amazon-bedrock-applications/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/using-responsible-ai-principles-with-amazon-bedrock-batch-inference/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000177491019000002/amazonclimateltr.htm",
+          "gained https://aws.amazon.com/ai/responsible-ai/policy/",
+          "gained https://aws.amazon.com/blogs/industries/aligning-amazon-bedrock-with-naic-ai-principles-and-model-bulletin/"
+        ]
+      },
+      {
+        "measureId": "2.1a-ai-use-cases-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/considerations-for-addressing-the-core-dimensions-of-responsible-ai-for-amazon-bedrock-applications/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/category/analytics/amazon-sagemaker-data-ai-governance/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000109690625000526/nlpc_px14a6g.htm",
+          "gained https://www.aboutamazon.com/news/policy-news-views/amazon-responsible-ai",
+          "gained https://aws.amazon.com/blogs/machine-learning/governance-by-design-the-essential-guide-for-successful-ai-scaling/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000089102003000462/v87444sc13gza.htm"
+        ]
+      },
+      {
+        "measureId": "2.2-ai-production-pilot-breakdown",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/using-responsible-ai-principles-with-amazon-bedrock-batch-inference/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/responsible-ai-in-action-how-data-reply-red-teaming-supports-generative-ai-safety-on-aws/",
+          "gained https://aws.amazon.com/blogs/machine-learning/considerations-for-addressing-the-core-dimensions-of-responsible-ai-for-amazon-bedrock-applications/",
+          "gained https://aws.amazon.com/ai/responsible-ai/policy/",
+          "gained https://aws.amazon.com/blogs/industries/aligning-amazon-bedrock-with-naic-ai-principles-and-model-bulletin/"
+        ]
+      },
+      {
+        "measureId": "2.2a-ai-production-deployment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "dropped OTHER https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_ai-opt-out.html",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000109690625000526/nlpc_px14a6g.htm",
+          "dropped OTHER https://aws.amazon.com/blogs/security/why-policy-in-amazon-bedrock-agentcore-chose-cedar-for-securing-agentic-workflows/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000089102003000462/v87444sc13gza.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+          "gained https://www.stocktitan.net/sec-filings/AMZN/def-14a-amazon-com-inc-definitive-proxy-statement-0223e31377e8.html"
+        ]
+      },
+      {
+        "measureId": "2.3-ai-use-case-descriptions",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/enterprise-strategy/overseeing-ai-risk-in-a-rapidly-changing-landscape/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/introducing-aws-ai-service-cards-a-new-resource-to-enhance-transparency-and-advance-responsible-ai/",
+          "dropped OTHER https://docs.aws.amazon.com/prescriptive-guidance/latest/strategy-enterprise-ready-gen-ai-platform/security.html",
+          "dropped OTHER https://docs.aws.amazon.com/whitepapers/latest/aws-caf-for-ai/business-perspective-the-ai-strategy-in-the-age-of-aiml.html",
+          "gained https://www.stocktitan.net/sec-filings/AMZN/def-14a-amazon-com-inc-definitive-proxy-statement-0223e31377e8.html",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+          "gained https://docs.aws.amazon.com/wellarchitected/latest/generative-ai-lens/responsible-ai.html"
+        ]
+      },
+      {
+        "measureId": "3.1-board-oversight-ai-charter",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/can-your-governance-keep-pace-with-your-ai-ambitions-ai-risk-intelligence-in-the-agentic-era/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+          "gained https://www.stocktitan.net/sec-filings/AMZN/def-14a-amazon-com-inc-definitive-proxy-statement-0223e31377e8.html"
+        ]
+      },
+      {
+        "measureId": "3.1a-ai-board-discussion",
+        "class": "SAME",
+        "notes": []
+      },
+      {
+        "measureId": "3.2-ai-leadership-accountability",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/can-your-governance-keep-pace-with-your-ai-ambitions-ai-risk-intelligence-in-the-agentic-era/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+          "dropped OTHER https://www.stocktitan.net/sec-filings/AMZN/def-14a-amazon-com-inc-definitive-proxy-statement-0223e31377e8.html",
+          "gained https://aws.amazon.com/blogs/enterprise-strategy/overseeing-ai-risk-in-a-rapidly-changing-landscape/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1394096/000121465919003296/d58193px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm"
+        ]
+      },
+      {
+        "measureId": "3.3-ai-governance-committees",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "gained https://aws.amazon.com/blogs/machine-learning/responsible-ai-design-in-healthcare-and-life-sciences/"
+        ]
+      },
+      {
+        "measureId": "3.4-ai-safety-robustness",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://docs.aws.amazon.com/wellarchitected/latest/generative-ai-lens/responsible-ai.html",
+          "gained https://aws.amazon.com/blogs/machine-learning/responsible-ai-design-in-healthcare-and-life-sciences/"
+        ]
+      },
+      {
+        "measureId": "4.1-ai-policy-published",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/can-your-governance-keep-pace-with-your-ai-ambitions-ai-risk-intelligence-in-the-agentic-era/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/governance-by-design-the-essential-guide-for-successful-ai-scaling/",
+          "dropped OTHER https://aws.amazon.com/video/watch/29c183a9ef6/",
+          "gained https://aws.amazon.com/blogs/security/ai-lifecycle-risk-management-iso-iec-420012023-for-ai-governance/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000109690625000526/nlpc_px14a6g.htm"
+        ]
+      },
+      {
+        "measureId": "4.1a-ai-policy-internal",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/responsible-ai-in-action-how-data-reply-red-teaming-supports-generative-ai-safety-on-aws/",
+          "gained https://aws.amazon.com/blogs/machine-learning/governance-by-design-the-essential-guide-for-successful-ai-scaling/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000089102003000462/v87444sc13gza.htm"
+        ]
+      },
+      {
+        "measureId": "4.2-operationalisation-ai-principles",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://docs.aws.amazon.com/prescriptive-guidance/latest/strategy-enterprise-ready-gen-ai-platform/security.html",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/category/analytics/amazon-sagemaker-data-ai-governance/"
+        ]
+      },
+      {
+        "measureId": "4.3-data-security-privacy-ai",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/can-your-governance-keep-pace-with-your-ai-ambitions-ai-risk-intelligence-in-the-agentic-era/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm",
+          "gained https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "gained https://aws.amazon.com/blogs/machine-learning/using-responsible-ai-principles-with-amazon-bedrock-batch-inference/",
+          "gained https://aws.amazon.com/blogs/security/securing-generative-ai-data-compliance-and-privacy-considerations/",
+          "gained https://aws.amazon.com/blogs/machine-learning/responsible-ai-for-the-payments-industry-part-1/"
+        ]
+      },
+      {
+        "measureId": "4.4-third-party-ai-risk",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000101872425000036/amzn-20250331.htm"
+        ]
+      },
+      {
+        "measureId": "5.1-ai-kpis-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/security/enabling-ai-adoption-at-scale-through-enterprise-risk-management-framework-part-1/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/using-responsible-ai-principles-with-amazon-bedrock-batch-inference/",
+          "gained https://aws.amazon.com/blogs/machine-learning/can-your-governance-keep-pace-with-your-ai-ambitions-ai-risk-intelligence-in-the-agentic-era/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000177491019000002/amazonclimateltr.htm",
+          "gained https://aws.amazon.com/ai/responsible-ai/policy/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm"
+        ]
+      },
+      {
+        "measureId": "5.1a-ai-kpis-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/considerations-for-addressing-the-core-dimensions-of-responsible-ai-for-amazon-bedrock-applications/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/using-responsible-ai-principles-with-amazon-bedrock-batch-inference/",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/responsible-ai-in-action-how-data-reply-red-teaming-supports-generative-ai-safety-on-aws/",
+          "gained https://www.aboutamazon.com/news/policy-news-views/amazon-responsible-ai",
+          "gained https://aws.amazon.com/blogs/security/enabling-ai-adoption-at-scale-through-enterprise-risk-management-framework-part-1/",
+          "gained https://aws.amazon.com/blogs/machine-learning/can-your-governance-keep-pace-with-your-ai-ambitions-ai-risk-intelligence-in-the-agentic-era/"
+        ]
+      },
+      {
+        "measureId": "5.2-ai-financial-impact-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465924045910/tm2329302d4_def14a.htm",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/using-responsible-ai-principles-with-amazon-bedrock-batch-inference/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000177491019000002/amazonclimateltr.htm",
+          "gained https://aws.amazon.com/blogs/security/enabling-ai-adoption-at-scale-through-enterprise-risk-management-framework-part-1/"
+        ]
+      },
+      {
+        "measureId": "5.2a-ai-financial-impact-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://docs.aws.amazon.com/wellarchitected/latest/generative-ai-lens/responsible-ai.html",
+          "gained https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "gained https://aws.amazon.com/blogs/security/enabling-ai-adoption-at-scale-through-enterprise-risk-management-framework-part-1/"
+        ]
+      },
+      {
+        "measureId": "6.1-ai-reskilling-programme",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+          "dropped OTHER https://aws.amazon.com/blogs/publicsector/how-aws-helps-agencies-meet-omb-ai-governance-requirements/",
+          "dropped OTHER https://www.stocktitan.net/sec-filings/AMZN/def-14a-amazon-com-inc-definitive-proxy-statement-0223e31377e8.html",
+          "dropped OTHER https://aws.amazon.com/blogs/security/securing-generative-ai-data-compliance-and-privacy-considerations/",
+          "gained https://aws.amazon.com/blogs/apn/energize-and-amplify-data-and-ai-governance-and-security-on-aws-through-partners/",
+          "gained https://docs.aws.amazon.com/whitepapers/latest/aws-caf-for-ai/business-perspective-the-ai-strategy-in-the-age-of-aiml.html"
+        ]
+      },
+      {
+        "measureId": "6.1a-ai-reskilling-commitment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+          "dropped OTHER https://www.stocktitan.net/sec-filings/AMZN/def-14a-amazon-com-inc-definitive-proxy-statement-0223e31377e8.html"
+        ]
+      },
+      {
+        "measureId": "6.2-ai-training-headcount",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm",
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/responsible-ai-for-the-payments-industry-part-1/",
+          "gained https://www.stocktitan.net/sec-filings/AMZN/def-14a-amazon-com-inc-definitive-proxy-statement-0223e31377e8.html",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000177491019000002/amazonclimateltr.htm",
+          "gained https://aws.amazon.com/blogs/apn/energize-and-amplify-data-and-ai-governance-and-security-on-aws-through-partners/"
+        ]
+      },
+      {
+        "measureId": "7.1-strategic-ai-partnerships",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/bedrock/security-privacy-responsible-ai/",
+          "dropped OTHER https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm",
+          "dropped OTHER https://aws.amazon.com/blogs/security/securing-generative-ai-data-compliance-and-privacy-considerations/",
+          "gained https://aws.amazon.com/ai/responsible-ai/",
+          "gained https://aws.amazon.com/blogs/machine-learning/responsible-ai-for-the-payments-industry-part-1/"
+        ]
+      },
+      {
+        "measureId": "8.1-ai-literacy-community",
+        "class": "CHANGED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "8.2-ai-public-policy-advocacy",
+        "class": "SAME",
+        "notes": []
+      },
+      {
+        "measureId": "9.1-ai-risk-factor-disclosure",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000110465924045910/tm2329302d4_def14a.htm",
+          "dropped OTHER https://aws.amazon.com/privacy/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1018724/000109690625000526/nlpc_px14a6g.htm",
+          "gained https://aws.amazon.com/blogs/machine-learning/considerations-for-addressing-the-core-dimensions-of-responsible-ai-for-amazon-bedrock-applications/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000177491019000002/amazonclimateltr.htm",
+          "gained https://aws.amazon.com/blogs/machine-learning/responsible-ai-for-the-payments-industry-part-1/"
+        ]
+      },
+      {
+        "measureId": "9.2-ai-capex-rd-quantified",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "gained https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465924045910/tm2329302d4_def14a.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465925033442/tm252295-1_def14a.htm"
+        ]
+      },
+      {
+        "measureId": "9.3-ai-business-model-risk",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000177491019000002/amazonclimateltr.htm",
+          "gained https://www.aboutamazon.com/news/company-news/amazon-responsible-ai"
+        ]
+      },
+      {
+        "measureId": "9.4-ai-incident-disclosure",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://aws.amazon.com/blogs/machine-learning/responsible-ai-design-in-healthcare-and-life-sciences/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+          "gained https://aws.amazon.com/blogs/security/enabling-ai-adoption-at-scale-through-enterprise-risk-management-framework-part-2/"
+        ]
+      }
+    ],
+    "oracle": [
+      {
+        "measureId": "1.1-ai-strategy-objectives",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://blogs.oracle.com/cloud-infrastructure/oracle-joins-nist-ai-safety-consortium",
+          "dropped OTHER https://www.oracle.com/webfolder/technetwork/tutorials/jdedwards/Presentations/JDE-AI-Strategy-January-2025.pdf",
+          "gained https://blogs.oracle.com/fusioninsider/bookmark-this-fusion-ai-governance-security-bias-docs",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/a/ocom/docs/fusion-cloud-sustainability.pdf"
+        ]
+      },
+      {
+        "measureId": "1.1a-ai-strategic-priority",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312525220801/d72066ddef14a.htm?ref=wheresyoured.at",
+          "dropped OTHER https://www.oracle.com/financial-services/chartis-ai-report/",
+          "dropped OTHER https://www.oracle.com/au/a/ocom/docs/autonomous-thinktank-report-1-v6.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/oracle-financial-services-ar-2023-24.pdf",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/brsr-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "gained https://blogs.oracle.com/cloud-infrastructure/oracle-joins-nist-ai-safety-consortium",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/analytics/machine-learning/",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm -> https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm"
+        ]
+      },
+      {
+        "measureId": "1.2-ai-competitive-driver",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy25-yuho-eng.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://blogs.oracle.com/integration/oracle-integration-ai-strategy",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2025-10K-251057371.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/business-responsibility-and-sustainability-report-2023-24.pdf",
+          "gained https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/brsr-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm"
+        ]
+      },
+      {
+        "measureId": "1.3-ai-technology-differentiation",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-software-development/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/safe-secure-efficient-llms-with-protopia-on-oci",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "gained https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf"
+        ]
+      },
+      {
+        "measureId": "1.4-ai-regulation-readiness",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/cloud-infrastructure/oracle-joins-nist-ai-safety-consortium",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf"
+        ]
+      },
+      {
+        "measureId": "2.1-ai-use-cases-count",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/financial-services/chartis-ai-report/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2025-10K-251057371.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/safe-secure-efficient-llms-with-protopia-on-oci",
+          "dropped OTHER https://blogs.oracle.com/fusioninsider/updated-ai-strategy-and-direction-for-fusion-apps",
+          "gained https://docs.oracle.com/en/database/oracle/machine-learning/oml4sql/21/dmcon/machine-learning-basics.html",
+          "gained https://blogs.oracle.com/cloud-infrastructure/raising-the-bar-for-trustworthy-ai-at-oracle",
+          "gained https://www.oracle.com/artificial-intelligence/ai-vs-gen-ai-vs-ml/",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://blogs.oracle.com/ai-and-datascience/responsible-ai-for-hc-and-fsi"
+        ]
+      },
+      {
+        "measureId": "2.1a-ai-use-cases-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/corporate/netsuite-inapp-disclaimers-terms.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.oracle.com/artificial-intelligence/ai-vs-gen-ai-vs-ml/",
+          "gained https://blogs.oracle.com/database/oracle-deep-data-security-is-now-available-in-oracle-ai-database-26ai",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf"
+        ]
+      },
+      {
+        "measureId": "2.2-ai-production-pilot-breakdown",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/financial-services/chartis-ai-report/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/safe-secure-efficient-llms-with-protopia-on-oci",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained https://www.oracle.com/au/a/ocom/docs/autonomous-thinktank-report-1-v6.pdf",
+          "gained https://blogs.oracle.com/cloud-infrastructure/raising-the-bar-for-trustworthy-ai-at-oracle",
+          "gained https://www.oracle.com/asean/artificial-intelligence/what-is-sovereign-ai/",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/artificial-intelligence/what-is-sovereign-ai/"
+        ]
+      },
+      {
+        "measureId": "2.2a-ai-production-deployment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/financial-services/chartis-ai-report/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-software-development/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.oracle.com/contracts/docs/oracle-ai-terms.pdf",
+          "gained https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "gained https://blogs.oracle.com/security/security-plans-for-ai-systems"
+        ]
+      },
+      {
+        "measureId": "2.3-ai-use-case-descriptions",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://docs.oracle.com/en/database/oracle/machine-learning/oml4sql/21/mlsql/machine-learning-functions.html",
+          "dropped OTHER https://blogs.oracle.com/integration/oracle-integration-ai-strategy",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.oracle.com/ai-data-platform/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/a/ocom/docs/cdp-climate-change-questionnaire-2024.pdf"
+        ]
+      },
+      {
+        "measureId": "3.1-board-oversight-ai-charter",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/cloud-infrastructure/raising-the-bar-for-trustworthy-ai-at-oracle",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2025-10K-251057371.pdf",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "dropped OTHER https://www.oracle.com/analytics/machine-learning/",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.oracle.com/il-en/corporate/responsible-ai-iso-42001/",
+          "gained https://www.oracle.com/a/ocom/docs/environmental-and-social-impact-report-2024.pdf"
+        ]
+      },
+      {
+        "measureId": "3.1a-ai-board-discussion",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/what-is-sovereign-ai/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/oracle-financial-services-ar-2023-24.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm -> https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm"
+        ]
+      },
+      {
+        "measureId": "3.2-ai-leadership-accountability",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312525220801/d72066ddef14a.htm?ref=wheresyoured.at",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2025-10K-251057371.pdf",
+          "gained https://www.oracle.com/artificial-intelligence/ai-open-weights-models/"
+        ]
+      },
+      {
+        "measureId": "3.3-ai-governance-committees",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy25-yuho-eng.pdf",
+          "dropped OTHER https://www.oracle.com/corporate/corporate-governance/",
+          "dropped OTHER https://www.oracle.com/asean/corporate/corporate-governance/",
+          "dropped OTHER https://www.oracle.com/au/a/ocom/docs/autonomous-thinktank-report-1-v6.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/ai-vs-gen-ai-vs-ml/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000119312525220801/d72066ddef14a.htm?ref=wheresyoured.at",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/brsr-report.pdf"
+        ]
+      },
+      {
+        "measureId": "3.4-ai-safety-robustness",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/sovereign-ai-brief.pdf",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf"
+        ]
+      },
+      {
+        "measureId": "4.1-ai-policy-published",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/oracle-financial-services-ar-2023-24.pdf",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/cdp-climate-change-questionnaire-2024.pdf",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/fs-need-esg-iinvestment-challenges-wp.pdf",
+          "gained https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "gained https://blogs.oracle.com/cloud-infrastructure/oracle-joins-nist-ai-safety-consortium"
+        ]
+      },
+      {
+        "measureId": "4.1a-ai-policy-internal",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://blogs.oracle.com/fusioninsider/bookmark-this-fusion-ai-governance-security-bias-docs",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000119312525220801/d72066ddef14a.htm?ref=wheresyoured.at",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/a/ocom/docs/corporate/netsuite-inapp-disclaimers-terms.pdf"
+        ]
+      },
+      {
+        "measureId": "4.2-operationalisation-ai-principles",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-software-development/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/business-responsibility-and-sustainability-report-2023-24.pdf",
+          "dropped OTHER https://www.oracle.com/ai-data-platform/",
+          "gained https://blogs.oracle.com/fusioninsider/bookmark-this-fusion-ai-governance-security-bias-docs",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "gained https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "gained https://blogs.oracle.com/cx/designing-for-delight-in-the-age-of-ai-why-service-still-starts-with-strategy"
+        ]
+      },
+      {
+        "measureId": "4.3-data-security-privacy-ai",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://blogs.oracle.com/database/india-privacy-act-dpdpa-ai-threats-and-quantum-risks-all-converge-at-the-database",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "dropped OTHER https://www.oracle.com/applications/effective-ai-strategies/",
+          "gained https://www.oracle.com/a/ocom/docs/social-impact-report-2022.pdf",
+          "gained https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "gained https://www.oracle.com/corporate/acquisitions/cerner/security/"
+        ]
+      },
+      {
+        "measureId": "4.4-third-party-ai-risk",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/corporate/acquisitions/cerner/security/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/oracle-financial-services-ar-2023-24.pdf",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000119312525220801/d72066ddef14a.htm?ref=wheresyoured.at",
+          "gained https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/article_9002708453.html",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/brsr-report.pdf",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/business-responsibility-and-sustainability-report-2023-24.pdf"
+        ]
+      },
+      {
+        "measureId": "5.1-ai-kpis-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://blogs.oracle.com/integration/oracle-integration-ai-strategy",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-software-development/",
+          "gained https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "gained https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "gained https://www.oracle.com/a/ocom/docs/cdp-climate-change-questionnaire-2024.pdf",
+          "gained https://blogs.oracle.com/cloud-infrastructure/oracle-joins-nist-ai-safety-consortium",
+          "gained https://www.oracle.com/a/ocom/docs/sovereign-ai-brief.pdf",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf"
+        ]
+      },
+      {
+        "measureId": "5.1a-ai-kpis-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/fs-need-esg-iinvestment-challenges-wp.pdf",
+          "dropped OTHER https://www.oracle.com/au/a/ocom/docs/autonomous-thinktank-report-1-v6.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://blogs.oracle.com/cloud-infrastructure/oracle-joins-nist-ai-safety-consortium",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/social-impact-report-2022.pdf",
+          "gained https://www.oracle.com/artificial-intelligence/ai-vs-gen-ai-vs-ml/",
+          "gained https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "gained https://www.oracle.com/a/ocom/docs/cdp-climate-change-questionnaire-2024.pdf",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf"
+        ]
+      },
+      {
+        "measureId": "5.2-ai-financial-impact-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy25-yuho-eng.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/cloud-infrastructure/raising-the-bar-for-trustworthy-ai-at-oracle",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/oracle-financial-services-ar-2023-24.pdf",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2025-10K-251057371.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-software-development/",
+          "dropped OTHER https://blogs.oracle.com/cloud-infrastructure/first-principles-oci-ai-agent-platform",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://blogs.oracle.com/database/securing-your-business-data-amidst-emerging-ai-threats",
+          "gained https://www.oracle.com/artificial-intelligence/ai-vs-gen-ai-vs-ml/",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/brsr-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "gained https://blogs.oracle.com/cx/designing-for-delight-in-the-age-of-ai-why-service-still-starts-with-strategy",
+          "gained https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy24-yuho-eng.pdf"
+        ]
+      },
+      {
+        "measureId": "5.2a-ai-financial-impact-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/what-is-sovereign-ai/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/what-is-sovereign-ai/",
+          "gained https://www.oracle.com/artificial-intelligence/generative-ai/",
+          "gained https://www.oracle.com/a/ocom/docs/cdp-climate-change-questionnaire-2024.pdf",
+          "gained https://blogs.oracle.com/cx/designing-for-delight-in-the-age-of-ai-why-service-still-starts-with-strategy",
+          "gained https://www.oracle.com/a/ocom/docs/sovereign-ai-brief.pdf",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf"
+        ]
+      },
+      {
+        "measureId": "6.1-ai-reskilling-programme",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://blogs.oracle.com/database/securing-your-business-data-amidst-emerging-ai-threats",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-software-development/",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/safe-secure-efficient-llms-with-protopia-on-oci",
+          "dropped OTHER https://blogs.oracle.com/cloud-infrastructure/first-principles-oci-ai-agent-platform",
+          "gained https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy25-yuho-eng.pdf",
+          "gained https://blogs.oracle.com/cloud-infrastructure/oracle-joins-nist-ai-safety-consortium",
+          "gained https://docs.oracle.com/en/cloud/saas/fusion-ai/aiaqa/what-ai-governance-and-standards-accreditations-does-oracle-have-for-fusion-applications.html",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf"
+        ]
+      },
+      {
+        "measureId": "6.1a-ai-reskilling-commitment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312525220801/d72066ddef14a.htm?ref=wheresyoured.at",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/agentic-ai-strategy-oracle",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained https://www.oracle.com/a/ocom/docs/cdp-climate-change-questionnaire-2024.pdf",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.oracle.com/contracts/docs/oracle-ai-terms.pdf",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/a/ocom/docs/corporate/supplier-responsibility-report.pdf"
+        ]
+      },
+      {
+        "measureId": "6.2-ai-training-headcount",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/brsr-report.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-software-development/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/social-impact-report-2022.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000119312525220801/d72066ddef14a.htm?ref=wheresyoured.at",
+          "gained https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy25-yuho-eng.pdf",
+          "gained https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy24-yuho-eng.pdf"
+        ]
+      },
+      {
+        "measureId": "7.1-strategic-ai-partnerships",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/financial-services/chartis-ai-report/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/safe-secure-efficient-llms-with-protopia-on-oci",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "gained https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://blogs.oracle.com/ai-and-datascience/generative-ai-strategy"
+        ]
+      },
+      {
+        "measureId": "8.1-ai-literacy-community",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/social-impact-report-2022.pdf",
+          "dropped OTHER https://www.oracle.com/webfolder/technetwork/tutorials/jdedwards/Presentations/JDE-AI-Strategy-January-2025.pdf",
+          "gained https://blogs.oracle.com/fusioninsider/bookmark-this-fusion-ai-governance-security-bias-docs",
+          "gained https://blogs.oracle.com/cloud-infrastructure/raising-the-bar-for-trustworthy-ai-at-oracle",
+          "gained https://www.oracle.com/artificial-intelligence/ai-vs-gen-ai-vs-ml/",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://blogs.oracle.com/ai-and-datascience/responsible-ai-for-hc-and-fsi",
+          "gained https://www.oracle.com/analytics/machine-learning/"
+        ]
+      },
+      {
+        "measureId": "8.2-ai-public-policy-advocacy",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy25-yuho-eng.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/business-responsibility-and-sustainability-report-2023-24.pdf",
+          "dropped OTHER https://www.oracle.com/il-en/corporate/responsible-ai-iso-42001/",
+          "gained https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+          "gained https://www.oracle.com/a/ocom/docs/cdp-climate-change-questionnaire-2024.pdf",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://blogs.oracle.com/cloud-infrastructure/oracle-joins-nist-ai-safety-consortium"
+        ]
+      },
+      {
+        "measureId": "9.1-ai-risk-factor-disclosure",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/ai-open-weights-models/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-software-development/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/fs-need-esg-iinvestment-challenges-wp.pdf",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/oracle-financial-services-ar-2023-24.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm -> https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm"
+        ]
+      },
+      {
+        "measureId": "9.2-ai-capex-rd-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/agentic-ai-strategy-oracle",
+          "dropped OTHER https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy25-yuho-eng.pdf",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000119312525220801/d72066ddef14a.htm?ref=wheresyoured.at",
+          "gained https://blogs.oracle.com/academy/oracle-champions-sustainable-and-responsible-ai-at-the-global-data-science-and-ai-summit-ilabafrica-centre-at-strathmore-university-nairobi",
+          "gained https://www.oracle.com/a/ocom/docs/cdp-climate-change-questionnaire-2024.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "gained https://www.oracle.com/analytics/machine-learning/",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm -> https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm"
+        ]
+      },
+      {
+        "measureId": "9.3-ai-business-model-risk",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/jp/a/ocom/docs/jp-investor-relations/fy25-yuho-eng.pdf",
+          "dropped OTHER https://blogs.oracle.com/ai-and-datascience/generative-ai-strategy",
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "dropped OTHER https://www.oracle.com/analytics/machine-learning/",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/fs-need-esg-iinvestment-challenges-wp.pdf",
+          "gained https://www.arabsolutionsgroup.com/2025/07/05/ethics-and-responsible-ai-development-oracles-approach/",
+          "gained https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm -> https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm"
+        ]
+      },
+      {
+        "measureId": "9.4-ai-incident-disclosure",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.oracle.com/artificial-intelligence/database-machine-learning/",
+          "dropped OTHER https://www.oracle.com/asean/artificial-intelligence/",
+          "dropped OTHER https://www.oracle.com/a/ocom/docs/industries/financial-services/oracle-financial-services-ar-2023-24.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-orcl/oracle-corporation/annual-reports/nyse-orcl-2024-10K-241056542.pdf",
+          "gained https://www.oracle.com/a/ocom/docs/industries/financial-services/business-responsibility-and-sustainability-report-2023-24.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1341439/000119312526101045/orcl-20260228.htm -> https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm"
+        ]
+      }
+    ],
+    "meta": [
+      {
+        "measureId": "1.1-ai-strategy-objectives",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "gained https://collaborate.unpri.org/group/33341/home",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "1.1a-ai-strategic-priority",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://www.csrhub.com/CSR_and_sustainability_information/Meta",
+          "gained https://collaborate.unpri.org/group/33341/home",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm -> https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "1.2-ai-competitive-driver",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000121465924008490/e57241px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "1.3-ai-technology-differentiation",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped OTHER https://ai.meta.com/blog/responsible-ai-progress-meta-2022/",
+          "gained https://ai.meta.com/blog/responsible-ai-connect-2024/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680123000013/meta-20221231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "1.4-ai-regulation-readiness",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680123000013/meta-20221231.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped OTHER https://ai.meta.com/blog/responsible-ai-progress-meta-2022/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "gained https://sustainability.atmeta.com/asset/2024-esg-data-index/"
+        ]
+      },
+      {
+        "measureId": "2.1-ai-use-cases-count",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://www.marketscreener.com/news/meta-platforms-2024-annual-report-ce7e5ddcde8bf025",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000121465925006514/p428257px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680123000103/meta-20230930.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "2.1a-ai-use-cases-qualitative",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://www.marketscreener.com/news/meta-platforms-2024-annual-report-ce7e5ddcde8bf025",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "2.2-ai-production-pilot-breakdown",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped OTHER https://investor.atmeta.com/home/default.aspx",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000121465924008490/e57241px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "2.2a-ai-production-deployment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.sec.gov/divisions/corpfin/cf-noaction/14a-8/2022/mercymeta033022-14a8.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000121465925006514/p428257px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+          "gained https://nationalcioreview.com/articles-insights/extra-bytes/metas-court-losses-put-ai-governance-under-new-pressure/",
+          "gained https://sustainability.atmeta.com/wp-content/uploads/2025/08/Meta_2025-Sustainability-Report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000121465924008490/e57241px14a6g.htm"
+        ]
+      },
+      {
+        "measureId": "2.3-ai-use-case-descriptions",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://nationalcioreview.com/articles-insights/extra-bytes/metas-court-losses-put-ai-governance-under-new-pressure/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "3.1-board-oversight-ai-charter",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://investor.atmeta.com/leadership-and-governance/corporate-governance-guidelines/default.aspx",
+          "dropped OTHER https://investor.atmeta.com/leadership-and-governance/Privacy-Committee-Charter/default.aspx",
+          "dropped OTHER https://investor.atmeta.com/search-results/default.aspx?SearchTerm=&PageNumber=206",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://investor.atmeta.com/leadership-and-governance/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "3.1a-ai-board-discussion",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://last10k.com/sec-filings/meta/0001326801-25-000040.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm -> https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "3.2-ai-leadership-accountability",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "dropped OTHER https://www.marketscreener.com/news/meta-platforms-2024-annual-report-ce7e5ddcde8bf025",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://investor.atmeta.com/leadership-and-governance/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "3.3-ai-governance-committees",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://transparency.meta.com/governance/innovation/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000121465925006514/p428257px14a6g.htm",
+          "gained https://sustainability.atmeta.com/asset/2024-esg-data-index/"
+        ]
+      },
+      {
+        "measureId": "3.4-ai-safety-robustness",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "4.1-ai-policy-published",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://collaborate.unpri.org/group/33341/home",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "4.1a-ai-policy-internal",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "4.2-operationalisation-ai-principles",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://www.esgdive.com/news/how-meta-is-ramping-up-cleantech-investments-amid-the-ai-boom-roundup-2025/806665/",
+          "gained https://www.marketscreener.com/news/meta-platforms-2024-annual-report-ce7e5ddcde8bf025",
+          "gained https://techstrong.ai/articles/meta-takes-a-cautionary-approach-with-ai-policy-document/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "4.3-data-security-privacy-ai",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped OTHER https://collaborate.unpri.org/group/33341/home",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680123000093/meta-20230630.htm",
+          "gained https://techstrong.ai/articles/meta-takes-a-cautionary-approach-with-ai-policy-document/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680123000103/meta-20230930.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "4.4-third-party-ai-risk",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680125000017/meta-20241231.htm",
+          "dropped OTHER https://sustainability.atmeta.com/asset/2024-esg-data-index/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped MIRROR https://fortune.com/company-assets/1548/quartr/annual-report-10-k-b7912-2026-01-29-11-26-03.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "5.1-ai-kpis-quantified",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680123000067/meta-20230331.htm",
+          "gained https://sustainability.atmeta.com/asset/2024-esg-data-index/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "5.1a-ai-kpis-qualitative",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680125000017/meta-20241231.htm",
+          "gained https://sustainability.atmeta.com/asset/2024-esg-data-index/",
+          "gained https://investor.atmeta.com/investor-news/press-release-details/2023/Meta-Reports-Third-Quarter-2023-Results/default.aspx",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "5.2-ai-financial-impact-quantified",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://investor.atmeta.com/investor-news/press-release-details/2024/Meta-Reports-First-Quarter-2024-Results/default.aspx",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "5.2a-ai-financial-impact-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680123000013/meta-20221231.htm",
+          "dropped OTHER https://www.marketscreener.com/news/meta-platforms-2024-annual-report-ce7e5ddcde8bf025",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped OTHER https://www.sec.gov/divisions/corpfin/cf-noaction/14a-8/2022/mercymeta033022-14a8.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000121465924008490/e57241px14a6g.htm",
+          "gained https://sustainability.atmeta.com/wp-content/uploads/2024/08/Meta-2024-Sustainability-Report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "6.1-ai-reskilling-programme",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped MIRROR https://fortune.com/company-assets/1548/quartr/annual-report-10-k-b7912-2026-01-29-11-26-03.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "gained https://collaborate.unpri.org/group/33341/home"
+        ]
+      },
+      {
+        "measureId": "6.1a-ai-reskilling-commitment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped OTHER https://www.sec.gov/divisions/corpfin/cf-noaction/14a-8/2022/mercymeta033022-14a8.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000121465924008490/e57241px14a6g.htm",
+          "gained https://collaborate.unpri.org/group/33341/home",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "6.2-ai-training-headcount",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped MIRROR https://fortune.com/company-assets/1548/quartr/annual-report-10-k-b7912-2026-01-29-11-26-03.pdf",
+          "gained https://techstrong.ai/articles/meta-takes-a-cautionary-approach-with-ai-policy-document/",
+          "gained https://collaborate.unpri.org/group/33341/home"
+        ]
+      },
+      {
+        "measureId": "7.1-strategic-ai-partnerships",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000121465925006514/p428257px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "8.1-ai-literacy-community",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://sustainability.atmeta.com/asset/2024-esg-data-index/",
+          "dropped OTHER https://sustainability.atmeta.com/wp-content/uploads/2024/08/Meta-2024-Sustainability-Report.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped MIRROR https://fortune.com/company-assets/1548/quartr/annual-report-10-k-b7912-2026-01-29-11-26-03.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "gained https://www.marketscreener.com/news/meta-platforms-2024-annual-report-ce7e5ddcde8bf025",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680125000017/meta-20241231.htm",
+          "gained https://sustainability.atmeta.com/wp-content/uploads/2025/08/Meta_2025-Sustainability-Report.pdf",
+          "gained https://techstrong.ai/articles/meta-takes-a-cautionary-approach-with-ai-policy-document/"
+        ]
+      },
+      {
+        "measureId": "8.2-ai-public-policy-advocacy",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained https://techstrong.ai/articles/meta-takes-a-cautionary-approach-with-ai-policy-document/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "9.1-ai-risk-factor-disclosure",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped OTHER https://investor.atmeta.com/home/default.aspx",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "dropped OTHER https://techstrong.ai/articles/meta-takes-a-cautionary-approach-with-ai-policy-document/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000095010321020492/filename1.htm",
+          "gained https://sustainability.atmeta.com/asset/2024-esg-data-index/",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm -> https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "9.2-ai-capex-rd-quantified",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000132680124000022/meta-20240329.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000095010321020492/filename1.htm",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm -> https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "9.3-ai-business-model-risk",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000121465924008490/e57241px14a6g.htm",
+          "gained https://www.marketscreener.com/news/meta-platforms-2024-annual-report-ce7e5ddcde8bf025",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm -> https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "9.4-ai-incident-disclosure",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000109690625000701/nlpc_px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1326801/000121465925006514/p428257px14a6g.htm",
+          "gained https://investor.atmeta.com/leadership-and-governance/audit-committee-charter/default.aspx",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1326801/000132680125000017/meta-20241231.htm",
+          "FORCE https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm -> https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm"
+        ]
+      }
+    ],
+    "salesforce": [
+      {
+        "measureId": "1.1-ai-strategy-objectives",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/ap/artificial-intelligence/ai-governance/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf"
+        ]
+      },
+      {
+        "measureId": "1.1a-ai-strategic-priority",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/ai-safety/",
+          "dropped OTHER https://www.salesforce.com/au/artificial-intelligence/ai-safety/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1108524/000110852425000009/crm-20250424.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000025/salesforce2025proxysupplem.htm",
+          "gained https://www.salesforce.com/net-zero/california-climate-disclosure-laws/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "1.2-ai-competitive-driver",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/cert-prep-salesforce-ai-associate/examine-the-ethical-considerations-of-ai",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/in/artificial-intelligence/ai-compliance/",
+          "gained https://www.salesforce.com/uk/artificial-intelligence/ai-compliance/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/company/sustainability/salesforce-ai-sustainability-outlook.pdf"
+        ]
+      },
+      {
+        "measureId": "1.3-ai-technology-differentiation",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/ai-strategy/establish-ai-governance",
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852424000034/crm-20241031.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-compliance/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-strategy-guide/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "1.4-ai-regulation-readiness",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/ai-strategy/establish-ai-governance",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://investor.salesforce.com/financials/quarterly-results/"
+        ]
+      },
+      {
+        "measureId": "2.1-ai-use-cases-count",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://www.salesforce.com/company/ethical-and-humane-use/",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1108524/000110852426000060/crm-20260131.htm",
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/cert-prep-salesforce-ai-associate/examine-the-ethical-considerations-of-ai",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "2.1a-ai-use-cases-qualitative",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852426000060/crm-20260131.htm"
+        ]
+      },
+      {
+        "measureId": "2.2-ai-production-pilot-breakdown",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1108524/000110852426000085/crm-20260416.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1108524/000110852426000060/crm-20260131.htm",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000025/salesforce2025proxysupplem.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-safety/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "2.2a-ai-production-deployment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/ai-risk-management/",
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/",
+          "dropped OTHER https://www.salesforce.com/company/ethical-and-humane-use/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained https://www.salesforce.com/ap/artificial-intelligence/ai-ethics/",
+          "gained https://www.salesforce.com/ca/artificial-intelligence/ai-ethics/",
+          "gained https://www.salesforce.com/au/artificial-intelligence/ai-ethics/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm"
+        ]
+      },
+      {
+        "measureId": "2.3-ai-use-case-descriptions",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/company/ethical-and-humane-use/",
+          "dropped OTHER https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/guides/ai-literacy-and-compliance.pdf",
+          "dropped OTHER https://www.salesforce.com/company/ethical-and-humane-use/responsible-ai-governance/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://investor.salesforce.com/governance/governance-documents/default.aspx",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://investor.salesforce.com/financials/quarterly-results/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "3.1-board-oversight-ai-charter",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/ca/artificial-intelligence/ai-governance/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000009/crm-20250424.htm"
+        ]
+      },
+      {
+        "measureId": "3.1a-ai-board-discussion",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "3.2-ai-leadership-accountability",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1108524/000110852425000025/salesforce2025proxysupplem.htm",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000009/crm-20250424.htm",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "3.3-ai-governance-committees",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf"
+        ]
+      },
+      {
+        "measureId": "3.4-ai-safety-robustness",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/ai-risk-management/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://investor.salesforce.com/governance/governance-documents/default.aspx",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "4.1-ai-policy-published",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1108524/000110852426000085/crm-20260416.htm",
+          "dropped OTHER https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/guides/ai-literacy-and-compliance.pdf",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework"
+        ]
+      },
+      {
+        "measureId": "4.1a-ai-policy-internal",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/guides/ai-literacy-and-compliance.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000009/crm-20250424.htm",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "4.2-operationalisation-ai-principles",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/cert-prep-salesforce-ai-associate/examine-the-ethical-considerations-of-ai",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://www.salesforce.com/company/intentional-innovation/ethics-by-design/",
+          "dropped OTHER https://www.salesforce.com/au/artificial-intelligence/responsible-ai/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-risk-management/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/ca/artificial-intelligence/ai-governance/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/apply-the-nist-ai-risk-management-framework",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework"
+        ]
+      },
+      {
+        "measureId": "4.3-data-security-privacy-ai",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/white-papers/salesforce-fy25-stakeholder-impact-report.pdf",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained https://www.salesforce.com/ap/artificial-intelligence/ai-ethics/"
+        ]
+      },
+      {
+        "measureId": "4.4-third-party-ai-risk",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852426000085/crm-20260416.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "5.1-ai-kpis-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/ai-strategy/establish-ai-governance",
+          "dropped OTHER https://www.salesforce.com/in/artificial-intelligence/ai-compliance/",
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/ai-compliance/",
+          "dropped OTHER https://www.salesforce.com/uk/artificial-intelligence/ai-compliance/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://investor.salesforce.com/governance/governance-documents/default.aspx",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000025/salesforce2025proxysupplem.htm",
+          "gained https://www.salesforce.com/net-zero/cloud/esg-reporting/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "5.1a-ai-kpis-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/ai-strategy/establish-ai-governance",
+          "dropped OTHER https://www.salesforce.com/net-zero/cloud/esg-reporting/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained https://trailhead.salesforce.com/content/learn/modules/strategies-for-inclusive-philanthropy-quick-look/build-trust-and-responsible-ai-as-part-of-the-1-1-1-module",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000025/salesforce2025proxysupplem.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "5.2-ai-financial-impact-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/ai-strategy/establish-ai-governance",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-risk-management/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework"
+        ]
+      },
+      {
+        "measureId": "5.2a-ai-financial-impact-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/ai-strategy/establish-ai-governance",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000009/crm-20250424.htm",
+          "gained https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/white-papers/salesforce-fy25-stakeholder-impact-report.pdf"
+        ]
+      },
+      {
+        "measureId": "6.1-ai-reskilling-programme",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/ap/artificial-intelligence/ai-strategy-guide/",
+          "gained https://www.salesforce.com/company/public-policy/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/au/artificial-intelligence/ai-safety/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-safety/"
+        ]
+      },
+      {
+        "measureId": "6.1a-ai-reskilling-commitment",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852426000125/crm-q1fy27xexhibit991.htm"
+        ]
+      },
+      {
+        "measureId": "6.2-ai-training-headcount",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/ap/artificial-intelligence/ai-strategy-guide/",
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/cert-prep-salesforce-ai-associate/examine-the-ethical-considerations-of-ai",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/guides/ai-literacy-and-compliance.pdf",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "7.1-strategic-ai-partnerships",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/white-papers/salesforce-fy25-stakeholder-impact-report.pdf",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/guides/ai-literacy-and-compliance.pdf",
+          "gained https://www.salesforce.com/net-zero/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-risk-management/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework",
+          "gained https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/company/sustainability/salesforce-ai-sustainability-outlook.pdf"
+        ]
+      },
+      {
+        "measureId": "8.1-ai-literacy-community",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1108524/000110852426000085/crm-20260416.htm",
+          "dropped OTHER https://www.salesforce.com/company/public-policy/",
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/ai-strategy-guide/",
+          "dropped OTHER https://www.salesforce.com/ap/artificial-intelligence/ai-strategy-guide/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-risk-management/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework"
+        ]
+      },
+      {
+        "measureId": "8.2-ai-public-policy-advocacy",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1108524/000110852426000060/crm-20260131.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852425000025/salesforce2025proxysupplem.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/company/ethical-and-humane-use/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "9.1-ai-risk-factor-disclosure",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/ai-compliance/",
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/cert-prep-salesforce-ai-associate/examine-the-ethical-considerations-of-ai",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/company/legal/privacy/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "9.2-ai-capex-rd-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/ai-compliance/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-strategy-guide/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/explore-the-nist-ai-risk-management-framework"
+        ]
+      },
+      {
+        "measureId": "9.3-ai-business-model-risk",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.salesforce.com/company/ethical-and-humane-use/responsible-ai-governance/",
+          "dropped OTHER https://www.salesforce.com/net-zero/cloud/esg-reporting/",
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://www.salesforce.com/artificial-intelligence/ai-compliance/",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/",
+          "gained https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/guides/ai-literacy-and-compliance.pdf",
+          "gained https://www.salesforce.com/net-zero/california-climate-disclosure-laws/",
+          "gained https://www.salesforce.com/eu/artificial-intelligence/ai-governance/"
+        ]
+      },
+      {
+        "measureId": "9.4-ai-incident-disclosure",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped MIRROR https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+          "dropped OTHER https://trailhead.salesforce.com/content/learn/modules/artificial-intelligence-and-risk-management/apply-the-nist-ai-risk-management-framework",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1108524/000110852422000060/crm-20221031.htm",
+          "gained https://www.salesforce.com/artificial-intelligence/ai-governance/"
+        ]
+      }
+    ],
+    "alphabet": [
+      {
+        "measureId": "1.1-ai-strategy-objectives",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000109690625000841/nlpc_px14a6g.htm",
+          "dropped OTHER https://www.iccr.org/wp-content/uploads/2025/05/Alphabet-human-rights.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://connect.sustainalytics.com/hubfs/SFS/SFS%20-%20500th%20SPO/Alphabet-Sustainability-Bond-Framework-Second-Party-Opinion.pdf",
+          "gained https://www.alphabet.com/content/dam/rcss/alphabetweb/alphabet_com/common/sustainability/Alphabet_Sustainability_Report_2024.pdf.coredownload.pdf",
+          "gained https://www.alphabet.com/content/dam/rcss/alphabetweb/alphabet_com/es_ES/sostenibilidad/sostenibilidad/Alphabet_Sustainability_Report_2024_final.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf"
+        ]
+      },
+      {
+        "measureId": "1.1a-ai-strategic-priority",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped OTHER https://collaborate.unpri.org/group/32216/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained https://finnhub.io/api/news?id=dfb09ad1bc5ff79f26a1f5504ee3d6551be4ae1c4630d2319334e3c1ccb9cc53",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained https://storage.googleapis.com/gweb-sustainability.appspot.com/CDP/Alphabet-2018-CDP-Report.pdf"
+        ]
+      },
+      {
+        "measureId": "1.2-ai-competitive-driver",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained https://www.iccr.org/wp-content/uploads/2025/05/Alphabet-human-rights.pdf",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf"
+        ]
+      },
+      {
+        "measureId": "1.3-ai-technology-differentiation",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "1.4-ai-regulation-readiness",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped OTHER https://knowesg.com/esg-ratings/alphabet",
+          "dropped OTHER https://s206.q4cdn.com/479360582/files/doc_downloads/SustainabilityBondFramework2020.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "2.1-ai-use-cases-count",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000165204417000008/goog10-kq42016.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped MIRROR https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained https://www.smartenergydecisions.com/wp-content/uploads/2025/04/google-2024-environmental-report.pdf",
+          "gained https://collaborate.unpri.org/group/33716/home",
+          "gained https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "2.1a-ai-use-cases-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped MIRROR https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204424000022/goog-20231231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf"
+        ]
+      },
+      {
+        "measureId": "2.2-ai-production-pilot-breakdown",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped MIRROR https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained https://www.smartenergydecisions.com/wp-content/uploads/2025/04/google-2024-environmental-report.pdf",
+          "gained https://collaborate.unpri.org/group/33716/home",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "2.2a-ai-production-deployment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000165204417000008/goog10-kq42016.htm",
+          "dropped OTHER https://www.iccr.org/wp-content/uploads/2025/05/Alphabet-human-rights.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204424000022/goog-20231231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "2.3-ai-use-case-descriptions",
+        "class": "ENFORCED",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000165204417000008/goog10-kq42016.htm",
+          "dropped MIRROR https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained https://collaborate.unpri.org/group/33716/home",
+          "gained https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://storage.googleapis.com/gweb-sustainability.appspot.com/CDP/Alphabet-2018-CDP-Report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "3.1-board-oversight-ai-charter",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained https://s206.q4cdn.com/479360582/files/doc_downloads/2026/GOOG_PXY_2026_WO27_WKV_WR-IR.pdf"
+        ]
+      },
+      {
+        "measureId": "3.1a-ai-board-discussion",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000119312515336577/d82837dex31.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000130817926000342/goog-20260424.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000121465926005268/o429268px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "3.2-ai-leadership-accountability",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://share.ca/blog/proxy-alert-alphabet-shareholders-urged-to-support-ai-governance-proposal/",
+          "dropped OTHER https://finnhub.io/api/news?id=dfb09ad1bc5ff79f26a1f5504ee3d6551be4ae1c4630d2319334e3c1ccb9cc53",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://s206.q4cdn.com/479360582/files/doc_downloads/2026/GOOG_PXY_2026_WO27_WKV_WR-IR.pdf",
+          "gained https://www.iccr.org/wp-content/uploads/2025/05/Alphabet-human-rights.pdf",
+          "gained https://storage.googleapis.com/gweb-sustainability.appspot.com/CDP/Alphabet-2018-CDP-Report.pdf"
+        ]
+      },
+      {
+        "measureId": "3.3-ai-governance-committees",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://share.ca/blog/proxy-alert-alphabet-shareholders-urged-to-support-ai-governance-proposal/",
+          "dropped OTHER https://knowesg.com/esg-ratings/alphabet",
+          "dropped OTHER https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf",
+          "gained https://www.alphabet.com/content/dam/rcss/alphabetweb/alphabet_com/es_ES/sostenibilidad/sostenibilidad/Alphabet_Sustainability_Report_2024_final.pdf",
+          "gained https://collaborate.unpri.org/group/20851/home",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "3.4-ai-safety-robustness",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf",
+          "gained https://collaborate.unpri.org/group/33716/home",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained https://www.iccr.org/wp-content/uploads/2025/05/Alphabet-human-rights.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained https://www.theglobeandmail.com/business/article-ai-oversight-artificial-intelligence-shareholder-tech/"
+        ]
+      },
+      {
+        "measureId": "4.1-ai-policy-published",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.iccr.org/wp-content/uploads/2025/05/Alphabet-human-rights.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm"
+        ]
+      },
+      {
+        "measureId": "4.1a-ai-policy-internal",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "4.2-operationalisation-ai-principles",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained https://collaborate.unpri.org/group/33716/home",
+          "gained https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf"
+        ]
+      },
+      {
+        "measureId": "4.3-data-security-privacy-ai",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "4.4-third-party-ai-risk",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf",
+          "gained https://knowesg.com/esg-ratings/alphabet",
+          "gained https://collaborate.unpri.org/group/24981/home",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204424000022/goog-20231231.htm"
+        ]
+      },
+      {
+        "measureId": "5.1-ai-kpis-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000109690625000841/nlpc_px14a6g.htm",
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://knowesg.com/esg-ratings/alphabet",
+          "gained https://connect.sustainalytics.com/hubfs/SFS/SFS%20-%20500th%20SPO/Alphabet-Sustainability-Bond-Framework-Second-Party-Opinion.pdf",
+          "gained https://collaborate.unpri.org/group/11651/home"
+        ]
+      },
+      {
+        "measureId": "5.1a-ai-kpis-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped OTHER https://knowesg.com/esg-ratings/alphabet",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000165204417000008/goog10-kq42016.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://connect.sustainalytics.com/hubfs/SFS/SFS%20-%20500th%20SPO/Alphabet-Sustainability-Bond-Framework-Second-Party-Opinion.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "5.2-ai-financial-impact-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000165204424000022/goog-20231231.htm",
+          "gained https://www.smartenergydecisions.com/wp-content/uploads/2025/04/google-2024-environmental-report.pdf",
+          "gained https://collaborate.unpri.org/group/24981/home",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://www.bitget.com/wiki/alphabet-stock-earnings",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "5.2a-ai-financial-impact-qualitative",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000109690625000841/nlpc_px14a6g.htm",
+          "dropped OTHER https://knowesg.com/esg-ratings/alphabet",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://www.proxypreview.org/all-contributor-articles/alphabet-ai-driven-target-ads-pose-human-rights-risks",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://www.bitget.com/wiki/alphabet-stock-earnings",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf"
+        ]
+      },
+      {
+        "measureId": "6.1-ai-reskilling-programme",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.smartenergydecisions.com/wp-content/uploads/2025/04/google-2024-environmental-report.pdf",
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://www.theglobeandmail.com/business/article-ai-oversight-artificial-intelligence-shareholder-tech/",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://knowesg.com/esg-ratings/alphabet",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "6.1a-ai-reskilling-commitment",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://www.smartenergydecisions.com/wp-content/uploads/2025/04/google-2024-environmental-report.pdf",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://collaborate.unpri.org/group/33716/home",
+          "gained https://collaborate.unpri.org/group/20851/home"
+        ]
+      },
+      {
+        "measureId": "6.2-ai-training-headcount",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000165204421000010/goog-20201231.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000109690625000841/nlpc_px14a6g.htm",
+          "gained https://collaborate.unpri.org/group/11651/home"
+        ]
+      },
+      {
+        "measureId": "7.1-strategic-ai-partnerships",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000109690625000841/nlpc_px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained https://www.smartenergydecisions.com/wp-content/uploads/2025/04/google-2024-environmental-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained https://s206.q4cdn.com/479360582/files/doc_downloads/2026/GOOG_PXY_2026_WO27_WKV_WR-IR.pdf"
+        ]
+      },
+      {
+        "measureId": "8.1-ai-literacy-community",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped OTHER https://collaborate.unpri.org/group/33716/home",
+          "dropped OTHER https://knowesg.com/esg-ratings/alphabet",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://www.alphabet.com/content/dam/rcss/alphabetweb/alphabet_com/es_ES/sostenibilidad/sostenibilidad/Alphabet_Sustainability_Report_2024_final.pdf",
+          "dropped OTHER https://www.alphabet.com/content/dam/rcss/alphabetweb/alphabet_com/common/sustainability/Alphabet_Sustainability_Report_2024.pdf.coredownload.pdf",
+          "gained https://www.smartenergydecisions.com/wp-content/uploads/2025/04/google-2024-environmental-report.pdf",
+          "gained https://s206.q4cdn.com/479360582/files/doc_downloads/SustainabilityBondFramework2020.pdf",
+          "gained https://collaborate.unpri.org/system/files/supporting-materials/2026-05/Alphabet_Exempt-Solicitation-Letter_Final.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "8.2-ai-public-policy-advocacy",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000130817916000354/lgoog_pre14a.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "gained https://collaborate.unpri.org/group/33716/home"
+        ]
+      },
+      {
+        "measureId": "9.1-ai-risk-factor-disclosure",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1394096/000121465918003664/b514180px14a6g.htm",
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://www.theglobeandmail.com/business/article-ai-oversight-artificial-intelligence-shareholder-tech/",
+          "gained https://collaborate.unpri.org/group/33716/home",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained https://www.board-cybersecurity.com/annual-reports/tracker/20250204-alphabet-inc-cybersecurity-10k",
+          "gained https://www.iccr.org/wp-content/uploads/2025/05/Alphabet-human-rights.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "9.2-ai-capex-rd-quantified",
+        "class": "SUPPRESSED?",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "dropped OTHER https://storage.googleapis.com/gweb-sustainability.appspot.com/CDP/Alphabet-2018-CDP-Report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+          "gained https://connect.sustainalytics.com/hubfs/SFS/SFS%20-%20500th%20SPO/Alphabet-Sustainability-Bond-Framework-Second-Party-Opinion.pdf",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained https://www.bitget.com/wiki/alphabet-stock-earnings"
+        ]
+      },
+      {
+        "measureId": "9.3-ai-business-model-risk",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000119312515336577/d82837dex31.htm",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      },
+      {
+        "measureId": "9.4-ai-incident-disclosure",
+        "class": "GAINED_PRIMARY",
+        "notes": [
+          "dropped EDGAR(other-period) https://www.sec.gov/Archives/edgar/data/1652044/000121465924008582/e58244px14a6g.htm",
+          "gained https://knowesg.com/esg-ratings/alphabet",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000165204424000022/goog-20231231.htm",
+          "gained https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/2024-annual-report.pdf",
+          "gained EDGAR https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,127 @@
+company_id,name,analysis_status,total_score,measure_rows
+443,"adidas AG",failed,9,34
+238,"ASHOK LEYLAND LIMITED",failed,10,34
+438,"BANK ALBILAD SJSC",failed,14,34
+1696,"BANK OF CHANGSHA CO., LTD.",failed,19,34
+1706,"BANK OF HANGZHOU CO., LTD.",failed,5,34
+917,"Beijing New Building Materials Public Limited Company",failed,,0
+2237,"Beijing Roborock Technology Co Ltd",failed,,0
+2282,"Bestechnic Shanghai Co Ltd",failed,2,34
+1682,"BOC International (China) CO., LTD.",failed,34,34
+28,"BT GROUP PLC",failed,26,34
+892,"BYD COMPANY LIMITED",failed,16,34
+1707,"China Galaxy Securities Co., Ltd.",failed,,0
+1927,"China Nonferrous Mining Corp Ltd",failed,3,34
+947,"China Resources Microelectronics Limited",failed,,0
+1751,"Chongqing Rural Commercial Bank Co., Ltd.",failed,9,34
+2352,"CICT Mobile Communication Technology Co Ltd",failed,,0
+2447,"CSG NV",failed,0,34
+1017,"DAIKIN INDUSTRIES,LTD.",failed,9,34
+63,"Dongfang Electric Corporation Limited",failed,,0
+2347,"Empyrean Technology Co Ltd",failed,,0
+1077,"EVERGREEN MARINE CORPORATION (TAIWAN) LTD.",failed,,0
+523,"Far Eastern New Century Corporation",failed,26,34
+313,"FORD OTOMOTIV SANAYI ANONIM SIRKETI",failed,,0
+662,"Galaxy Entertainment Group Limited",failed,,0
+123,"GERDAU S.A.",failed,25,34
+1872,"Giant Network Group Co Ltd",failed,,0
+1027,"HENGLI PETROCHEMICAL CO., LTD.",failed,3,34
+1201,"Hengtong Optic-Electric CO.,LTD",failed,12,34
+303,"HLB INC.",failed,,0
+1162,"HMM CO.,LTD",failed,10,34
+2012,"HUA HONG SEMICONDUCTOR LIMITED",failed,,0
+1697,"HUATAI SECURITIES CO.,LTD.",failed,,0
+1832,"JA Solar Technology Co., Ltd.",failed,7,34
+333,"Jiangsu Hengrui Pharmaceuticals Co.,Ltd",failed,,0
+138,"LG CHEM LTD",failed,,0
+1922,"LONGi Green Energy Technology Co., Ltd.",failed,,0
+148,"MAPFRE, S.A.",failed,19,34
+482,"MatsukiyoCocokara & Co.",failed,3,34
+2212,"Maxscend Microelectronics Co Ltd",failed,,0
+1267,"METRO INC.",failed,0,34
+253,"MITSUI & CO., LTD.",failed,,0
+2037,"Ningbo Tuopu Group Co., Ltd.",failed,,0
+273,"OSAKA GAS CO., LTD.",failed,10,34
+2195,"Pharmaron Beijing Co., Ltd.",failed,,0
+1657,"POSTE ITALIANE - SOCIETA PER AZIONI",failed,50,34
+492,"RIO TINTO LIMITED",failed,7,34
+1676,"SAMSUNG SDS CO., LTD.",failed,40,34
+323,"Shanghai Baosight Software Co., Ltd.",failed,,0
+2222,"Shanghai BOCHU Electronic Technology Corp Ltd",failed,,0
+2126,"Shanghai Putailai New Energy Technology Group Co.,Ltd.",failed,0,34
+2326,"SK Square Co., Ltd.",failed,10,34
+2257,"SMOORE INTERNATIONAL HOLDINGS LIMITED",failed,,0
+363,"SOUTHERN COPPER CORPORATION",failed,3,34
+463,"Sumitomo Mitsui Trust Group, Inc.",failed,3,34
+1817,"Suzhou Dongshan Precision Manufacturing Co., Ltd",failed,,0
+2187,"Suzhou Maxwell Technologies Co., Ltd.",failed,,0
+1887,"Swiss Re AG",failed,5,34
+203,"TCL Technology Group Corporation",failed,,0
+378,"TINGYI (CAYMAN ISLANDS) HOLDING CORP.",failed,,0
+707,"TOKYO GAS CO.,LTD.",failed,21,34
+1507,"TOKYU CORPORATION",failed,0,34
+213,"TongFu Microelectronics Co., Ltd.",failed,,0
+1512,"TSURUHA HOLDINGS INC.",failed,12,34
+1562,"UNI-PRESIDENT ENTERPRISES CORP.",failed,,0
+383,"UNITED UTILITIES GROUP PLC",failed,17,34
+1582,"WAN HAI LINES LTD.",failed,,0
+393,"Wanhua Chemical Group Co., Ltd.",failed,,0
+1857,"Yonghui Superstores Co., Ltd.",failed,,0
+193,"Zhejiang Juhua Co., Ltd.",failed,,0
+2097,"ZTO EXPRESS (CAYMAN) INC.",failed,3,34
+818,"ABSA GROUP LIMITED",idle,,0
+978,"AECC AVIATION POWER CO,LTD",idle,,0
+838,"AEON CO.,LTD.",idle,,0
+703,"Aluminum Corporation of China Limited",idle,,0
+858,"AMERICAN INTERNATIONAL GROUP, INC.",idle,,0
+548,"ANHEUSER-BUSCH INBEV SA",idle,,0
+863,"ANHUI GUJING DISTILLERY COMPANY LIMITED",idle,,0
+868,"ArcelorMittal SA",idle,,0
+873,"ASIAN PAINTS LIMITED",idle,,0
+828,"ASML Holding N.V.",idle,,0
+913,"Bank of Ningbo Co., Ltd.",idle,,0
+953,"CARLISLE COMPANIES INCORPORATED",idle,,0
+983,"China CSSC Holdings Limited",idle,,0
+973,"China Merchants Bank Co., Ltd.",idle,,0
+673,"China Ruyi Holdings Limited",idle,,0
+688,"CHOLAMANDALAM INVESTMENT AND FINANCE COMPANY LIMITED",idle,,0
+993,"CITIZENS FINANCIAL GROUP, INC.",idle,,0
+1203,"CNPC Capital Company Limited",idle,,0
+1003,"Companhia Energetica de Minas Gerais - CEMIG",idle,,0
+1018,"DAIWA HOUSE INDUSTRY CO., LTD.",idle,,0
+1118,"DANONE SA",idle,,0
+743,"DSV A/S",idle,,0
+793,"E INK HOLDINGS INC.",idle,,0
+1088,"FEDEX CORPORATION",idle,,0
+1093,"FISERV, INC.",idle,,0
+1128,"Focus Media Information Technology Co., Ltd.",idle,,0
+1143,"Henan Shuanghui Investment & Development Co., Ltd.",idle,,0
+1153,"HONG LEONG BANK BERHAD",idle,,0
+1158,"Hunan Valin Steel Co., Ltd.",idle,,0
+1178,"INFO EDGE (INDIA) LIMITED",idle,,0
+1183,"INNER MONGOLIA YITAI COAL CO.,LTD.",idle,,0
+1188,"INTERNATIONAL CONTAINER TERMINAL SERVICES, INC.",idle,,0
+733,"KGI Financial Holding Co., Ltd.",idle,,0
+1223,"Kimberly-Clark de Mexico, S.A.B. de C.V.",idle,,0
+1213,"KT&G Corporation",idle,,0
+1258,"LIVE NATION ENTERTAINMENT, INC.",idle,,0
+1263,"LOTES CO., LTD.",idle,,0
+738,"Lotus Bakeries NV",idle,,0
+773,"MediaTek Inc.",idle,,0
+1268,"MinebeaMitsumi Inc.",idle,,0
+1298,"MonotaRO Co Ltd",idle,,0
+1313,"NASPERS LIMITED",idle,,0
+1323,"NEWMONT CORPORATION",idle,,0
+768,"Nintendo Co., Ltd.",idle,,0
+1308,"NIPPON STEEL CORPORATION",idle,,0
+1348,"PICC Property and Casualty Company Limited",idle,,0
+663,"PROLOGIS, INC.",idle,,0
+1353,"PTC INC.",idle,,0
+588,"REDEIA CORPORACION, S.A.",idle,,0
+758,"Richter Gedeon Vegyeszeti Gyar Nyilvanosan Mukodo Rt.",idle,,0
+808,"SAIC Motor Corporation Limited",idle,,0
+763,"Shanghai Zhangjiang Hi-Tech Park Development Co.,Ltd",idle,,0
+543,"Sichuan Changhong Electric Co., Ltd.",idle,,0
+1515,"TAIWAN BUSINESS BANK, LTD.",idle,,0
+788,"Talaat Moustafa Group Holding Company TMG Holding SAE",idle,,0
+813,"West Japan Railway Company",idle,,0

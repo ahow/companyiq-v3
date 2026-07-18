@@ -1,0 +1,1372 @@
+{
+  "amazon": [
+    {
+      "measureId": "1.1a-ai-strategic-priority",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "1.1-ai-strategy-objectives",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "1.2-ai-competitive-driver",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "1.3-ai-technology-differentiation",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "1.4-ai-regulation-readiness",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "2.1a-ai-use-cases-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "2.1-ai-use-cases-count",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "2.2a-ai-production-deployment",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "2.2-ai-production-pilot-breakdown",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "2.3-ai-use-case-descriptions",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "3.1a-ai-board-discussion",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "3.1-board-oversight-ai-charter",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "3.2-ai-leadership-accountability",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "3.3-ai-governance-committees",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "3.4-ai-safety-robustness",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "4.1a-ai-policy-internal",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "4.1-ai-policy-published",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "4.2-operationalisation-ai-principles",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "4.3-data-security-privacy-ai",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "4.4-third-party-ai-risk",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "5.1a-ai-kpis-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "5.1-ai-kpis-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "5.2a-ai-financial-impact-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "5.2-ai-financial-impact-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "6.1a-ai-reskilling-commitment",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "6.1-ai-reskilling-programme",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "6.2-ai-training-headcount",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "7.1-strategic-ai-partnerships",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "8.1-ai-literacy-community",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "8.2-ai-public-policy-advocacy",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "9.1-ai-risk-factor-disclosure",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "9.2-ai-capex-rd-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "9.3-ai-business-model-risk",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:48.189279"
+    },
+    {
+      "measureId": "9.4-ai-incident-disclosure",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:48.189279"
+    }
+  ],
+  "oracle": [
+    {
+      "measureId": "1.1a-ai-strategic-priority",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "1.1-ai-strategy-objectives",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "1.2-ai-competitive-driver",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "1.3-ai-technology-differentiation",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "1.4-ai-regulation-readiness",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "2.1a-ai-use-cases-qualitative",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "2.1-ai-use-cases-count",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "2.2a-ai-production-deployment",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "2.2-ai-production-pilot-breakdown",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "2.3-ai-use-case-descriptions",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "3.1a-ai-board-discussion",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "3.1-board-oversight-ai-charter",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "3.2-ai-leadership-accountability",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "3.3-ai-governance-committees",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "3.4-ai-safety-robustness",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "4.1a-ai-policy-internal",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "4.1-ai-policy-published",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "4.2-operationalisation-ai-principles",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "4.3-data-security-privacy-ai",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "4.4-third-party-ai-risk",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "5.1a-ai-kpis-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "5.1-ai-kpis-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "5.2a-ai-financial-impact-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "5.2-ai-financial-impact-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "6.1a-ai-reskilling-commitment",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "6.1-ai-reskilling-programme",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "6.2-ai-training-headcount",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "7.1-strategic-ai-partnerships",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "8.1-ai-literacy-community",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "8.2-ai-public-policy-advocacy",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "9.1-ai-risk-factor-disclosure",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "9.2-ai-capex-rd-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "9.3-ai-business-model-risk",
+      "verdict": "Partial",
+      "score": 0.5,
+      "confidence": "Low",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:07:28.775602"
+    },
+    {
+      "measureId": "9.4-ai-incident-disclosure",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:07:28.775602"
+    }
+  ],
+  "meta": [
+    {
+      "measureId": "1.1a-ai-strategic-priority",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "1.1-ai-strategy-objectives",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "1.2-ai-competitive-driver",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "1.3-ai-technology-differentiation",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "1.4-ai-regulation-readiness",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 4,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "2.1a-ai-use-cases-qualitative",
+      "verdict": "Partial",
+      "score": 0.5,
+      "confidence": "Low",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "2.1-ai-use-cases-count",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "2.2a-ai-production-deployment",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "2.2-ai-production-pilot-breakdown",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "2.3-ai-use-case-descriptions",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "3.1a-ai-board-discussion",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "3.1-board-oversight-ai-charter",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "3.2-ai-leadership-accountability",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "3.3-ai-governance-committees",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "3.4-ai-safety-robustness",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "4.1a-ai-policy-internal",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "4.1-ai-policy-published",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "4.2-operationalisation-ai-principles",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "4.3-data-security-privacy-ai",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "4.4-third-party-ai-risk",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "5.1a-ai-kpis-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "5.1-ai-kpis-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "5.2a-ai-financial-impact-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "5.2-ai-financial-impact-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "6.1a-ai-reskilling-commitment",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "6.1-ai-reskilling-programme",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "6.2-ai-training-headcount",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "7.1-strategic-ai-partnerships",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "8.1-ai-literacy-community",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "8.2-ai-public-policy-advocacy",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "9.1-ai-risk-factor-disclosure",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 4,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "9.2-ai-capex-rd-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "9.3-ai-business-model-risk",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:08:22.214762"
+    },
+    {
+      "measureId": "9.4-ai-incident-disclosure",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:08:22.214762"
+    }
+  ],
+  "salesforce": [
+    {
+      "measureId": "1.1a-ai-strategic-priority",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "1.1-ai-strategy-objectives",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "1.2-ai-competitive-driver",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "1.3-ai-technology-differentiation",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "1.4-ai-regulation-readiness",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 4,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "2.1a-ai-use-cases-qualitative",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "2.1-ai-use-cases-count",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "2.2a-ai-production-deployment",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "2.2-ai-production-pilot-breakdown",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "2.3-ai-use-case-descriptions",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "3.1a-ai-board-discussion",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "3.1-board-oversight-ai-charter",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "3.2-ai-leadership-accountability",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "3.3-ai-governance-committees",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "3.4-ai-safety-robustness",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "4.1a-ai-policy-internal",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "4.1-ai-policy-published",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "4.2-operationalisation-ai-principles",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 4,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "4.3-data-security-privacy-ai",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "4.4-third-party-ai-risk",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "5.1a-ai-kpis-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "5.1-ai-kpis-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "5.2a-ai-financial-impact-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "5.2-ai-financial-impact-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "6.1a-ai-reskilling-commitment",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "6.1-ai-reskilling-programme",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "6.2-ai-training-headcount",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "7.1-strategic-ai-partnerships",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "8.1-ai-literacy-community",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "8.2-ai-public-policy-advocacy",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 5,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "9.1-ai-risk-factor-disclosure",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 4,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "9.2-ai-capex-rd-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "9.3-ai-business-model-risk",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:59.453507"
+    },
+    {
+      "measureId": "9.4-ai-incident-disclosure",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:59.453507"
+    }
+  ],
+  "alphabet": [
+    {
+      "measureId": "1.1a-ai-strategic-priority",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "1.1-ai-strategy-objectives",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "1.2-ai-competitive-driver",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "1.3-ai-technology-differentiation",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "1.4-ai-regulation-readiness",
+      "verdict": "Partial",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "2.1a-ai-use-cases-qualitative",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "2.1-ai-use-cases-count",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "2.2a-ai-production-deployment",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "2.2-ai-production-pilot-breakdown",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "2.3-ai-use-case-descriptions",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "3.1a-ai-board-discussion",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "3.1-board-oversight-ai-charter",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "3.2-ai-leadership-accountability",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "3.3-ai-governance-committees",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "3.4-ai-safety-robustness",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "4.1a-ai-policy-internal",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "4.1-ai-policy-published",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "4.2-operationalisation-ai-principles",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "4.3-data-security-privacy-ai",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "4.4-third-party-ai-risk",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "5.1a-ai-kpis-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "5.1-ai-kpis-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "5.2a-ai-financial-impact-qualitative",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "5.2-ai-financial-impact-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "6.1a-ai-reskilling-commitment",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "6.1-ai-reskilling-programme",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "6.2-ai-training-headcount",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "7.1-strategic-ai-partnerships",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "8.1-ai-literacy-community",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "8.2-ai-public-policy-advocacy",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 1,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "9.1-ai-risk-factor-disclosure",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 3,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "9.2-ai-capex-rd-quantified",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "9.3-ai-business-model-risk",
+      "verdict": "Yes",
+      "score": 1.0,
+      "confidence": "High",
+      "nQuotes": 2,
+      "created_at": "2026-06-20 21:04:08.799060"
+    },
+    {
+      "measureId": "9.4-ai-incident-disclosure",
+      "verdict": "No",
+      "score": 0.0,
+      "confidence": "High",
+      "nQuotes": 0,
+      "created_at": "2026-06-20 21:04:08.799060"
+    }
+  ]
+}

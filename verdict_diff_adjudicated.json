@@ -1,0 +1,1278 @@
+[
+  {
+    "company": "Amazon",
+    "companyId": 853,
+    "measureId": "2.1a-ai-use-cases-qualitative",
+    "title": "Does the company reference multiple AI use cases qualitatively?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "tm261382-1_nonfiling - none - 10.4724512s - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+        "cls": "EDGAR-DEF14A-proxy",
+        "form": ""
+      },
+      {
+        "source": "tm261382-1_nonfiling - none - 10.4724512s - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+        "cls": "EDGAR-DEF14A-proxy",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on EDGAR-DEF14A-proxy (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Amazon",
+    "companyId": 853,
+    "measureId": "2.2a-ai-production-deployment",
+    "title": "Has the company stated any AI use case as in production?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "tm261382-1_nonfiling - none - 10.4724512s - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1018724/000110465926041026/tm261382-1_def14a.htm",
+        "cls": "EDGAR-DEF14A-proxy",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on EDGAR-DEF14A-proxy (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Amazon",
+    "companyId": 853,
+    "measureId": "3.4-ai-safety-robustness",
+    "title": "Does the company disclose AI safety and robustness testing practices?",
+    "category": "AI Governance and Oversight",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "National framework for AI assurance in Australian government - AWS",
+        "url": "https://aws.amazon.com/blogs/publicsector/national-framework-for-ai-assurance-in-australian-government-guidance-when-building-with-aws-ai-ml-solutions/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "National framework for AI assurance in Australian government - AWS",
+        "url": "https://aws.amazon.com/blogs/publicsector/national-framework-for-ai-assurance-in-australian-government-guidance-when-building-with-aws-ai-ml-solutions/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "National framework for AI assurance in Australian government - AWS",
+        "url": "https://aws.amazon.com/blogs/publicsector/national-framework-for-ai-assurance-in-australian-government-guidance-when-building-with-aws-ai-ml-solutions/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Responsible AI in action: How Data Reply red teaming ... - AWS",
+        "url": "https://aws.amazon.com/blogs/machine-learning/responsible-ai-in-action-how-data-reply-red-teaming-supports-generative-ai-safety-on-aws/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Our commitment to the responsible use of AI - Amazon News",
+        "url": "https://www.aboutamazon.com/news/company-news/amazon-responsible-ai",
+        "cls": "company-marketing",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on company-marketing (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Oracle",
+    "companyId": 552,
+    "measureId": "2.2a-ai-production-deployment",
+    "title": "Has the company stated any AI use case as in production?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "Oracle Financial Services ranks 1st in AI for Risk Technology",
+        "url": "https://www.oracle.com/financial-services/chartis-ai-report/",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Oracle",
+    "companyId": 552,
+    "measureId": "2.3-ai-use-case-descriptions",
+    "title": "Does the company provide qualitative descriptions of AI use cases in key business areas?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "AI vs. GenAI vs. ML: Key Differences - Artificial Intelligence - Oracle",
+        "url": "https://www.oracle.com/artificial-intelligence/ai-vs-gen-ai-vs-ml/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Generative AI Capabilities - Oracle",
+        "url": "https://www.oracle.com/artificial-intelligence/generative-ai/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Machine Learning Services - Oracle",
+        "url": "https://www.oracle.com/artificial-intelligence/machine-learning/",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "AI vs. GenAI vs. ML: Key Differences - Artificial Intelligence - Oracle",
+        "url": "https://www.oracle.com/artificial-intelligence/ai-vs-gen-ai-vs-ml/",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Oracle",
+    "companyId": 552,
+    "measureId": "4.2-operationalisation-ai-principles",
+    "title": "Does the company describe how AI principles are operationalised (controls, processes, KPIs)?",
+    "category": "AI Policies and Ethical Considerations",
+    "v3j_verdict": "Partial",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0.5,
+    "v3k_score": 1,
+    "v3j_cites": [
+      {
+        "source": "Raising the bar for trustworthy AI at Oracle: ISO/IEC 42001 ...",
+        "url": "https://blogs.oracle.com/cloud-infrastructure/raising-the-bar-for-trustworthy-ai-at-oracle",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "ISO/IEC 42001 Certification: Oracle's Responsible AI Management ...",
+        "url": "https://www.oracle.com/il-en/corporate/responsible-ai-iso-42001/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "A Practical Guide to Implementing the NIST AI Risk Management ...",
+        "url": "https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "AI Data Platform - Oracle",
+        "url": "https://www.oracle.com/ai-data-platform/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Building Trustworthy AI at Oracle | ai-data-science",
+        "url": "https://blogs.oracle.com/ai-and-datascience/building-trustworthy-ai-at-oracle",
+        "cls": "company-marketing",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "Raising the bar for trustworthy AI at Oracle: ISO/IEC 42001 ...",
+        "url": "https://blogs.oracle.com/cloud-infrastructure/raising-the-bar-for-trustworthy-ai-at-oracle",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "ISO/IEC 42001 Certification: Oracle's Responsible AI Management ...",
+        "url": "https://www.oracle.com/il-en/corporate/responsible-ai-iso-42001/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "A Practical Guide to Implementing the NIST AI Risk Management ...",
+        "url": "https://www.ateam-oracle.com/ciso-perspectives-a-practical-guide-to-implementing-the-nist-ai-risk-management-framework-ai-rmf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites company-marketing"
+  },
+  {
+    "company": "Oracle",
+    "companyId": 552,
+    "measureId": "8.2-ai-public-policy-advocacy",
+    "title": "Does the company engage in public policy advocacy related to AI ethics and governance?",
+    "category": "Community and Societal Impact",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "Raising the bar for trustworthy AI at Oracle: ISO/IEC 42001 ...",
+        "url": "https://blogs.oracle.com/cloud-infrastructure/raising-the-bar-for-trustworthy-ai-at-oracle",
+        "cls": "company-marketing",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on company-marketing (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Oracle",
+    "companyId": 552,
+    "measureId": "9.3-ai-business-model-risk",
+    "title": "Does the company disclose AI as a competitive risk to its existing business model?",
+    "category": "AI Risk Disclosure and Capital Allocation",
+    "v3j_verdict": "No",
+    "v3k_verdict": "Partial",
+    "v3j_score": 0,
+    "v3k_score": 0.5,
+    "v3j_cites": [],
+    "v3k_cites": [
+      {
+        "source": "10-K - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1341439/000095017025087926/orcl-20250531.htm",
+        "cls": "EDGAR-primary",
+        "form": "10-K"
+      }
+    ],
+    "classification": "OTHER",
+    "reason": "No->Partial"
+  },
+  {
+    "company": "Meta",
+    "companyId": 1918,
+    "measureId": "1.2-ai-competitive-driver",
+    "title": "Is AI mentioned as a material driver of the company's competitive strategy?",
+    "category": "AI Strategy and Integration",
+    "v3j_verdict": "Partial",
+    "v3k_verdict": "No",
+    "v3j_score": 0.5,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "meta-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026025532/meta-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "meta-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026025532/meta-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "meta-20251231 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "classification": "OTHER",
+    "reason": "Partial->No"
+  },
+  {
+    "company": "Meta",
+    "companyId": 1918,
+    "measureId": "2.1a-ai-use-cases-qualitative",
+    "title": "Does the company reference multiple AI use cases qualitatively?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "Partial",
+    "v3j_score": 1,
+    "v3k_score": 0.5,
+    "v3j_cites": [
+      {
+        "source": "meta-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026025532/meta-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "meta-20260331 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "meta-20260331 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "meta-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026025532/meta-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "meta-20251231 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "classification": "RESAMPLE",
+    "reason": "v3j & v3k both have EDGAR primary in pack; verdict flip is grader resampling, not source loss"
+  },
+  {
+    "company": "Meta",
+    "companyId": 1918,
+    "measureId": "3.3-ai-governance-committees",
+    "title": "Has the company established a cross-functional AI governance/ethics committee at management level?",
+    "category": "AI Governance and Oversight",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "meta-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026025532/meta-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "meta-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026025532/meta-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "classification": "RESAMPLE",
+    "reason": "v3j & v3k both have EDGAR primary in pack; verdict flip is grader resampling, not source loss"
+  },
+  {
+    "company": "NVIDIA",
+    "companyId": 1312,
+    "measureId": "2.1a-ai-use-cases-qualitative",
+    "title": "Does the company reference multiple AI use cases qualitatively?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "Partial",
+    "v3j_score": 1,
+    "v3k_score": 0.5,
+    "v3j_cites": [
+      {
+        "source": "[PDF] FORM 10-K NVIDIA CORPORATION - Fortune",
+        "url": "https://fortune.com/company-assets/1936/quartr/annual-report-10-k-4ccfc-2026-02-25-09-13-43.pdf",
+        "cls": "other-web",
+        "form": "10-K"
+      },
+      {
+        "source": "[PDF] FORM 10-K NVIDIA CORPORATION - Fortune",
+        "url": "https://fortune.com/company-assets/1936/quartr/annual-report-10-k-4ccfc-2026-02-25-09-13-43.pdf",
+        "cls": "other-web",
+        "form": "10-K"
+      },
+      {
+        "source": "[PDF] FORM 10-K NVIDIA CORPORATION - Fortune",
+        "url": "https://fortune.com/company-assets/1936/quartr/annual-report-10-k-4ccfc-2026-02-25-09-13-43.pdf",
+        "cls": "other-web",
+        "form": "10-K"
+      },
+      {
+        "source": "AI Cybersecurity Solutions for your Business - NVIDIA",
+        "url": "https://www.nvidia.com/en-us/solutions/ai/cybersecurity/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2025",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/NVIDIA-Sustainability-Report-Fiscal-Year-2025.pdf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "[PDF] FORM 10-K NVIDIA CORPORATION",
+        "url": "https://investor.nvidia.com/files/doc_financials/2026/q4/10K-NVDA.pdf",
+        "cls": "other-web",
+        "form": "10-K"
+      },
+      {
+        "source": "AI Cybersecurity Solutions for your Business - NVIDIA",
+        "url": "https://www.nvidia.com/en-us/solutions/ai/cybersecurity/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "nvda-20260125 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "NVIDIA",
+    "companyId": 1312,
+    "measureId": "4.2-operationalisation-ai-principles",
+    "title": "Does the company describe how AI principles are operationalised (controls, processes, KPIs)?",
+    "category": "AI Policies and Ethical Considerations",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "Partial",
+    "v3j_score": 1,
+    "v3k_score": 0.5,
+    "v3j_cites": [
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2025",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/NVIDIA-Sustainability-Report-Fiscal-Year-2025.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] frontier ai risk assessment | nvidia",
+        "url": "https://images.nvidia.com/content/pdf/NVIDIA-Frontier-AI-Risk-Assessment.pdf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2025",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/NVIDIA-Sustainability-Report-Fiscal-Year-2025.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] frontier ai risk assessment | nvidia",
+        "url": "https://images.nvidia.com/content/pdf/NVIDIA-Frontier-AI-Risk-Assessment.pdf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "NVIDIA",
+    "companyId": 1312,
+    "measureId": "4.3-data-security-privacy-ai",
+    "title": "Does the AI policy explicitly cover data security and personal data privacy?",
+    "category": "AI Policies and Ethical Considerations",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2024",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/FY2024-NVIDIA-Corporate-Sustainability-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "NVIDIA",
+    "companyId": 1312,
+    "measureId": "5.1a-ai-kpis-qualitative",
+    "title": "Does the company reference internally tracked AI metrics qualitatively?",
+    "category": "AI Performance and Impact Measurement",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2025",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/NVIDIA-Sustainability-Report-Fiscal-Year-2025.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] NVIDIA Sustainability Report Fiscal Year 2025",
+        "url": "https://images.nvidia.com/aem-dam/Solutions/documents/NVIDIA-Sustainability-Report-Fiscal-Year-2025.pdf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "NVIDIA",
+    "companyId": 1312,
+    "measureId": "9.1-ai-risk-factor-disclosure",
+    "title": "Does the company disclose AI as a material risk factor in its 10-K, 20-F or equivalent annual filing?",
+    "category": "AI Risk Disclosure and Capital Allocation",
+    "v3j_verdict": "No",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0,
+    "v3k_score": 1,
+    "v3j_cites": [],
+    "v3k_cites": [
+      {
+        "source": "nvda-20260125 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites EDGAR-primary"
+  },
+  {
+    "company": "Microsoft",
+    "companyId": 553,
+    "measureId": "2.1a-ai-use-cases-qualitative",
+    "title": "Does the company reference multiple AI use cases qualitatively?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Partial",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0.5,
+    "v3k_score": 1,
+    "v3j_cites": [
+      {
+        "source": "Microsoft Corp (MSFT) Vote Yes: Item #10 \u2013 Report on the Risks of ...",
+        "url": "https://www.sec.gov/Archives/edgar/data/789019/000121465925016180/u1110251px14a6g.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "Microsoft Corp (MSFT) Vote Yes: Item #10 \u2013 Report on the Risks of ...",
+        "url": "https://www.sec.gov/Archives/edgar/data/789019/000121465925016180/u1110251px14a6g.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites EDGAR-primary"
+  },
+  {
+    "company": "Microsoft",
+    "companyId": 553,
+    "measureId": "3.1-board-oversight-ai-charter",
+    "title": "Does the board (or a board committee) have an explicit, documented charter mandate for AI strategy and risk?",
+    "category": "AI Governance and Oversight",
+    "v3j_verdict": "No",
+    "v3k_verdict": "Partial",
+    "v3j_score": 0,
+    "v3k_score": 0.5,
+    "v3j_cites": [
+      {
+        "source": "[PDF] Responsible AI Transparency Report - Microsoft",
+        "url": "https://cdn-dynmedia-1.microsoft.com/is/content/microsoftcorp/microsoft/final/en-us/microsoft-brand/documents/responsible-aI-transparency-report-2024.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] Task Force on Climate-related Financial Disclosures 2024 report",
+        "url": "https://cdn-dynmedia-1.microsoft.com/is/content/microsoftcorp/microsoft/msc/documents/presentations/CSR/2024-Microsoft-TCFD-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "[PDF] 2025 Responsible AI Transparency Report - Microsoft",
+        "url": "https://cdn-dynmedia-1.microsoft.com/is/content/microsoftcorp/microsoft/msc/documents/presentations/CSR/Responsible-AI-Transparency-Report-2025-vertical.pdf",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "[PDF] Task Force on Climate-related Financial Disclosures 2024 report",
+        "url": "https://cdn-dynmedia-1.microsoft.com/is/content/microsoftcorp/microsoft/msc/documents/presentations/CSR/2024-Microsoft-TCFD-Report.pdf",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "OTHER",
+    "reason": "No->Partial"
+  },
+  {
+    "company": "Microsoft",
+    "companyId": 553,
+    "measureId": "3.1a-ai-board-discussion",
+    "title": "Is AI risk or oversight discussed by the board in proxy or 10-K?",
+    "category": "AI Governance and Oversight",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "DEF 14A - Proxy Statement 2025 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312525245150/d908201ddef14a.htm",
+        "cls": "EDGAR-DEF14A-proxy",
+        "form": "DEF 14A"
+      },
+      {
+        "source": "DEF 14A - Proxy Statement 2025 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312525245150/d908201ddef14a.htm",
+        "cls": "EDGAR-DEF14A-proxy",
+        "form": "DEF 14A"
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on EDGAR-DEF14A-proxy (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Microsoft",
+    "companyId": 553,
+    "measureId": "4.3-data-security-privacy-ai",
+    "title": "Does the AI policy explicitly cover data security and personal data privacy?",
+    "category": "AI Policies and Ethical Considerations",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "Responsible AI Principles and Approach - Microsoft",
+        "url": "https://www.microsoft.com/en-us/ai/principles-and-approach",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Responsible AI: Ethical policies and practices - Microsoft",
+        "url": "https://www.microsoft.com/en-us/ai/responsible-ai",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "Responsible AI Principles and Approach - Microsoft",
+        "url": "https://www.microsoft.com/en-us/ai/principles-and-approach",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Responsible AI: Ethical policies and practices - Microsoft",
+        "url": "https://www.microsoft.com/en-us/ai/responsible-ai",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Microsoft",
+    "companyId": 553,
+    "measureId": "7.1-strategic-ai-partnerships",
+    "title": "Has the company disclosed strategic partnerships with foundation-model providers or hyperscalers?",
+    "category": "AI Partnerships and Ecosystem Engagement",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "DEF 14A - Proxy Statement 2025 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312525245150/d908201ddef14a.htm",
+        "cls": "EDGAR-DEF14A-proxy",
+        "form": "DEF 14A"
+      },
+      {
+        "source": "Microsoft's AI safety policies - Microsoft On the Issues",
+        "url": "https://blogs.microsoft.com/on-the-issues/2023/10/26/microsofts-ai-safety-policies/",
+        "cls": "company-marketing",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on EDGAR-DEF14A-proxy (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "Salesforce",
+    "companyId": 420,
+    "measureId": "2.1a-ai-use-cases-qualitative",
+    "title": "Does the company reference multiple AI use cases qualitatively?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Partial",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0.5,
+    "v3k_score": 1,
+    "v3j_cites": [
+      {
+        "source": "crm-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1108524/000110852426000085/crm-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "crm-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1108524/000110852426000085/crm-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "Trusted AI Resources | Salesforce",
+        "url": "https://www.salesforce.com/company/ethical-and-humane-use/explore-trusted-ai-resources/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Trusted AI Resources | Salesforce",
+        "url": "https://www.salesforce.com/company/ethical-and-humane-use/explore-trusted-ai-resources/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Trusted AI Resources | Salesforce",
+        "url": "https://www.salesforce.com/company/ethical-and-humane-use/explore-trusted-ai-resources/",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "What is AI Governance? A guide to trust & ethics | Salesforce",
+        "url": "https://www.salesforce.com/artificial-intelligence/ai-governance/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Trusted AI Resources | Salesforce",
+        "url": "https://www.salesforce.com/company/ethical-and-humane-use/explore-trusted-ai-resources/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "Trusted AI Resources | Salesforce",
+        "url": "https://www.salesforce.com/company/ethical-and-humane-use/explore-trusted-ai-resources/",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites other-web"
+  },
+  {
+    "company": "Salesforce",
+    "companyId": 420,
+    "measureId": "2.3-ai-use-case-descriptions",
+    "title": "Does the company provide qualitative descriptions of AI use cases in key business areas?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Partial",
+    "v3k_verdict": "No",
+    "v3j_score": 0.5,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "[PDF] Salesforce.com Annual Report 2025 Form 10-K (NYSE:CRM ...",
+        "url": "https://stocklight.com/stocks/us/nyse-crm/salesforce-com/annual-reports/nyse-crm-2025-10K-25711276.pdf",
+        "cls": "third-party-mirror",
+        "form": "10-K"
+      },
+      {
+        "source": "crm-20260416 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1108524/000110852426000085/crm-20260416.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "OTHER",
+    "reason": "Partial->No"
+  },
+  {
+    "company": "Salesforce",
+    "companyId": 420,
+    "measureId": "4.4-third-party-ai-risk",
+    "title": "Does the company have a policy for managing third-party AI risks?",
+    "category": "AI Policies and Ethical Considerations",
+    "v3j_verdict": "No",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0,
+    "v3k_score": 1,
+    "v3j_cites": [],
+    "v3k_cites": [
+      {
+        "source": "AI Compliance: Frameworks for Ethical Automation - Salesforce",
+        "url": "https://www.salesforce.com/artificial-intelligence/ai-compliance/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "AI Compliance: Frameworks for Ethical Automation | Salesforce IN",
+        "url": "https://www.salesforce.com/in/artificial-intelligence/ai-compliance/",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "AI Compliance: Frameworks for Ethical Automation | Salesforce UK",
+        "url": "https://www.salesforce.com/uk/artificial-intelligence/ai-compliance/",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites other-web"
+  },
+  {
+    "company": "Alphabet",
+    "companyId": 2063,
+    "measureId": "1.1a-ai-strategic-priority",
+    "title": "Does the company name AI as a stated strategic priority?",
+    "category": "AI Strategy and Integration",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "goog-20251231 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [],
+    "classification": "COLLATERAL?",
+    "reason": "v3j cited EDGAR primary; v3k pack lost EDGAR primary for this measure"
+  },
+  {
+    "company": "Alphabet",
+    "companyId": 2063,
+    "measureId": "4.3-data-security-privacy-ai",
+    "title": "Does the AI policy explicitly cover data security and personal data privacy?",
+    "category": "AI Policies and Ethical Considerations",
+    "v3j_verdict": "No",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0,
+    "v3k_score": 1,
+    "v3j_cites": [
+      {
+        "source": "goog-20260424 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000130817926000342/goog-20260424.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "goog-20260424 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000130817926000342/goog-20260424.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "ALPHABET INC. - DEF14A - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+        "cls": "EDGAR-DEF14A-proxy",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "goog-20260424 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000130817926000342/goog-20260424.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "goog-20260424 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000130817926000342/goog-20260424.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "ALPHABET INC. - DEF14A - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000130817925000511/goog012701-def14a.htm",
+        "cls": "EDGAR-DEF14A-proxy",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites EDGAR-primary"
+  },
+  {
+    "company": "Alphabet",
+    "companyId": 2063,
+    "measureId": "9.3-ai-business-model-risk",
+    "title": "Does the company disclose AI as a competitive risk to its existing business model?",
+    "category": "AI Risk Disclosure and Capital Allocation",
+    "v3j_verdict": "No",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0,
+    "v3k_score": 1,
+    "v3j_cites": [
+      {
+        "source": "goog-20251231 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "goog-20251231 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "goog-20251231 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      },
+      {
+        "source": "goog-20251231 - SEC.gov",
+        "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+        "cls": "EDGAR-primary",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites EDGAR-primary"
+  },
+  {
+    "company": "360 Security",
+    "companyId": 1914,
+    "measureId": "2.2a-ai-production-deployment",
+    "title": "Has the company stated any AI use case as in production?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Partial",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0.5,
+    "v3k_score": 1,
+    "v3j_cites": [
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites other-web"
+  },
+  {
+    "company": "360 Security",
+    "companyId": 1914,
+    "measureId": "2.3-ai-use-case-descriptions",
+    "title": "Does the company provide qualitative descriptions of AI use cases in key business areas?",
+    "category": "AI Deployment and Use Cases",
+    "v3j_verdict": "Partial",
+    "v3k_verdict": "Yes",
+    "v3j_score": 0.5,
+    "v3k_score": 1,
+    "v3j_cites": [
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "IMPROVED",
+    "reason": "v3k now cites other-web"
+  },
+  {
+    "company": "360 Security",
+    "companyId": 1914,
+    "measureId": "5.1-ai-kpis-quantified",
+    "title": "Does the company disclose quantified AI-specific KPIs that it tracks internally?",
+    "category": "AI Performance and Impact Measurement",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "No",
+    "v3j_score": 1,
+    "v3k_score": 0,
+    "v3j_cites": [
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  },
+  {
+    "company": "360 Security",
+    "companyId": 1914,
+    "measureId": "5.2a-ai-financial-impact-qualitative",
+    "title": "Does the company qualitatively attribute revenue or cost impact to AI?",
+    "category": "AI Performance and Impact Measurement",
+    "v3j_verdict": "Yes",
+    "v3k_verdict": "Partial",
+    "v3j_score": 1,
+    "v3k_score": 0.5,
+    "v3j_cites": [
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "v3k_cites": [
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      },
+      {
+        "source": "360 Security Technology Inc. \u5e74\u5ea6\u62a5\u544a (cninfo official)",
+        "url": "https://static.cninfo.com.cn/finalpage/2026-04-30/1225257356.PDF",
+        "cls": "other-web",
+        "form": ""
+      }
+    ],
+    "classification": "ENFORCED",
+    "reason": "v3j Yes relied on other-web (no EDGAR primary); removed by source-quality gate"
+  }
+]

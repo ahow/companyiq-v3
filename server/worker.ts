@@ -310,6 +310,20 @@ async function maybeHandleBatchCompletion(
       "[Worker] Batch " + batchId + " complete with no failures: " + completed + " succeeded — finalising",
     );
     await storage.completeBatchRun(batchId);
+
+    // Option A: suppress Results snapshot for single-company / re-exam batches.
+    // These are typically auto-reexaminations or manual single-company analyses
+    // that clutter the Results page with 1-company rows. The company's scores are
+    // still updated live; they'll be included in the next full-run or consolidated
+    // snapshot. Only suppress when there's no list_id (re-exams never have one)
+    // AND total <= 1.
+    if (total <= 1 && !listId) {
+      console.log(
+        "[Worker] Batch " + batchId + " is a single-company batch with no list — skipping Results snapshot",
+      );
+      return;
+    }
+
     setTimeout(async () => {
       try {
         await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
