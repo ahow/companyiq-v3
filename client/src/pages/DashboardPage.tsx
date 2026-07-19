@@ -43,6 +43,8 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const [newCompany, setNewCompany] = useState({ name: "", isin: "", sector: "", country: "", domain: "" });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [reviewExpanded, setReviewExpanded] = useState(false);
+  const [anomalyExpanded, setAnomalyExpanded] = useState(false);
+  const [selectedAnomalyIds, setSelectedAnomalyIds] = useState<Set<number>>(new Set());
 
   const { data: companiesData, isLoading } = useQuery({
     queryKey: ["companies"],
@@ -54,6 +56,44 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     queryKey: ["batchStatus"],
     queryFn: api.getBatchStatus,
     refetchInterval: 3000,
+  });
+
+  const { data: anomalies = [] } = useQuery({
+    queryKey: ["scoreAnomalies"],
+    queryFn: () => api.getScoreAnomalies("pending"),
+    refetchInterval: 30000,
+  });
+
+  const dismissAnomalyMutation = useMutation({
+    mutationFn: (id: number) => api.dismissAnomaly(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scoreAnomalies"] }),
+  });
+
+  const reexamineAnomalyMutation = useMutation({
+    mutationFn: (id: number) => api.reexamineAnomaly(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scoreAnomalies"] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+    },
+  });
+
+  const bulkDismissMutation = useMutation({
+    mutationFn: (ids: number[]) => api.bulkDismissAnomalies(ids),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scoreAnomalies"] });
+      setSelectedAnomalyIds(new Set());
+    },
+  });
+
+  const bulkReexamineMutation = useMutation({
+    mutationFn: (ids: number[]) => api.bulkReexamineAnomalies(ids),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scoreAnomalies"] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      setSelectedAnomalyIds(new Set());
+    },
   });
 
   const { data: lists = [] } = useQuery({
@@ -394,6 +434,139 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Score Anomalies — Review Suggested */}
+      {anomalies.length > 0 && (
+        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-purple-600" />
+              <span className="text-sm font-semibold text-purple-900">
+                Review Suggested — {anomalies.length} outlier{anomalies.length !== 1 ? "s" : ""} detected
+              </span>
+              <span className="text-xs text-purple-600">
+                Companies with scores significantly different from sector/country peers
+              </span>
+            </div>
+            <button
+              onClick={() => setAnomalyExpanded((v) => !v)}
+              className="text-xs text-purple-700 underline hover:text-purple-900"
+            >
+              {anomalyExpanded ? "Collapse" : "Expand"}
+            </button>
+          </div>
+
+          {anomalyExpanded && (
+            <div className="mt-3">
+              {/* Bulk action bar */}
+              {selectedAnomalyIds.size > 0 && (
+                <div className="flex items-center gap-3 mb-2 p-2 bg-purple-100 rounded">
+                  <span className="text-xs font-medium text-purple-800">{selectedAnomalyIds.size} selected</span>
+                  <button
+                    onClick={() => bulkReexamineMutation.mutate(Array.from(selectedAnomalyIds))}
+                    disabled={bulkReexamineMutation.isPending}
+                    className="px-2 py-1 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+                  >
+                    Re-examine selected
+                  </button>
+                  <button
+                    onClick={() => bulkDismissMutation.mutate(Array.from(selectedAnomalyIds))}
+                    disabled={bulkDismissMutation.isPending}
+                    className="px-2 py-1 text-xs bg-white border border-purple-300 text-purple-700 rounded hover:bg-purple-50 disabled:opacity-50"
+                  >
+                    Dismiss selected
+                  </button>
+                  <button
+                    onClick={() => setSelectedAnomalyIds(new Set())}
+                    className="px-2 py-1 text-xs text-purple-600 hover:text-purple-800"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-purple-100 sticky top-0">
+                    <tr>
+                      <th className="p-1.5 text-left">
+                        <input
+                          type="checkbox"
+                          checked={selectedAnomalyIds.size === anomalies.length && anomalies.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedAnomalyIds(new Set(anomalies.map((a: any) => a.id)));
+                            } else {
+                              setSelectedAnomalyIds(new Set());
+                            }
+                          }}
+                        />
+                      </th>
+                      <th className="p-1.5 text-left text-purple-800">Company</th>
+                      <th className="p-1.5 text-left text-purple-800">Sector</th>
+                      <th className="p-1.5 text-left text-purple-800">Country</th>
+                      <th className="p-1.5 text-right text-purple-800">Actual</th>
+                      <th className="p-1.5 text-right text-purple-800">Expected</th>
+                      <th className="p-1.5 text-right text-purple-800">Residual</th>
+                      <th className="p-1.5 text-left text-purple-800">Reason</th>
+                      <th className="p-1.5 text-center text-purple-800">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {anomalies.map((a: any) => (
+                      <tr key={a.id} className={`border-t border-purple-100 ${selectedAnomalyIds.has(a.id) ? "bg-purple-100" : "hover:bg-purple-50"}`}>
+                        <td className="p-1.5">
+                          <input
+                            type="checkbox"
+                            checked={selectedAnomalyIds.has(a.id)}
+                            onChange={(e) => {
+                              const next = new Set(selectedAnomalyIds);
+                              if (e.target.checked) next.add(a.id);
+                              else next.delete(a.id);
+                              setSelectedAnomalyIds(next);
+                            }}
+                          />
+                        </td>
+                        <td className="p-1.5 font-medium text-gray-900">{a.companyName}</td>
+                        <td className="p-1.5 text-gray-600">{a.sector || "—"}</td>
+                        <td className="p-1.5 text-gray-600">{a.country || "—"}</td>
+                        <td className={`p-1.5 text-right font-medium ${a.residual > 0 ? "text-green-700" : "text-red-700"}`}>
+                          {a.actualScore?.toFixed(0)}%
+                        </td>
+                        <td className="p-1.5 text-right text-gray-600">{a.expectedScore?.toFixed(0)}%</td>
+                        <td className={`p-1.5 text-right font-bold ${a.residual > 0 ? "text-green-700" : "text-red-700"}`}>
+                          {a.residual > 0 ? "+" : ""}{a.residual?.toFixed(0)}pp
+                        </td>
+                        <td className="p-1.5 text-gray-500 max-w-xs truncate" title={a.reason}>{a.reason}</td>
+                        <td className="p-1.5 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => reexamineAnomalyMutation.mutate(a.id)}
+                              disabled={reexamineAnomalyMutation.isPending}
+                              className="px-1.5 py-0.5 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+                              title="Re-examine this company"
+                            >
+                              Re-examine
+                            </button>
+                            <button
+                              onClick={() => dismissAnomalyMutation.mutate(a.id)}
+                              disabled={dismissAnomalyMutation.isPending}
+                              className="px-1.5 py-0.5 text-xs text-purple-600 border border-purple-300 rounded hover:bg-purple-50 disabled:opacity-50"
+                              title="Dismiss — score is correct"
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

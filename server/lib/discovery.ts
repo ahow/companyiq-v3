@@ -950,7 +950,7 @@ function buildMultiDocumentQueries(companyName: string, framework: Framework): s
   return queries;
 }
 
-function buildDomainQueries(companyName: string, domain: string, framework: Framework): string[] {
+function buildDomainQueries(companyName: string, domain: string, framework: Framework, topicPhrases?: string[]): string[] {
   const topic = (framework.topicDescription || framework.name || "").toLowerCase();
   const frameworkName = (framework.name || "").toLowerCase();
 
@@ -962,7 +962,7 @@ function buildDomainQueries(companyName: string, domain: string, framework: Fram
     `site:${domain}/investors`,
   ];
 
-  // Topic-specific domain queries
+  // Topic-specific domain queries (legacy hard-coded branches kept for backward compat)
   const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
   const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
   const isESGBroad = /esg|sustainability|environmental|social/i.test(topic);
@@ -1007,6 +1007,16 @@ function buildDomainQueries(companyName: string, domain: string, framework: Fram
       `site:${domain} sustainability report`,
       `site:${domain} ESG`,
     );
+  }
+
+  // Topic-lexicon-driven queries (topic-agnostic, works for any framework)
+  // These complement the hard-coded branches above and ensure coverage for
+  // novel frameworks where no hard-coded branch matches.
+  if (topicPhrases && topicPhrases.length > 0) {
+    const lexiconQueries = topicPhrases.slice(0, 8).map(term => `site:${domain} ${term}`);
+    for (const q of lexiconQueries) {
+      if (!baseQueries.includes(q)) baseQueries.push(q);
+    }
   }
 
   return baseQueries;
@@ -1105,20 +1115,38 @@ function resolveLocaleProfile(country?: string | null): LocaleProfile | null {
 function buildLocalizedAIQueries(
   companyName: string,
   framework: Framework,
-  profile: LocaleProfile
+  profile: LocaleProfile,
+  topicPhrases?: string[]
 ): string[] {
   const topic = framework.topicDescription || framework.name || "";
   const frameworkName = (framework.name || "").toLowerCase();
   const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
-  if (!isAIRelated) return [];
   const queries: string[] = [];
-  for (const term of profile.aiTerms) {
-    queries.push(`"${companyName}" ${term}`);
+
+  // Use locale's hard-coded AI terms for AI-related frameworks
+  if (isAIRelated) {
+    for (const term of profile.aiTerms) {
+      queries.push(`"${companyName}" ${term}`);
+    }
+    // Pair the strongest AI term with a native annual-report term to surface filings
+    if (profile.aiTerms[0] && profile.reportTerms[0]) {
+      queries.push(`"${companyName}" ${profile.aiTerms[0]} ${profile.reportTerms[0]}`);
+    }
   }
-  // Pair the strongest AI term with a native annual-report term to surface filings
-  if (profile.aiTerms[0] && profile.reportTerms[0]) {
-    queries.push(`"${companyName}" ${profile.aiTerms[0]} ${profile.reportTerms[0]}`);
+
+  // For ANY framework: also use topic lexicon terms with report terms
+  // This ensures localized search fires for climate, ESG, or novel frameworks too
+  if (topicPhrases && topicPhrases.length > 0) {
+    // Use up to 3 topic phrases paired with the company name
+    for (const term of topicPhrases.slice(0, 3)) {
+      queries.push(`"${companyName}" ${term}`);
+    }
+    // Pair first topic phrase with native report term
+    if (profile.reportTerms[0]) {
+      queries.push(`"${companyName}" ${topicPhrases[0]} ${profile.reportTerms[0]}`);
+    }
   }
+
   return queries;
 }
 
@@ -1953,9 +1981,10 @@ async function runRelevanceGate(
 
 ACCEPT ONLY:
 - Corporate reports, filings, policy documents, governance pages, sustainability reports, annual reports, and other substantive disclosures that are SPECIFICALLY ABOUT THIS EXACT COMPANY
-- Documents hosted on this company's own corporate domain
+- Documents hosted on this company's own corporate domain that are RELEVANT TO THE ANALYSIS TOPIC
 - Regulatory filings specifically naming this company
 - Industry reports where this company is a primary subject (not just mentioned in passing)
+- The document must be plausibly relevant to the ANALYSIS TOPIC described below — not just any page about the company
 
 REJECT:
 - Documents about a DIFFERENT company, even if in the same industry (e.g., if searching for BNP Paribas, reject documents about DBS Bank, AXA, Santander, etc.)
@@ -1965,6 +1994,7 @@ REJECT:
 - YouTube videos, social media posts (unless they link to official disclosures)
 - Documents from unrelated organizations
 - Blog posts or thought-leadership articles from consulting firms unless they are a detailed case study of this specific company
+- Pages that are about the company but CLEARLY UNRELATED to the analysis topic (e.g., product catalogs, careers pages, investor relations boilerplate with no topic content)
 
 CRITICAL RULES:
 1. If the URL domain belongs to ANOTHER company (e.g., dbs.com, axa-im.ch when searching for BNP Paribas), REJECT it unless it explicitly discusses the target company
@@ -2155,13 +2185,50 @@ export async function searchCompanyDocuments(opts: {
   }
   if (effectiveDomain) {
     console.log(`[${companyName}] Running domain-anchored search lane (domain: ${effectiveDomain})`);
-    const domainQueries = buildDomainQueries(companyName, effectiveDomain, framework);
+    const domainQueries = buildDomainQueries(companyName, effectiveDomain, framework, topicPhrases);
     for (const query of domainQueries) {
       const results = await webSearch(query, { num: searchDepth });
       for (const r of results) addCandidate(r, "domain");
     }
   } else {
     console.log(`[${companyName}] No domain available, skipping domain-anchored search`);
+  }
+
+  // Lane 2b: Topic-lexicon own-site probe (topic-agnostic)
+  // Uses the framework's derived topic lexicon to search the company's own domain
+  // for dedicated topic pages that may not rank for generic queries.
+  // This catches pages like aboutamazon.com/ai, company.com/sustainability, etc.
+  if (effectiveDomain && topicPhrases.length > 0) {
+    console.log(`[${companyName}] Running topic-lexicon own-site probe (${topicPhrases.length} terms)`);
+    // Use the top 6 topic phrases as individual site-scoped queries
+    const probeTerms = topicPhrases.slice(0, 6);
+    for (const term of probeTerms) {
+      const query = `site:${effectiveDomain} ${term}`;
+      const results = await webSearch(query, { num: 5 });
+      for (const r of results) addCandidate(r, "topic-probe");
+    }
+    // Also try common corporate URL patterns with slugified topic terms
+    const slugTerms = topicPhrases.slice(0, 3).map(t => t.toLowerCase().replace(/\s+/g, "-"));
+    for (const slug of slugTerms) {
+      const probeUrls = [
+        `https://${effectiveDomain}/${slug}`,
+        `https://www.${effectiveDomain}/${slug}`,
+        `https://${effectiveDomain}/about/${slug}`,
+      ];
+      for (const url of probeUrls) {
+        if (!seenUrls.has(url)) {
+          seenUrls.add(url);
+          allCandidates.push({
+            url,
+            title: `Topic probe: ${slug}`,
+            snippet: "",
+            lane: "topic-probe-url",
+            priority: -30, // High priority — deterministic own-site topic page
+          });
+          laneCounts["topic-probe-url"] = (laneCounts["topic-probe-url"] || 0) + 1;
+        }
+      }
+    }
   }
 
   // Lane 3: Trusted source search (framework-specific sources take priority)
@@ -2197,7 +2264,7 @@ export async function searchCompanyDocuments(opts: {
   // home-country Google locale (gl/hl) so foreign-language AI disclosures are
   // surfaced. Gated by an env flag and only runs for non-English locales.
   if (process.env.MULTILINGUAL_DISCOVERY_ENABLED !== "false" && localeProfile) {
-    const localizedQueries = buildLocalizedAIQueries(companyName, framework, localeProfile);
+    const localizedQueries = buildLocalizedAIQueries(companyName, framework, localeProfile, topicPhrases);
     if (localizedQueries.length > 0) {
       console.log(`[${companyName}] Running localized ${localeProfile.lang} search lane (gl=${localeProfile.gl}, hl=${localeProfile.hl})`);
       for (const query of localizedQueries) {

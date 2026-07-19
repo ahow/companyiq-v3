@@ -132,4 +132,12 @@ export const api = {
   // Diagnostics
   getBatchRuns: () => request("/batch/runs"),
   getRecentErrors: () => request("/diagnostics/recent-errors"),
+
+  // Score Anomalies
+  getScoreAnomalies: (status: string = "pending") => request(`/score-anomalies?status=${status}`),
+  getAnomalyCount: () => request("/score-anomalies/count"),
+  dismissAnomaly: (id: number) => request(`/score-anomalies/${id}/dismiss`, { method: "POST" }),
+  reexamineAnomaly: (id: number) => request(`/score-anomalies/${id}/reexamine`, { method: "POST" }),
+  bulkDismissAnomalies: (ids: number[]) => request("/score-anomalies/bulk-dismiss", { method: "POST", body: JSON.stringify({ ids }) }),
+  bulkReexamineAnomalies: (ids: number[]) => request("/score-anomalies/bulk-reexamine", { method: "POST", body: JSON.stringify({ ids }) }),
 };

@@ -343,6 +343,32 @@ export const analysisResults = pgTable("analysis_results", {
   workspaceIdx: index("results_workspace_idx").on(table.workspaceId),
 }));
 
+// ─── Score Anomalies (Expected-Score Outlier Detection) ─────────────────────
+
+export const scoreAnomalies = pgTable("score_anomalies", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  batchId: integer("batch_id").references(() => batchRuns.id).notNull(),
+  frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
+  companyId: integer("company_id").references(() => companies.id).notNull(),
+  companyName: text("company_name").notNull(),
+  sector: text("sector"),
+  country: text("country"),
+  actualScore: real("actual_score").notNull(),
+  expectedScore: real("expected_score").notNull(),
+  residual: real("residual").notNull(), // actual - expected (positive = over, negative = under)
+  peerGroupSize: integer("peer_group_size").notNull(),
+  peerGroupMedian: real("peer_group_median").notNull(),
+  reason: text("reason").notNull(), // human-readable explanation
+  status: text("status").notNull().default("pending"), // pending | reviewed | re_examined | dismissed
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  reviewedAt: timestamp("reviewed_at"),
+}, (table) => ({
+  workspaceIdx: index("anomalies_workspace_idx").on(table.workspaceId),
+  batchIdx: index("anomalies_batch_idx").on(table.batchId),
+  statusIdx: index("anomalies_status_idx").on(table.workspaceId, table.status),
+}));
+
 // ─── Type Exports ──────────────────────────────────────────────────────────
 
 export type User = typeof users.$inferSelect;
@@ -368,3 +394,5 @@ export type WorkspaceSetting = typeof workspaceSettings.$inferSelect;
 export type AnalysisResultSnapshot = typeof analysisResults.$inferSelect;
 export type ExcludedSource = typeof excludedSources.$inferSelect;
 export type PlatformSource = typeof platformSources.$inferSelect;
+export type ScoreAnomaly = typeof scoreAnomalies.$inferSelect;
+export type InsertScoreAnomaly = typeof scoreAnomalies.$inferInsert;

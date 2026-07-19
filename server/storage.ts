@@ -881,6 +881,24 @@ export async function getFailedJobsForBatch(
   }));
 }
 
+/** Return all jobs for a batch (any status). Used by anomaly detection to identify completed companies. */
+export async function getJobsForBatch(
+  batchId: number,
+): Promise<Array<{ id: number; companyId: number; companyName: string; status: string }>> {
+  const r = await db.execute(sql`
+    SELECT id, company_id, company_name, status
+    FROM analysis_jobs
+    WHERE batch_id = ${batchId}
+    ORDER BY id ASC
+  `);
+  return (r.rows as any[]).map(row => ({
+    id: Number(row.id),
+    companyId: Number(row.company_id),
+    companyName: String(row.company_name || ""),
+    status: String(row.status || ""),
+  }));
+}
+
 /**
  * Reset the terminal-failed jobs of a batch back to `pending` (attempts=0,
  * cleared error/worker/claim) so they can be re-enqueued. Also resets the
@@ -1627,4 +1645,104 @@ export async function createTrustedSource(data: { domain: string; description?: 
     description: data.description || null,
   }).returning();
   return source;
+}
+
+// ─── Score Anomalies Storage ──────────────────────────────────────────────
+
+export async function getScoreAnomalies(workspaceId: number, status: string = "pending") {
+  return db
+    .select()
+    .from(schema.scoreAnomalies)
+    .where(
+      and(
+        eq(schema.scoreAnomalies.workspaceId, workspaceId),
+        eq(schema.scoreAnomalies.status, status)
+      )
+    )
+    .orderBy(sql`abs(${schema.scoreAnomalies.residual}) DESC`);
+}
+
+export async function countPendingAnomalies(workspaceId: number): Promise<number> {
+  const r = await db.execute(sql`
+    SELECT count(*)::int AS cnt FROM score_anomalies
+    WHERE workspace_id = ${workspaceId} AND status = 'pending'
+  `);
+  return Number((r.rows as any[])[0]?.cnt || 0);
+}
+
+export async function getAnomalyById(id: number, workspaceId: number) {
+  const [row] = await db
+    .select()
+    .from(schema.scoreAnomalies)
+    .where(
+      and(
+        eq(schema.scoreAnomalies.id, id),
+        eq(schema.scoreAnomalies.workspaceId, workspaceId)
+      )
+    )
+    .limit(1);
+  return row || null;
+}
+
+export async function getAnomaliesByIds(ids: number[], workspaceId: number) {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(schema.scoreAnomalies)
+    .where(
+      and(
+        inArray(schema.scoreAnomalies.id, ids),
+        eq(schema.scoreAnomalies.workspaceId, workspaceId)
+      )
+    );
+}
+
+export async function dismissAnomaly(id: number, workspaceId: number) {
+  await db
+    .update(schema.scoreAnomalies)
+    .set({ status: "dismissed", reviewedAt: new Date() })
+    .where(
+      and(
+        eq(schema.scoreAnomalies.id, id),
+        eq(schema.scoreAnomalies.workspaceId, workspaceId)
+      )
+    );
+}
+
+export async function markAnomalyReexamined(id: number, workspaceId: number) {
+  await db
+    .update(schema.scoreAnomalies)
+    .set({ status: "re_examined", reviewedAt: new Date() })
+    .where(
+      and(
+        eq(schema.scoreAnomalies.id, id),
+        eq(schema.scoreAnomalies.workspaceId, workspaceId)
+      )
+    );
+}
+
+export async function bulkDismissAnomalies(ids: number[], workspaceId: number) {
+  if (ids.length === 0) return;
+  await db
+    .update(schema.scoreAnomalies)
+    .set({ status: "dismissed", reviewedAt: new Date() })
+    .where(
+      and(
+        inArray(schema.scoreAnomalies.id, ids),
+        eq(schema.scoreAnomalies.workspaceId, workspaceId)
+      )
+    );
+}
+
+export async function bulkMarkAnomaliesReexamined(ids: number[], workspaceId: number) {
+  if (ids.length === 0) return;
+  await db
+    .update(schema.scoreAnomalies)
+    .set({ status: "re_examined", reviewedAt: new Date() })
+    .where(
+      and(
+        inArray(schema.scoreAnomalies.id, ids),
+        eq(schema.scoreAnomalies.workspaceId, workspaceId)
+      )
+    );
 }

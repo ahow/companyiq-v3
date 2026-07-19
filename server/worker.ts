@@ -15,6 +15,7 @@ import { runAnalysisPipeline, type PipelineResult } from "./lib/pipeline.js";
 import * as storage from "./storage.js";
 import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
+import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
 import { isCreditAlertActive } from "./lib/credit-breaker.js";
 
 const QUEUE_NAME = "analysis";
@@ -330,6 +331,14 @@ async function maybeHandleBatchCompletion(
       } catch (err: any) {
         console.error("[Worker] Failed to save results for batch " + batchId + ": " + err.message);
       }
+      // Run anomaly detection after save (non-blocking)
+      try {
+        const jobRows = await storage.getJobsForBatch(batchId);
+        const companyIds = jobRows.filter((j: any) => j.status === "completed").map((j: any) => j.companyId || j.company_id);
+        await detectScoreAnomalies({ batchId, workspaceId, frameworkId, companyIds });
+      } catch (err: any) {
+        console.warn("[Worker] Anomaly detection failed for batch " + batchId + ": " + err.message);
+      }
     }, 60000);
   } finally {
     finalizingBatches.delete(batchId);
@@ -351,6 +360,14 @@ export async function finalizeBatchAndSave(
   try {
     await storage.clearSystemAlert("batch_review", String(batchId));
   } catch { /* non-fatal */ }
+  // Run anomaly detection after finalise
+  try {
+    const jobRows = await storage.getJobsForBatch(batchId);
+    const companyIds = jobRows.filter((j: any) => j.status === "completed").map((j: any) => j.companyId || j.company_id);
+    await detectScoreAnomalies({ batchId, workspaceId, frameworkId, companyIds });
+  } catch (err: any) {
+    console.warn("[Worker] Anomaly detection failed for batch " + batchId + ": " + err.message);
+  }
 }
 
 /**

@@ -1463,3 +1463,84 @@ apiRouter.get("/diagnostics/recent-errors", async (req: Request, res: Response) 
     res.status(500).json({ error: error.message });
   }
 });
+
+// ─── Score Anomalies (Expected-Score Outlier Detection) ───────────────────
+
+apiRouter.get("/score-anomalies", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const status = (req.query.status as string) || "pending";
+    const anomalies = await storage.getScoreAnomalies(workspaceId, status);
+    res.json(anomalies);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.get("/score-anomalies/count", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const count = await storage.countPendingAnomalies(workspaceId);
+    res.json({ count });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/score-anomalies/:id/dismiss", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(req.params.id);
+    await storage.dismissAnomaly(id, workspaceId);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/score-anomalies/:id/reexamine", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(req.params.id);
+    // Get the anomaly to find the company
+    const anomaly = await storage.getAnomalyById(id, workspaceId);
+    if (!anomaly) return res.status(404).json({ error: "Anomaly not found" });
+    // Enqueue re-examination
+    const result = await storage.enqueueReexamination(anomaly.companyId, anomaly.frameworkId, workspaceId);
+    // Mark anomaly as re_examined
+    await storage.markAnomalyReexamined(id, workspaceId);
+    res.json({ success: true, batchId: result.batchId, jobId: result.jobId });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/score-anomalies/bulk-dismiss", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids required" });
+    await storage.bulkDismissAnomalies(ids, workspaceId);
+    res.json({ success: true, dismissed: ids.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/score-anomalies/bulk-reexamine", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids required" });
+    const anomalies = await storage.getAnomaliesByIds(ids, workspaceId);
+    const results: Array<{ companyId: number; batchId: number; jobId: number }> = [];
+    for (const a of anomalies) {
+      const r = await storage.enqueueReexamination(a.companyId, a.frameworkId, a.workspaceId);
+      results.push({ companyId: a.companyId, batchId: r.batchId, jobId: r.jobId });
+    }
+    await storage.bulkMarkAnomaliesReexamined(ids, workspaceId);
+    res.json({ success: true, reexamined: results.length, results });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});

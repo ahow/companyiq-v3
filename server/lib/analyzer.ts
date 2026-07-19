@@ -1214,10 +1214,14 @@ export async function analyzeCompanyMeasures(opts: {
         }
       }
 
-      // Fallback: if BM25 retrieval returns < 1000 chars, use more text
-      const finalEvidence = evidenceText.length < 1000 && combinedText.length > 1000
-        ? combinedText.slice(0, 10000)
-        : evidenceText;
+      // Fallback: if BM25 retrieval returns < 1000 chars, do NOT dump generic
+      // corpus text. The old approach (combinedText.slice(0, 10000)) fed non-topic
+      // text to the scorer, causing false positives when general governance language
+      // was conflated with topic-specific evidence. Instead, keep the thin evidence
+      // as-is — the scorer will see insufficient evidence and score accordingly.
+      // The deep-read second pass (below) handles the genuine under-evidenced case
+      // where topic content exists in the corpus but wasn't surfaced by normal BM25.
+      const finalEvidence = evidenceText;
 
       let measureResult: MeasureResult;
 
