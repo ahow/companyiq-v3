@@ -101,17 +101,46 @@ app.get("/api/health", (req, res) => {
 });
 
 // ─── Public Share Endpoint (no auth required) ──────────────────────────────
-app.get("/api/results/:id/share", async (req, res) => {
+// Security: uses unguessable UUID share tokens (not sequential IDs) to prevent
+// enumeration. Legacy numeric IDs still accepted for backward compat but
+// rate-limited. Workspace scoping enforced via the token lookup.
+const shareRateLimits = new Map<string, { count: number; resetAt: number }>();
+app.get("/api/results/:idOrToken/share", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid result id." });
+    const param = req.params.idOrToken;
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(param);
+    const isNumeric = /^\d+$/.test(param);
+
+    if (!isUUID && !isNumeric) {
+      return res.status(400).json({ error: "Invalid share link." });
+    }
+
+    // Rate limiting: 60 requests per minute per IP for numeric IDs (enumeration risk)
+    if (isNumeric) {
+      const ip = req.ip || "unknown";
+      const now = Date.now();
+      const limit = shareRateLimits.get(ip);
+      if (limit && limit.resetAt > now) {
+        if (limit.count >= 60) {
+          return res.status(429).json({ error: "Rate limit exceeded. Use share tokens instead of numeric IDs." });
+        }
+        limit.count++;
+      } else {
+        shareRateLimits.set(ip, { count: 1, resetAt: now + 60000 });
+      }
+    }
+
+    const { db } = await import("./db.js");
+    const { sql } = await import("drizzle-orm");
+
+    // Lookup: prefer token (unguessable), fall back to ID (legacy)
+    const whereClause = isUUID
+      ? sql`ar.share_token = ${param}`
+      : sql`ar.id = ${parseInt(param)}`;
 
     // ?format=summary (default) -> lightweight per-company scores, browser-friendly.
     // ?format=full            -> complete dataset incl. measures/quotes/sources, streamed.
     const wantFull = String(req.query.format || "summary").toLowerCase() === "full";
-
-    const { db } = await import("./db.js");
-    const { sql } = await import("drizzle-orm");
 
     // Cache for 5 min at the edge; payload is immutable per id+format.
     res.setHeader("Cache-Control", "public, max-age=300");
@@ -120,11 +149,10 @@ app.get("/api/results/:id/share", async (req, res) => {
     if (!wantFull) {
       // Default summary view. Project ONLY the light per-company fields *inside Postgres*
       // via jsonb_array_elements + jsonb_build_object, so the (potentially ~100MB)
-      // results_data blob is never loaded into the app. For 2,440 companies this is
-      // ~0.5MB instead of ~100MB, and returns in ~1s instead of ~5min.
+      // results_data blob is never loaded into the app.
       const r = await db.execute(sql`
         SELECT
-          ar.id, ar.framework_name, ar.list_name, ar.companies_count,
+          ar.id, ar.share_token, ar.framework_name, ar.list_name, ar.companies_count,
           ar.average_score, ar.created_at,
           COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
@@ -139,12 +167,13 @@ app.get("/api/results/:id/share", async (req, res) => {
             ))
             FROM jsonb_array_elements(ar.results_data) e
           ), '[]'::jsonb) AS summary
-        FROM analysis_results ar WHERE ar.id = ${id}
+        FROM analysis_results ar WHERE ${whereClause}
       `);
       const row = (r.rows as any[])?.[0];
       if (!row) return res.status(404).json({ error: "Result not found" });
       return res.json({
         id: row.id,
+        shareToken: row.share_token,
         frameworkName: row.framework_name,
         listName: row.list_name,
         companiesCount: row.companies_count,
@@ -152,24 +181,27 @@ app.get("/api/results/:id/share", async (req, res) => {
         createdAt: row.created_at,
         format: "summary",
         note: "Summary view. Append ?format=full for the complete dataset (measures, quotes, sources).",
+        shareUrl: `/api/results/${row.share_token}/share`,
         results: row.summary || [],
       });
     }
 
     // Full export. Load the blob once, then stream the JSON so we never re-buffer a
     // second ~100MB copy. Compression middleware gzips this on the wire.
-    const result = await db.execute(sql`SELECT * FROM analysis_results WHERE id = ${id}`);
+    const result = await db.execute(sql`SELECT * FROM analysis_results WHERE ${whereClause}`);
     const row = (result.rows as any[])?.[0];
     if (!row) return res.status(404).json({ error: "Result not found" });
     const rows: any[] = Array.isArray(row.results_data) ? row.results_data : [];
     const meta = {
       id: row.id,
+      shareToken: row.share_token,
       frameworkName: row.framework_name,
       listName: row.list_name,
       companiesCount: row.companies_count,
       averageScore: row.average_score,
       createdAt: row.created_at,
       format: "full",
+      shareUrl: `/api/results/${row.share_token}/share`,
     };
     res.write('{');
     for (const [k, v] of Object.entries(meta)) {

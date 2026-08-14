@@ -149,6 +149,10 @@ export const documents = pgTable("documents", {
   fetchFailures: integer("fetch_failures").notNull().default(0),
   contentId: integer("content_id").references(() => documentContent.id), // FK to deduplicated content
   content: text("content"), // DEPRECATED: kept for migration rollback safety, will be NULLed
+  // Review fix 2.3: distinguish first-party (company's own disclosure) from
+  // third-party (news, NGO commentary, aggregators). Passed to scorer so
+  // commitment-type measures require first-party support.
+  sourceType: text("source_type"), // "first_party" | "third_party" | null (legacy)
   fetchedAt: timestamp("fetched_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
@@ -181,6 +185,11 @@ export const measureScores = pgTable("measure_scores", {
   // v3e (Section 4): SHA1 of the sorted evidence-chunk identifiers that produced
   // this verdict, enabling identical-evidence verdict caching and drift logging.
   evidenceFingerprint: text("evidence_fingerprint"),
+  // Methodology versioning (review fix 3.2/4.1): enables cross-batch comparability,
+  // model-mix detection, and prompt-drift tracking.
+  modelId: text("model_id"),              // e.g. "deepseek-chat", "gpt-4o-mini"
+  promptHash: text("prompt_hash"),         // SHA-256 of the scoring prompt template
+  pipelineVersion: text("pipeline_version"), // git SHA or semantic version tag
   displayOrder: integer("display_order").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({

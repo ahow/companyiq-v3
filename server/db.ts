@@ -425,6 +425,14 @@ export async function initializeDatabase(): Promise<void> {
       `);
     }
 
+    // ─── Review Fix Columns (Aug 2026) ─────────────────────────────────
+    // Fix 5: Methodology versioning on measure_scores
+    await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS model_id TEXT`);
+    await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS prompt_hash TEXT`);
+    await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS pipeline_version TEXT`);
+    // Fix 6: First-party vs third-party evidence tagging
+    await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_type TEXT`);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────────
     await seedDefaultSettings();
 

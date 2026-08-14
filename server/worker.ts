@@ -456,15 +456,28 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         capUsed: diagnostics?.capUsed ?? undefined,
       };
 
+      // Compute coverage-adjusted score: exclude backfilled (not_assessed) measures
+      const fullMeasureScores = buildFullMeasureScores(allMeasures, scores);
+      const assessedMeasures = fullMeasureScores.filter(m => !m.backfilled);
+      const assessedCount = assessedMeasures.length;
+      const metCount = assessedMeasures.filter(m => m.score === 1).length;
+      const partialCount = assessedMeasures.filter(m => m.score === 0.5).length;
+      const coveragePct = measureCount > 0 ? Math.round((assessedCount / measureCount) * 100) : 100;
+      // Score computed over assessed measures only (no downward bias from back-fill)
+      const adjustedScore = assessedCount > 0
+        ? Math.round(((metCount + partialCount * 0.5) / assessedCount) * 100)
+        : (company.totalScore || 0);
+
       resultsData.push({
         companyId: company.id,
         companyName: company.name,
         isin: company.isin || undefined,
         sector: company.sector || undefined,
         country: company.country || undefined,
-        totalScore: company.totalScore || 0,
-        measuresMetCount: company.measuresMetCount || 0,
-        measuresTotalCount: company.measuresTotalCount || 0,
+        totalScore: adjustedScore,
+        measuresMetCount: metCount,
+        measuresTotalCount: assessedCount,
+        measuresCoverage: coveragePct,
         summary: company.summary || undefined,
         coverageLevel,
         missingTier1,
@@ -474,7 +487,7 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         lowEvidence: fetchCoverage?.lowEvidence ?? undefined,
         manifest,
         sourceDocuments,
-        measureScores: buildFullMeasureScores(allMeasures, scores),
+        measureScores: fullMeasureScores,
       });
     }
 
@@ -511,9 +524,10 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       }
     }
 
-    // Calculate average score
+    // Calculate average score (exclude null/backfilled measures from per-company scores)
+    // Each company's totalScore is already computed from assessed measures only (see below).
     const avgScore = Math.round(
-      resultsData.reduce((sum, r) => sum + r.totalScore, 0) / resultsData.length
+      resultsData.reduce((sum, r) => sum + (r.totalScore || 0), 0) / resultsData.length
     );
 
     const shareToken = crypto.randomUUID();
@@ -543,14 +557,18 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
     }
   } catch (error: any) {
     console.error("[Worker] Failed to save analysis results for batch " + batchId + ": " + error.message);
+  } finally {
+    // Always release the guard so a failed save doesn't permanently block re-saving.
+    savingBatches.delete(batchId);
   }
 }
 
 /**
  * Merge a company's measure_scores rows against the FULL framework measure list
  * so the saved record always contains EVERY measure. Measures with no score row
- * are emitted explicitly at score 0 / verdict "No" / no evidence, flagged with
- * `backfilled: true` for transparency. Never fabricates evidence.
+ * are emitted with score: null / verdict: "not_assessed" and flagged with
+ * `backfilled: true`. These are EXCLUDED from the total_score denominator so
+ * they don't create downward bias. Never fabricates evidence.
  */
 function buildFullMeasureScores(allMeasures: any[], scores: any[]): any[] {
   const byId = new Map<string, any>();
@@ -570,14 +588,15 @@ function buildFullMeasureScores(allMeasures: any[], scores: any[]): any[] {
       };
     }
     // Back-filled: measure was not scored for this company (no data) — include it
-    // explicitly rather than silently dropping it.
+    // explicitly with null score / "not_assessed" verdict. These are excluded from
+    // the total_score denominator so they don't create downward bias.
     return {
       measureId: m.measureId,
       title: m.title || "",
       category: m.category || "",
-      score: 0,
-      verdict: "No",
-      confidence: "Low",
+      score: null,
+      verdict: "not_assessed",
+      confidence: null,
       evidenceSummary: undefined,
       quotes: [],
       backfilled: true,
