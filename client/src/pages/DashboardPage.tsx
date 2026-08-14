@@ -155,9 +155,12 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
 
   const maxBucketCount = Math.max(...scoreDistribution.buckets.map((b) => b.count), 1);
 
+  // Off-peak scheduling toggle
+  const [offPeakOnly, setOffPeakOnly] = useState(false);
+
   // Mutations
   const analyzeMutation = useMutation({
-    mutationFn: (opts: { frameworkId: number; listId?: number }) => api.analyze(opts),
+    mutationFn: (opts: { frameworkId: number; listId?: number; offPeakOnly?: boolean }) => api.analyze(opts),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
       queryClient.invalidateQueries({ queryKey: ["companies"] });
@@ -266,6 +269,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     analyzeMutation.mutate({
       frameworkId: effectiveFrameworkId,
       listId: selectedList || undefined,
+      offPeakOnly,
     });
   };
 
@@ -692,10 +696,30 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
             </button>
           </div>
         </div>
+        {/* Off-peak scheduling toggle */}
+        <div className="flex items-center gap-3 mt-3">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={offPeakOnly}
+              onChange={(e) => setOffPeakOnly(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">
+              {offPeakOnly ? "Run during off-peak only" : "Run now"}
+            </span>
+          </label>
+          {offPeakOnly && (
+            <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded">
+              50% cheaper — jobs deferred to off-peak hours (outside 01:00-04:00 &amp; 06:00-10:00 UTC)
+            </span>
+          )}
+        </div>
         {effectiveFrameworkName && (
           <p className="text-xs text-gray-500 mt-2">
             Will analyze {selectedList ? "companies in selected list" : `all ${stats.total} companies`} using{" "}
             <strong>{effectiveFrameworkName}</strong>
+            {offPeakOnly && <span className="text-green-600"> (off-peak scheduling enabled)</span>}
           </p>
         )}
       </div>

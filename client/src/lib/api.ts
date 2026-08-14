@@ -73,7 +73,7 @@ export const api = {
   setMeasures: (frameworkId: number, measures: any[]) => request(`/frameworks/${frameworkId}/measures`, { method: "POST", body: JSON.stringify({ measures }) }),
 
   // Analysis
-  analyze: (data: { frameworkId: number; listId?: number; companyIds?: number[] }) =>
+  analyze: (data: { frameworkId: number; listId?: number; companyIds?: number[]; offPeakOnly?: boolean }) =>
     request("/analyze", { method: "POST", body: JSON.stringify(data) }),
   getBatchStatus: () => request("/batch/status"),
   cancelBatch: () => request("/batch/cancel", { method: "POST" }),

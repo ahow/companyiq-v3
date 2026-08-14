@@ -435,6 +435,8 @@ export async function initializeDatabase(): Promise<void> {
     // Share lifecycle: opt-in public sharing + expiry
     await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT false`);
     await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS share_expires_at TIMESTAMP`);
+    // Off-peak scheduling: flag batches to only run during DeepSeek off-peak hours
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS off_peak_only BOOLEAN NOT NULL DEFAULT false`);
 
     // ─── Seed Default Settings for All Workspaces ──────────────────────────
     await seedDefaultSettings();

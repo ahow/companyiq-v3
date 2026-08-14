@@ -99,6 +99,41 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
     return { success: false, error: "Paused: credit exhausted", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
+  // OFF-PEAK SCHEDULING GATE: If this batch is marked offPeakOnly and we are
+  // currently in a DeepSeek peak hour (01:00-04:00 or 06:00-10:00 UTC), re-queue
+  // the job with a delay until the next off-peak window starts. This halves API
+  // costs by deferring processing to off-peak rates.
+  if (process.env.OFFPEAK_GATE_ENABLED !== "false") {
+    const hour = new Date().getUTCHours();
+    const isPeak = (hour >= 1 && hour < 4) || (hour >= 6 && hour < 10);
+    if (isPeak) {
+      // Check if this batch is off-peak-only
+      try {
+        const batchRow = await storage.getBatchRunById(batchId, workspaceId);
+        if (batchRow && batchRow.offPeakOnly) {
+          // Calculate delay until next off-peak window
+          const now = new Date();
+          let target: Date;
+          if (hour >= 1 && hour < 4) {
+            target = new Date(now); target.setUTCHours(4, 0, 0, 0);
+          } else {
+            target = new Date(now); target.setUTCHours(10, 0, 0, 0);
+          }
+          const delayMs = Math.max(target.getTime() - now.getTime(), 60000);
+          const { getQueue } = await import("./queue.js");
+          const q = getQueue();
+          const jobIdStr = `batch-${batchId}-company-${companyId}-offpeak-${Date.now()}`;
+          await q.add(`analysis-offpeak-${batchId}-${companyId}`, job.data, { delay: delayMs, priority: 2, jobId: jobIdStr });
+          console.log(`[Worker] OFF-PEAK GATE: job ${jobId} deferred ${Math.round(delayMs / 60000)}min until off-peak (batch ${batchId} is offPeakOnly)`);
+          return { success: false, error: "Deferred: peak hour", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+        }
+      } catch (err: any) {
+        // Non-fatal: if we can't check, process normally
+        console.warn(`[Worker] Off-peak gate check failed (non-fatal): ${err.message}`);
+      }
+    }
+  }
+
   // Check if batch was cancelled. Authoritative (async) check against Redis so
   // that a cancel issued on the web service is honored by every worker replica,
   // including jobs already pulled from the queue. This also seeds the local
