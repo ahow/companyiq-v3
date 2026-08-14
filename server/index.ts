@@ -102,41 +102,28 @@ app.get("/api/health", (req, res) => {
 
 // ─── Public Share Endpoint (no auth required) ──────────────────────────────
 // Security: uses unguessable UUID share tokens (not sequential IDs) to prevent
-// enumeration. Legacy numeric IDs still accepted for backward compat but
-// rate-limited. Workspace scoping enforced via the token lookup.
-const shareRateLimits = new Map<string, { count: number; resetAt: number }>();
+// Share endpoint: Token-only access. Numeric IDs are REMOVED (returns 410 Gone).
+// Public access requires the result to have is_public=true AND be accessed by token.
+// Authenticated users can access any result in their workspace by token.
 app.get("/api/results/:idOrToken/share", async (req, res) => {
   try {
     const param = req.params.idOrToken;
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(param);
     const isNumeric = /^\d+$/.test(param);
 
-    if (!isUUID && !isNumeric) {
-      return res.status(400).json({ error: "Invalid share link." });
-    }
-
-    // Rate limiting: 60 requests per minute per IP for numeric IDs (enumeration risk)
+    // SECURITY: Numeric path is permanently removed. No enumeration possible.
     if (isNumeric) {
-      const ip = req.ip || "unknown";
-      const now = Date.now();
-      const limit = shareRateLimits.get(ip);
-      if (limit && limit.resetAt > now) {
-        if (limit.count >= 60) {
-          return res.status(429).json({ error: "Rate limit exceeded. Use share tokens instead of numeric IDs." });
-        }
-        limit.count++;
-      } else {
-        shareRateLimits.set(ip, { count: 1, resetAt: now + 60000 });
-      }
+      return res.status(410).json({ error: "Numeric share links have been permanently removed. Use the share token URL." });
+    }
+    if (!isUUID) {
+      return res.status(400).json({ error: "Invalid share link." });
     }
 
     const { db } = await import("./db.js");
     const { sql } = await import("drizzle-orm");
 
-    // Lookup: prefer token (unguessable), fall back to ID (legacy)
-    const whereClause = isUUID
-      ? sql`ar.share_token = ${param}`
-      : sql`ar.id = ${parseInt(param)}`;
+    // Token-only lookup
+    const whereClause = sql`ar.share_token = ${param}`;
 
     // ?format=summary (default) -> lightweight per-company scores, browser-friendly.
     // ?format=full            -> complete dataset incl. measures/quotes/sources, streamed.
@@ -171,29 +158,19 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
       `);
       const row = (r.rows as any[])?.[0];
       if (!row) return res.status(404).json({ error: "Result not found" });
-      // Security: only expose the share token/URL when accessed BY token.
-      // Numeric-path access should NOT leak the token (prevents enumeration → token harvest).
-      const responseObj: any = {
+      return res.json({
         id: row.id,
+        shareToken: row.share_token,
+        shareUrl: `/api/results/${row.share_token}/share`,
         frameworkName: row.framework_name,
         listName: row.list_name,
         companiesCount: row.companies_count,
         averageScore: row.average_score,
         createdAt: row.created_at,
         format: "summary",
+        note: "Summary view. Append ?format=full for the complete dataset.",
         results: row.summary || [],
-      };
-      if (isUUID) {
-        // Token-based access: include the canonical share URL
-        responseObj.shareToken = row.share_token;
-        responseObj.shareUrl = `/api/results/${row.share_token}/share`;
-        responseObj.note = "Summary view. Append ?format=full for the complete dataset.";
-      } else {
-        // Numeric access (deprecated): don't expose the token
-        responseObj.note = "Numeric ID access is deprecated. Use the share token URL for stable, secure access.";
-        responseObj.deprecated = true;
-      }
-      return res.json(responseObj);
+      });
     }
 
     // Full export. Stream results_data as raw text from Postgres — avoids parsing
@@ -217,6 +194,8 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
 
     const meta: any = {
       id: metaRow.id,
+      shareToken: metaRow.share_token,
+      shareUrl: `/api/results/${metaRow.share_token}/share`,
       frameworkName: metaRow.framework_name,
       listName: metaRow.list_name,
       companiesCount: metaRow.companies_count,
@@ -224,11 +203,6 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
       createdAt: metaRow.created_at,
       format: "full",
     };
-    // Only expose token when accessed by token (not numeric ID)
-    if (isUUID) {
-      meta.shareToken = metaRow.share_token;
-      meta.shareUrl = `/api/results/${metaRow.share_token}/share`;
-    }
     res.write('{');
     for (const [k, v] of Object.entries(meta)) {
       res.write(JSON.stringify(k) + ':' + JSON.stringify(v) + ',');
