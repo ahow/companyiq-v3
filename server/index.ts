@@ -201,17 +201,17 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
     // We select metadata + results_data::text separately, then write the JSON envelope
     // around the raw text without ever parsing it.
     const metaResult = await db.execute(sql`
-      SELECT id, share_token, framework_name, list_name, companies_count,
-             average_score, created_at
-      FROM analysis_results WHERE ${whereClause}
+      SELECT ar.id, ar.share_token, ar.framework_name, ar.list_name, ar.companies_count,
+             ar.average_score, ar.created_at
+      FROM analysis_results ar WHERE ${whereClause}
     `);
     const metaRow = (metaResult.rows as any[])?.[0];
     if (!metaRow) return res.status(404).json({ error: "Result not found" });
 
     // Fetch results_data as raw text (no JSON parse by pg driver)
     const dataResult = await db.execute(sql`
-      SELECT results_data::text AS raw_data
-      FROM analysis_results WHERE ${whereClause}
+      SELECT ar.results_data::text AS raw_data
+      FROM analysis_results ar WHERE ${whereClause}
     `);
     const rawData = (dataResult.rows as any[])?.[0]?.raw_data || "[]";
 
