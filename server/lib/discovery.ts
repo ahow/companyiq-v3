@@ -2541,8 +2541,28 @@ export async function searchCompanyDocuments(opts: {
     console.log(`[${companyName}] Pre-gate heuristic removed ${allCandidates.length - filteredCandidates.length} candidates mentioning other companies`);
   }
 
+  // Fix 2 (Financed Emissions robustness): For non-US companies, cap SEC EDGAR
+  // URLs to prevent the dense EDGAR filing set from crowding out the company's own
+  // climate/sustainability reports. The 20-F and 1-2 key filings are kept (they have
+  // the best priority scores), but the dozens of 6-Ks, FWPs, and prospectus supplements
+  // that Google discovers are trimmed. US companies keep all their EDGAR filings.
+  const isNonUS = opts.country && !/united states|usa|u\.s\./i.test(opts.country);
+  let preCapCandidates = filteredCandidates;
+  if (isNonUS) {
+    const MAX_EDGAR_FOR_FOREIGN = 5;
+    const edgarCandidates = filteredCandidates.filter(c => /sec\.gov/i.test(c.url));
+    if (edgarCandidates.length > MAX_EDGAR_FOR_FOREIGN) {
+      // Keep only the top-priority EDGAR URLs (by priority score, lower = better)
+      const sortedEdgar = edgarCandidates.sort((a, b) => a.priority - b.priority);
+      const keptEdgar = new Set(sortedEdgar.slice(0, MAX_EDGAR_FOR_FOREIGN).map(c => c.url));
+      const removed = edgarCandidates.length - MAX_EDGAR_FOR_FOREIGN;
+      preCapCandidates = filteredCandidates.filter(c => !/sec\.gov/i.test(c.url) || keptEdgar.has(c.url));
+      console.log(`[${companyName}] EDGAR cap for non-US issuer: kept ${MAX_EDGAR_FOR_FOREIGN} of ${edgarCandidates.length} SEC URLs (removed ${removed})`);
+    }
+  }
+
   // Cap before gate to bound LLM cost
-  const preGateCandidates = filteredCandidates
+  const preGateCandidates = preCapCandidates
     .sort((a, b) => a.priority - b.priority)
     .slice(0, PRE_GATE_CAP);
 

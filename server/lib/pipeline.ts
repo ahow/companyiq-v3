@@ -305,6 +305,69 @@ async function runFetchPhase(opts: {
     }
   }
 
+  // ─── Corpus Validity Check (framework-aware) ─────────────────────────────
+  // Detect when the corpus is composed entirely of the WRONG document types for
+  // the framework's topic. E.g., for a Financed Emissions framework, a corpus of
+  // 69 EDGAR filings with zero climate/TCFD/sustainability reports is invalid even
+  // though the fetch ratio is 99%. This catches the SMFG-type failure.
+  let corpusValidityWarning: string | null = null;
+  {
+    const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+    const fetchedDocs = discoveryResult.documents.filter(d => d.fetchStatus !== "dead");
+    const allDocText = fetchedDocs.map(d => ((d.url || "") + " " + (d.title || "")).toLowerCase());
+
+    // Derive expected document types from the framework topic
+    const expectedTypes: Array<{ label: string; pattern: RegExp }> = [];
+    if (/climate|emission|carbon|tcfd|net.?zero|financed.?emission|decarboni/i.test(topic)) {
+      expectedTypes.push(
+        { label: "Climate/TCFD/Sustainability Report", pattern: /climate|tcfd|sustainability|esg|emission|carbon|net.?zero|environment/ },
+      );
+    }
+    if (/ai|artificial.?intelligence|machine.?learning|responsible.?ai/i.test(topic)) {
+      expectedTypes.push(
+        { label: "AI/Technology Policy or Strategy", pattern: /ai|artificial.?intelligence|machine.?learning|responsible|ethics|technology.?strategy/ },
+      );
+    }
+    if (/modern.?slavery|human.?rights|forced.?labour|supply.?chain/i.test(topic)) {
+      expectedTypes.push(
+        { label: "Modern Slavery Statement or Human Rights Report", pattern: /modern.?slavery|human.?rights|supply.?chain|forced.?labo/ },
+      );
+    }
+    // Generic fallback: if the topic has a clear keyword, expect at least one doc mentioning it
+    if (expectedTypes.length === 0) {
+      const topicWords = topic.split(/\s+/).filter(w => w.length > 4).slice(0, 3);
+      if (topicWords.length > 0) {
+        const pattern = new RegExp(topicWords.join("|"), "i");
+        expectedTypes.push({ label: `Topic-relevant document (${topicWords.join("/")})`, pattern });
+      }
+    }
+
+    // Check if at least one fetched document matches each expected type
+    for (const { label, pattern } of expectedTypes) {
+      const hasMatch = allDocText.some(text => pattern.test(text));
+      if (!hasMatch && fetchedDocs.length >= 5) {
+        // Only flag if we have a substantial corpus but it's all wrong types
+        corpusValidityWarning = `Corpus lacks expected document type: ${label}. ` +
+          `${fetchedDocs.length} documents fetched but none match the framework topic. ` +
+          `Score may be a false negative due to discovery-composition failure.`;
+        console.warn(`[${companyName}] CORPUS VALIDITY WARNING: ${corpusValidityWarning}`);
+        break;
+      }
+    }
+
+    // Persist the validity warning in diagnostics
+    if (corpusValidityWarning) {
+      const priorDiag2 = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+      await storage.updateCompany(companyId, workspaceId, {
+        discoveryDiagnostics: {
+          ...priorDiag2,
+          corpusValidityWarning,
+          coverageLevelOverride: "suspect",
+        } as any,
+      });
+    }
+  }
+
   if (cancelCheck?.()) {
     await storage.updateCompany(companyId, workspaceId, { analysisStatus: "idle" });
     return { fetchedCount: 0, totalAccepted: discoveryResult.documents.length };

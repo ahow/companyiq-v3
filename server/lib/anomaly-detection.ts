@@ -1,10 +1,14 @@
 /**
- * Expected-Score Anomaly Detection
+ * Expected-Score Anomaly Detection (v2 — framework-scoped)
  *
  * After each batch completes, computes expected scores for each company based on
  * sector × country peer medians, then flags outliers using a robust MAD-based
- * z-score (Leys et al. 2013) for human review. Topic-agnostic — works for any
- * framework.
+ * z-score (Leys et al. 2013) for human review.
+ *
+ * KEY FIX (Financed Emissions robustness review): The peer universe is now scoped
+ * to companies scored on the SAME FRAMEWORK, computed from measure_scores rather
+ * than the stale cross-framework companies.totalScore. This prevents comparing
+ * Financed Emissions scores against AI Governance scores.
  *
  * Statistical approach:
  * - Peer groups: sector × country (fallback: sector-only if cross-group < MIN_PEER_GROUP_SIZE)
@@ -12,19 +16,16 @@
  * - Dispersion: MAD (Median Absolute Deviation) × 1.4826 (consistency factor for normal)
  * - Flagging: |actual − median| / (1.4826 × MAD) > Z_THRESHOLD (default 2.5)
  * - Minimum peer group: 8 (below this, medians are too noisy to trust)
- * - Companies with < 80% measure coverage are excluded from peer computation
  */
 
 import { db } from "../db.js";
 import { companies, measureScores, scoreAnomalies } from "../../shared/schema.js";
-import { eq, and, inArray, isNotNull, sql } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 
 // Robust z-score threshold (2.5 ≈ p < 0.01 for normal; conservative for skewed data)
 const Z_THRESHOLD = 2.5;
 // Minimum peer group size for reliable median/MAD estimation
 const MIN_PEER_GROUP_SIZE = 8;
-// Minimum coverage (%) to include a company in peer computation (avoids back-fill bias)
-const MIN_COVERAGE_PCT = 80;
 // Fallback: if MAD is 0 (all peers have same score), use fixed 10pp as dispersion floor
 const MAD_FLOOR = 10;
 
@@ -56,57 +57,73 @@ function mad(arr: number[]): number {
 /**
  * Compute expected scores and flag anomalies for a completed batch.
  * Called from maybeHandleBatchCompletion after the batch is finalised.
+ *
+ * The peer universe is derived from measure_scores for the SAME frameworkId,
+ * ensuring we only compare like-with-like (e.g., Financed Emissions scores
+ * against other Financed Emissions scores, never against AI Governance).
  */
 export async function detectScoreAnomalies(input: AnomalyInput): Promise<number> {
   const { batchId, workspaceId, frameworkId, companyIds } = input;
 
   if (companyIds.length === 0) return 0;
 
-  // 1. Load ALL completed companies in this workspace (the full peer universe)
-  const allCompanies = await db
+  // 1. Compute per-company scores for THIS FRAMEWORK from measure_scores.
+  //    This replaces the stale companies.totalScore (which is overwritten each run
+  //    and mixes frameworks). We compute: (measures with score > 0) / total measures × 100.
+  const frameworkScores = await db
+    .select({
+      companyId: measureScores.companyId,
+      totalMeasures: sql<number>`count(*)`.as("total_measures"),
+      metMeasures: sql<number>`count(*) filter (where ${measureScores.score} > 0)`.as("met_measures"),
+      avgScore: sql<number>`round(100.0 * count(*) filter (where ${measureScores.score} > 0) / nullif(count(*), 0), 1)`.as("avg_score"),
+    })
+    .from(measureScores)
+    .where(eq(measureScores.frameworkId, frameworkId))
+    .groupBy(measureScores.companyId);
+
+  if (frameworkScores.length < MIN_PEER_GROUP_SIZE) return 0;
+
+  // 2. Join with company metadata (sector, country, name) for peer grouping
+  const scoredCompanyIds = frameworkScores.map(s => s.companyId);
+  const companyMeta = await db
     .select({
       id: companies.id,
       name: companies.name,
       sector: companies.sector,
       country: companies.country,
-      totalScore: companies.totalScore,
-      measuresMetCount: companies.measuresMetCount,
-      measuresTotalCount: companies.measuresTotalCount,
     })
     .from(companies)
     .where(
       and(
         eq(companies.workspaceId, workspaceId),
-        eq(companies.analysisStatus, "completed"),
-        isNotNull(companies.totalScore)
+        inArray(companies.id, scoredCompanyIds)
       )
     );
 
-  if (allCompanies.length < MIN_PEER_GROUP_SIZE) return 0;
+  // Build a lookup map
+  const metaMap = new Map(companyMeta.map(c => [c.id, c]));
+  const scoreMap = new Map(frameworkScores.map(s => [s.companyId, s]));
 
-  // 2. Build peer-group score arrays (sector × country and sector-only)
-  // Exclude low-coverage companies from peer computation to avoid back-fill bias
+  // 3. Build peer-group score arrays (sector × country and sector-only)
   const peerGroups = new Map<string, number[]>();
   const sectorGroups = new Map<string, number[]>();
 
-  for (const c of allCompanies) {
-    // Coverage filter: skip companies with low assessment coverage
-    const totalMeasures = c.measuresTotalCount || 0;
-    const metMeasures = c.measuresMetCount || 0;
-    // If measuresTotalCount is 0, we can't determine coverage — include by default
-    // (this handles legacy data where coverage wasn't tracked)
+  for (const s of frameworkScores) {
+    const meta = metaMap.get(s.companyId);
+    if (!meta) continue;
+    const score = Number(s.avgScore);
+    if (isNaN(score)) continue;
 
-    const key = peerKey(c.sector, c.country);
+    const key = peerKey(meta.sector, meta.country);
     if (!peerGroups.has(key)) peerGroups.set(key, []);
-    peerGroups.get(key)!.push(c.totalScore!);
+    peerGroups.get(key)!.push(score);
 
-    const sKey = (c.sector || "Unknown").toLowerCase();
+    const sKey = (meta.sector || "Unknown").toLowerCase();
     if (!sectorGroups.has(sKey)) sectorGroups.set(sKey, []);
-    sectorGroups.get(sKey)!.push(c.totalScore!);
+    sectorGroups.get(sKey)!.push(score);
   }
 
-  // 3. For each company in this batch, compute robust z-score and flag outliers
-  const batchCompanies = allCompanies.filter(c => companyIds.includes(c.id));
+  // 4. For each company in this batch, compute robust z-score and flag outliers
   const anomalies: Array<{
     companyId: number;
     companyName: string;
@@ -120,18 +137,23 @@ export async function detectScoreAnomalies(input: AnomalyInput): Promise<number>
     reason: string;
   }> = [];
 
-  for (const c of batchCompanies) {
-    if (c.totalScore == null) continue;
-    const actualPct = c.totalScore;
-    const key = peerKey(c.sector, c.country);
+  for (const cId of companyIds) {
+    const s = scoreMap.get(cId);
+    const meta = metaMap.get(cId);
+    if (!s || !meta) continue;
+
+    const actualPct = Number(s.avgScore);
+    if (isNaN(actualPct)) continue;
+
+    const key = peerKey(meta.sector, meta.country);
     let peerScores = peerGroups.get(key) || [];
-    let groupLabel = `${c.sector || "Unknown"} × ${c.country || "Unknown"}`;
+    let groupLabel = `${meta.sector || "Unknown"} × ${meta.country || "Unknown"}`;
 
     // Fall back to sector-only if sector×country peer group is too small
     if (peerScores.length < MIN_PEER_GROUP_SIZE) {
-      const sKey = (c.sector || "Unknown").toLowerCase();
+      const sKey = (meta.sector || "Unknown").toLowerCase();
       peerScores = sectorGroups.get(sKey) || [];
-      groupLabel = `${c.sector || "Unknown"} (all countries)`;
+      groupLabel = `${meta.sector || "Unknown"} (all countries)`;
     }
 
     // Still too small? Skip — can't make a meaningful comparison
@@ -149,10 +171,10 @@ export async function detectScoreAnomalies(input: AnomalyInput): Promise<number>
       const reason = `Score ${actualPct.toFixed(0)}% is ${Math.abs(residual).toFixed(0)}pp ${direction} peer median ${peerMedian.toFixed(0)}% (z=${zScore.toFixed(1)}, ${groupLabel}, n=${peerScores.length})`;
 
       anomalies.push({
-        companyId: c.id,
-        companyName: c.name,
-        sector: c.sector,
-        country: c.country,
+        companyId: cId,
+        companyName: meta.name,
+        sector: meta.sector,
+        country: meta.country,
         actualScore: actualPct,
         expectedScore: peerMedian,
         residual,
@@ -163,7 +185,7 @@ export async function detectScoreAnomalies(input: AnomalyInput): Promise<number>
     }
   }
 
-  // 4. Persist anomalies (delete prior anomalies for this batch first, in case of re-run)
+  // 5. Persist anomalies (delete prior anomalies for this batch first, in case of re-run)
   if (anomalies.length > 0) {
     await db.delete(scoreAnomalies).where(
       and(
@@ -191,9 +213,9 @@ export async function detectScoreAnomalies(input: AnomalyInput): Promise<number>
       }))
     );
 
-    console.log(`[AnomalyDetection] Batch ${batchId}: flagged ${anomalies.length} outliers (MAD z-score > ${Z_THRESHOLD}, min peer n=${MIN_PEER_GROUP_SIZE})`);
+    console.log(`[AnomalyDetection] Batch ${batchId} (framework ${frameworkId}): flagged ${anomalies.length} outliers from ${frameworkScores.length} peers (MAD z > ${Z_THRESHOLD}, min n=${MIN_PEER_GROUP_SIZE})`);
   } else {
-    console.log(`[AnomalyDetection] Batch ${batchId}: no outliers detected`);
+    console.log(`[AnomalyDetection] Batch ${batchId} (framework ${frameworkId}): no outliers detected among ${frameworkScores.length} peers`);
   }
 
   return anomalies.length;
