@@ -1746,3 +1746,32 @@ export async function bulkMarkAnomaliesReexamined(ids: number[], workspaceId: nu
       )
     );
 }
+
+export async function getCompletedCompanyIds(workspaceId: number): Promise<number[]> {
+  const rows = await db
+    .select({ id: schema.companies.id })
+    .from(schema.companies)
+    .where(
+      and(
+        eq(schema.companies.workspaceId, workspaceId),
+        eq(schema.companies.analysisStatus, "completed")
+      )
+    );
+  return rows.map(r => r.id);
+}
+
+export async function getLatestCompletedBatch(workspaceId: number, frameworkId: number) {
+  const [batch] = await db
+    .select({ id: schema.batchRuns.id })
+    .from(schema.batchRuns)
+    .where(
+      and(
+        eq(schema.batchRuns.workspaceId, workspaceId),
+        eq(schema.batchRuns.frameworkId, frameworkId),
+        eq(schema.batchRuns.status, "completed")
+      )
+    )
+    .orderBy(desc(schema.batchRuns.completedAt))
+    .limit(1);
+  return batch || null;
+}

@@ -4,6 +4,7 @@ import * as storage from "../storage.js";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { addBatchJobs, removeBatchJobs, getQueueStats } from "../queue.js";
 import { cancelBatch, finalizeBatchAndSave, saveBatchSnapshot } from "../worker.js";
+import { detectScoreAnomalies } from "../lib/anomaly-detection.js";
 
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -1540,6 +1541,34 @@ apiRouter.post("/score-anomalies/bulk-reexamine", async (req: Request, res: Resp
     }
     await storage.bulkMarkAnomaliesReexamined(ids, workspaceId);
     res.json({ success: true, reexamined: results.length, results });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin: Seed anomaly detection for all completed companies in a framework
+apiRouter.post("/score-anomalies/seed", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const { frameworkId } = req.body;
+    if (!frameworkId) return res.status(400).json({ error: "frameworkId required" });
+
+    // Get all completed company IDs for this workspace
+    const allCompanies = await storage.getCompletedCompanyIds(workspaceId);
+    if (allCompanies.length === 0) return res.json({ flagged: 0, message: "No completed companies" });
+
+    // Find the latest completed batch for this framework to use as the batch reference
+    const latestBatch = await storage.getLatestCompletedBatch(workspaceId, Number(frameworkId));
+    if (!latestBatch) return res.json({ flagged: 0, message: "No completed batch found for this framework" });
+
+    const flagged = await detectScoreAnomalies({
+      batchId: latestBatch.id,
+      workspaceId,
+      frameworkId: Number(frameworkId),
+      companyIds: allCompanies,
+    });
+
+    res.json({ success: true, flagged, totalCompanies: allCompanies.length });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
