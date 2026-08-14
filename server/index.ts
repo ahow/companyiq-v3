@@ -125,9 +125,46 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
     // Token-only lookup
     const whereClause = sql`ar.share_token = ${param}`;
 
+    // Check is_public + expiry. Unauthenticated access requires is_public=true.
+    // Authenticated users in the same workspace can always access their own results.
+    const authCheck = await db.execute(sql`
+      SELECT ar.id, ar.is_public, ar.share_expires_at, ar.workspace_id
+      FROM analysis_results ar WHERE ar.share_token = ${param}
+    `);
+    const authRow = (authCheck.rows as any[])?.[0];
+    if (!authRow) return res.status(404).json({ error: "Result not found" });
+
+    // Check if caller is authenticated and owns this result
+    const sessionId = req.cookies?.session_id;
+    let isOwner = false;
+    if (sessionId) {
+      try {
+        const sessCheck = await db.execute(sql`
+          SELECT workspace_id FROM user_sessions WHERE id = ${sessionId}
+        `);
+        const sessRow = (sessCheck.rows as any[])?.[0];
+        isOwner = sessRow?.workspace_id === authRow.workspace_id;
+      } catch { /* non-fatal */ }
+    }
+
+    // Enforce access control
+    if (!isOwner) {
+      if (!authRow.is_public) {
+        return res.status(403).json({ error: "This result has not been shared publicly. The owner must enable sharing first." });
+      }
+      if (authRow.share_expires_at && new Date(authRow.share_expires_at) < new Date()) {
+        return res.status(410).json({ error: "This share link has expired." });
+      }
+    }
+
     // ?format=summary (default) -> lightweight per-company scores, browser-friendly.
     // ?format=full            -> complete dataset incl. measures/quotes/sources, streamed.
+    // format=full requires authentication (even with a valid token) to prevent
+    // full evidence dumps from leaking via a shared link.
     const wantFull = String(req.query.format || "summary").toLowerCase() === "full";
+    if (wantFull && !isOwner) {
+      return res.status(403).json({ error: "Full export requires authentication. Use the summary format for public share links." });
+    }
 
     // Cache for 5 min at the edge; payload is immutable per id+format.
     res.setHeader("Cache-Control", "public, max-age=300");

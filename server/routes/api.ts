@@ -939,6 +939,47 @@ apiRouter.delete("/results/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ─── Share Management ─────────────────────────────────────────────────────
+// Toggle public sharing on/off for a result (opt-in)
+apiRouter.post("/results/:id/share/toggle", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(req.params.id);
+    const { isPublic, expiresInDays } = req.body || {};
+    const { db } = await import("../db.js");
+    const { sql } = await import("drizzle-orm");
+    const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400000).toISOString() : null;
+    await db.execute(sql`
+      UPDATE analysis_results
+      SET is_public = ${isPublic !== false}, share_expires_at = ${expiresAt}
+      WHERE id = ${id} AND workspace_id = ${workspaceId}
+    `);
+    res.json({ success: true, isPublic: isPublic !== false, shareExpiresAt: expiresAt });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Rotate (revoke old + generate new) share token
+apiRouter.post("/results/:id/share/rotate", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(req.params.id);
+    const { db } = await import("../db.js");
+    const { sql } = await import("drizzle-orm");
+    const { randomUUID } = await import("crypto");
+    const newToken = randomUUID();
+    await db.execute(sql`
+      UPDATE analysis_results
+      SET share_token = ${newToken}
+      WHERE id = ${id} AND workspace_id = ${workspaceId}
+    `);
+    res.json({ success: true, shareToken: newToken });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 apiRouter.get("/results/:id/share", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);

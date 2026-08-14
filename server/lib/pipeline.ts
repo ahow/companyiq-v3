@@ -740,6 +740,45 @@ async function runAnalyzePhase(opts: {
     return null;
   }
 
+  // ─── FETCH-OUTCOME CONFIDENCE ADJUSTMENT ────────────────────────────────
+  // If gate-accepted, on-topic documents failed to fetch (dead), any "No" verdict
+  // with High/Medium confidence is unreliable — the evidence may have been in
+  // those unfetched documents. Downgrade to Low confidence and annotate.
+  // This is the reviewer's "single most valuable fix": fetch failures must not
+  // produce confident negatives.
+  try {
+    const allAcceptedDocs = await storage.getAcceptedDocuments(companyId);
+    const deadAccepted = allAcceptedDocs.filter(d => d.fetchStatus === "dead");
+    if (deadAccepted.length > 0) {
+      const deadTitles = deadAccepted.map(d => d.title || d.url).slice(0, 5);
+      const deadCount = deadAccepted.length;
+      const deadFirstParty = deadAccepted.filter(d => d.sourceType === "first_party");
+      // Determine if the dead docs are material (first-party or Tier-1 filings)
+      const hasMaterialDead = deadFirstParty.length > 0 || deadAccepted.some(d =>
+        /10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy|sustainability/i.test((d.url + " " + (d.title || "")).toLowerCase())
+      );
+      if (hasMaterialDead) {
+        let downgraded = 0;
+        for (const cat of analysis.categories) {
+          for (const m of cat.measures) {
+            // Only downgrade "No" verdicts with High/Medium confidence
+            if (m.verdict === "No" && (m.confidence === "High" || m.confidence === "Medium")) {
+              m.confidence = "Low";
+              m.verdictNuance = (m.verdictNuance || "") +
+                ` [Confidence downgraded: ${deadCount} gate-accepted document(s) failed to fetch (${deadFirstParty.length} first-party). Missing: ${deadTitles.join("; ")}]`;
+              downgraded++;
+            }
+          }
+        }
+        if (downgraded > 0) {
+          console.log(`[${companyName}] FETCH-CONFIDENCE: downgraded ${downgraded} measures from High/Medium to Low (${deadCount} dead accepted docs, ${deadFirstParty.length} first-party)`);
+        }
+      }
+    }
+  } catch (fcErr: any) {
+    console.warn(`[${companyName}] Fetch-confidence adjustment failed (non-fatal): ${fcErr.message}`);
+  }
+
   // ─── Persist Results ──────────────────────────────────────────────────────
 
   await storage.clearMeasureScores(companyId);

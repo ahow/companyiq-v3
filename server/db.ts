@@ -432,6 +432,9 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS pipeline_version TEXT`);
     // Fix 6: First-party vs third-party evidence tagging
     await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_type TEXT`);
+    // Share lifecycle: opt-in public sharing + expiry
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT false`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS share_expires_at TIMESTAMP`);
 
     // ─── Seed Default Settings for All Workspaces ──────────────────────────
     await seedDefaultSettings();
