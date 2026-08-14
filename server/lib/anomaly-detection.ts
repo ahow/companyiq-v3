@@ -63,7 +63,7 @@ export async function detectScoreAnomalies(input: AnomalyInput): Promise<number>
   for (const c of allCompanies) {
     const key = peerKey(c.sector, c.country);
     if (!peerGroups.has(key)) peerGroups.set(key, []);
-    peerGroups.get(key)!.push(c.totalScore! * 100); // stored as 0-1, display as 0-100%
+    peerGroups.get(key)!.push(c.totalScore!); // stored as whole percentage (e.g. 55 = 55%)
   }
 
   // Also build sector-only fallback groups (for when sector×country is too small)
@@ -71,7 +71,7 @@ export async function detectScoreAnomalies(input: AnomalyInput): Promise<number>
   for (const c of allCompanies) {
     const sKey = (c.sector || "Unknown").toLowerCase();
     if (!sectorGroups.has(sKey)) sectorGroups.set(sKey, []);
-    sectorGroups.get(sKey)!.push(c.totalScore! * 100);
+    sectorGroups.get(sKey)!.push(c.totalScore!);
   }
 
   function median(arr: number[]): number {
@@ -97,7 +97,7 @@ export async function detectScoreAnomalies(input: AnomalyInput): Promise<number>
 
   for (const c of batchCompanies) {
     if (c.totalScore == null) continue;
-    const actualPct = c.totalScore * 100;
+    const actualPct = c.totalScore;
     const key = peerKey(c.sector, c.country);
     let peerScores = peerGroups.get(key) || [];
     let groupLabel = `${c.sector || "Unknown"} × ${c.country || "Unknown"}`;
