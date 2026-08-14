@@ -171,48 +171,72 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
       `);
       const row = (r.rows as any[])?.[0];
       if (!row) return res.status(404).json({ error: "Result not found" });
-      return res.json({
+      // Security: only expose the share token/URL when accessed BY token.
+      // Numeric-path access should NOT leak the token (prevents enumeration → token harvest).
+      const responseObj: any = {
         id: row.id,
-        shareToken: row.share_token,
         frameworkName: row.framework_name,
         listName: row.list_name,
         companiesCount: row.companies_count,
         averageScore: row.average_score,
         createdAt: row.created_at,
         format: "summary",
-        note: "Summary view. Append ?format=full for the complete dataset (measures, quotes, sources).",
-        shareUrl: `/api/results/${row.share_token}/share`,
         results: row.summary || [],
-      });
+      };
+      if (isUUID) {
+        // Token-based access: include the canonical share URL
+        responseObj.shareToken = row.share_token;
+        responseObj.shareUrl = `/api/results/${row.share_token}/share`;
+        responseObj.note = "Summary view. Append ?format=full for the complete dataset.";
+      } else {
+        // Numeric access (deprecated): don't expose the token
+        responseObj.note = "Numeric ID access is deprecated. Use the share token URL for stable, secure access.";
+        responseObj.deprecated = true;
+      }
+      return res.json(responseObj);
     }
 
-    // Full export. Load the blob once, then stream the JSON so we never re-buffer a
-    // second ~100MB copy. Compression middleware gzips this on the wire.
-    const result = await db.execute(sql`SELECT * FROM analysis_results WHERE ${whereClause}`);
-    const row = (result.rows as any[])?.[0];
-    if (!row) return res.status(404).json({ error: "Result not found" });
-    const rows: any[] = Array.isArray(row.results_data) ? row.results_data : [];
-    const meta = {
-      id: row.id,
-      shareToken: row.share_token,
-      frameworkName: row.framework_name,
-      listName: row.list_name,
-      companiesCount: row.companies_count,
-      averageScore: row.average_score,
-      createdAt: row.created_at,
+    // Full export. Stream results_data as raw text from Postgres — avoids parsing
+    // the ~100MB JSONB blob into a JS object (which causes OOM/timeout on large results).
+    // We select metadata + results_data::text separately, then write the JSON envelope
+    // around the raw text without ever parsing it.
+    const metaResult = await db.execute(sql`
+      SELECT id, share_token, framework_name, list_name, companies_count,
+             average_score, created_at
+      FROM analysis_results WHERE ${whereClause}
+    `);
+    const metaRow = (metaResult.rows as any[])?.[0];
+    if (!metaRow) return res.status(404).json({ error: "Result not found" });
+
+    // Fetch results_data as raw text (no JSON parse by pg driver)
+    const dataResult = await db.execute(sql`
+      SELECT results_data::text AS raw_data
+      FROM analysis_results WHERE ${whereClause}
+    `);
+    const rawData = (dataResult.rows as any[])?.[0]?.raw_data || "[]";
+
+    const meta: any = {
+      id: metaRow.id,
+      frameworkName: metaRow.framework_name,
+      listName: metaRow.list_name,
+      companiesCount: metaRow.companies_count,
+      averageScore: metaRow.average_score,
+      createdAt: metaRow.created_at,
       format: "full",
-      shareUrl: `/api/results/${row.share_token}/share`,
     };
+    // Only expose token when accessed by token (not numeric ID)
+    if (isUUID) {
+      meta.shareToken = metaRow.share_token;
+      meta.shareUrl = `/api/results/${metaRow.share_token}/share`;
+    }
     res.write('{');
     for (const [k, v] of Object.entries(meta)) {
       res.write(JSON.stringify(k) + ':' + JSON.stringify(v) + ',');
     }
-    res.write('"results":[');
-    for (let i = 0; i < rows.length; i++) {
-      if (i > 0) res.write(',');
-      res.write(JSON.stringify(rows[i]));
-    }
-    res.write(']}');
+    // Write results_data directly as raw JSON text (already a valid JSON array)
+    res.write('"results":');
+    res.write(rawData);
+    res.write('}');
     return res.end();
   } catch (error: any) {
     if (!res.headersSent) return res.status(500).json({ error: error.message });

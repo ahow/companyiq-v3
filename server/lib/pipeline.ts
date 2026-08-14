@@ -29,7 +29,7 @@
 import * as storage from "../storage.js";
 import { searchCompanyDocuments, type DiscoveryResult } from "./discovery.js";
 import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError } from "./processor.js";
-import { analyzeCompanyMeasures, type AnalysisResult } from "./analyzer.js";
+import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -177,8 +177,20 @@ async function runFetchPhase(opts: {
   }
 
   // Step 3: Store discovered documents in DB (company-level, no frameworkId in uniqueness)
+  // Determine first-party vs third-party based on domain matching
+  const companyDomainLower = (company.domain || "").replace(/^www\./, "").toLowerCase();
   for (const doc of discoveryResult.documents) {
     const type = inferDocumentType(doc.url);
+    // Tag source type: first_party if URL matches company domain, third_party otherwise
+    let sourceType: string = "third_party";
+    if (companyDomainLower) {
+      try {
+        const docHost = new URL(doc.url).hostname.replace(/^www\./, "").toLowerCase();
+        if (docHost === companyDomainLower || docHost.endsWith("." + companyDomainLower)) {
+          sourceType = "first_party";
+        }
+      } catch {}
+    }
     await storage.upsertDocument({
       companyId,
       url: doc.url,
@@ -186,6 +198,7 @@ async function runFetchPhase(opts: {
       type,
       gateVerdict: "accept",
       gateReason: `Priority: ${doc.priority}, Lane: ${doc.lane}`,
+      sourceType,
     });
   }
 
@@ -637,11 +650,11 @@ async function runAnalyzePhase(opts: {
   cancelCheck?: () => boolean;
 }): Promise<AnalysisResult | null> {
   const { company, framework, measures, workspaceId, cancelCheck } = opts;
-  const companyId = company.id;
+    const companyId = company.id;
   const companyName = company.name;
-
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
-
+  // Load settings for scoring mode (needed for prompt hash stamping)
+  const settings = await storage.getSettings(workspaceId);
   // Update status to analyzing
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "analyzing" });
 
@@ -765,6 +778,10 @@ async function runAnalyzePhase(opts: {
         // denominator and cross-run drift detection / verdict caching.
         abstained: (m as any).abstained === true,
         evidenceFingerprint: (m as any).evidenceFingerprint ?? null,
+        // Review fix: methodology stamping — enables cross-batch comparability
+        modelId: (m as any)._gradedBy || null,
+        promptHash: getPromptHash(settings.scoring_mode || "binary"),
+        pipelineVersion: getPipelineVersion(),
       };
     })
   );

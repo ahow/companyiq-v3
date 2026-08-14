@@ -330,6 +330,7 @@ export async function getAcceptedDocuments(companyId: number) {
       gateReason: schema.documents.gateReason,
       fetchStatus: schema.documents.fetchStatus,
       fetchFailures: schema.documents.fetchFailures,
+      sourceType: schema.documents.sourceType,
       fetchedAt: schema.documents.fetchedAt,
       createdAt: schema.documents.createdAt,
     })
@@ -382,13 +383,13 @@ export async function getCorpusCharCount(companyId: number): Promise<number> {
   return Number((rows.rows[0] as any)?.total || 0);
 }
 
-export async function upsertDocument(data: { companyId: number; url: string; title?: string; type: string; gateVerdict: string; gateReason?: string }) {
+export async function upsertDocument(data: { companyId: number; url: string; title?: string; type: string; gateVerdict: string; gateReason?: string; sourceType?: string }) {
   const [doc] = await db
     .insert(schema.documents)
     .values(data)
     .onConflictDoUpdate({
       target: [schema.documents.companyId, schema.documents.url],
-      set: { title: data.title, gateVerdict: data.gateVerdict, gateReason: data.gateReason },
+      set: { title: data.title, gateVerdict: data.gateVerdict, gateReason: data.gateReason, sourceType: data.sourceType },
     })
     .returning();
   return doc;

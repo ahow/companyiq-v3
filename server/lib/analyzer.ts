@@ -9,6 +9,29 @@ import { corpusSourceTypes } from "./discovery.js";
 import { createHash } from "crypto";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
 
+// ─── Methodology Stamping ───────────────────────────────────────────────────
+// Computed once at module load; changes only when the scoring prompt template
+// or pipeline code changes (i.e. on deploy).
+const PIPELINE_VERSION = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || "dev";
+
+// Hash the scoring prompt TEMPLATE (the static parts, not per-company evidence).
+// This changes when prompt logic changes, enabling drift detection.
+const BINARY_PROMPT_HASH = createHash("sha256")
+  .update("binary-v1:" + buildBinaryScoringPrompt.toString().slice(0, 500))
+  .digest("hex")
+  .slice(0, 16);
+const PARTIAL_PROMPT_HASH = createHash("sha256")
+  .update("partial-v1:" + buildPartialScoringPrompt.toString().slice(0, 500))
+  .digest("hex")
+  .slice(0, 16);
+
+export function getPromptHash(mode: string): string {
+  return mode === "partial" ? PARTIAL_PROMPT_HASH : BINARY_PROMPT_HASH;
+}
+export function getPipelineVersion(): string {
+  return PIPELINE_VERSION;
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface MeasureResult {
@@ -1589,6 +1612,8 @@ async function scoreSingleMeasure(opts: {
   chosen.confidence = unanimous ? "High" : winningCount >= Math.ceil(passes / 2) ? "Medium" : "Low";
   chosen.verdictNuance = (chosen.verdictNuance ? chosen.verdictNuance + " " : "") +
     `[Self-consistency ${winningCount}/${passes} on ${gradedByLabel}]`;
+  // Propagate model identity for methodology stamping
+  (chosen as any)._gradedBy = gradedByLabel;
   return chosen;
 }
 
