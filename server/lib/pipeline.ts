@@ -332,9 +332,7 @@ async function runFetchPhase(opts: {
       // Force-mark remaining pending docs as dead so we can proceed
       const remainingPending = (await storage.getAcceptedDocuments(companyId)).filter(d => d.fetchStatus === "pending");
       for (const doc of remainingPending) {
-        await storage.recordFetchFailure(companyId, doc.url);
-        await storage.recordFetchFailure(companyId, doc.url);
-        await storage.recordFetchFailure(companyId, doc.url);
+        await storage.recordFetchDead(companyId, doc.url, "budget_exceeded");
       }
       if (remainingPending.length > 0) {
         console.warn(`[${companyName}] Force-marked ${remainingPending.length} remaining pending docs as dead (budget exceeded)`);
@@ -361,9 +359,7 @@ async function runFetchPhase(opts: {
       console.warn(`[${companyName}] Max fetch passes (${MAX_PASSES}) reached. ${pendingDocs.length} docs still pending — marking as dead.`);
       // Force-mark remaining pending docs as dead
       for (const doc of pendingDocs) {
-        await storage.recordFetchFailure(companyId, doc.url);
-        await storage.recordFetchFailure(companyId, doc.url);
-        await storage.recordFetchFailure(companyId, doc.url);
+        await storage.recordFetchDead(companyId, doc.url, "max_retries_exceeded");
       }
       break;
     }
@@ -510,26 +506,23 @@ async function runFetchPhase(opts: {
         }
       } catch (error: any) {
         if (error instanceof TimeoutError) {
-          // A per-document timeout is the most budget-expensive failure mode and
-          // almost never resolves on a retry within the same run. Mark it dead in
-          // one step so the fetch loop does not re-attempt it (and re-burn the
-          // full timeout) on every subsequent pass.
           console.warn(`[${companyName}] Document fetch TIMEOUT (${PER_DOCUMENT_TIMEOUT_MS / 1000}s) — marking dead: ${doc.url.slice(0, 100)}`);
-          await storage.recordFetchDead(companyId, doc.url);
+          await storage.recordFetchDead(companyId, doc.url, "timeout");
         } else if (error instanceof TransientFetchError) {
-          // REVIEWER FIX v3d (issue #3): browser-PDF returned empty THIS pass for a
-          // possibly-transient WAF/edge reason (e.g. ir.tesla.com Akamai). Record a
-          // retryable failure so a later pass can recover the high-value IR PDF,
-          // instead of discarding it as dead on the first miss.
           console.warn(`[${companyName}] Transient fetch failure — keeping retryable: ${doc.url.slice(0, 100)} (${error.message})`);
-          await storage.recordFetchFailure(companyId, doc.url);
+          await storage.recordFetchFailure(companyId, doc.url, "transient");
         } else if (error instanceof PermanentFetchError) {
-          // 401 paywall / 403 CDN block — will not succeed on retry. Mark dead now.
-          console.warn(`[${companyName}] Permanent fetch failure — marking dead: ${doc.url.slice(0, 100)} (${error.message})`);
-          await storage.recordFetchDead(companyId, doc.url);
+          // Classify the permanent failure by HTTP status
+          const status = (error as any).statusCode;
+          const reason = status === 401 ? "paywall_401" : status === 403 ? "blocked_403" : status === 404 ? "not_found_404" : "blocked_403";
+          console.warn(`[${companyName}] Permanent fetch failure (${reason}) — marking dead: ${doc.url.slice(0, 100)} (${error.message})`);
+          await storage.recordFetchDead(companyId, doc.url, reason);
         } else {
-          console.warn(`[${companyName}] Fetch failed for ${doc.url}: ${error.message}`);
-          await storage.recordFetchFailure(companyId, doc.url);
+          // Unknown error — classify from message heuristics
+          const msg = (error.message || "").toLowerCase();
+          const reason = msg.includes("403") ? "blocked_403" : msg.includes("404") ? "not_found_404" : msg.includes("timeout") ? "timeout" : "transient";
+          console.warn(`[${companyName}] Fetch failed (${reason}) for ${doc.url}: ${error.message}`);
+          await storage.recordFetchFailure(companyId, doc.url, reason);
         }
       }
     };
@@ -559,9 +552,7 @@ async function runFetchPhase(opts: {
     if (fetchBudgetExceeded) {
       const remainingPending = (await storage.getAcceptedDocuments(companyId)).filter(d => d.fetchStatus === "pending");
       for (const doc of remainingPending) {
-        await storage.recordFetchFailure(companyId, doc.url);
-        await storage.recordFetchFailure(companyId, doc.url);
-        await storage.recordFetchFailure(companyId, doc.url);
+        await storage.recordFetchDead(companyId, doc.url, "budget_exceeded");
       }
       if (remainingPending.length > 0) {
         console.warn(`[${companyName}] Force-marked ${remainingPending.length} remaining pending docs as dead (budget exceeded)`);

@@ -1898,6 +1898,19 @@ function calculatePriority(
     }
   }
 
+  // Fix 6 (Dead-fetch diagnosis): Bias toward direct document URLs over landing pages.
+  // PDFs on the company's own domain are almost always the actual report (not a
+  // landing page), and fetch at ~97% success rate vs ~50% for IR HTML pages.
+  if (companyDomain && urlLower.includes(companyDomain)) {
+    if (/\.pdf($|\?)/.test(urlLower)) {
+      priority -= 6; // Strong boost: direct company PDF (ESG report, annual report)
+    }
+    // Penalize landing-page patterns that often fail to fetch (JS-rendered IR pages)
+    if (/\/ir\/|investor-relations|investors\..*\.com/.test(urlLower) && !/\.pdf($|\?)/.test(urlLower) && !/\.htm/.test(urlLower)) {
+      priority += 3; // Mild penalty: likely a JS landing page, not a document
+    }
+  }
+
   // Third-party blog/news penalty
   const newsDomains = ["reuters.com", "bloomberg.com", "cnbc.com", "bbc.com", "medium.com"];
   if (newsDomains.some((d) => urlLower.includes(d))) {
@@ -2445,7 +2458,55 @@ export async function searchCompanyDocuments(opts: {
   const excludeEntities = disambiguationExclusions(companyName);
   const url2 = (s: string) => s.toLowerCase();
 
-  const filteredCandidates = allCandidates.filter(c => {
+  // Fix 3 (Dead-fetch diagnosis): Filter out low-quality SEC EDGAR URLs that are
+  // guaranteed to fail fetch — index pages, bare accession-folder URLs, XBRL viewers,
+  // and non-primary exhibits (schedule 13G, form 4, etc.).
+  const preEdgarFilterCount = allCandidates.length;
+  const edgarFiltered = allCandidates.filter(c => {
+    const u = c.url.toLowerCase();
+    if (!/sec\.gov/.test(u)) return true; // Only filter SEC URLs
+    // Reject EDGAR index pages
+    if (/-index\.htm/.test(u) || /\/index\.htm/.test(u)) return false;
+    // Reject bare accession-folder URLs (no file extension)
+    if (/\/archives\/edgar\/data\/\d+\/\d+\/?$/.test(u)) return false;
+    // Reject XBRL viewer URLs
+    if (/viewer\.htm|ix\?doc=/.test(u)) return false;
+    // Reject non-primary exhibits unless title indicates a primary filing
+    const titleLower = (c.title || "").toLowerCase();
+    const isExhibit = /ex\d|exhibit|schedule.?13|sc.?13[dg]|form.?[345]\b|\b6-?k\b/.test(u + " " + titleLower);
+    const isPrimaryFiling = /10-?k|20-?f|40-?f|def.?14a|annual.?report/.test(titleLower);
+    if (isExhibit && !isPrimaryFiling) return false;
+    // Reject "Untitled" SEC pages (directory listings)
+    if (titleLower === "untitled" || titleLower === "") return false;
+    return true;
+  });
+  if (edgarFiltered.length < preEdgarFilterCount) {
+    console.log(`[${companyName}] EDGAR quality filter removed ${preEdgarFilterCount - edgarFiltered.length} low-quality SEC URLs`);
+  }
+
+  // Fix 4 (Dead-fetch diagnosis): Drop URLs from known-blocked third-party
+  // aggregators that consistently return 403/paywall and waste fetch retries.
+  // Under first-party-only these are excluded anyway; removing them pre-gate
+  // also saves LLM gate cost.
+  const BLOCKED_AGGREGATOR_DOMAINS = new Set([
+    "sustainabilityreports.com", "business-humanrights.org", "spglobal.com",
+    "finance.yahoo.com", "yahoo.com", "relayto.com", "responsibilityreports.com",
+    "seekingalpha.com", "morningstar.com", "ft.com", "wsj.com", "bloomberg.com",
+    "reuters.com", "marketscreener.com", "simplywall.st", "tipranks.com",
+  ]);
+  const preAggregatorCount = edgarFiltered.length;
+  const aggregatorFiltered = edgarFiltered.filter(c => {
+    try {
+      const host = new URL(c.url).hostname.replace(/^www\./, "").toLowerCase();
+      return !BLOCKED_AGGREGATOR_DOMAINS.has(host) &&
+        ![...BLOCKED_AGGREGATOR_DOMAINS].some(d => host.endsWith("." + d));
+    } catch { return true; }
+  });
+  if (aggregatorFiltered.length < preAggregatorCount) {
+    console.log(`[${companyName}] Aggregator filter removed ${preAggregatorCount - aggregatorFiltered.length} blocked third-party URLs`);
+  }
+
+  const filteredCandidates = aggregatorFiltered.filter(c => {
     const titleLower = c.title.toLowerCase();
     const haystack = titleLower + " " + url2(c.url);
     // Hard exclude known-distinct entities sharing an ambiguous token, UNLESS

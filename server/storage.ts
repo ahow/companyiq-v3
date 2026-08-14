@@ -422,10 +422,11 @@ export async function recordFetchSuccess(companyId: number, url: string, content
   `);
 }
 
-export async function recordFetchFailure(companyId: number, url: string) {
+export async function recordFetchFailure(companyId: number, url: string, failureReason?: string) {
   await db.execute(sql`
     UPDATE documents SET fetch_failures = fetch_failures + 1,
-    fetch_status = CASE WHEN fetch_failures + 1 >= 3 THEN 'dead' ELSE 'pending' END
+    fetch_status = CASE WHEN fetch_failures + 1 >= 3 THEN 'dead' ELSE 'pending' END,
+    failure_reason = COALESCE(${failureReason || null}, failure_reason)
     WHERE company_id = ${companyId} AND url = ${url}
   `);
 }
@@ -439,9 +440,10 @@ export async function recordFetchFailure(companyId: number, url: string) {
  * loop from burning multiple passes — and minutes of the fetch budget — on URLs
  * that are effectively unreachable.
  */
-export async function recordFetchDead(companyId: number, url: string) {
+export async function recordFetchDead(companyId: number, url: string, failureReason?: string) {
   await db.execute(sql`
-    UPDATE documents SET fetch_failures = 3, fetch_status = 'dead'
+    UPDATE documents SET fetch_failures = 3, fetch_status = 'dead',
+    failure_reason = COALESCE(${failureReason || null}, failure_reason)
     WHERE company_id = ${companyId} AND url = ${url}
   `);
 }

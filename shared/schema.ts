@@ -153,6 +153,7 @@ export const documents = pgTable("documents", {
   // third-party (news, NGO commentary, aggregators). Passed to scorer so
   // commitment-type measures require first-party support.
   sourceType: text("source_type"), // "first_party" | "third_party" | null (legacy)
+  failureReason: text("failure_reason"), // blocked_403 | not_found_404 | timeout | empty_after_render | paywall_401 | transient | null
   fetchedAt: timestamp("fetched_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
