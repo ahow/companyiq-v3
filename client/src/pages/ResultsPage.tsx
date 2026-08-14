@@ -227,7 +227,8 @@ export default function ResultsPage() {
   };
 
   const handleShare = async (result: any) => {
-    const shareUrl = `${window.location.origin}/api/results/${result.id}/share`;
+    // Use the unguessable share token (not numeric ID) for public share links
+    const shareUrl = `${window.location.origin}/api/results/${result.shareToken}/share`;
     try {
       await navigator.clipboard.writeText(shareUrl);
       alert("Share link copied to clipboard!");
