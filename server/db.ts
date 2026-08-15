@@ -453,6 +453,10 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+
+    // P2d: Framework-declared required document types and data patterns
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS required_doc_types JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS data_patterns JSONB`);
     // ─── Seed Default Settings for All Workspaces ──────────────────────────
     await seedDefaultSettings();
 

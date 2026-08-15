@@ -2435,6 +2435,41 @@ export async function searchCompanyDocuments(opts: {
     }
   }
 
+
+  // Lane 11: Subsidiary / CDN discovery (P2c)
+  // Search on known subsidiary/brand names and allow PDF discovery on common
+  // corporate-doc CDNs. This catches the Coinbase modern-slavery-statement miss
+  // (CB Payments is the subsidiary that publishes the MSA statement).
+  // Also searches common IR/doc CDNs that host company PDFs.
+  {
+    const CORPORATE_DOC_CDNS = ["ctfassets.net", "q4cdn.com", "s3.amazonaws.com"];
+    const topicKeywords = topicPhrases.slice(0, 3).join(" OR ");
+
+    // Search for company + topic on common corporate CDNs
+    if (topicKeywords) {
+      for (const cdn of CORPORATE_DOC_CDNS) {
+        const query = `site:${cdn} "${companyName}" ${topicKeywords} filetype:pdf`;
+        try {
+          const results = await webSearch(query, { num: 5 });
+          for (const r of results) addCandidate(r, "cdn-pdf");
+        } catch { /* best-effort */ }
+      }
+    }
+
+    // Search for subsidiary/brand names if the company name suggests a parent
+    // Common patterns: "Group" → search without "Group"; multi-word → search abbreviation
+    const parentName = companyName.replace(/\s+(Group|Holdings|Inc\.?|Corp\.?|Ltd\.?|PLC|SE|AG|SA|NV)\s*$/i, "").trim();
+    if (parentName !== companyName && parentName.length >= 3) {
+      const subQuery = `"${parentName}" ${topicPhrases.slice(0, 2).join(" ")} filetype:pdf`;
+      try {
+        const results = await webSearch(subQuery, { num: 5 });
+        for (const r of results) addCandidate(r, "subsidiary");
+      } catch { /* best-effort */ }
+    }
+
+    laneCounts["subsidiary-cdn"] = (laneCounts["subsidiary-cdn"] || 0);
+  }
+
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);
 
   // PRE-GATE HEURISTIC: Remove candidates whose title prominently mentions

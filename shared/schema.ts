@@ -95,6 +95,15 @@ export const frameworks = pgTable("frameworks", {
   negativeKeywords: jsonb("negative_keywords").$type<string[]>(),
   negativeDomains: jsonb("negative_domains").$type<string[]>(),
   knownDisclosureUrls: jsonb("known_disclosure_urls").$type<string[]>(),
+  // P2d: Framework-declared required document types and data patterns.
+  // requiredDocTypes: human-readable labels of documents that constitute a valid corpus
+  //   e.g. ["TCFD/Climate Report", "Sustainability Report"] for financed emissions
+  // dataPatterns: regex patterns (as strings) that prove the topic was found in content
+  //   e.g. ["scope\\s*[123]", "financed.?emission", "tonnes?.?co2"] for climate
+  // These replace the hard-coded contentPatterns in pipeline.ts, making corpus validity
+  // checks work for ANY framework without code changes.
+  requiredDocTypes: jsonb("required_doc_types").$type<string[]>(),
+  dataPatterns: jsonb("data_patterns").$type<string[]>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

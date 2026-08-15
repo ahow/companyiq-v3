@@ -346,11 +346,25 @@ async function runFetchPhase(opts: {
     // Content-based patterns look for actual data/figures, not just topic keywords.
     // IMPORTANT: DiscoveryCandidate objects do NOT carry content — we must load
     // actual fetched text from the DB via storage.getFetchedDocuments (JOINs document_content).
-    const contentPatterns: Record<string, RegExp> = {
-      "Climate/TCFD/Sustainability Report": /(?:scope\s*[123]|financed.?emission|tonnes?.?(?:co2|carbon)|tcfd|ghg.?(?:emission|target|inventory)|net.?zero.?(?:target|commitment|by)|carbon.?(?:neutral|footprint|intensity)|climate.?(?:risk|scenario|transition))/i,
-      "AI/Technology Policy or Strategy": /(?:responsible.?ai|ai.?(?:governance|ethics|policy|strategy|principle)|machine.?learning.?(?:model|deployment)|algorithmic.?(?:bias|fairness|accountability))/i,
-      "Modern Slavery Statement or Human Rights Report": /(?:modern.?slavery.?(?:act|statement)|forced.?labo|human.?rights.?(?:due.?diligence|impact|assessment)|supply.?chain.?(?:audit|risk|transparency))/i,
-    };
+    //
+    // P2d: If the framework declares dataPatterns, use those (cross-domain extensibility).
+    // Otherwise fall back to the hard-coded patterns for known topics.
+    const frameworkDataPatterns = (framework as any).dataPatterns as string[] | null;
+    let contentPatterns: Record<string, RegExp> = {};
+    if (frameworkDataPatterns && frameworkDataPatterns.length > 0) {
+      // Framework-declared patterns: combine into a single regex for each expected type
+      const combinedPattern = new RegExp(`(?:${frameworkDataPatterns.join("|")})`, "i");
+      for (const { label } of expectedTypes) {
+        contentPatterns[label] = combinedPattern;
+      }
+    } else {
+      // Hard-coded fallback for known topics (backward compat)
+      contentPatterns = {
+        "Climate/TCFD/Sustainability Report": /(?:scope\s*[123]|financed.?emission|tonnes?.?(?:co2|carbon)|tcfd|ghg.?(?:emission|target|inventory)|net.?zero.?(?:target|commitment|by)|carbon.?(?:neutral|footprint|intensity)|climate.?(?:risk|scenario|transition))/i,
+        "AI/Technology Policy or Strategy": /(?:responsible.?ai|ai.?(?:governance|ethics|policy|strategy|principle)|machine.?learning.?(?:model|deployment)|algorithmic.?(?:bias|fairness|accountability))/i,
+        "Modern Slavery Statement or Human Rights Report": /(?:modern.?slavery.?(?:act|statement)|forced.?labo|human.?rights.?(?:due.?diligence|impact|assessment)|supply.?chain.?(?:audit|risk|transparency))/i,
+      };
+    }
 
     // Load real content from DB (the same JOIN the analyze phase uses)
     const docsWithContent = await storage.getFetchedDocuments(companyId);
@@ -960,7 +974,17 @@ async function runAnalyzePhase(opts: {
       const hasMaterialDead = deadFirstParty.length > 0 || deadAccepted.some(d =>
         /10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy|sustainability/i.test((d.url + " " + (d.title || "")).toLowerCase())
       );
-      if (hasMaterialDead) {
+      // P3b: blocked_403/empty_after_render on a RELEVANT document (company-domain or
+      // topic-titled) is a stronger signal than not_found_404. These are documents
+      // that exist but couldn't be retrieved — the evidence is likely there.
+      const companyDomainLower = (company.domain || "").replace(/^www\./, "").toLowerCase();
+      const hasBlockedRelevant = deadAccepted.some(d => {
+        const reason = (d as any).failureReason || "";
+        const isBlocked = reason === "blocked_403" || reason === "empty_after_render";
+        const isOnCompanyDomain = companyDomainLower && d.url.toLowerCase().includes(companyDomainLower);
+        return isBlocked && isOnCompanyDomain;
+      });
+      if (hasMaterialDead || hasBlockedRelevant) {
         let downgraded = 0;
         for (const cat of analysis.categories) {
           for (const m of cat.measures) {
