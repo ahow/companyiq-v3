@@ -62,6 +62,7 @@ export interface PipelineOptions {
   framework: Framework;
   measures: FrameworkMeasure[];
   workspaceId: number;
+  batchId?: number; // For corpus snapshot (batch_corpus table)
   cancelCheck?: () => boolean;
   skipFetch?: boolean; // If true, skip fetch phase (reuse existing documents)
 }
@@ -102,9 +103,10 @@ async function runFetchPhase(opts: {
   company: Company;
   framework: Framework;
   workspaceId: number;
+  batchId?: number;
   cancelCheck?: () => boolean;
 }): Promise<{ fetchedCount: number; totalAccepted: number }> {
-  const { company, framework, workspaceId, cancelCheck } = opts;
+  const { company, framework, workspaceId, batchId, cancelCheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
   const fetchPhaseStart = Date.now();
@@ -384,11 +386,16 @@ async function runFetchPhase(opts: {
     // Persist the validity warning in diagnostics (or clear stale warning if check passed)
     const priorDiag2 = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
     if (corpusValidityWarning) {
+      // P4a: Write coverageLevel directly into the coverage sub-object that the API reads
+      // (api.ts reads discoveryDiagnostics.coverage.coverageLevel). The old coverageLevelOverride
+      // field was never consumed. Now we set both for backward compat.
+      const existingCoverage = priorDiag2.coverage || {};
       await storage.updateCompany(companyId, workspaceId, {
         discoveryDiagnostics: {
           ...priorDiag2,
           corpusValidityWarning,
           coverageLevelOverride: "suspect",
+          coverage: { ...existingCoverage, coverageLevel: "suspect" },
         } as any,
       });
     } else if (priorDiag2.corpusValidityWarning) {
@@ -661,6 +668,61 @@ async function runFetchPhase(opts: {
     }
   }
 
+  // ─── One-Hop PDF Harvest (P2a) ────────────────────────────────────────────
+  // When a fetched company-domain page is index-like (many links, little substantive text),
+  // extract same-domain/CDN PDF links whose anchor text matches the framework topic.
+  // This catches the SMFG case: found the sustainability section page, but not the actual report.
+  try {
+    const fetchedOkDocs = await storage.getFetchedDocuments(companyId);
+    const topicPattern = new RegExp(
+      (framework.topicDescription || framework.name || "sustainability")
+        .toLowerCase().split(/\s+/).filter(w => w.length > 3).slice(0, 5).join("|"),
+      "i"
+    );
+    let harvestedCount = 0;
+    const MAX_HARVEST = 5;
+    for (const doc of fetchedOkDocs) {
+      if (harvestedCount >= MAX_HARVEST) break;
+      if (!companyDomain || !doc.url.toLowerCase().includes(companyDomain)) continue;
+      if (/\.pdf(\?|$)/i.test(doc.url)) continue; // Already a PDF
+      const content = doc.content || "";
+      // Index-like: has links but relatively little text per link
+      const linkMatches = content.match(/href=["'][^"']*\.pdf[^"']*/gi) || [];
+      if (linkMatches.length < 2) continue;
+      // Extract PDF URLs from the content
+      for (const link of linkMatches.slice(0, 10)) {
+        if (harvestedCount >= MAX_HARVEST) break;
+        const hrefMatch = link.match(/href=["']([^"']+)/i);
+        if (!hrefMatch) continue;
+        let pdfUrl = hrefMatch[1];
+        // Resolve relative URLs
+        if (pdfUrl.startsWith("/")) {
+          try { pdfUrl = new URL(pdfUrl, doc.url).href; } catch { continue; }
+        }
+        if (!/\.pdf(\?|$)/i.test(pdfUrl)) continue;
+        // Must be same domain or common CDN
+        const pdfHost = (() => { try { return new URL(pdfUrl).hostname; } catch { return ""; } })();
+        const isSameDomain = pdfHost.includes(companyDomain) ||
+          /ctfassets\.net|q4cdn\.com|s3\.amazonaws\.com/i.test(pdfHost);
+        if (!isSameDomain) continue;
+        // Check if anchor text or URL matches framework topic
+        const anchorText = link.toLowerCase();
+        if (!topicPattern.test(anchorText) && !topicPattern.test(pdfUrl.toLowerCase())) continue;
+        // Add as a new candidate if not already known
+        const existing = await storage.getDocumentByUrl(companyId, pdfUrl);
+        if (!existing) {
+          await storage.addDiscoveredDocument(companyId, pdfUrl, `PDF harvest: ${pdfUrl.split("/").pop()}`, "first_party");
+          harvestedCount++;
+        }
+      }
+    }
+    if (harvestedCount > 0) {
+      console.log(`[${companyName}] ONE-HOP PDF HARVEST: discovered ${harvestedCount} new PDFs from landing pages`);
+    }
+  } catch (harvestErr: any) {
+    console.warn(`[${companyName}] PDF harvest failed (non-fatal): ${harvestErr.message}`);
+  }
+
   // Final count
   const finalDocs = await storage.getAcceptedDocuments(companyId);
   totalFetched = finalDocs.filter(d => d.fetchStatus === "ok").length;
@@ -720,6 +782,25 @@ async function runFetchPhase(opts: {
     console.warn(`[${companyName}] Failed to persist fetch-coverage diagnostics (non-fatal): ${covErr.message}`);
   }
 
+  // ─── Corpus Snapshot: freeze the evidence set for this batch ──────────────
+  // This makes re-scoring byte-identical: the analyze phase reads from batch_corpus
+  // instead of the live documents table, so corpus composition is frozen at fetch time.
+  if (batchId) {
+    try {
+      const { db } = await import("../db.js");
+      const { sql } = await import("drizzle-orm");
+      await db.execute(sql`
+        INSERT INTO batch_corpus (batch_id, company_id, document_id)
+        SELECT ${batchId}, ${companyId}, id FROM documents
+        WHERE company_id = ${companyId} AND fetch_status = 'ok'
+        ON CONFLICT DO NOTHING
+      `);
+      console.log(`[${companyName}] CORPUS SNAPSHOT: frozen for batch ${batchId}`);
+    } catch (snapErr: any) {
+      console.warn(`[${companyName}] Corpus snapshot failed (non-fatal): ${snapErr.message}`);
+    }
+  }
+
   // Update status to fetched
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "fetched" });
 
@@ -733,10 +814,11 @@ async function runAnalyzePhase(opts: {
   framework: Framework;
   measures: FrameworkMeasure[];
   workspaceId: number;
+  batchId?: number;
   cancelCheck?: () => boolean;
 }): Promise<AnalysisResult | null> {
-  const { company, framework, measures, workspaceId, cancelCheck } = opts;
-    const companyId = company.id;
+  const { company, framework, measures, workspaceId, batchId, cancelCheck } = opts;
+  const companyId = company.id;
   const companyName = company.name;
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
 
@@ -749,8 +831,38 @@ async function runAnalyzePhase(opts: {
   // Update status to analyzing
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "analyzing" });
 
-  // Load all fetched documents for this company (company-level, reusable)
-  const fetchedDocs = await storage.getFetchedDocuments(companyId);
+  // Load documents: prefer batch_corpus snapshot (deterministic) over live documents table.
+  // When a batch_corpus snapshot exists for this batch+company, use it with stable ORDER BY d.id
+  // so the evidence pack is identical every time. Falls back to live table if no snapshot.
+  let fetchedDocs: Awaited<ReturnType<typeof storage.getFetchedDocuments>>;
+  if (batchId) {
+    try {
+      const { db: dbImport } = await import("../db.js");
+      const { sql: sqlImport } = await import("drizzle-orm");
+      const snapshotRows = await dbImport.execute(sqlImport`
+        SELECT d.id, d.company_id, d.url, d.title, d.type, d.gate_verdict,
+               d.gate_reason, d.fetch_status, d.fetch_failures, d.fetched_at, d.created_at,
+               COALESCE(dc.content, d.content) AS content
+        FROM batch_corpus bc
+        JOIN documents d ON d.id = bc.document_id
+        LEFT JOIN document_content dc ON dc.id = d.content_id
+        WHERE bc.batch_id = ${batchId} AND bc.company_id = ${companyId}
+        ORDER BY d.id
+      `);
+      if (snapshotRows.rows.length > 0) {
+        fetchedDocs = snapshotRows.rows as any;
+        console.log(`[${companyName}] Using batch_corpus snapshot (${fetchedDocs.length} docs, batch ${batchId})`);
+      } else {
+        // No snapshot yet (e.g. scoreOnly on a batch that predates snapshots)
+        fetchedDocs = await storage.getFetchedDocuments(companyId);
+      }
+    } catch (snapErr: any) {
+      console.warn(`[${companyName}] batch_corpus read failed, falling back to live: ${snapErr.message}`);
+      fetchedDocs = await storage.getFetchedDocuments(companyId);
+    }
+  } else {
+    fetchedDocs = await storage.getFetchedDocuments(companyId);
+  }
 
   if (fetchedDocs.length === 0) {
     console.warn(`[${companyName}] No fetched documents available for analysis`);
@@ -869,26 +981,35 @@ async function runAnalyzePhase(opts: {
   } catch (fcErr: any) {
     console.warn(`[${companyName}] Fetch-confidence adjustment failed (non-fatal): ${fcErr.message}`);
   }
+  // ─── Coverage-Based Confidence Cap (P4c) ─────────────────────────────────────
+  // A "No" verdict built on a thin, suspect, or minimal corpus should never be
+  // reported as High confidence. This folds corpus validity + coverage signals into
+  // a hard cap on negative confidence, making the tool honest about what it could not retrieve.
+  {
+    const freshCompany = await storage.getCompanyById(companyId, workspaceId);
+    const diag = (freshCompany?.discoveryDiagnostics as any) || {};
+    const coverageLevel = diag.coverage?.coverageLevel || "unknown";
+    const isSuspectOrMinimal = coverageLevel === "suspect" || coverageLevel === "minimal";
+    const shouldClamp = corpusValidityWarning || isSuspectOrMinimal;
 
-
-  // ─── Corpus Validity Confidence Clamp ────────────────────────────────────────
-  // When corpus validity warning is set (e.g. SMFG: all docs lack framework data),
-  // a confident "No" is likely a false negative. Clamp to Low so downstream consumers
-  // know the verdict is suspect.
-  if (corpusValidityWarning) {
-    let cvClamped = 0;
-    for (const cat of analysis.categories) {
-      for (const m of cat.measures) {
-        if (m.verdict === "No" && (m.confidence === "High" || m.confidence === "Medium")) {
-          m.confidence = "Low";
-          m.verdictNuance = (m.verdictNuance || "") +
-            ` [Confidence clamped: corpus validity warning — documents lack framework-relevant data]`;
-          cvClamped++;
+    if (shouldClamp) {
+      let cvClamped = 0;
+      const reason = corpusValidityWarning
+        ? "corpus validity warning — documents lack framework-relevant data"
+        : `coverage level is "${coverageLevel}" — insufficient evidence for confident negatives`;
+      for (const cat of analysis.categories) {
+        for (const m of cat.measures) {
+          if (m.verdict === "No" && (m.confidence === "High" || m.confidence === "Medium")) {
+            m.confidence = "Low";
+            m.verdictNuance = (m.verdictNuance || "") +
+              ` [Confidence clamped: ${reason}]`;
+            cvClamped++;
+          }
         }
       }
-    }
-    if (cvClamped > 0) {
-      console.log(`[${companyName}] CORPUS-VALIDITY-CLAMP: downgraded ${cvClamped} "No" measures to Low confidence`);
+      if (cvClamped > 0) {
+        console.log(`[${companyName}] COVERAGE-CONFIDENCE-CLAMP: downgraded ${cvClamped} "No" measures to Low (${reason})`);
+      }
     }
   }
   // ─── Persist Results ──────────────────────────────────────────────────────
@@ -1132,7 +1253,7 @@ async function maybeAutoReexamine(opts: {
 // ─── Combined Pipeline (both phases in sequence) ────────────────────────────
 
 export async function runAnalysisPipeline(opts: PipelineOptions): Promise<PipelineResult> {
-  const { company, framework, measures, workspaceId, cancelCheck, skipFetch } = opts;
+  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch } = opts;
   const companyName = company.name;
   const companyId = company.id;
   const pipelineStart = Date.now();
@@ -1145,7 +1266,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // Phase 1: Fetch (unless skipping to reuse cached docs)
       let fetchResult = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
-        fetchResult = await runFetchPhase({ company, framework, workspaceId, cancelCheck });
+        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck });
         
         if (cancelCheck?.()) {
           return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
@@ -1187,7 +1308,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       }
 
       // Phase 2: Analyze
-      const analysis = await runAnalyzePhase({ company, framework, measures, workspaceId, cancelCheck });
+      const analysis = await runAnalyzePhase({ company, framework, measures, workspaceId, batchId, cancelCheck });
 
       if (!analysis) {
         return {

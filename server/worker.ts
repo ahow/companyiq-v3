@@ -195,6 +195,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
         framework,
         measures,
         workspaceId,
+        batchId,
         cancelCheck,
         skipFetch,
       }),

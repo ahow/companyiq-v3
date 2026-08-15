@@ -814,8 +814,14 @@ export function buildEvidencePackForMeasure(opts: {
     };
   });
 
-  // Primary ranking by blended score (desc).
-  scored.sort((a, b) => b.score - a.score);
+  // Primary ranking by blended score (desc), with deterministic tie-breaking
+  // by (documentIndex, sequenceInDoc) so equal-score passages resolve identically each run.
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const aChunk = chunks[a.idx], bChunk = chunks[b.idx];
+    if (aChunk.docIndex !== bChunk.docIndex) return aChunk.docIndex - bChunk.docIndex;
+    return (aChunk.seqInDoc ?? a.idx) - (bChunk.seqInDoc ?? b.idx);
+  });
 
   // ─── Selection with per-document budgeting (Layer C) + topic floor (Layer B)
   const perDocCount = new Map<number, number>();

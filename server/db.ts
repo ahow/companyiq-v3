@@ -443,6 +443,16 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
     await db.execute(sql`ALTER TABLE documents ALTER COLUMN failure_reason SET DEFAULT 'unspecified'`);
 
+    // Corpus snapshot: freeze the evidence set per batch for reproducibility
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS batch_corpus (
+        batch_id INTEGER NOT NULL,
+        company_id INTEGER NOT NULL,
+        document_id INTEGER NOT NULL,
+        PRIMARY KEY (batch_id, company_id, document_id)
+      )
+    `);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────────
     await seedDefaultSettings();
 

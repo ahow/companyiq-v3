@@ -395,6 +395,21 @@ export async function upsertDocument(data: { companyId: number; url: string; tit
   return doc;
 }
 
+export async function getDocumentByUrl(companyId: number, url: string) {
+  const rows = await db.execute(sql`
+    SELECT id FROM documents WHERE company_id = ${companyId} AND url = ${url} LIMIT 1
+  `);
+  return (rows.rows as any[])?.[0] || null;
+}
+
+export async function addDiscoveredDocument(companyId: number, url: string, title: string, sourceType: string) {
+  await db.execute(sql`
+    INSERT INTO documents (company_id, url, title, type, gate_verdict, gate_reason, fetch_status, source_type, fetch_failures)
+    VALUES (${companyId}, ${url}, ${title}, 'pdf', 'accepted', 'pdf_harvest', 'pending', ${sourceType}, 0)
+    ON CONFLICT (company_id, url) DO NOTHING
+  `);
+}
+
 export async function recordFetchSuccess(companyId: number, url: string, content: string) {
   // Step 1: Upsert content into the deduplicated document_content table
   const urlHash = hashUrl(url);

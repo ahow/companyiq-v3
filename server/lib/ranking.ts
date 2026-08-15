@@ -266,6 +266,24 @@ function crossLanguageSignal(title: string, authClass: number, nativeNonLatinMar
   return looksEnglish ? -2.0 : 0.0;
 }
 
+
+/**
+ * Component 10 — PDF-over-landing-page signal (−6..+8).
+ * Prefer the actual document (PDF on company domain) over section landing pages.
+ * Penalise index/navigation pages that link to reports but are not reports themselves.
+ */
+function pdfVsLandingSignal(url: string, title: string, isCompanyDomain: boolean): number {
+  const u = url.toLowerCase();
+  const t = (title || "").toLowerCase();
+  let score = 0;
+  // Boost: company-domain PDFs are the actual reports
+  if (isCompanyDomain && /\.pdf(\?|$)/i.test(u)) score += 8;
+  // Penalise: section landing pages (navigation, not content)
+  if (/\/(sustainability|esg|responsibility|ir|reports?)\/?$/i.test(u)) score -= 6;
+  // Penalise: report library / download centre pages (index, not document)
+  if (/reports?.and.presentations|report.library|download.centre|document.library/i.test(t) && !/\.pdf/i.test(u)) score -= 4;
+  return score;
+}
 // ─── Public: compute the full layered ranking signal for one document ─────────
 
 export interface ComputeOpts {
@@ -283,6 +301,7 @@ export function computeRankSignals(doc: RankableDoc, opts: ComputeOpts = {}): Ra
   const title = doc.title || "";
   const s = (url + " " + title).toLowerCase();
   const authClass = authorityClass(url, opts.companyDomain ?? null);
+  const isCompanyDomain = opts.companyDomain ? url.toLowerCase().includes(opts.companyDomain.toLowerCase()) : false;
 
   const components: Record<string, number> = {
     filingType: filingTypeWeight(s),
@@ -294,6 +313,9 @@ export function computeRankSignals(doc: RankableDoc, opts: ComputeOpts = {}): Ra
     size: sizeBonus(opts.sizeBytes),
     crossLanguage: crossLanguageSignal(title, authClass, !!opts.nativeNonLatinMarket),
     pathDiscriminator: pathDiscriminator(url),
+    // P2a: Prefer the actual document (PDF) over the landing/index page.
+    // Company-domain PDFs are the actual reports; section landing pages are navigation.
+    pdfVsLanding: pdfVsLandingSignal(url, title, isCompanyDomain),
   };
   const fineScore = Object.values(components).reduce((a, b) => a + b, 0);
   const urlHash = createHash("sha1").update(url).digest("hex");
