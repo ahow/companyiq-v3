@@ -457,7 +457,63 @@ export async function initializeDatabase(): Promise<void> {
     // P2d: Framework-declared required document types and data patterns
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS required_doc_types JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS data_patterns JSONB`);
-    // ─── Seed Default Settings for All Workspaces ──────────────────────────
+
+    // Auto-populate strict dataPatterns for known framework topics.
+    // These require actual figures/targets in the content, not just topic keywords.
+    // Only sets if currently NULL (doesn't overwrite user-customized patterns).
+    await db.execute(sql`
+      UPDATE frameworks SET data_patterns = ${
+        JSON.stringify([
+          "scope\\s*[123]",
+          "financed.?emission",
+          "\\b20[23]\\d.*target",
+          "tonnes?\\s*(?:CO2|co2|carbon)",
+          "\\bMtCO2",
+          "intensity.?(?:target|reduction|pathway)",
+          "net.?zero.?(?:by|target|commitment|20[23])",
+          "GHG.?(?:emission|inventory|target)",
+          "carbon.?(?:neutral|footprint|intensity).?(?:target|20[23])",
+          "PCAF",
+          "transition.?plan"
+        ])
+      }::jsonb
+      WHERE data_patterns IS NULL
+        AND (topic_description ILIKE '%emission%' OR topic_description ILIKE '%climate%'
+             OR topic_description ILIKE '%financed%' OR topic_description ILIKE '%carbon%'
+             OR name ILIKE '%emission%' OR name ILIKE '%climate%' OR name ILIKE '%financed%')
+    `);
+    await db.execute(sql`
+      UPDATE frameworks SET data_patterns = ${
+        JSON.stringify([
+          "modern.?slavery.?(?:act|statement)",
+          "forced.?labo",
+          "human.?trafficking",
+          "supply.?chain.?(?:audit|due.?diligence|transparency|risk)",
+          "human.?rights.?(?:impact|assessment|due.?diligence)",
+          "remediation.?(?:process|mechanism)"
+        ])
+      }::jsonb
+      WHERE data_patterns IS NULL
+        AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
+             OR topic_description ILIKE '%forced labo%'
+             OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
+    `);
+    await db.execute(sql`
+      UPDATE frameworks SET data_patterns = ${
+        JSON.stringify([
+          "\\bai\\b.?(?:governance|ethics|policy|strategy|principle|framework)",
+          "responsible.?ai",
+          "algorithmic.?(?:bias|fairness|accountability|transparency)",
+          "model.?(?:risk|governance|validation)",
+          "ai.?(?:risk|safety|oversight|committee|board)"
+        ])
+      }::jsonb
+      WHERE data_patterns IS NULL
+        AND (topic_description ~* '\\bai\\b|artificial.?intelligence|machine.?learning'
+             OR name ~* '\\bai\\b|artificial.?intelligence')
+    `);
+
+    // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 
     console.log("[DB] All tables created successfully");

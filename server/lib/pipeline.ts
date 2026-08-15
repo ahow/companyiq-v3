@@ -430,10 +430,14 @@ async function runFetchPhase(opts: {
   // Analysis will NOT start until zero documents remain in "pending" status.
   const companyDomain = company.domain?.replace(/^www\./, "").toLowerCase() || "";
 
-  // Fix 4 (Fetch Stability): Before re-fetching, check if any pending docs already have
-  // content in the deduplicated document_content table from a prior successful fetch.
-  // This makes the accepted set converge: a doc that ever fetched successfully is reused
-  // without re-fetching (and possibly failing this time due to transient blocks).
+  // Fix 4 (Fetch Stability) + Fix 3 (Content-Drift Closure):
+  // Before re-fetching, check if any pending docs already have content in the
+  // deduplicated document_content table from a prior successful fetch.
+  // This makes the accepted set converge AND eliminates content-level drift:
+  // a doc that ever fetched successfully is reused with its STORED content
+  // (not re-fetched, which could yield slightly different text due to page updates).
+  // This is the "discover-once → re-score" principle applied at the document level.
+  const contentCache = new Map<string, string>(); // URL → cached content for this run
   try {
     const pendingBefore = (await storage.getAcceptedDocuments(companyId)).filter(d => d.fetchStatus === "pending");
     let cacheHits = 0;
@@ -441,11 +445,12 @@ async function runFetchPhase(opts: {
       const cached = await storage.getContentByUrl(doc.url);
       if (cached && cached.length > 50) {
         await storage.recordFetchSuccess(companyId, doc.url, cached);
+        contentCache.set(doc.url, cached);
         cacheHits++;
       }
     }
     if (cacheHits > 0) {
-      console.log(`[${companyName}] FETCH-CACHE: reused ${cacheHits} previously-fetched documents (stability fix)`);
+      console.log(`[${companyName}] FETCH-CACHE: reused ${cacheHits} previously-fetched documents (stability + content-drift fix)`);
     }
   } catch (cacheErr: any) {
     console.warn(`[${companyName}] Fetch-cache reuse failed (non-fatal): ${cacheErr.message}`);

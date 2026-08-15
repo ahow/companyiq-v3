@@ -119,7 +119,9 @@ function filingTypeWeight(s: string): number {
   return 0.0;
 }
 
-/** Component 2 — continuous recency (0..6). Fallback 1.5 if no year detected. */
+/** Component 2 — continuous recency (0..10). Fallback 1.5 if no year detected.
+ *  Strengthened: latest-year reports get a much larger boost (+10) to ensure
+ *  the 2024/2025 TCFD report outranks the 2021 one. Older reports decay steeply. */
 function recencyWeight(s: string): number {
   // Match a plausible 4-digit filing year (1990..currentYear+1).
   const years = (s.match(/\b(19|20)\d{2}\b/g) || [])
@@ -127,7 +129,14 @@ function recencyWeight(s: string): number {
     .filter(y => y >= 1990 && y <= CURRENT_YEAR + 1);
   if (years.length === 0) return 1.5;
   const docYear = Math.max(...years);
-  return Math.max(0.0, 6.0 - 1.5 * (CURRENT_YEAR - docYear));
+  const age = CURRENT_YEAR - docYear;
+  // Latest year (age 0) = 10, age 1 = 8, age 2 = 5, age 3 = 3, age 4+ decays to 0
+  if (age <= 0) return 10.0;
+  if (age === 1) return 8.0;
+  if (age === 2) return 5.0;
+  if (age === 3) return 3.0;
+  if (age === 4) return 1.5;
+  return 0.0;
 }
 
 /** Component 3 — topic-phrase density (0..8): COUNT of distinct lexicon matches. */

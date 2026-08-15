@@ -826,13 +826,18 @@ function buildGeneralQueries(companyName: string, framework: Framework): string[
       `"${companyName}" machine learning governance`,
     ];
   } else if (isClimateRelated) {
+    const currentYear = new Date().getFullYear();
+    const lastYear = currentYear - 1;
     return [
-      `"${companyName}" sustainability report`,
-      `"${companyName}" climate report`,
-      `"${companyName}" TCFD report`,
+      `"${companyName}" sustainability report ${currentYear}`,
+      `"${companyName}" climate report ${currentYear} OR ${lastYear}`,
+      `"${companyName}" TCFD report ${currentYear} OR ${lastYear}`,
       `"${companyName}" net zero target`,
-      `"${companyName}" transition plan`,
-      `"${companyName}" emissions report`,
+      `"${companyName}" transition plan ${currentYear}`,
+      `"${companyName}" financed emissions report`,
+      `"${companyName}" sustainability report`,
+      `"${companyName}" TCFD report`,
+      `"${companyName}" climate report filetype:pdf`,
     ];
   } else {
     // Generic fallback using topic words
