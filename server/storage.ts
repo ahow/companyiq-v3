@@ -718,14 +718,14 @@ export async function resetListCompanies(listId: number, workspaceId: number): P
 
 // ─── Batch Run Operations (Workspace-Scoped) ────────────────────────────────
 
-export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number, offPeakOnly: boolean = false) {
+export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number, offPeakOnly: boolean = false, scoreOnly: boolean = false) {
   // Cancel any existing running batches for this workspace
   await db
     .update(schema.batchRuns)
     .set({ status: "cancelled", completedAt: new Date() })
     .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "running")));
 
-  const [batch] = await db.insert(schema.batchRuns).values({ workspaceId, frameworkId, listId, totalJobs, offPeakOnly }).returning();
+  const [batch] = await db.insert(schema.batchRuns).values({ workspaceId, frameworkId, listId, totalJobs, offPeakOnly, scoreOnly }).returning();
   return batch;
 }
 

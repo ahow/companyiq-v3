@@ -437,6 +437,8 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS share_expires_at TIMESTAMP`);
     // Off-peak scheduling: flag batches to only run during DeepSeek off-peak hours
     await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS off_peak_only BOOLEAN NOT NULL DEFAULT false`);
+    // Score-only mode: skip fetch phase, score from stored corpus (reproducibility fix)
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS score_only BOOLEAN NOT NULL DEFAULT false`);
     // Dead-fetch diagnosis fix 1: record failure reason on documents
     await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
 

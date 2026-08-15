@@ -160,7 +160,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
 
   // Mutations
   const analyzeMutation = useMutation({
-    mutationFn: (opts: { frameworkId: number; listId?: number; offPeakOnly?: boolean }) => api.analyze(opts),
+    mutationFn: (opts: { frameworkId: number; listId?: number; offPeakOnly?: boolean; scoreOnly?: boolean }) => api.analyze(opts),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
       queryClient.invalidateQueries({ queryKey: ["companies"] });
@@ -270,6 +270,16 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
       frameworkId: effectiveFrameworkId,
       listId: selectedList || undefined,
       offPeakOnly,
+    });
+  };
+
+  const handleRescore = () => {
+    if (!effectiveFrameworkId) return alert("No framework selected");
+    analyzeMutation.mutate({
+      frameworkId: effectiveFrameworkId,
+      listId: selectedList || undefined,
+      offPeakOnly,
+      scoreOnly: true,
     });
   };
 
@@ -663,9 +673,17 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
               onClick={handleAnalyze}
               disabled={batchStatus?.running || companies.length === 0}
               className="flex items-center gap-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              title={`Analyze ${selectedList ? "selected list" : "all companies"} with ${effectiveFrameworkName || "active framework"}`}
+              title={`Analyze ${selectedList ? "selected list" : "all companies"} with ${effectiveFrameworkName || "active framework"} (full discovery + scoring)`}
             >
               <Play className="w-4 h-4" /> Analyze
+            </button>
+            <button
+              onClick={handleRescore}
+              disabled={batchStatus?.running || companies.length === 0}
+              className="flex items-center gap-1 px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Re-score using existing evidence (no re-fetch — deterministic, fast, cheap)"
+            >
+              <RotateCcw className="w-4 h-4" /> Re-score
             </button>
             <button
               onClick={handleReset}

@@ -209,6 +209,7 @@ export const batchRuns = pgTable("batch_runs", {
   completedJobs: integer("completed_jobs").notNull().default(0),
   failedJobs: integer("failed_jobs").notNull().default(0),
   offPeakOnly: boolean("off_peak_only").notNull().default(false),
+  scoreOnly: boolean("score_only").notNull().default(false),
   startedAt: timestamp("started_at").defaultNow().notNull(),
   completedAt: timestamp("completed_at"),
 }, (table) => ({

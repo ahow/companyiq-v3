@@ -548,7 +548,7 @@ apiRouter.delete("/frameworks/:id", async (req: Request, res: Response) => {
 apiRouter.post("/analyze", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
-    const { frameworkId, listId, companyIds, offPeakOnly } = req.body;
+    const { frameworkId, listId, companyIds, offPeakOnly, scoreOnly } = req.body;
 
     // Get framework
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
@@ -615,7 +615,7 @@ apiRouter.post("/analyze", async (req: Request, res: Response) => {
     }
 
     // Create batch run
-    const batch = await storage.createBatchRun(workspaceId, frameworkId, companies.length, listId, offPeakOnly === true);
+    const batch = await storage.createBatchRun(workspaceId, frameworkId, companies.length, listId, offPeakOnly === true, scoreOnly === true);
 
     // Create jobs in DB and add to BullMQ queue
     const jobsData = companies.map((c) => ({
@@ -634,12 +634,14 @@ apiRouter.post("/analyze", async (req: Request, res: Response) => {
       frameworkId: j.frameworkId,
       batchId: batch.id,
       workspaceId,
+      skipFetch: scoreOnly === true,
     }));
     await addBatchJobs(queueJobs, workspaceId, batch.id);
 
     res.json({
       success: true,
       batchId: batch.id,
+      scoreOnly: scoreOnly === true,
       totalJobs: companies.length,
     });
   } catch (error: any) {
