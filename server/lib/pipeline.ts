@@ -313,8 +313,6 @@ async function runFetchPhase(opts: {
   let corpusValidityWarning: string | null = null;
   {
     const topic = (framework.topicDescription || framework.name || "").toLowerCase();
-    const fetchedDocs = discoveryResult.documents.filter(d => d.fetchStatus !== "dead");
-    const allDocText = fetchedDocs.map(d => ((d.url || "") + " " + (d.title || "")).toLowerCase());
 
     // Derive expected document types from the framework topic
     const expectedTypes: Array<{ label: string; pattern: RegExp }> = [];
@@ -343,13 +341,21 @@ async function runFetchPhase(opts: {
     }
 
     // Check if at least one fetched document matches each expected type.
-    // Two-level check: (1) title/URL match (fast), (2) content match (authoritative).
     // Content-based patterns look for actual data/figures, not just topic keywords.
+    // IMPORTANT: DiscoveryCandidate objects do NOT carry content — we must load
+    // actual fetched text from the DB via storage.getFetchedDocuments (JOINs document_content).
     const contentPatterns: Record<string, RegExp> = {
       "Climate/TCFD/Sustainability Report": /(?:scope\s*[123]|financed.?emission|tonnes?.?(?:co2|carbon)|tcfd|ghg.?(?:emission|target|inventory)|net.?zero.?(?:target|commitment|by)|carbon.?(?:neutral|footprint|intensity)|climate.?(?:risk|scenario|transition))/i,
       "AI/Technology Policy or Strategy": /(?:responsible.?ai|ai.?(?:governance|ethics|policy|strategy|principle)|machine.?learning.?(?:model|deployment)|algorithmic.?(?:bias|fairness|accountability))/i,
       "Modern Slavery Statement or Human Rights Report": /(?:modern.?slavery.?(?:act|statement)|forced.?labo|human.?rights.?(?:due.?diligence|impact|assessment)|supply.?chain.?(?:audit|risk|transparency))/i,
     };
+
+    // Load real content from DB (the same JOIN the analyze phase uses)
+    const docsWithContent = await storage.getFetchedDocuments(companyId);
+
+    // Fail-safe: if we genuinely couldn't load any readable content, do NOT flag suspect.
+    // Absence of readable content ≠ proof the corpus lacks data — skip the check entirely.
+    const anyContentReadable = docsWithContent.some(d => (d.content || "").length >= 200);
 
     for (const { label, pattern } of expectedTypes) {
       const contentPattern = contentPatterns[label];
@@ -357,33 +363,39 @@ async function runFetchPhase(opts: {
       // A document "counts" only if its actual fetched content contains framework data.
       // A matching title alone is NOT sufficient (SMFG has "Sustainability Report" title
       // on a landing page with no actual climate data).
-      const hasDataDoc = fetchedDocs.some(d => {
-        const content = ((d as any).content || (d as any).extractedText || "");
+      const hasDataDoc = docsWithContent.some(d => {
+        const content = d.content || "";
         if (content.length < 200) return false;  // nav/landing pages have little text
         if (contentPattern && contentPattern.test(content)) return true;
         // Fall back to the topic pattern against content (not just title) for frameworks w/o a contentPattern
         return !contentPattern && pattern.test(content);
       });
 
-      if (!hasDataDoc && fetchedDocs.length >= 5) {
+      if (!hasDataDoc && anyContentReadable && docsWithContent.length >= 5) {
         corpusValidityWarning =
-          `Corpus lacks framework-relevant DATA for "${label}": ${fetchedDocs.length} documents fetched, ` +
+          `Corpus lacks framework-relevant DATA for "${label}": ${docsWithContent.length} documents fetched, ` +
           `none contain the expected figures/targets in their text (titles may match, content does not). ` +
-          `Likely discovery-composition failure — score should be treated as low-coverage.`;
+          `Likely discovery-composition failure \u2014 score should be treated as low-coverage.`;
         console.warn(`[${companyName}] CORPUS VALIDITY WARNING: ${corpusValidityWarning}`);
         break;
       }
     }
 
-    // Persist the validity warning in diagnostics
+    // Persist the validity warning in diagnostics (or clear stale warning if check passed)
+    const priorDiag2 = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
     if (corpusValidityWarning) {
-      const priorDiag2 = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
       await storage.updateCompany(companyId, workspaceId, {
         discoveryDiagnostics: {
           ...priorDiag2,
           corpusValidityWarning,
           coverageLevelOverride: "suspect",
         } as any,
+      });
+    } else if (priorDiag2.corpusValidityWarning) {
+      // Clear stale warning from a previous run (company now has valid content)
+      const { corpusValidityWarning: _removed, coverageLevelOverride: _cov, ...rest } = priorDiag2;
+      await storage.updateCompany(companyId, workspaceId, {
+        discoveryDiagnostics: rest as any,
       });
     }
   }
