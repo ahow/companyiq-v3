@@ -141,3 +141,4 @@ export const api = {
   bulkDismissAnomalies: (ids: number[]) => request("/score-anomalies/bulk-dismiss", { method: "POST", body: JSON.stringify({ ids }) }),
   bulkReexamineAnomalies: (ids: number[]) => request("/score-anomalies/bulk-reexamine", { method: "POST", body: JSON.stringify({ ids }) }),
 };
+// v1786754269
