@@ -222,7 +222,7 @@ async function runFetchPhase(opts: {
       const content = d.content || "";
       if (content.length <= 50) {
         // No usable cached content — drop back to normal fetch path.
-        await storage.recordFetchFailure(companyId, d.url);
+        await storage.recordFetchFailure(companyId, d.url, "empty_cached_content");
         continue;
       }
       if (!shouldVerifyDocument({ url: d.url, verifiedDomain: company.domain, platformHosts })) {
@@ -342,13 +342,42 @@ async function runFetchPhase(opts: {
       }
     }
 
-    // Check if at least one fetched document matches each expected type
+    // Check if at least one fetched document matches each expected type.
+    // Two-level check: (1) title/URL match (fast), (2) content match (authoritative).
+    // Content-based patterns look for actual data/figures, not just topic keywords.
+    const contentPatterns: Record<string, RegExp> = {
+      "Climate/TCFD/Sustainability Report": /(?:scope\s*[123]|financed.?emission|tonnes?.?(?:co2|carbon)|tcfd|ghg.?(?:emission|target|inventory)|net.?zero.?(?:target|commitment|by)|carbon.?(?:neutral|footprint|intensity)|climate.?(?:risk|scenario|transition))/i,
+      "AI/Technology Policy or Strategy": /(?:responsible.?ai|ai.?(?:governance|ethics|policy|strategy|principle)|machine.?learning.?(?:model|deployment)|algorithmic.?(?:bias|fairness|accountability))/i,
+      "Modern Slavery Statement or Human Rights Report": /(?:modern.?slavery.?(?:act|statement)|forced.?labo|human.?rights.?(?:due.?diligence|impact|assessment)|supply.?chain.?(?:audit|risk|transparency))/i,
+    };
+
     for (const { label, pattern } of expectedTypes) {
-      const hasMatch = allDocText.some(text => pattern.test(text));
-      if (!hasMatch && fetchedDocs.length >= 5) {
+      // Level 1: title/URL match
+      const hasTitleMatch = allDocText.some(text => pattern.test(text));
+      if (hasTitleMatch) continue; // Found in title — no warning needed
+
+      // Level 2: content match — check actual fetched text for framework-specific data
+      const contentPattern = contentPatterns[label];
+      let hasContentMatch = false;
+      if (contentPattern) {
+        // Check first-party documents' content (most reliable signal)
+        const firstPartyDocs = fetchedDocs.filter(d => d.sourceType === "first_party");
+        const docsToCheck = firstPartyDocs.length > 0 ? firstPartyDocs : fetchedDocs.slice(0, 20);
+        for (const doc of docsToCheck) {
+          // Access stored content via the document's content field (already loaded in discoveryResult)
+          const content = (doc as any).content || (doc as any).extractedText || "";
+          if (content.length > 100 && contentPattern.test(content)) {
+            hasContentMatch = true;
+            break;
+          }
+        }
+      }
+
+      if (!hasContentMatch && fetchedDocs.length >= 5) {
         // Only flag if we have a substantial corpus but it's all wrong types
         corpusValidityWarning = `Corpus lacks expected document type: ${label}. ` +
-          `${fetchedDocs.length} documents fetched but none match the framework topic. ` +
+          `${fetchedDocs.length} documents fetched but none contain framework-relevant data ` +
+          `(checked both titles/URLs and document content). ` +
           `Score may be a false negative due to discovery-composition failure.`;
         console.warn(`[${companyName}] CORPUS VALIDITY WARNING: ${corpusValidityWarning}`);
         break;
@@ -536,7 +565,7 @@ async function runFetchPhase(opts: {
                 newFetchCount++;
               } else {
                 console.warn(`[${companyName}] VERIFY ERROR (${vr.reason}); no name mention — rejected: ${doc.url.slice(0, 80)}`);
-                await storage.recordFetchFailure(companyId, doc.url);
+                await storage.recordFetchFailure(companyId, doc.url, "verification_failed");
               }
             } else if (
               vr.verdict === "generic" &&
@@ -552,7 +581,7 @@ async function runFetchPhase(opts: {
               // is a primary driver of the systematic zero-scoring of Chinese-listed
               // issuers.
               console.warn(`[${companyName}] POST-FETCH generic/empty (likely JS shell) — keeping retryable: ${doc.url.slice(0, 80)} — ${vr.reason}`);
-              await storage.recordFetchFailure(companyId, doc.url);
+              await storage.recordFetchFailure(companyId, doc.url, "empty_after_render");
             } else {
               // different_company, or genuine generic (real multi-company index /
               // industry page with substantive text) -> TERMINAL reject. Mark the
@@ -565,7 +594,7 @@ async function runFetchPhase(opts: {
             }
           }
         } else {
-          await storage.recordFetchFailure(companyId, doc.url);
+          await storage.recordFetchFailure(companyId, doc.url, "fetch_returned_empty");
         }
       } catch (error: any) {
         if (error instanceof TimeoutError) {

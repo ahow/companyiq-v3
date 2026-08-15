@@ -143,7 +143,8 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
           SELECT workspace_id FROM user_sessions WHERE id = ${sessionId}
         `);
         const sessRow = (sessCheck.rows as any[])?.[0];
-        isOwner = sessRow?.workspace_id === authRow.workspace_id;
+        // Use == for type coercion (pg may return string or number depending on driver)
+        isOwner = sessRow?.workspace_id != null && String(sessRow.workspace_id) === String(authRow.workspace_id);
       } catch { /* non-fatal */ }
     }
 

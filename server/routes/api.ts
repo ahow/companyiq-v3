@@ -1373,6 +1373,7 @@ apiRouter.post("/companies/:id/analyze", async (req: Request, res: Response) => 
   try {
     const { workspaceId } = getSessionContext(req);
     const companyId = parseInt(req.params.id);
+    const { scoreOnly } = req.body || {};
     const company = await storage.getCompanyById(companyId, workspaceId);
     if (!company) return res.status(404).json({ error: "Company not found" });
 
@@ -1384,7 +1385,7 @@ apiRouter.post("/companies/:id/analyze", async (req: Request, res: Response) => 
     await storage.updateCompany(company.id, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
 
     // Create a batch for single company
-    const batch = await storage.createBatchRun(workspaceId, activeFramework.id, 1);
+    const batch = await storage.createBatchRun(workspaceId, activeFramework.id, 1, false, !!scoreOnly);
 
     // Create jobs in DB (same pattern as batch analyze)
     const jobsData = [{
@@ -1403,6 +1404,7 @@ apiRouter.post("/companies/:id/analyze", async (req: Request, res: Response) => 
       frameworkId: j.frameworkId,
       batchId: batch.id,
       workspaceId,
+      ...(scoreOnly ? { skipFetch: true } : {}),
     }));
     await addBatchJobs(queueJobs, workspaceId, batch.id);
 
