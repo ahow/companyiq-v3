@@ -395,6 +395,8 @@ WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON bloc
   "name": "Framework Name",
   "topicDescription": "A comprehensive 200-400 word description of the assessment scope, evidence types, relevant standards, EXPLICIT EXCLUSIONS, definitional boundaries, and temporal scope. This description is used by the discovery engine and scorer, so it must be precise.",
   "searchTemplates": ["{company} sustainability report AI governance", "{company} artificial intelligence policy", "{company} environmental social risk framework", "{company} transition plan"],
+  "requiredDocTypes": ["Climate/TCFD Report", "Sustainability Report", "CDP Response", "Annual Report"],
+  "dataPatterns": ["scope\\s*[123]", "financed.?emission", "\\bMtCO2", "\\b20[23]\\d.*target", "PCAF"],
   "negativeKeywords": ["keywords that indicate irrelevant documents"],
   "negativeDomains": ["domains to exclude"],
   "trustedSources": [
@@ -424,6 +426,10 @@ WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON bloc
   ]
 }
 \`\`\`
+
+NOTE ON FRAMEWORK-LEVEL DISCOVERY FIELDS:
+- "requiredDocTypes" (array of strings): The specific published document types that, for THIS topic, contain the evidence. These are the same document types you identified with the user during the conversation (e.g., climate → ["Climate/TCFD Report", "Sustainability Report", "CDP Response"]; human rights → ["Modern Slavery Statement", "Human Rights Report"]; tax → ["Tax Transparency Report", "Country-by-Country Report"]). The discovery engine searches for these by name. Derive them by aggregating the document types that the measures' scoringGuidance/required_evidence_type name.
+- "dataPatterns" (array of strings): 5-10 regex fragments that prove the topic's actual DATA is present in a document's text (specific figures, standard names, target phrasings for THIS topic). These distinguish a topic-relevant report with real data from a landing page or generic mention. E.g., for climate: ["scope\\s*[123]", "financed.?emission", "\\bMtCO2", "PCAF"]; for slavery: ["modern.?slavery.?(?:act|statement)", "forced.?labo"]; for tax: ["country.?by.?country", "effective.?tax.?rate"].
 
 NOTE ON SCORING GUIDANCE FIELDS:
 - "explicit_exclusions" (array of strings): List specific types of evidence that should NOT be accepted as sufficient. This is the most powerful tool for preventing false positives.
@@ -801,6 +807,8 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       negativeKeywords: framework.negativeKeywords || null,
       negativeDomains: framework.negativeDomains || null,
       knownDisclosureUrls: framework.knownDisclosureUrls || null,
+      requiredDocTypes: framework.requiredDocTypes || null,
+      dataPatterns: framework.dataPatterns || null,
     });
 
     // Create measures from categories

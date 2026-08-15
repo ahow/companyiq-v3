@@ -804,18 +804,36 @@ interface DiscoveryCandidate {
 }
 
 function buildGeneralQueries(companyName: string, framework: Framework): string[] {
-  const topic = framework.topicDescription || framework.name;
-  const frameworkName = (framework.name || "").toLowerCase();
-  
-  // If framework has explicit search templates, use them
+  // If framework has explicit search templates, use them (highest priority)
   if (framework.searchTemplates && framework.searchTemplates.length > 0) {
     return framework.searchTemplates.map((t) => t.replace(/\{company\}/g, companyName));
   }
-  
-  // Otherwise generate topic-aware fallback queries
+
+  // TOPIC-AGNOSTIC: build queries from framework.requiredDocTypes when available.
+  // The topic→document mapping is defined at framework-definition time by the builder;
+  // the search code simply REFERENCES that data. No topic knowledge here.
+  const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
+  if (requiredDocTypes && requiredDocTypes.length > 0) {
+    const currentYear = new Date().getFullYear();
+    const lastYear = currentYear - 1;
+    const queries: string[] = [];
+    // For each declared document type, generate targeted queries
+    for (const docType of requiredDocTypes.slice(0, 5)) {
+      queries.push(`"${companyName}" ${docType} ${currentYear} OR ${lastYear}`);
+      queries.push(`"${companyName}" ${docType} filetype:pdf`);
+    }
+    // Always include the topic-agnostic filings base
+    queries.push(`"${companyName}" annual report ${currentYear}`);
+    return queries;
+  }
+
+  // LEGACY FALLBACK: for frameworks that predate requiredDocTypes, use topic detection.
+  // This will be retired once all frameworks are re-authored or back-filled.
+  const topic = framework.topicDescription || framework.name;
+  const frameworkName = (framework.name || "").toLowerCase();
   const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
   const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
-  
+
   if (isAIRelated) {
     return [
       `"${companyName}" AI strategy`,

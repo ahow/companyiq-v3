@@ -314,86 +314,60 @@ async function runFetchPhase(opts: {
   // though the fetch ratio is 99%. This catches the SMFG-type failure.
   let corpusValidityWarning: string | null = null;
   {
-    const topic = (framework.topicDescription || framework.name || "").toLowerCase();
-
-    // Derive expected document types from the framework topic
-    const expectedTypes: Array<{ label: string; pattern: RegExp }> = [];
-    if (/climate|emission|carbon|tcfd|net.?zero|financed.?emission|decarboni/i.test(topic)) {
-      expectedTypes.push(
-        { label: "Climate/TCFD/Sustainability Report", pattern: /climate|tcfd|sustainability|esg|emission|carbon|net.?zero|environment/ },
-      );
-    }
-    if (/\bai\b|artificial\s?intelligence|machine\s?learning|responsible\s?ai/i.test(topic)) {
-      expectedTypes.push(
-        { label: "AI/Technology Policy or Strategy", pattern: /\bai\b|artificial\s?intelligence|machine\s?learning|responsible\s?ai|algorithmic\s?(?:bias|accountability)/i },
-      );
-    }
-    if (/modern.?slavery|human.?rights|forced.?labour|supply.?chain/i.test(topic)) {
-      expectedTypes.push(
-        { label: "Modern Slavery Statement or Human Rights Report", pattern: /modern.?slavery|human.?rights|supply.?chain|forced.?labo/ },
-      );
-    }
-    // Generic fallback: if the topic has a clear keyword, expect at least one doc mentioning it
-    if (expectedTypes.length === 0) {
-      const topicWords = topic.split(/\s+/).filter(w => w.length > 4).slice(0, 3);
-      if (topicWords.length > 0) {
-        const pattern = new RegExp(topicWords.join("|"), "i");
-        expectedTypes.push({ label: `Topic-relevant document (${topicWords.join("/")})`, pattern });
-      }
-    }
-
-    // Check if at least one fetched document matches each expected type.
-    // Content-based patterns look for actual data/figures, not just topic keywords.
-    // IMPORTANT: DiscoveryCandidate objects do NOT carry content — we must load
-    // actual fetched text from the DB via storage.getFetchedDocuments (JOINs document_content).
-    //
-    // P2d: If the framework declares dataPatterns, use those (cross-domain extensibility).
-    // Otherwise fall back to the hard-coded patterns for known topics.
+    // TOPIC-AGNOSTIC CORPUS VALIDITY CHECK
+    // The expected document types and data patterns are defined at framework-definition
+    // time (by the builder) and stored on the framework record. The code here simply
+    // REFERENCES those fields. No topic knowledge lives in this code path.
+    const frameworkDocTypes = (framework as any).requiredDocTypes as string[] | null;
     const frameworkDataPatterns = (framework as any).dataPatterns as string[] | null;
-    let contentPatterns: Record<string, RegExp> = {};
+
+    // Build the expected-type label from the framework's declared doc types
+    const expectedLabel = frameworkDocTypes && frameworkDocTypes.length > 0
+      ? frameworkDocTypes.join(" / ")
+      : (framework.topicDescription || framework.name || "topic-relevant document");
+
+    // Build the content-test regex from the framework's declared data patterns
+    let contentPattern: RegExp | null = null;
     if (frameworkDataPatterns && frameworkDataPatterns.length > 0) {
-      // Framework-declared patterns: combine into a single regex for each expected type
-      const combinedPattern = new RegExp(`(?:${frameworkDataPatterns.join("|")})`, "i");
-      for (const { label } of expectedTypes) {
-        contentPatterns[label] = combinedPattern;
-      }
+      contentPattern = new RegExp(`(?:${frameworkDataPatterns.join("|")})`, "i");
     } else {
-      // Hard-coded fallback for known topics (backward compat)
-      contentPatterns = {
-        "Climate/TCFD/Sustainability Report": /(?:scope\s*[123]|financed.?emission|tonnes?.?(?:co2|carbon)|tcfd|ghg.?(?:emission|target|inventory)|net.?zero.?(?:target|commitment|by)|carbon.?(?:neutral|footprint|intensity)|climate.?(?:risk|scenario|transition))/i,
-        "AI/Technology Policy or Strategy": /(?:responsible.?ai|ai.?(?:governance|ethics|policy|strategy|principle)|machine.?learning.?(?:model|deployment)|algorithmic.?(?:bias|fairness|accountability))/i,
-        "Modern Slavery Statement or Human Rights Report": /(?:modern.?slavery.?(?:act|statement)|forced.?labo|human.?rights.?(?:due.?diligence|impact|assessment)|supply.?chain.?(?:audit|risk|transparency))/i,
-      };
+      // LEGACY FALLBACK: for frameworks that predate dataPatterns, derive from topic.
+      // This will be retired once all frameworks are re-authored or back-filled.
+      const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+      if (/climate|emission|carbon|tcfd|net.?zero|financed.?emission|decarboni/i.test(topic)) {
+        contentPattern = /(?:scope\s*[123]|financed.?emission|tonnes?.?(?:co2|carbon)|tcfd|ghg.?(?:emission|target|inventory)|net.?zero.?(?:target|commitment|by)|carbon.?(?:neutral|footprint|intensity)|climate.?(?:risk|scenario|transition))/i;
+      } else if (/\bai\b|artificial\s?intelligence|machine\s?learning|responsible\s?ai/i.test(topic)) {
+        contentPattern = /(?:\bai\b.?(?:governance|ethics|policy|strategy|principle)|responsible.?ai|algorithmic.?(?:bias|fairness|accountability))/i;
+      } else if (/modern.?slavery|human.?rights|forced.?labour|supply.?chain/i.test(topic)) {
+        contentPattern = /(?:modern.?slavery.?(?:act|statement)|forced.?labo|human.?rights.?(?:due.?diligence|impact|assessment)|supply.?chain.?(?:audit|risk|transparency))/i;
+      } else {
+        // Generic: use topic words as a loose content check
+        const topicWords = topic.split(/\s+/).filter(w => w.length > 4).slice(0, 5);
+        if (topicWords.length > 0) contentPattern = new RegExp(topicWords.join("|"), "i");
+      }
     }
 
     // Load real content from DB (the same JOIN the analyze phase uses)
     const docsWithContent = await storage.getFetchedDocuments(companyId);
 
     // Fail-safe: if we genuinely couldn't load any readable content, do NOT flag suspect.
-    // Absence of readable content ≠ proof the corpus lacks data — skip the check entirely.
     const anyContentReadable = docsWithContent.some(d => (d.content || "").length >= 200);
 
-    for (const { label, pattern } of expectedTypes) {
-      const contentPattern = contentPatterns[label];
-
-      // A document "counts" only if its actual fetched content contains framework data.
-      // A matching title alone is NOT sufficient (SMFG has "Sustainability Report" title
-      // on a landing page with no actual climate data).
+    // A document "counts" only if its actual fetched content contains framework data.
+    // A matching title alone is NOT sufficient.
+    if (contentPattern && anyContentReadable && docsWithContent.length >= 5) {
       const hasDataDoc = docsWithContent.some(d => {
         const content = d.content || "";
-        if (content.length < 200) return false;  // nav/landing pages have little text
-        if (contentPattern && contentPattern.test(content)) return true;
-        // Fall back to the topic pattern against content (not just title) for frameworks w/o a contentPattern
-        return !contentPattern && pattern.test(content);
+        if (content.length < 200) return false;
+        return contentPattern!.test(content);
       });
 
-      if (!hasDataDoc && anyContentReadable && docsWithContent.length >= 5) {
+      if (!hasDataDoc) {
         corpusValidityWarning =
-          `Corpus lacks framework-relevant DATA for "${label}": ${docsWithContent.length} documents fetched, ` +
+          `Corpus lacks framework-relevant DATA for "${expectedLabel}": ${docsWithContent.length} documents fetched, ` +
           `none contain the expected figures/targets in their text (titles may match, content does not). ` +
-          `Likely discovery-composition failure \u2014 score should be treated as low-coverage.`;
+          `Likely discovery-composition failure — score should be treated as low-coverage.`;
         console.warn(`[${companyName}] CORPUS VALIDITY WARNING: ${corpusValidityWarning}`);
-        break;
       }
     }
 
@@ -517,7 +491,21 @@ async function runFetchPhase(opts: {
     //   3. PDFs over HTML.
     // Low-value periodic filings (old 10-Qs) and generic product/marketing pages
     // therefore sink to the bottom and are the first to be dropped on budget.
-    const HIGH_VALUE_RE = /10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy|ai.?ethic|responsible.?ai|ai.?governance|ai.?policy|ai.?principle|ethics.?and.?integrity|csr.?report|sustainability.?report|esg/i;
+    // TOPIC-AGNOSTIC: build HIGH_VALUE_RE from framework.requiredDocTypes + filings base.
+    // The topic-specific document types are defined at framework-definition time.
+    const FILINGS_BASE = "10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy";
+    const frameworkDocTypesForRank = (framework as any).requiredDocTypes as string[] | null;
+    let topicDocPattern = "";
+    if (frameworkDocTypesForRank && frameworkDocTypesForRank.length > 0) {
+      // Convert doc type labels to regex fragments (e.g. "Climate/TCFD Report" → "climate|tcfd.?report")
+      topicDocPattern = frameworkDocTypesForRank
+        .map(dt => dt.toLowerCase().replace(/[\s/]+/g, ".?").replace(/[()]/g, ""))
+        .join("|");
+    } else {
+      // Legacy fallback
+      topicDocPattern = "ai.?ethic|responsible.?ai|ai.?governance|csr.?report|sustainability.?report|esg";
+    }
+    const HIGH_VALUE_RE = new RegExp(`${FILINGS_BASE}|${topicDocPattern}`, "i");
     const LOW_VALUE_RE = /10-?q|transcript|glossary|generative-ai-vs|gen-ai-glossary|express\/web/i;
     const rank = (u: string): number => {
       const s = u.toLowerCase();

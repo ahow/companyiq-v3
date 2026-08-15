@@ -1618,7 +1618,7 @@ export async function getCompanyByIsin(isin: string, workspaceId: number) {
 }
 
 // ─── Framework Editor Operations ───────────────────────────────────────────
-export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; isShared: boolean }>) {
+export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; requiredDocTypes: string[]; dataPatterns: string[]; isShared: boolean }>) {
   await db.update(schema.frameworks).set(updates as any).where(eq(schema.frameworks.id, frameworkId));
 }
 
