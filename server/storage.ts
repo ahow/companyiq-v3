@@ -486,6 +486,19 @@ export async function recordVerificationReject(companyId: number, url: string, r
 }
 
 /**
+ * Fix 4 (Fetch Stability): Look up previously-fetched content for a URL from the
+ * global document_content table. Returns the content string if found, null otherwise.
+ * This enables reuse of content that was successfully fetched in a prior run.
+ */
+export async function getContentByUrl(url: string): Promise<string | null> {
+  const urlHash = hashUrl(url);
+  const rows = await db.execute(sql`
+    SELECT content FROM document_content WHERE url_hash = ${urlHash} AND content_length > 50 LIMIT 1
+  `);
+  return (rows.rows as any[])?.[0]?.content || null;
+}
+
+/**
  * Cross-workspace document reuse: for any pending documents that already have
  * content in the global document_content table (fetched for ANOTHER company),
  * link the cached content to avoid re-fetching the same URL.

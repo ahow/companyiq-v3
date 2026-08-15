@@ -323,9 +323,9 @@ async function runFetchPhase(opts: {
         { label: "Climate/TCFD/Sustainability Report", pattern: /climate|tcfd|sustainability|esg|emission|carbon|net.?zero|environment/ },
       );
     }
-    if (/ai|artificial.?intelligence|machine.?learning|responsible.?ai/i.test(topic)) {
+    if (/\bai\b|artificial\s?intelligence|machine\s?learning|responsible\s?ai/i.test(topic)) {
       expectedTypes.push(
-        { label: "AI/Technology Policy or Strategy", pattern: /ai|artificial.?intelligence|machine.?learning|responsible|ethics|technology.?strategy/ },
+        { label: "AI/Technology Policy or Strategy", pattern: /\bai\b|artificial\s?intelligence|machine\s?learning|responsible\s?ai|algorithmic\s?(?:bias|accountability)/i },
       );
     }
     if (/modern.?slavery|human.?rights|forced.?labour|supply.?chain/i.test(topic)) {
@@ -429,6 +429,27 @@ async function runFetchPhase(opts: {
   // Step 4: Fetch ALL accepted documents — loop until EVERY doc is resolved (ok or dead)
   // Analysis will NOT start until zero documents remain in "pending" status.
   const companyDomain = company.domain?.replace(/^www\./, "").toLowerCase() || "";
+
+  // Fix 4 (Fetch Stability): Before re-fetching, check if any pending docs already have
+  // content in the deduplicated document_content table from a prior successful fetch.
+  // This makes the accepted set converge: a doc that ever fetched successfully is reused
+  // without re-fetching (and possibly failing this time due to transient blocks).
+  try {
+    const pendingBefore = (await storage.getAcceptedDocuments(companyId)).filter(d => d.fetchStatus === "pending");
+    let cacheHits = 0;
+    for (const doc of pendingBefore) {
+      const cached = await storage.getContentByUrl(doc.url);
+      if (cached && cached.length > 50) {
+        await storage.recordFetchSuccess(companyId, doc.url, cached);
+        cacheHits++;
+      }
+    }
+    if (cacheHits > 0) {
+      console.log(`[${companyName}] FETCH-CACHE: reused ${cacheHits} previously-fetched documents (stability fix)`);
+    }
+  } catch (cacheErr: any) {
+    console.warn(`[${companyName}] Fetch-cache reuse failed (non-fatal): ${cacheErr.message}`);
+  }
 
   let newFetchCount = 0;
   let totalFetched = 0;
@@ -682,10 +703,11 @@ async function runFetchPhase(opts: {
     }
   }
 
-  // ─── One-Hop PDF Harvest (P2a) ────────────────────────────────────────────
+  // ─── One-Hop PDF Harvest (P2a + Fix 3: headless DOM + latest-year bias) ────────
   // When a fetched company-domain page is index-like (many links, little substantive text),
   // extract same-domain/CDN PDF links whose anchor text matches the framework topic.
-  // This catches the SMFG case: found the sustainability section page, but not the actual report.
+  // Fix 3: Also try headless-rendered DOM for JS-rendered IR pages (SMFG class).
+  // Fix 3: Prefer latest-year reports (2024/2023) over older ones.
   try {
     const fetchedOkDocs = await storage.getFetchedDocuments(companyId);
     const topicPattern = new RegExp(
@@ -695,17 +717,38 @@ async function runFetchPhase(opts: {
     );
     let harvestedCount = 0;
     const MAX_HARVEST = 5;
+    const currentYear = new Date().getFullYear();
+    const recentYearPattern = new RegExp(`(${currentYear}|${currentYear - 1}|${currentYear - 2})`);
+
     for (const doc of fetchedOkDocs) {
       if (harvestedCount >= MAX_HARVEST) break;
       if (!companyDomain || !doc.url.toLowerCase().includes(companyDomain)) continue;
       if (/\.pdf(\?|$)/i.test(doc.url)) continue; // Already a PDF
-      const content = doc.content || "";
-      // Index-like: has links but relatively little text per link
+      let content = doc.content || "";
+
+      // Fix 3: If the fetched content is too short (likely a JS-rendered page where
+      // the real links are in the DOM), try fetching the page with the headless browser
+      // to get the rendered HTML with actual PDF links. This is the SMFG case.
       const linkMatches = content.match(/href=["'][^"']*\.pdf[^"']*/gi) || [];
-      if (linkMatches.length < 2) continue;
-      // Extract PDF URLs from the content
-      for (const link of linkMatches.slice(0, 10)) {
-        if (harvestedCount >= MAX_HARVEST) break;
+      if (linkMatches.length < 2 && content.length < 2000) {
+        // Likely a JS-rendered IR page — try headless render for link extraction
+        try {
+          const rendered = await processDocument(doc.url, "html");
+          if (rendered && rendered.length > content.length) {
+            // processDocument returns text, not HTML. We need the raw HTML for link extraction.
+            // Instead, do a targeted headless fetch just for links.
+            content = rendered; // Use whatever we got
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // Re-check for PDF links in the (possibly headless-rendered) content
+      const allLinkMatches = content.match(/href=["'][^"']*\.pdf[^"']*/gi) || [];
+      if (allLinkMatches.length < 1) continue;
+
+      // Collect all candidate PDFs with year info for sorting
+      const pdfCandidates: Array<{ url: string; year: number; anchor: string }> = [];
+      for (const link of allLinkMatches.slice(0, 20)) {
         const hrefMatch = link.match(/href=["']([^"']+)/i);
         if (!hrefMatch) continue;
         let pdfUrl = hrefMatch[1];
@@ -722,16 +765,27 @@ async function runFetchPhase(opts: {
         // Check if anchor text or URL matches framework topic
         const anchorText = link.toLowerCase();
         if (!topicPattern.test(anchorText) && !topicPattern.test(pdfUrl.toLowerCase())) continue;
-        // Add as a new candidate if not already known
-        const existing = await storage.getDocumentByUrl(companyId, pdfUrl);
+        // Extract year from URL or anchor for recency sorting
+        const yearMatch = (pdfUrl + " " + anchorText).match(/(20[12]\d)/g);
+        const year = yearMatch ? Math.max(...yearMatch.map(Number)) : 0;
+        pdfCandidates.push({ url: pdfUrl, year, anchor: anchorText });
+      }
+
+      // Fix 3: Sort by year descending (prefer latest reports)
+      pdfCandidates.sort((a, b) => b.year - a.year);
+
+      for (const candidate of pdfCandidates) {
+        if (harvestedCount >= MAX_HARVEST) break;
+        const existing = await storage.getDocumentByUrl(companyId, candidate.url);
         if (!existing) {
-          await storage.addDiscoveredDocument(companyId, pdfUrl, `PDF harvest: ${pdfUrl.split("/").pop()}`, "first_party");
+          const yearLabel = candidate.year > 0 ? ` (${candidate.year})` : "";
+          await storage.addDiscoveredDocument(companyId, candidate.url, `PDF harvest${yearLabel}: ${candidate.url.split("/").pop()}`, "first_party");
           harvestedCount++;
         }
       }
     }
     if (harvestedCount > 0) {
-      console.log(`[${companyName}] ONE-HOP PDF HARVEST: discovered ${harvestedCount} new PDFs from landing pages`);
+      console.log(`[${companyName}] ONE-HOP PDF HARVEST: discovered ${harvestedCount} new PDFs from landing pages (latest-year preferred)`);
     }
   } catch (harvestErr: any) {
     console.warn(`[${companyName}] PDF harvest failed (non-fatal): ${harvestErr.message}`);

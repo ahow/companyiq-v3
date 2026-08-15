@@ -1017,7 +1017,10 @@ apiRouter.get("/results/:id/share", async (req: Request, res: Response) => {
               'totalScore',  e->'totalScore',
               'measuresMetCount',   e->'measuresMetCount',
               'measuresTotalCount', e->'measuresTotalCount',
-              'coverageLevel',      e->>'coverageLevel'
+              'coverageLevel',      e->>'coverageLevel',
+              'corpusValidityWarning', e->>'corpusValidityWarning',
+              'hasRequiredDataDoc',    e->'hasRequiredDataDoc',
+              'corpusHash',            e->>'corpusHash'
             ))
             FROM jsonb_array_elements(ar.results_data) e
           ), '[]'::jsonb) AS summary

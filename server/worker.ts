@@ -504,6 +504,22 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         ? Math.round(((metCount + partialCount * 0.5) / assessedCount) * 100)
         : (company.totalScore || 0);
 
+      // Fix 2 (instrumentation): surface diagnostics so CI/harness can measure
+      // corpus validity precision, determinism, and dead-fetch composition.
+      const corpusValidityWarning = diagnostics?.corpusValidityWarning || null;
+      const hasRequiredDataDoc = !corpusValidityWarning; // true if corpus passed validity check
+      // Dead-fetch breakdown by reason
+      const allAccepted = await storage.getAcceptedDocuments(company.id);
+      const deadDocs = allAccepted.filter((d: any) => d.fetchStatus === "dead");
+      const deadByReason: Record<string, number> = {};
+      for (const d of deadDocs) {
+        const reason = (d as any).failureReason || "unknown";
+        deadByReason[reason] = (deadByReason[reason] || 0) + 1;
+      }
+      // Corpus hash: sorted accepted document IDs for determinism tracking
+      const acceptedOk = allAccepted.filter((d: any) => d.fetchStatus === "ok");
+      const corpusHash = acceptedOk.map((d: any) => d.id).sort((a: number, b: number) => a - b).join(",");
+
       resultsData.push({
         companyId: company.id,
         companyName: company.name,
@@ -521,6 +537,11 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         documentsDiscovered: fetchCoverage?.documentsDiscovered ?? undefined,
         fetchRatio: fetchCoverage?.fetchRatio ?? undefined,
         lowEvidence: fetchCoverage?.lowEvidence ?? undefined,
+        // Instrumentation (Fix 2): diagnostics for CI/harness measurement
+        corpusValidityWarning,
+        hasRequiredDataDoc,
+        deadByReason: Object.keys(deadByReason).length > 0 ? deadByReason : undefined,
+        corpusHash,
         manifest,
         sourceDocuments,
         measureScores: fullMeasureScores,
