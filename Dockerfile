@@ -32,6 +32,11 @@ RUN npm install --legacy-peer-deps
 # Copy source
 COPY . .
 
+# Cache-bust: Railway sets RAILWAY_GIT_COMMIT_SHA as a build arg automatically.
+# This ensures Docker invalidates the build layer whenever source code changes,
+# even if the COPY layer hash is identical (which can happen with BuildKit).
+ARG CACHEBUST=1
+
 # Build client (run from client dir, vite.config.ts has outDir: ../dist/client)
 RUN cd client && ../node_modules/.bin/vite build
 
