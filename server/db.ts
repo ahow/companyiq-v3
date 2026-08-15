@@ -441,6 +441,7 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS score_only BOOLEAN NOT NULL DEFAULT false`);
     // Dead-fetch diagnosis fix 1: record failure reason on documents
     await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
+    await db.execute(sql`ALTER TABLE documents ALTER COLUMN failure_reason SET DEFAULT 'unspecified'`);
 
     // ─── Seed Default Settings for All Workspaces ──────────────────────────
     await seedDefaultSettings();

@@ -352,33 +352,24 @@ async function runFetchPhase(opts: {
     };
 
     for (const { label, pattern } of expectedTypes) {
-      // Level 1: title/URL match
-      const hasTitleMatch = allDocText.some(text => pattern.test(text));
-      if (hasTitleMatch) continue; // Found in title — no warning needed
-
-      // Level 2: content match — check actual fetched text for framework-specific data
       const contentPattern = contentPatterns[label];
-      let hasContentMatch = false;
-      if (contentPattern) {
-        // Check first-party documents' content (most reliable signal)
-        const firstPartyDocs = fetchedDocs.filter(d => d.sourceType === "first_party");
-        const docsToCheck = firstPartyDocs.length > 0 ? firstPartyDocs : fetchedDocs.slice(0, 20);
-        for (const doc of docsToCheck) {
-          // Access stored content via the document's content field (already loaded in discoveryResult)
-          const content = (doc as any).content || (doc as any).extractedText || "";
-          if (content.length > 100 && contentPattern.test(content)) {
-            hasContentMatch = true;
-            break;
-          }
-        }
-      }
 
-      if (!hasContentMatch && fetchedDocs.length >= 5) {
-        // Only flag if we have a substantial corpus but it's all wrong types
-        corpusValidityWarning = `Corpus lacks expected document type: ${label}. ` +
-          `${fetchedDocs.length} documents fetched but none contain framework-relevant data ` +
-          `(checked both titles/URLs and document content). ` +
-          `Score may be a false negative due to discovery-composition failure.`;
+      // A document "counts" only if its actual fetched content contains framework data.
+      // A matching title alone is NOT sufficient (SMFG has "Sustainability Report" title
+      // on a landing page with no actual climate data).
+      const hasDataDoc = fetchedDocs.some(d => {
+        const content = ((d as any).content || (d as any).extractedText || "");
+        if (content.length < 200) return false;  // nav/landing pages have little text
+        if (contentPattern && contentPattern.test(content)) return true;
+        // Fall back to the topic pattern against content (not just title) for frameworks w/o a contentPattern
+        return !contentPattern && pattern.test(content);
+      });
+
+      if (!hasDataDoc && fetchedDocs.length >= 5) {
+        corpusValidityWarning =
+          `Corpus lacks framework-relevant DATA for "${label}": ${fetchedDocs.length} documents fetched, ` +
+          `none contain the expected figures/targets in their text (titles may match, content does not). ` +
+          `Likely discovery-composition failure — score should be treated as low-coverage.`;
         console.warn(`[${companyName}] CORPUS VALIDITY WARNING: ${corpusValidityWarning}`);
         break;
       }
@@ -736,6 +727,11 @@ async function runAnalyzePhase(opts: {
     const companyId = company.id;
   const companyName = company.name;
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
+
+  // Read corpus validity warning from diagnostics (set during fetch phase)
+  const companyDiag = (company.discoveryDiagnostics as any) || {};
+  const corpusValidityWarning: string | null = companyDiag.corpusValidityWarning || null;
+
   // Load settings for scoring mode (needed for prompt hash stamping)
   const settings = await storage.getSettings(workspaceId);
   // Update status to analyzing
@@ -862,6 +858,27 @@ async function runAnalyzePhase(opts: {
     console.warn(`[${companyName}] Fetch-confidence adjustment failed (non-fatal): ${fcErr.message}`);
   }
 
+
+  // ─── Corpus Validity Confidence Clamp ────────────────────────────────────────
+  // When corpus validity warning is set (e.g. SMFG: all docs lack framework data),
+  // a confident "No" is likely a false negative. Clamp to Low so downstream consumers
+  // know the verdict is suspect.
+  if (corpusValidityWarning) {
+    let cvClamped = 0;
+    for (const cat of analysis.categories) {
+      for (const m of cat.measures) {
+        if (m.verdict === "No" && (m.confidence === "High" || m.confidence === "Medium")) {
+          m.confidence = "Low";
+          m.verdictNuance = (m.verdictNuance || "") +
+            ` [Confidence clamped: corpus validity warning — documents lack framework-relevant data]`;
+          cvClamped++;
+        }
+      }
+    }
+    if (cvClamped > 0) {
+      console.log(`[${companyName}] CORPUS-VALIDITY-CLAMP: downgraded ${cvClamped} "No" measures to Low confidence`);
+    }
+  }
   // ─── Persist Results ──────────────────────────────────────────────────────
 
   await storage.clearMeasureScores(companyId);

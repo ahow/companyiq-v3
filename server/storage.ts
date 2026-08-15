@@ -716,6 +716,18 @@ export async function resetListCompanies(listId: number, workspaceId: number): P
   return (countResult.rows[0] as any)?.cnt || 0;
 }
 
+// ─── Framework Resolution Helper ────────────────────────────────────────────
+
+export async function getMostRecentFrameworkIdForCompany(companyId: number, workspaceId: number): Promise<number | null> {
+  const rows = await db.execute(sql`
+    SELECT framework_id
+    FROM analysis_jobs
+    WHERE company_id = ${companyId} AND workspace_id = ${workspaceId} AND framework_id IS NOT NULL
+    ORDER BY created_at DESC LIMIT 1
+  `).then((x: any) => x.rows);
+  return rows?.[0]?.framework_id ?? null;
+}
+
 // ─── Batch Run Operations (Workspace-Scoped) ────────────────────────────────
 
 export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number, offPeakOnly: boolean = false, scoreOnly: boolean = false) {

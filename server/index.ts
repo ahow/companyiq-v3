@@ -134,19 +134,13 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
     const authRow = (authCheck.rows as any[])?.[0];
     if (!authRow) return res.status(404).json({ error: "Result not found" });
 
-    // Check if caller is authenticated and owns this result
-    const sessionId = req.cookies?.session_id;
-    let isOwner = false;
-    if (sessionId) {
-      try {
-        const sessCheck = await db.execute(sql`
-          SELECT workspace_id FROM user_sessions WHERE id = ${sessionId}
-        `);
-        const sessRow = (sessCheck.rows as any[])?.[0];
-        // Use == for type coercion (pg may return string or number depending on driver)
-        isOwner = sessRow?.workspace_id != null && String(sessRow.workspace_id) === String(authRow.workspace_id);
-      } catch { /* non-fatal */ }
-    }
+    // Check if caller is authenticated and owns this result.
+    // express-session (sessionMiddleware) has already populated req.session.
+    // The cookie is "connect.sid" (not "session_id"), and the session store is
+    // connect-pg-simple which stores a JSON blob — no workspace_id column.
+    // So we read workspaceId directly from the deserialized session object.
+    const sessWorkspaceId = (req.session as any)?.workspaceId;
+    const isOwner = sessWorkspaceId != null && String(sessWorkspaceId) === String(authRow.workspace_id);
 
     // Enforce access control
     if (!isOwner) {

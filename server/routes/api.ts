@@ -1373,19 +1373,33 @@ apiRouter.post("/companies/:id/analyze", async (req: Request, res: Response) => 
   try {
     const { workspaceId } = getSessionContext(req);
     const companyId = parseInt(req.params.id);
-    const { scoreOnly } = req.body || {};
+    const { scoreOnly, frameworkId: bodyFrameworkId } = req.body || {};
     const company = await storage.getCompanyById(companyId, workspaceId);
     if (!company) return res.status(404).json({ error: "Company not found" });
 
+    // Resolve framework: explicit body param > company's most-recent framework > active (fallback).
+    // NEVER silently score on the active framework when the company was last scored on another.
+    let framework;
     const frameworks = await storage.getFrameworks(workspaceId);
-    const activeFramework = frameworks.find((f: any) => f.isActive);
-    if (!activeFramework) return res.status(400).json({ error: "No active framework" });
+    if (bodyFrameworkId) {
+      framework = frameworks.find((f: any) => f.id === bodyFrameworkId);
+    } else {
+      const lastFwId = await storage.getMostRecentFrameworkIdForCompany(companyId, workspaceId);
+      framework = frameworks.find((f: any) => f.id === lastFwId)
+               ?? frameworks.find((f: any) => f.isActive);
+    }
+    if (!framework) {
+      return res.status(400).json({ error: "No framework resolved. Pass frameworkId." });
+    }
 
     // Reset company status
     await storage.updateCompany(company.id, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
 
     // Create a batch for single company
-    const batch = await storage.createBatchRun(workspaceId, activeFramework.id, 1, false, !!scoreOnly);
+    // FIX: listId must be undefined (not false); put flags in their correct slots.
+    const batch = await storage.createBatchRun(
+      workspaceId, framework.id, 1, undefined /*listId*/, false /*offPeakOnly*/, !!scoreOnly /*scoreOnly*/
+    );
 
     // Create jobs in DB (same pattern as batch analyze)
     const jobsData = [{
@@ -1393,7 +1407,7 @@ apiRouter.post("/companies/:id/analyze", async (req: Request, res: Response) => 
       batchId: batch.id,
       companyId: company.id,
       companyName: company.name,
-      frameworkId: activeFramework.id,
+      frameworkId: framework.id,
     }];
     const dbJobs = await storage.createAnalysisJobs(jobsData);
 
