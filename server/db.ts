@@ -441,6 +441,12 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS score_only BOOLEAN NOT NULL DEFAULT false`);
     // Snapshot persistence: track whether the results snapshot was saved successfully
     await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS snapshot_saved BOOLEAN NOT NULL DEFAULT false`);
+    // Backfill: mark historical batches that already have snapshots in analysis_results
+    await db.execute(sql`
+      UPDATE batch_runs SET snapshot_saved = TRUE
+      WHERE status = 'completed' AND snapshot_saved = FALSE
+        AND id IN (SELECT DISTINCT (results_data->>'batchId')::int FROM analysis_results WHERE results_data->>'batchId' IS NOT NULL)
+    `);
     // Dead-fetch diagnosis fix 1: record failure reason on documents
     await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
     await db.execute(sql`ALTER TABLE documents ALTER COLUMN failure_reason SET DEFAULT 'unspecified'`);
@@ -545,9 +551,22 @@ export async function initializeDatabase(): Promise<void> {
 
     // P5: Pin known disclosure URLs for repeat-failing defended sites.
     // These get force-headless fetch treatment in the pipeline.
+    // Also fix SMFG's domain (was incorrectly set to mitsui.com which is a different company).
     await db.execute(sql`
-      UPDATE companies SET pinned_documents = '["https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/", "https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/pdf/tcfd_report_e.pdf"]'::jsonb
-      WHERE LOWER(name) LIKE '%sumitomo mitsui%' OR LOWER(name) LIKE '%smfg%'
+      UPDATE companies SET
+        pinned_documents = '["https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/", "https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/pdf/tcfd_report_e.pdf"]'::jsonb,
+        domain = 'smfg.co.jp'
+      WHERE LOWER(name) LIKE '%sumitomo mitsui financial%'
+        AND (pinned_documents IS NULL OR pinned_documents = '[]'::jsonb OR pinned_documents = 'null'::jsonb)
+    `);
+
+    // Fix incorrect/missing domains for zero-scoring companies
+    await db.execute(sql`UPDATE companies SET domain = 'hdfcbank.com' WHERE LOWER(name) = 'hdfc bank limited' AND (domain IS NULL OR domain = 'hdfc.bank.in')`);
+    await db.execute(sql`UPDATE companies SET domain = 'ccb.com' WHERE LOWER(name) LIKE '%china construction bank%' AND domain IS NULL`);
+    // Pin Santander's modern slavery statement for headless fetch
+    await db.execute(sql`
+      UPDATE companies SET pinned_documents = '["https://www.santander.com/content/dam/santander-com/en/documentos/informe-anual-de-sostenibilidad/2023/ias-2023-modern-slavery-statement-en.pdf"]'::jsonb
+      WHERE LOWER(name) = 'banco santander, s.a.'
         AND (pinned_documents IS NULL OR pinned_documents = '[]'::jsonb OR pinned_documents = 'null'::jsonb)
     `);
 

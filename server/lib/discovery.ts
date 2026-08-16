@@ -2310,20 +2310,35 @@ async function searchCompanyDocumentsInner(opts: {
   }
 
   // Lane 1: General search (with recency filter)
-  // P0 fix: Cap at 12 queries to prevent search-API rate-limit stalls under concurrency.
-  // Priority order: templates → legacy → metadata (buildGeneralQueries returns them in this order).
-  const MAX_GENERAL_QUERIES = 12;
+  // The cap ONLY trims metadata (Layer 3) queries. Templates (Layer 1) and
+  // legacy topic-tuned queries (Layer 2) are ALWAYS run in full — they are the
+  // proven breadth that drives the baseline averages. The cap prevents the
+  // additive metadata layer from exploding search-API volume under concurrency.
+  const MAX_TOTAL_GENERAL_QUERIES = 18; // raised from 12 to accommodate full legacy
   const allGeneralQueries = buildGeneralQueries(companyName, framework, companyDomain || undefined);
-  const generalQueries = allGeneralQueries.slice(0, MAX_GENERAL_QUERIES);
-  console.log(`[${companyName}] Running general search lane (${generalQueries.length}/${allGeneralQueries.length} queries, capped at ${MAX_GENERAL_QUERIES})`);
+  // Never cap below the number of template+legacy queries (first two layers).
+  // buildGeneralQueries returns them in order: templates → legacy → metadata.
+  // Count template+legacy as everything before the metadata layer starts.
+  const templateCount = (framework.searchTemplates || []).length;
+  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+  const fwName = (framework.name || "").toLowerCase();
+  const isAI = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + fwName);
+  const isClimate = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
+  const isSlavery = /slavery|human rights|forced labo/i.test(topic + " " + fwName);
+  const legacyCount = isAI ? 6 : isClimate ? 9 : isSlavery ? 5 : 6;
+  const coreLayers = templateCount + legacyCount;
+  // Ensure we always run at least the full template+legacy set, plus up to MAX_TOTAL metadata
+  const effectiveCap = Math.max(coreLayers, MAX_TOTAL_GENERAL_QUERIES);
+  const generalQueries = allGeneralQueries.slice(0, effectiveCap);
+  console.log(`[${companyName}] Running general search lane (${generalQueries.length}/${allGeneralQueries.length} queries, core=${coreLayers}, cap=${effectiveCap})`);
   for (const query of generalQueries) {
     const results = await webSearch(query, { num: searchDepth, tbs: "qdr:y2" });
     for (const r of results) addCandidate(r, "general");
 
-    // P0 fix: Suppress unfiltered retry when query count is high (>10) —
-    // the marginal recall of retrying query #11 without a date filter is far
+    // Suppress unfiltered retry when query count is high (>12) —
+    // the marginal recall of retrying query #13 without a date filter is far
     // below the marginal cost of doubling search-API volume.
-    if (results.length < 3 && generalQueries.length <= 10) {
+    if (results.length < 3 && generalQueries.length <= 12) {
       const unfiltered = await webSearch(query, { num: searchDepth });
       for (const r of unfiltered) addCandidate(r, "general-unfiltered");
     }

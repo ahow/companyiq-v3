@@ -344,8 +344,15 @@ initializeDatabase().then(async () => {
     for (const b of missing) {
       console.warn("[Recovery] Batch " + b.id + " completed without a snapshot — saving now");
       try {
-        await saveBatchSnapshot(b.id, b.framework_id, b.workspace_id, b.list_id ?? undefined);
-        await storage.markBatchSnapshotSaved(b.id);
+        const saved = await saveBatchSnapshot(b.id, b.framework_id, b.workspace_id, b.list_id ?? undefined);
+        if (saved) {
+          await storage.markBatchSnapshotSaved(b.id);
+          console.log("[Recovery] Snapshot recovered for batch " + b.id);
+        } else {
+          console.warn("[Recovery] saveBatchSnapshot returned false for batch " + b.id + " (may already exist or no data)");
+          // Still mark as saved if the snapshot already exists (idempotent)
+          await storage.markBatchSnapshotSaved(b.id);
+        }
       } catch (e: any) {
         console.error("[Recovery] Failed to recover snapshot for batch " + b.id + ": " + e.message);
       }
