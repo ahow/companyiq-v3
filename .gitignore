@@ -3,3 +3,10 @@ dist/
 .env
 .env.local
 *.log
+
+# Data files
+framework7.json
+full_verdict_diff.json
+prov_diff*.json
+*.env
+*.env.*

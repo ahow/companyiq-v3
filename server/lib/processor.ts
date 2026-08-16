@@ -857,11 +857,30 @@ async function fetchPdfViaBrowser(url: string): Promise<string> {
 
 export async function processDocument(
   url: string,
-  type: "pdf" | "html"
+  type: "pdf" | "html",
+  opts?: { forceHeadless?: boolean }
 ): Promise<string> {
   // Check in-memory cache
   const cached = getCachedContent(url);
   if (cached) return cached;
+
+  // P5: For pinned/known URLs on repeat-failing domains, skip the plain fetch
+  // entirely and go straight to headless browser (which handles JS rendering,
+  // WAFs, and bot-protection challenges).
+  if (opts?.forceHeadless) {
+    try {
+      console.log(`[Processor] Force-headless fetch for pinned/known URL: ${url.slice(0, 80)}`);
+      const isPdfUrl = url.toLowerCase().includes(".pdf");
+      const content = isPdfUrl ? await fetchPdfViaBrowser(url) : await fetchWithBrowser(url);
+      if (content && content.trim().length > 50) {
+        setCachedContent(url, content);
+        return content;
+      }
+    } catch (e: any) {
+      console.warn(`[Processor] Force-headless failed for ${url}: ${e.message}`);
+    }
+    // Fall through to normal path if headless didn't work
+  }
 
   try {
     let content = "";

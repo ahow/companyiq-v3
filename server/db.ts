@@ -541,6 +541,14 @@ export async function initializeDatabase(): Promise<void> {
              OR name ~* '\\bai\\b|artificial.?intelligence')
     `);
 
+    // P5: Pin known disclosure URLs for repeat-failing defended sites.
+    // These get force-headless fetch treatment in the pipeline.
+    await db.execute(sql`
+      UPDATE companies SET pinned_documents = '["https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/", "https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/pdf/tcfd_report_e.pdf"]'::jsonb
+      WHERE LOWER(name) LIKE '%sumitomo mitsui%' OR LOWER(name) LIKE '%smfg%'
+        AND (pinned_documents IS NULL OR pinned_documents = '[]'::jsonb OR pinned_documents = 'null'::jsonb)
+    `);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 

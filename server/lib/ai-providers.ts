@@ -445,7 +445,7 @@ function initProviders() {
   providers.set("deepseek-r1", deepseekR1);
 
   // Kimi (moonshot supports up to 4K output tokens)
-  if (!process.env.KIMI_API_KEY) process.env.KIMI_API_KEY = "sk-SqknNt8WxX66s7vDUWcAY6ML7TCR2abC1ZOSRazHhIN5iZQY";
+  // KIMI_API_KEY must be set via environment variable
   const kimi = new OpenAICompatibleProvider({
     name: "kimi",
     model: "moonshot-v1-32k",

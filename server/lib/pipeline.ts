@@ -541,9 +541,13 @@ async function runFetchPhase(opts: {
 
       try {
         const type = inferDocumentType(doc.url);
+        // P5: Force headless for pinned/known URLs (they are high-priority and
+        // often on defended/JS-rendered sites like smfg.co.jp).
+        const gateReason = ((doc as any).gateReason || "").toLowerCase();
+        const isPinnedOrKnown = gateReason.includes("lane: pinned") || gateReason.includes("lane: known");
         // Wrap processDocument with a per-document timeout
         const content = await withTimeout(
-          processDocument(doc.url, type),
+          processDocument(doc.url, type, { forceHeadless: isPinnedOrKnown }),
           PER_DOCUMENT_TIMEOUT_MS,
           `[${companyName}] fetch ${doc.url.slice(0, 80)}`
         );
@@ -826,18 +830,18 @@ async function runFetchPhase(opts: {
         const urlLower = (d.url || "").toLowerCase();
         // First-party: on the company's own domain
         if (!companyDomain || !urlLower.includes(companyDomain)) return false;
-        // Exclude probe-lane speculative URLs (constructed from topic lexicon,
-        // never found by a search engine). These have predictable patterns:
-        // /modern-slavery, /forced-labor, /human-rights, /ai-governance, etc.
-        // that were speculatively appended to the domain.
-        const probePatterns = /\/(modern-slavery|forced-labor|human-rights|ai-governance|ai-ethics|responsible-ai|climate-report|sustainability-report|human-trafficking|supply-chain-transparency)$/i;
-        if (probePatterns.test(urlLower)) return false;
+        // P4b: Provenance-based probe exclusion. The lane is stored in gateReason
+        // as "Priority: X, Lane: <lane_name>". Exclude speculative probe-lane URLs
+        // (constructed from topic lexicon, never found by a search engine).
+        const gateReason = ((d as any).gateReason || "").toLowerCase();
+        if (gateReason.includes("lane: topic-probe-url") || gateReason.includes("lane: probe")) return false;
         return true;
       })
       .map(d => ({
         url: d.url,
         title: d.title || null,
         reason: d.failureReason || "unknown",
+        lane: ((d as any).gateReason || "").match(/Lane:\s*([\w-]+)/)?.[1] || "unknown",
       }))
       .slice(0, 10); // Cap at 10 for diagnostics readability
 

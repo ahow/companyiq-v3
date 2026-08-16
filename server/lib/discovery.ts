@@ -722,7 +722,67 @@ async function webSearchSerpApi(
   }));
 }
 
+// ─── Global Search Rate Limiter (Token Bucket) ─────────────────────────────
+// Shared across all workers in this process. Prevents concurrent batch runs
+// from collectively overwhelming the search provider with 300+ simultaneous calls.
+const SEARCH_RATE_LIMIT = {
+  tokens: 8,           // Max concurrent in-flight searches
+  maxTokens: 8,
+  refillRate: 4,       // Tokens restored per second
+  lastRefill: Date.now(),
+  waitQueue: [] as Array<() => void>,
+};
+
+async function acquireSearchToken(): Promise<void> {
+  // Refill tokens based on elapsed time
+  const now = Date.now();
+  const elapsed = (now - SEARCH_RATE_LIMIT.lastRefill) / 1000;
+  SEARCH_RATE_LIMIT.tokens = Math.min(
+    SEARCH_RATE_LIMIT.maxTokens,
+    SEARCH_RATE_LIMIT.tokens + elapsed * SEARCH_RATE_LIMIT.refillRate
+  );
+  SEARCH_RATE_LIMIT.lastRefill = now;
+
+  if (SEARCH_RATE_LIMIT.tokens >= 1) {
+    SEARCH_RATE_LIMIT.tokens -= 1;
+    return;
+  }
+
+  // Wait for a token to become available
+  return new Promise<void>((resolve) => {
+    SEARCH_RATE_LIMIT.waitQueue.push(resolve);
+    // Safety timeout: never wait more than 30s
+    setTimeout(() => {
+      const idx = SEARCH_RATE_LIMIT.waitQueue.indexOf(resolve);
+      if (idx >= 0) { SEARCH_RATE_LIMIT.waitQueue.splice(idx, 1); resolve(); }
+    }, 30000);
+  });
+}
+
+function releaseSearchToken(): void {
+  SEARCH_RATE_LIMIT.tokens = Math.min(SEARCH_RATE_LIMIT.maxTokens, SEARCH_RATE_LIMIT.tokens + 1);
+  SEARCH_RATE_LIMIT.lastRefill = Date.now();
+  if (SEARCH_RATE_LIMIT.waitQueue.length > 0) {
+    const next = SEARCH_RATE_LIMIT.waitQueue.shift()!;
+    SEARCH_RATE_LIMIT.tokens -= 1;
+    next();
+  }
+}
+
 async function webSearch(
+  query: string,
+  opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {}
+): Promise<SearchResult[]> {
+  // Global rate limiter: acquire a token before making any search API call
+  await acquireSearchToken();
+  try {
+    return await webSearchInner(query, opts);
+  } finally {
+    releaseSearchToken();
+  }
+}
+
+async function webSearchInner(
   query: string,
   opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {}
 ): Promise<SearchResult[]> {
@@ -734,6 +794,12 @@ async function webSearch(
     try {
       return await webSearchSerper(query, serperKey, opts);
     } catch (error: any) {
+      // On 429 (rate limit), wait and retry once
+      if (error?.response?.status === 429) {
+        console.warn(`[Discovery] Serper 429 rate-limited, backing off 5s for "${query.slice(0, 60)}"`);
+        await new Promise(r => setTimeout(r, 5000 + Math.random() * 2000));
+        try { return await webSearchSerper(query, serperKey, opts); } catch { /* fall through */ }
+      }
       console.warn(`[Discovery] Serper.dev failed for "${query}": ${error.message}`);
       // Fall through to SerpAPI
     }
@@ -743,6 +809,11 @@ async function webSearch(
     try {
       return await webSearchSerpApi(query, serpApiKey, opts);
     } catch (error: any) {
+      if (error?.response?.status === 429) {
+        console.warn(`[Discovery] SerpAPI 429 rate-limited, backing off 5s for "${query.slice(0, 60)}"`);
+        await new Promise(r => setTimeout(r, 5000 + Math.random() * 2000));
+        try { return await webSearchSerpApi(query, serpApiKey, opts); } catch { /* give up */ }
+      }
       console.warn(`[Discovery] SerpAPI failed for "${query}": ${error.message}`);
       return [];
     }
@@ -2139,6 +2210,10 @@ export interface DiscoveryResult {
   domainAutoDetected?: boolean;
 }
 
+// P0 fix: Per-company discovery timeout (10 minutes). If discovery takes longer
+// than this, it fails the job with a clear reason rather than hanging the batch.
+const DISCOVERY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
 export async function searchCompanyDocuments(opts: {
   companyName: string;
   companyId: number;
@@ -2152,6 +2227,27 @@ export async function searchCompanyDocuments(opts: {
   trustedSources: TrustedSource[];
   searchDepth?: number; // Number of results per query (default: 10)
   queryVariants?: number; // Number of LLM-generated query variants (default: 3)
+}): Promise<DiscoveryResult> {
+  // Wrap the entire discovery in a hard timeout
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(`Discovery timeout: ${opts.companyName} exceeded ${DISCOVERY_TIMEOUT_MS / 1000}s`)), DISCOVERY_TIMEOUT_MS);
+  });
+  return Promise.race([searchCompanyDocumentsInner(opts), timeoutPromise]);
+}
+
+async function searchCompanyDocumentsInner(opts: {
+  companyName: string;
+  companyId: number;
+  companyDomain?: string | null;
+  isin?: string | null;
+  ticker?: string | null;
+  sector?: string | null;
+  country?: string | null;
+  pinnedUrls?: string[];
+  framework: Framework;
+  trustedSources: TrustedSource[];
+  searchDepth?: number;
+  queryVariants?: number;
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
   const localeProfile = resolveLocaleProfile(opts.country);
@@ -2214,14 +2310,20 @@ export async function searchCompanyDocuments(opts: {
   }
 
   // Lane 1: General search (with recency filter)
-  console.log(`[${companyName}] Running general search lane`);
-  const generalQueries = buildGeneralQueries(companyName, framework, companyDomain || undefined);
+  // P0 fix: Cap at 12 queries to prevent search-API rate-limit stalls under concurrency.
+  // Priority order: templates → legacy → metadata (buildGeneralQueries returns them in this order).
+  const MAX_GENERAL_QUERIES = 12;
+  const allGeneralQueries = buildGeneralQueries(companyName, framework, companyDomain || undefined);
+  const generalQueries = allGeneralQueries.slice(0, MAX_GENERAL_QUERIES);
+  console.log(`[${companyName}] Running general search lane (${generalQueries.length}/${allGeneralQueries.length} queries, capped at ${MAX_GENERAL_QUERIES})`);
   for (const query of generalQueries) {
     const results = await webSearch(query, { num: searchDepth, tbs: "qdr:y2" });
     for (const r of results) addCandidate(r, "general");
 
-    // If too few results with recency filter, retry without
-    if (results.length < 3) {
+    // P0 fix: Suppress unfiltered retry when query count is high (>10) —
+    // the marginal recall of retrying query #11 without a date filter is far
+    // below the marginal cost of doubling search-API volume.
+    if (results.length < 3 && generalQueries.length <= 10) {
       const unfiltered = await webSearch(query, { num: searchDepth });
       for (const r of unfiltered) addCandidate(r, "general-unfiltered");
     }
