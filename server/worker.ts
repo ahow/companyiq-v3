@@ -210,6 +210,41 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
     if (result.success) {
       await storage.completeJob(jobId);
       console.log("[Worker] Job " + jobId + " completed successfully (attempt " + currentAttempt + ")");
+
+      // Instruction 3: Zero-score diagnostics — log detailed fetch/discovery info
+      // for any company that scores 0, enabling root-cause analysis.
+      try {
+        const companyScores = await storage.getMeasureScores(companyId, frameworkId);
+        const totalScore = companyScores.reduce((sum: number, s: any) => sum + (s.score || 0), 0);
+        if (totalScore === 0) {
+          const allDocs = await storage.getAcceptedDocuments(companyId);
+          const okDocs = allDocs.filter((d: any) => d.fetchStatus === "ok");
+          const deadDocs = allDocs.filter((d: any) => d.fetchStatus === "dead");
+          const pinnedDocs = (company.pinnedDocuments as string[]) || [];
+          const pinnedOk = pinnedDocs.filter(url => okDocs.some((d: any) => d.url === url)).length;
+          const deadByReason: Record<string, number> = {};
+          for (const d of deadDocs) {
+            const reason = (d as any).failureReason || "unknown";
+            deadByReason[reason] = (deadByReason[reason] || 0) + 1;
+          }
+          const diag = (company as any).discoveryDiagnostics || {};
+          console.log(JSON.stringify({
+            tag: "zero-score-diag",
+            companyName: company.name,
+            frameworkId,
+            documentsDiscovered: allDocs.length,
+            documentsFetched: okDocs.length,
+            fetchRatio: okDocs.length / Math.max(1, allDocs.length),
+            pinnedDocumentsAttempted: pinnedDocs.length,
+            pinnedDocumentsFetchedOk: pinnedOk,
+            hasRequiredDataDoc: !(diag.corpusValidityWarning),
+            corpusValidityWarning: diag.corpusValidityWarning || null,
+            deadByReason,
+          }));
+        }
+      } catch (diagErr: any) {
+        console.warn("[Worker] Zero-score diagnostics failed: " + diagErr.message);
+      }
     } else if (result.error === "Cancelled") {
       console.log("[Worker] Job " + jobId + " cancelled");
     } else {

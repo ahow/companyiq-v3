@@ -551,13 +551,13 @@ export async function initializeDatabase(): Promise<void> {
 
     // P5: Pin known disclosure URLs for repeat-failing defended sites.
     // These get force-headless fetch treatment in the pipeline.
-    // Also fix SMFG's domain (was incorrectly set to mitsui.com which is a different company).
+    // FORCE UPDATE (no guard clause) — the previous broken migration may have set
+    // a bad value, so we unconditionally overwrite to ensure the correct pins.
     await db.execute(sql`
       UPDATE companies SET
         pinned_documents = '["https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/", "https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/pdf/tcfd_report_e.pdf"]'::jsonb,
         domain = 'smfg.co.jp'
       WHERE LOWER(name) LIKE '%sumitomo mitsui financial%'
-        AND (pinned_documents IS NULL OR pinned_documents = '[]'::jsonb OR pinned_documents = 'null'::jsonb)
     `);
 
     // Fix incorrect/missing domains for zero-scoring companies

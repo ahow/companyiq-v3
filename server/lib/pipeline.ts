@@ -327,8 +327,13 @@ async function runFetchPhase(opts: {
       : (framework.topicDescription || framework.name || "topic-relevant document");
 
     // Build the content-test regex from the framework's declared data patterns
+    // Precision fix: require ≥2 distinct dataPatterns to hit the corpus text before
+    // declaring hasRequiredDataDoc = True. A single stray keyword no longer passes.
     let contentPattern: RegExp | null = null;
+    let useDistinctHitsPath = false;
     if (frameworkDataPatterns && frameworkDataPatterns.length > 0) {
+      useDistinctHitsPath = true;
+      // contentPattern kept as fallback for the per-doc check below
       contentPattern = new RegExp(`(?:${frameworkDataPatterns.join("|")})`, "i");
     } else {
       // LEGACY FALLBACK: for frameworks that predate dataPatterns, derive from topic.
@@ -356,11 +361,27 @@ async function runFetchPhase(opts: {
     // A document "counts" only if its actual fetched content contains framework data.
     // A matching title alone is NOT sufficient.
     if (contentPattern && anyContentReadable && docsWithContent.length >= 5) {
-      const hasDataDoc = docsWithContent.some(d => {
-        const content = d.content || "";
-        if (content.length < 200) return false;
-        return contentPattern!.test(content);
-      });
+      let hasDataDoc = false;
+
+      if (useDistinctHitsPath && frameworkDataPatterns) {
+        // Precision: require ≥2 distinct dataPatterns to match across the corpus.
+        // This prevents a single stray keyword from passing the check.
+        hasDataDoc = docsWithContent.some(d => {
+          const content = d.content || "";
+          if (content.length < 200) return false;
+          const distinctHits = frameworkDataPatterns.filter(p => {
+            try { return new RegExp(p, "i").test(content); } catch { return false; }
+          }).length;
+          return distinctHits >= 2;
+        });
+      } else {
+        // Legacy path: single alternation regex
+        hasDataDoc = docsWithContent.some(d => {
+          const content = d.content || "";
+          if (content.length < 200) return false;
+          return contentPattern!.test(content);
+        });
+      }
 
       if (!hasDataDoc) {
         corpusValidityWarning =

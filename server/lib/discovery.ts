@@ -874,7 +874,14 @@ interface DiscoveryCandidate {
   rank?: RankSignals;
 }
 
-function buildGeneralQueries(companyName: string, framework: Framework, companyDomain?: string): string[] {
+interface GeneralQueryResult {
+  queries: string[];
+  templateCount: number;
+  legacyCount: number;
+  metadataCount: number;
+}
+
+function buildGeneralQueries(companyName: string, framework: Framework, companyDomain?: string): GeneralQueryResult {
   const currentYear = new Date().getFullYear();
   const lastYear = currentYear - 1;
   const allQueries: string[] = [];
@@ -890,6 +897,7 @@ function buildGeneralQueries(companyName: string, framework: Framework, companyD
       addQuery(t.replace(/\{company\}/g, companyName));
     }
   }
+  const templateEnd = allQueries.length;
 
   // LAYER 2: Legacy topic-tuned queries (proven breadth, always included)
   const topic = framework.topicDescription || framework.name;
@@ -942,6 +950,9 @@ function buildGeneralQueries(companyName: string, framework: Framework, companyD
     ]) addQuery(q);
   }
 
+  const legacyEnd = allQueries.length;
+  const legacyCount = legacyEnd - templateEnd;
+
   // LAYER 3: ADDITIVE metadata-driven queries from requiredDocTypes.
   // These AUGMENT the above layers. Deduplication via the seen set.
   const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
@@ -957,7 +968,8 @@ function buildGeneralQueries(companyName: string, framework: Framework, companyD
     }
   }
 
-  return allQueries;
+  const metadataCount = allQueries.length - legacyEnd;
+  return { queries: allQueries, templateCount: templateEnd, legacyCount, metadataCount };
 }
 
 /**
@@ -2293,7 +2305,8 @@ async function searchCompanyDocumentsInner(opts: {
   }
 
   // Add pinned URLs with maximum priority
-  if (pinnedUrls) {
+  if (pinnedUrls && pinnedUrls.length > 0) {
+    console.log(`[${companyName}] pinned=${pinnedUrls.length}: ${pinnedUrls.join(" | ")}`);
     for (const url of pinnedUrls) {
       if (!seenUrls.has(url)) {
         seenUrls.add(url);
@@ -2314,34 +2327,27 @@ async function searchCompanyDocumentsInner(opts: {
   // legacy topic-tuned queries (Layer 2) are ALWAYS run in full — they are the
   // proven breadth that drives the baseline averages. The cap prevents the
   // additive metadata layer from exploding search-API volume under concurrency.
-  const MAX_TOTAL_GENERAL_QUERIES = 18; // raised from 12 to accommodate full legacy
-  const allGeneralQueries = buildGeneralQueries(companyName, framework, companyDomain || undefined);
-  // Never cap below the number of template+legacy queries (first two layers).
-  // buildGeneralQueries returns them in order: templates → legacy → metadata.
-  // Count template+legacy as everything before the metadata layer starts.
-  const templateCount = (framework.searchTemplates || []).length;
-  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
-  const fwName = (framework.name || "").toLowerCase();
-  const isAI = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + fwName);
-  const isClimate = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
-  const isSlavery = /slavery|human rights|forced labo/i.test(topic + " " + fwName);
-  const legacyCount = isAI ? 6 : isClimate ? 9 : isSlavery ? 5 : 6;
-  const coreLayers = templateCount + legacyCount;
-  // Ensure we always run at least the full template+legacy set, plus up to MAX_TOTAL metadata
+  const MAX_TOTAL_GENERAL_QUERIES = 18;
+  const queryResult = buildGeneralQueries(companyName, framework, companyDomain || undefined);
+  // Use the layer counts returned by buildGeneralQueries (single source of truth).
+  const coreLayers = queryResult.templateCount + queryResult.legacyCount;
   const effectiveCap = Math.max(coreLayers, MAX_TOTAL_GENERAL_QUERIES);
-  const generalQueries = allGeneralQueries.slice(0, effectiveCap);
-  console.log(`[${companyName}] Running general search lane (${generalQueries.length}/${allGeneralQueries.length} queries, core=${coreLayers}, cap=${effectiveCap})`);
+  const generalQueries = queryResult.queries.slice(0, effectiveCap);
+  console.log(`[${companyName}] Running general search lane (${generalQueries.length}/${queryResult.queries.length} queries, templates=${queryResult.templateCount}, legacy=${queryResult.legacyCount}, metadata=${queryResult.metadataCount}, cap=${effectiveCap})`);
+  let queryIndex = 0;
   for (const query of generalQueries) {
     const results = await webSearch(query, { num: searchDepth, tbs: "qdr:y2" });
     for (const r of results) addCandidate(r, "general");
 
-    // Suppress unfiltered retry when query count is high (>12) —
-    // the marginal recall of retrying query #13 without a date filter is far
-    // below the marginal cost of doubling search-API volume.
-    if (results.length < 3 && generalQueries.length <= 12) {
+    // Position-based retry: run the unfiltered fallback on the first 6 queries
+    // regardless of total count. This ensures older-but-valid documents (e.g.
+    // modern slavery statements >2 years old) are still discoverable, while
+    // limiting the API volume increase to a bounded 6 extra calls.
+    if (results.length < 3 && queryIndex < 6) {
       const unfiltered = await webSearch(query, { num: searchDepth });
       for (const r of unfiltered) addCandidate(r, "general-unfiltered");
     }
+    queryIndex++;
   }
 
   // Lane 2: Domain-anchored search (with auto-detection if no domain set)
