@@ -779,6 +779,18 @@ export async function getActiveBatchRun(workspaceId: number) {
   return batch || null;
 }
 
+/** Guard: check if any batch is currently running for a given list */
+export async function getActiveBatchesForList(listId: number, workspaceId: number) {
+  return db
+    .select()
+    .from(schema.batchRuns)
+    .where(and(
+      eq(schema.batchRuns.workspaceId, workspaceId),
+      eq(schema.batchRuns.listId, listId),
+      eq(schema.batchRuns.status, "running")
+    ));
+}
+
 /**
  * Honest "is anything actually running" summary for the dashboard.
  *

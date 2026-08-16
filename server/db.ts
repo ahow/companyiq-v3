@@ -483,6 +483,15 @@ export async function initializeDatabase(): Promise<void> {
              OR name ILIKE '%emission%' OR name ILIKE '%climate%' OR name ILIKE '%financed%')
     `);
     await db.execute(sql`
+      UPDATE frameworks SET required_doc_types = ${
+        JSON.stringify(["Climate/TCFD Report", "Sustainability Report", "CDP Response", "Transition Plan", "Annual Report"])
+      }::jsonb
+      WHERE required_doc_types IS NULL
+        AND (topic_description ILIKE '%emission%' OR topic_description ILIKE '%climate%'
+             OR topic_description ILIKE '%financed%' OR topic_description ILIKE '%carbon%'
+             OR name ILIKE '%emission%' OR name ILIKE '%climate%' OR name ILIKE '%financed%')
+    `);
+    await db.execute(sql`
       UPDATE frameworks SET data_patterns = ${
         JSON.stringify([
           "modern.?slavery.?(?:act|statement)",
@@ -490,10 +499,21 @@ export async function initializeDatabase(): Promise<void> {
           "human.?trafficking",
           "supply.?chain.?(?:audit|due.?diligence|transparency|risk)",
           "human.?rights.?(?:impact|assessment|due.?diligence)",
-          "remediation.?(?:process|mechanism)"
+          "remediation.?(?:process|mechanism)",
+          "section.?54",
+          "transparency.?in.?supply.?chain"
         ])
       }::jsonb
       WHERE data_patterns IS NULL
+        AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
+             OR topic_description ILIKE '%forced labo%'
+             OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
+    `);
+    await db.execute(sql`
+      UPDATE frameworks SET required_doc_types = ${
+        JSON.stringify(["Modern Slavery Statement", "Human Rights Report", "Modern Slavery Act Statement", "Supplier Code of Conduct", "Human Rights Policy"])
+      }::jsonb
+      WHERE required_doc_types IS NULL
         AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
              OR topic_description ILIKE '%forced labo%'
              OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
@@ -509,6 +529,14 @@ export async function initializeDatabase(): Promise<void> {
         ])
       }::jsonb
       WHERE data_patterns IS NULL
+        AND (topic_description ~* '\\bai\\b|artificial.?intelligence|machine.?learning'
+             OR name ~* '\\bai\\b|artificial.?intelligence')
+    `);
+    await db.execute(sql`
+      UPDATE frameworks SET required_doc_types = ${
+        JSON.stringify(["AI Governance Policy", "Responsible AI Report", "Technology Ethics Policy", "Annual Report", "ESG/Sustainability Report"])
+      }::jsonb
+      WHERE required_doc_types IS NULL
         AND (topic_description ~* '\\bai\\b|artificial.?intelligence|machine.?learning'
              OR name ~* '\\bai\\b|artificial.?intelligence')
     `);

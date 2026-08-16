@@ -180,6 +180,15 @@ apiRouter.post("/lists/:id/full-reset", async (req: Request, res: Response) => {
     const listId = parseInt(req.params.id);
     const list = await storage.getListById(listId, workspaceId);
     if (!list) return res.status(404).json({ error: "List not found" });
+    // Guard: reject reset if any batch is currently in-flight for this list
+    const activeBatches = await storage.getActiveBatchesForList(listId, workspaceId);
+    if (activeBatches.length > 0) {
+      return res.status(409).json({
+        error: "Cannot reset while a batch is in-flight",
+        activeBatchIds: activeBatches.map((b: any) => b.id),
+        hint: "Wait for the batch to complete or cancel it first."
+      });
+    }
     const resetCount = await storage.fullResetListCompanies(listId, workspaceId);
     res.json({ success: true, resetCount, listName: list.name });
   } catch (error: any) {

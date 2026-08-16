@@ -199,6 +199,15 @@ async function canonicalizeSecMirrorUrl(url: string): Promise<string> {
 
 // ─── Fetch with Retry ────────────────────────────────────────────────────────
 
+// Rotated User-Agents for defended hosts (reduces fingerprint-based blocking)
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+];
+
 async function fetchWithRetry(
   url: string,
   opts: { responseType?: "arraybuffer" | "text"; maxAttempts?: number } = {}
@@ -215,12 +224,16 @@ async function fetchWithRetry(
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const sec = isSecHost(url);
+      // Harden fetch: rotate User-Agent on retry to reduce fingerprint-based blocking
+      const ua = sec ? SEC_USER_AGENT : USER_AGENTS[attempt % USER_AGENTS.length];
       const headers: Record<string, string> = {
-        "User-Agent": sec ? SEC_USER_AGENT : USER_AGENT,
+        "User-Agent": ua,
         Accept: opts.responseType === "arraybuffer"
           ? "application/pdf"
           : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate",
+        // Add Referer for non-SEC hosts (some WAFs check for it)
+        ...(sec ? {} : { "Referer": (() => { try { return new URL(url).origin + "/"; } catch { return ""; } })() }),
       };
       const isBinary = opts.responseType === "arraybuffer";
       const response = await axios.get(url, {
@@ -241,8 +254,10 @@ async function fetchWithRetry(
     } catch (error: any) {
       lastError = error;
       if (attempt < maxAttempts - 1) {
-        const delay = RETRY_DELAY_BASE * Math.pow(2, attempt);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        // Randomized jitter delay to avoid rate-limit fingerprinting
+        const baseDelay = RETRY_DELAY_BASE * Math.pow(2, attempt);
+        const jitter = Math.floor(Math.random() * 1500);
+        await new Promise((resolve) => setTimeout(resolve, baseDelay + jitter));
       }
     }
   }
