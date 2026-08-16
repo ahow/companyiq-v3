@@ -330,6 +330,7 @@ export async function getAcceptedDocuments(companyId: number) {
       gateReason: schema.documents.gateReason,
       fetchStatus: schema.documents.fetchStatus,
       fetchFailures: schema.documents.fetchFailures,
+      failureReason: schema.documents.failureReason,
       sourceType: schema.documents.sourceType,
       fetchedAt: schema.documents.fetchedAt,
       createdAt: schema.documents.createdAt,

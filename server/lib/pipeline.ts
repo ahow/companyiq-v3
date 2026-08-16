@@ -491,21 +491,20 @@ async function runFetchPhase(opts: {
     //   3. PDFs over HTML.
     // Low-value periodic filings (old 10-Qs) and generic product/marketing pages
     // therefore sink to the bottom and are the first to be dropped on budget.
-    // TOPIC-AGNOSTIC: build HIGH_VALUE_RE from framework.requiredDocTypes + filings base.
-    // The topic-specific document types are defined at framework-definition time.
+    // HIGH_VALUE_RE: UNION of filings base + legacy topic pattern + metadata-derived pattern.
+    // The legacy pattern is ALWAYS included (it contains proven terms like 'esg', 'tcfd',
+    // 'sustainability.?report' that the metadata path may not reproduce exactly).
+    // The metadata pattern AUGMENTS by splitting doc-type labels on '/' and ',' into
+    // individual alternates (e.g. "Climate/TCFD Report" → "climate|tcfd|report").
     const FILINGS_BASE = "10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy";
+    const LEGACY_TOPIC = "ai.?ethic|responsible.?ai|ai.?governance|csr.?report|sustainability.?report|esg|tcfd|climate.?report|transition.?plan|cdp|modern.?slavery|human.?rights";
     const frameworkDocTypesForRank = (framework as any).requiredDocTypes as string[] | null;
-    let topicDocPattern = "";
-    if (frameworkDocTypesForRank && frameworkDocTypesForRank.length > 0) {
-      // Convert doc type labels to regex fragments (e.g. "Climate/TCFD Report" → "climate|tcfd.?report")
-      topicDocPattern = frameworkDocTypesForRank
-        .map(dt => dt.toLowerCase().replace(/[\s/]+/g, ".?").replace(/[()]/g, ""))
-        .join("|");
-    } else {
-      // Legacy fallback
-      topicDocPattern = "ai.?ethic|responsible.?ai|ai.?governance|csr.?report|sustainability.?report|esg";
-    }
-    const HIGH_VALUE_RE = new RegExp(`${FILINGS_BASE}|${topicDocPattern}`, "i");
+    const metaTopic = (frameworkDocTypesForRank ?? [])
+      .flatMap(dt => dt.toLowerCase().split(/[\/,]+/))  // "Climate/TCFD Report" → ["climate", "tcfd report"]
+      .map(f => f.trim().replace(/\s+/g, ".?"))
+      .filter(f => f.length >= 3)
+      .join("|");
+    const HIGH_VALUE_RE = new RegExp(`${FILINGS_BASE}|${LEGACY_TOPIC}${metaTopic ? "|" + metaTopic : ""}`, "i");
     const LOW_VALUE_RE = /10-?q|transcript|glossary|generative-ai-vs|gen-ai-glossary|express\/web/i;
     const rank = (u: string): number => {
       const s = u.toLowerCase();
@@ -819,16 +818,26 @@ async function runFetchPhase(opts: {
     // P3b: Surface "found but unretrievable" — identify first-party docs that were
     // discovered (relevant to the topic) but died on fetch. This converts a false "No"
     // into an actionable "exists, unread" diagnostic.
+    // P4 fix: (a) use actual failureReason from the document record,
+    //         (b) exclude speculatively constructed probe-lane URLs (only include
+    //             documents from actual search results or pinned sources).
     const unretrievableFirstParty = deadDocs
       .filter(d => {
         const urlLower = (d.url || "").toLowerCase();
         // First-party: on the company's own domain
-        return companyDomain && urlLower.includes(companyDomain);
+        if (!companyDomain || !urlLower.includes(companyDomain)) return false;
+        // Exclude probe-lane speculative URLs (constructed from topic lexicon,
+        // never found by a search engine). These have predictable patterns:
+        // /modern-slavery, /forced-labor, /human-rights, /ai-governance, etc.
+        // that were speculatively appended to the domain.
+        const probePatterns = /\/(modern-slavery|forced-labor|human-rights|ai-governance|ai-ethics|responsible-ai|climate-report|sustainability-report|human-trafficking|supply-chain-transparency)$/i;
+        if (probePatterns.test(urlLower)) return false;
+        return true;
       })
       .map(d => ({
         url: d.url,
         title: d.title || null,
-        reason: (d as any).failureReason || "unknown",
+        reason: d.failureReason || "unknown",
       }))
       .slice(0, 10); // Cap at 10 for diagnostics readability
 
@@ -874,7 +883,8 @@ async function runFetchPhase(opts: {
       await db.execute(sql`
         INSERT INTO batch_corpus (batch_id, company_id, document_id)
         SELECT ${batchId}, ${companyId}, id FROM documents
-        WHERE company_id = ${companyId} AND fetch_status = 'ok'
+        WHERE company_id = ${companyId}
+          AND (fetch_status = 'ok' OR content_id IS NOT NULL)
         ON CONFLICT DO NOTHING
       `);
       console.log(`[${companyName}] CORPUS SNAPSHOT: frozen for batch ${batchId}`);

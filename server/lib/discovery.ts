@@ -803,33 +803,42 @@ interface DiscoveryCandidate {
   rank?: RankSignals;
 }
 
-function buildGeneralQueries(companyName: string, framework: Framework): string[] {
-  // If framework has explicit search templates, use them (highest priority)
+function buildGeneralQueries(companyName: string, framework: Framework, companyDomain?: string): string[] {
+  const currentYear = new Date().getFullYear();
+  const lastYear = currentYear - 1;
+  const allQueries: string[] = [];
+  const seen = new Set<string>();
+  const addQuery = (q: string) => {
+    const key = q.toLowerCase().trim();
+    if (!seen.has(key)) { seen.add(key); allQueries.push(q); }
+  };
+
+  // LAYER 1: searchTemplates (user-authored, framework-specific)
   if (framework.searchTemplates && framework.searchTemplates.length > 0) {
-    return framework.searchTemplates.map((t) => t.replace(/\{company\}/g, companyName));
+    for (const t of framework.searchTemplates) {
+      addQuery(t.replace(/\{company\}/g, companyName));
+    }
   }
 
-  // STEP 1: Generate the LEGACY topic-tuned queries (proven breadth).
-  // These are ALWAYS included to preserve the tuned discovery that works.
+  // LAYER 2: Legacy topic-tuned queries (proven breadth, always included)
   const topic = framework.topicDescription || framework.name;
   const frameworkName = (framework.name || "").toLowerCase();
   const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
   const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
-  const currentYear = new Date().getFullYear();
-  const lastYear = currentYear - 1;
+  const isSlaveryRelated = /slavery|human rights|forced labo/i.test(topic + " " + frameworkName);
 
-  let baseQueries: string[];
   if (isAIRelated) {
-    baseQueries = [
+    for (const q of [
       `"${companyName}" AI strategy`,
       `"${companyName}" artificial intelligence governance`,
       `"${companyName}" responsible AI`,
       `"${companyName}" AI policy`,
       `"${companyName}" AI annual report`,
       `"${companyName}" machine learning governance`,
-    ];
-  } else if (isClimateRelated) {
-    baseQueries = [
+    ]) addQuery(q);
+  }
+  if (isClimateRelated) {
+    for (const q of [
       `"${companyName}" sustainability report ${currentYear}`,
       `"${companyName}" climate report ${currentYear} OR ${lastYear}`,
       `"${companyName}" TCFD report ${currentYear} OR ${lastYear}`,
@@ -839,42 +848,45 @@ function buildGeneralQueries(companyName: string, framework: Framework): string[
       `"${companyName}" sustainability report`,
       `"${companyName}" TCFD report`,
       `"${companyName}" climate report filetype:pdf`,
-    ];
-  } else {
-    baseQueries = [
+    ]) addQuery(q);
+  }
+  if (isSlaveryRelated) {
+    for (const q of [
+      `"${companyName}" modern slavery statement ${currentYear}`,
+      `"${companyName}" modern slavery act statement`,
+      `"${companyName}" human rights report ${currentYear} OR ${lastYear}`,
+      `"${companyName}" supplier code of conduct`,
+      `"${companyName}" modern slavery statement filetype:pdf`,
+    ]) addQuery(q);
+  }
+  // Generic fallback if no topic matched
+  if (!isAIRelated && !isClimateRelated && !isSlaveryRelated) {
+    for (const q of [
       `"${companyName}" ${topic}`,
       `"${companyName}" annual report`,
       `"${companyName}" governance`,
       `"${companyName}" policy framework`,
       `"${companyName}" corporate responsibility report`,
       `"${companyName}" ESG report`,
-    ];
+    ]) addQuery(q);
   }
 
-  // STEP 2: ADDITIVE — append metadata-driven queries from requiredDocTypes.
-  // These AUGMENT the legacy queries, they do NOT replace them.
-  // This is the topic-agnostic layer: declared doc types get targeted queries on top.
+  // LAYER 3: ADDITIVE metadata-driven queries from requiredDocTypes.
+  // These AUGMENT the above layers. Deduplication via the seen set.
   const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
   if (requiredDocTypes && requiredDocTypes.length > 0) {
-    const companyDomain = (framework as any)._companyDomain || "";
+    const domain = companyDomain || "";
     for (const docType of requiredDocTypes.slice(0, 5)) {
-      // Skip doc types that are already well-covered by the legacy queries
-      const dtLower = docType.toLowerCase();
-      const alreadyCovered = baseQueries.some(q => q.toLowerCase().includes(dtLower.split("/")[0]));
-      if (alreadyCovered) continue;
-      // Targeted queries for this doc type
-      baseQueries.push(`"${companyName}" "${docType}" ${currentYear} OR ${lastYear}`);
-      baseQueries.push(`"${companyName}" ${docType} filetype:pdf`);
-      // Unquoted variant for broader matching
-      baseQueries.push(`${companyName} ${docType} ${currentYear}`);
-      // Site-specific query if company domain is known
-      if (companyDomain) {
-        baseQueries.push(`site:${companyDomain} ${docType}`);
+      addQuery(`"${companyName}" "${docType}" ${currentYear} OR ${lastYear}`);
+      addQuery(`"${companyName}" ${docType} filetype:pdf`);
+      addQuery(`${companyName} ${docType} ${currentYear}`);
+      if (domain) {
+        addQuery(`site:${domain} ${docType}`);
       }
     }
   }
 
-  return baseQueries;
+  return allQueries;
 }
 
 /**
@@ -2203,9 +2215,7 @@ export async function searchCompanyDocuments(opts: {
 
   // Lane 1: General search (with recency filter)
   console.log(`[${companyName}] Running general search lane`);
-  // Pass company domain to buildGeneralQueries for site: queries
-  (framework as any)._companyDomain = companyDomain || "";
-  const generalQueries = buildGeneralQueries(companyName, framework);
+  const generalQueries = buildGeneralQueries(companyName, framework, companyDomain || undefined);
   for (const query of generalQueries) {
     const results = await webSearch(query, { num: searchDepth, tbs: "qdr:y2" });
     for (const r of results) addCandidate(r, "general");
