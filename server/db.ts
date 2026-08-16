@@ -439,6 +439,8 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS off_peak_only BOOLEAN NOT NULL DEFAULT false`);
     // Score-only mode: skip fetch phase, score from stored corpus (reproducibility fix)
     await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS score_only BOOLEAN NOT NULL DEFAULT false`);
+    // Snapshot persistence: track whether the results snapshot was saved successfully
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS snapshot_saved BOOLEAN NOT NULL DEFAULT false`);
     // Dead-fetch diagnosis fix 1: record failure reason on documents
     await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
     await db.execute(sql`ALTER TABLE documents ALTER COLUMN failure_reason SET DEFAULT 'unspecified'`);

@@ -183,3 +183,25 @@ authRouter.post("/create-workspace", requireAuth, async (req: Request, res: Resp
     res.status(500).json({ error: error.message });
   }
 });
+
+// ─── Change Password ──────────────────────────────────────────────────────
+
+authRouter.post("/change-password", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.session.userId!;
+
+    const user = await storage.getUserById(userId);
+    if (!user || !(await storage.verifyPassword(user, currentPassword))) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    if (!newPassword || String(newPassword).length < 12) {
+      return res.status(400).json({ error: "New password must be at least 12 characters" });
+    }
+
+    await storage.updateUserPassword(user.id, String(newPassword));
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});

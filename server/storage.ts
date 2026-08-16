@@ -34,6 +34,12 @@ export async function verifyPassword(user: schema.User, password: string) {
   return bcrypt.compare(password, user.passwordHash);
 }
 
+/** Update a user's password (bcrypt cost 12). */
+export async function updateUserPassword(userId: number, newPassword: string) {
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  await db.update(schema.users).set({ passwordHash }).where(eq(schema.users.id, userId));
+}
+
 // ─── Workspace Operations ───────────────────────────────────────────────────
 
 export async function createWorkspace(name: string, ownerId: number) {
@@ -955,6 +961,32 @@ export async function completeBatchRun(batchId: number) {
 /** Set an arbitrary batch status (e.g. "pending_review", "running"). */
 export async function setBatchRunStatus(batchId: number, status: string) {
   await db.execute(sql`UPDATE batch_runs SET status = ${status} WHERE id = ${batchId}`);
+}
+
+/** Mark a batch's snapshot as successfully saved. */
+export async function markBatchSnapshotSaved(batchId: number) {
+  await db.execute(sql`UPDATE batch_runs SET snapshot_saved = TRUE WHERE id = ${batchId}`);
+}
+
+/** Mark a batch as needing a snapshot save (failed on first attempt). */
+export async function markBatchSnapshotPending(batchId: number) {
+  await db.execute(sql`UPDATE batch_runs SET snapshot_saved = FALSE WHERE id = ${batchId}`);
+}
+
+/** Find completed batches that never got their snapshot saved (for self-heal on startup). */
+export async function getCompletedBatchesMissingSnapshot(): Promise<Array<{ id: number; framework_id: number; workspace_id: number; list_id: number | null }>> {
+  const rows = await db.execute(sql`
+    SELECT id, framework_id, workspace_id, list_id FROM batch_runs
+    WHERE status = 'completed' AND snapshot_saved = FALSE
+      AND total_jobs > 1
+    ORDER BY id DESC LIMIT 20
+  `);
+  return (rows.rows as any[]).map(r => ({
+    id: Number(r.id),
+    framework_id: Number(r.framework_id),
+    workspace_id: Number(r.workspace_id),
+    list_id: r.list_id ? Number(r.list_id) : null,
+  }));
 }
 
 /** Return the terminal-failed jobs (company + error) for a batch. */

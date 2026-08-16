@@ -335,6 +335,26 @@ initializeDatabase().then(async () => {
     await cleanupOnStartup();
   }
 
+  // Self-heal: recover any completed batches that lost their snapshot
+  // (e.g. due to a redeploy/crash during the old setTimeout window).
+  try {
+    const storage = await import("./storage.js");
+    const { saveBatchSnapshot } = await import("./worker.js");
+    const missing = await storage.getCompletedBatchesMissingSnapshot();
+    for (const b of missing) {
+      console.warn("[Recovery] Batch " + b.id + " completed without a snapshot — saving now");
+      try {
+        await saveBatchSnapshot(b.id, b.framework_id, b.workspace_id, b.list_id ?? undefined);
+        await storage.markBatchSnapshotSaved(b.id);
+      } catch (e: any) {
+        console.error("[Recovery] Failed to recover snapshot for batch " + b.id + ": " + e.message);
+      }
+    }
+    if (missing.length > 0) console.log(`[Recovery] Processed ${missing.length} missing snapshots`);
+  } catch (e: any) {
+    console.warn("[Recovery] Snapshot self-heal failed (non-fatal): " + e.message);
+  }
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Server] CompanyIQ v3 running on port ${PORT}`);
     console.log(`[Server] Environment: ${process.env.NODE_ENV || "development"}`);

@@ -361,21 +361,25 @@ async function maybeHandleBatchCompletion(
       return;
     }
 
-    setTimeout(async () => {
-      try {
-        await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
-      } catch (err: any) {
-        console.error("[Worker] Failed to save results for batch " + batchId + ": " + err.message);
-      }
-      // Run anomaly detection after save (non-blocking)
-      try {
-        const jobRows = await storage.getJobsForBatch(batchId);
-        const companyIds = jobRows.filter((j: any) => j.status === "completed").map((j: any) => j.companyId || j.company_id);
-        await detectScoreAnomalies({ batchId, workspaceId, frameworkId, companyIds });
-      } catch (err: any) {
-        console.warn("[Worker] Anomaly detection failed for batch " + batchId + ": " + err.message);
-      }
-    }, 60000);
+    // Snapshot persistence fix: save synchronously (no setTimeout).
+    // The 60s delay was a reliability hazard — a redeploy/crash in that window
+    // silently lost the snapshot with no retry or persistence.
+    try {
+      await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
+      await storage.markBatchSnapshotSaved(batchId);
+    } catch (err: any) {
+      console.error("[Worker] snapshot save failed for batch " + batchId + ": " + err.message);
+      // Mark as pending so the self-heal on startup can retry
+      try { await storage.markBatchSnapshotPending(batchId); } catch { /* best effort */ }
+    }
+    // Run anomaly detection after save
+    try {
+      const jobRows = await storage.getJobsForBatch(batchId);
+      const companyIds = jobRows.filter((j: any) => j.status === "completed").map((j: any) => j.companyId || j.company_id);
+      await detectScoreAnomalies({ batchId, workspaceId, frameworkId, companyIds });
+    } catch (err: any) {
+      console.warn("[Worker] Anomaly detection failed for batch " + batchId + ": " + err.message);
+    }
   } finally {
     finalizingBatches.delete(batchId);
   }
