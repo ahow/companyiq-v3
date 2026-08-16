@@ -338,6 +338,43 @@ export async function getAcceptedDocuments(companyId: number) {
     .where(and(eq(schema.documents.companyId, companyId), eq(schema.documents.gateVerdict, "accept")));
 }
 
+/**
+ * Document Pool: returns ALL ever-successfully-fetched documents for a company,
+ * regardless of current fetch_status. This includes docs that were fetched in
+ * prior runs (even under different frameworks) and may have been reset since.
+ * The pool is safe because BM25 + topic-term signal self-filter off-topic docs.
+ */
+export async function getAllFetchedDocumentsForCompany(companyId: number) {
+  // Return all documents that have content (either via content_id or inline),
+  // including those currently marked 'ok' AND those that have content_id set
+  // (meaning they were successfully fetched at some point, even if later reset).
+  const rows = await db.execute(sql`
+    SELECT d.id, d.company_id, d.url, d.title, d.type, d.gate_verdict,
+           d.gate_reason, d.fetch_status, d.fetch_failures, d.fetched_at, d.created_at,
+           COALESCE(dc.content, d.content) AS content
+    FROM documents d
+    LEFT JOIN document_content dc ON dc.id = d.content_id
+    WHERE d.company_id = ${companyId}
+      AND (d.fetch_status = 'ok' OR d.content_id IS NOT NULL)
+      AND COALESCE(dc.content_length, length(d.content)) > 50
+    ORDER BY d.id
+  `);
+  return rows.rows as Array<{
+    id: number;
+    company_id: number;
+    url: string;
+    title: string | null;
+    type: string;
+    gate_verdict: string | null;
+    gate_reason: string | null;
+    fetch_status: string;
+    fetch_failures: number;
+    fetched_at: Date | null;
+    created_at: Date;
+    content: string | null;
+  }>;
+}
+
 export async function getFetchedDocuments(companyId: number) {
   // JOIN with document_content to get deduplicated content
   // Falls back to inline content column for rows not yet migrated

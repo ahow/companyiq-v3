@@ -816,6 +816,22 @@ async function runFetchPhase(opts: {
     try { corpusChars = await storage.getCorpusCharCount(companyId); } catch { /* non-fatal */ }
     const corpusThin = corpusChars < AUTO_REEXAM_MAX_CHARS;
     const lowEvidence = fetchWeakness && corpusThin;
+    // P3b: Surface "found but unretrievable" — identify first-party docs that were
+    // discovered (relevant to the topic) but died on fetch. This converts a false "No"
+    // into an actionable "exists, unread" diagnostic.
+    const unretrievableFirstParty = deadDocs
+      .filter(d => {
+        const urlLower = (d.url || "").toLowerCase();
+        // First-party: on the company's own domain
+        return companyDomain && urlLower.includes(companyDomain);
+      })
+      .map(d => ({
+        url: d.url,
+        title: d.title || null,
+        reason: (d as any).failureReason || "unknown",
+      }))
+      .slice(0, 10); // Cap at 10 for diagnostics readability
+
     const existingDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
     await storage.updateCompany(companyId, workspaceId, {
       discoveryDiagnostics: {
@@ -831,9 +847,14 @@ async function runFetchPhase(opts: {
           fetchWeakness,
           lowEvidence,
           budgetExceeded: fetchBudgetExceeded,
+          // P3b: "found but unretrievable" — first-party docs that died on fetch
+          unretrievableFirstParty: unretrievableFirstParty.length > 0 ? unretrievableFirstParty : undefined,
         },
       } as any,
     });
+    if (unretrievableFirstParty.length > 0) {
+      console.warn(`[${companyName}] FOUND-BUT-UNRETRIEVABLE: ${unretrievableFirstParty.length} first-party docs discovered but failed to fetch: ${unretrievableFirstParty.map(d => d.url).join(", ")}`);
+    }
     if (lowEvidence) {
       console.warn(`[${companyName}] LOW EVIDENCE: only ${totalFetched}/${totalDiscovered} docs fetched (ratio ${Math.round(fetchRatio * 100)}%${deadTier1 ? ', a primary filing failed to fetch' : ''}), thin corpus (${corpusChars} chars) — score may understate true disclosure`);
     } else if (fetchWeakness && !corpusThin) {
@@ -893,8 +914,16 @@ async function runAnalyzePhase(opts: {
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "analyzing" });
 
   // Load documents: prefer batch_corpus snapshot (deterministic) over live documents table.
+  // DOCUMENT POOL (P3a): At analyze time, retrieve from the UNION of:
+  //   (i) all fetch_status='ok' documents ever collected for the company, AND
+  //   (ii) this run's targeted discovery.
+  // This is safe because the tool is recall-limited, precision-robust: per-measure
+  // BM25 + topic-term signal self-filter off-topic documents, and no false positives
+  // were observed even at 70-80 docs. The batch_corpus snapshot still freezes the
+  // exact set used so re-score stays byte-identical.
+  //
   // When a batch_corpus snapshot exists for this batch+company, use it with stable ORDER BY d.id
-  // so the evidence pack is identical every time. Falls back to live table if no snapshot.
+  // so the evidence pack is identical every time. Falls back to the full pool if no snapshot.
   let fetchedDocs: Awaited<ReturnType<typeof storage.getFetchedDocuments>>;
   if (batchId) {
     try {
@@ -914,15 +943,17 @@ async function runAnalyzePhase(opts: {
         fetchedDocs = snapshotRows.rows as any;
         console.log(`[${companyName}] Using batch_corpus snapshot (${fetchedDocs.length} docs, batch ${batchId})`);
       } else {
-        // No snapshot yet (e.g. scoreOnly on a batch that predates snapshots)
-        fetchedDocs = await storage.getFetchedDocuments(companyId);
+        // No snapshot — use the full document pool (all ever-fetched docs for this company)
+        fetchedDocs = await storage.getAllFetchedDocumentsForCompany(companyId);
+        console.log(`[${companyName}] Using full document pool (${fetchedDocs.length} docs, no snapshot)`);
       }
     } catch (snapErr: any) {
-      console.warn(`[${companyName}] batch_corpus read failed, falling back to live: ${snapErr.message}`);
-      fetchedDocs = await storage.getFetchedDocuments(companyId);
+      console.warn(`[${companyName}] batch_corpus read failed, falling back to pool: ${snapErr.message}`);
+      fetchedDocs = await storage.getAllFetchedDocumentsForCompany(companyId);
     }
   } else {
-    fetchedDocs = await storage.getFetchedDocuments(companyId);
+    // No batch context — use the full document pool
+    fetchedDocs = await storage.getAllFetchedDocumentsForCompany(companyId);
   }
 
   if (fetchedDocs.length === 0) {
