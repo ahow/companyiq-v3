@@ -232,6 +232,7 @@ async function fetchWithRetry(
           ? "application/pdf"
           : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "en-GB,en;q=0.9",
         // Add Referer for non-SEC hosts (some WAFs check for it)
         ...(sec ? {} : { "Referer": (() => { try { return new URL(url).origin + "/"; } catch { return ""; } })() }),
       };
@@ -455,7 +456,9 @@ const BROWSER_FETCH_TIMEOUT = 30000;
 // Chromium contexts concurrently exhausts the container's process/fork and
 // memory budget ("fork: Resource temporarily unavailable"), which previously
 // cascaded into an unhandled rejection that crashed the whole process.
-const MAX_CONCURRENT_BROWSER = parseInt(process.env.MAX_CONCURRENT_BROWSER || "2", 10);
+// Instruction 12: Reduced from 2 to 1 to prevent Chromium fork storms.
+// With 8 worker replicas, even 1 per worker = 8 concurrent browser processes cluster-wide.
+const MAX_CONCURRENT_BROWSER = parseInt(process.env.MAX_CONCURRENT_BROWSER || "1", 10);
 let activeBrowserFetches = 0;
 const browserWaiters: Array<() => void> = [];
 

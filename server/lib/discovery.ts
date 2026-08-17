@@ -2285,14 +2285,28 @@ async function searchCompanyDocumentsInner(opts: {
     console.warn(`[${companyName}] Discovery topic lexicon failed: ${lexErr?.message}`);
   }
 
+  // Instruction 11a: Auto-upgrade http:// to https:// for first-party URLs
+  function normaliseUrl(url: string): string {
+    try {
+      const u = new URL(url);
+      if (u.protocol === "http:" && companyDomain &&
+          (u.hostname === companyDomain || u.hostname.endsWith("." + companyDomain))) {
+        u.protocol = "https:";
+      }
+      return u.toString();
+    } catch { return url; }
+  }
+
   function addCandidate(result: SearchResult, lane: string) {
-    if (seenUrls.has(result.link)) return;
+    const normUrl = normaliseUrl(result.link);
+    if (seenUrls.has(normUrl)) return;
     // Hard deny-list filter: block noise URLs before they enter the candidate pool
-    if (isUrlDenied(result.link.toLowerCase())) {
+    if (isUrlDenied(normUrl.toLowerCase())) {
       laneCounts["denied"] = (laneCounts["denied"] || 0) + 1;
       return;
     }
-    seenUrls.add(result.link);
+    seenUrls.add(normUrl);
+    result.link = normUrl;
     const priority = calculatePriority(result.link, result.title, companyDomain || null, framework, topicPhrases);
     allCandidates.push({
       url: result.link,

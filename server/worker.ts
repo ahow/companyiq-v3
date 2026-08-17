@@ -211,8 +211,9 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
       await storage.completeJob(jobId);
       console.log("[Worker] Job " + jobId + " completed successfully (attempt " + currentAttempt + ")");
 
-      // Instruction 3+8: Zero-score and below-prior-best diagnostics — log detailed
-      // fetch/discovery info for any company that scores 0 OR below its prior best.
+      // Instruction 13: Multi-line diagnostics + DB dual-write for zero-score and
+      // below-prior-best companies. Split into short prefixed lines so Railway's
+      // log viewer doesn't truncate/filter the single JSON blob.
       try {
         const companyScores = await storage.getMeasureScores(companyId, frameworkId);
         const totalScore = companyScores.reduce((sum: number, s: any) => sum + (s.score || 0), 0);
@@ -233,21 +234,35 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
             deadByReason[reason] = (deadByReason[reason] || 0) + 1;
           }
           const diag = (company as any).discoveryDiagnostics || {};
-          console.log(JSON.stringify({
-            tag: isBelowPriorBest ? "below-prior-best-diag" : "zero-score-diag",
+          const tag = isBelowPriorBest ? "below-prior-best-diag" : "zero-score-diag";
+          const diagData = {
+            tag,
             companyName: company.name,
             totalScore,
             priorBestThreshold: threshold || null,
             frameworkId,
             documentsDiscovered: allDocs.length,
             documentsFetched: okDocs.length,
-            fetchRatio: okDocs.length / Math.max(1, allDocs.length),
+            fetchRatio: +(okDocs.length / Math.max(1, allDocs.length)).toFixed(2),
             pinnedDocumentsAttempted: pinnedDocs.length,
             pinnedDocumentsFetchedOk: pinnedOk,
             hasRequiredDataDoc: !(diag.corpusValidityWarning),
             corpusValidityWarning: diag.corpusValidityWarning || null,
             deadByReason,
-          }));
+          };
+          // Multi-line prefixed output (Railway-friendly)
+          const prefix = `[${tag}] ${company.name}`;
+          console.log(`${prefix} score=${totalScore} fw=${frameworkId} docs=${allDocs.length} fetched=${okDocs.length} ratio=${diagData.fetchRatio}`);
+          console.log(`${prefix} pinned=${pinnedDocs.length} pinnedOk=${pinnedOk} hasDataDoc=${diagData.hasRequiredDataDoc} warning=${diagData.corpusValidityWarning || "none"}`);
+          console.log(`${prefix} deadByReason=${JSON.stringify(deadByReason)}`);
+          // DB dual-write: persist to discoveryDiagnostics so it's accessible via API
+          try {
+            const existingDiag = (company as any).discoveryDiagnostics || {};
+            existingDiag.lastZeroScoreDiag = diagData;
+            await storage.updateCompany(companyId, workspaceId, { discoveryDiagnostics: existingDiag } as any);
+          } catch (dbErr: any) {
+            console.warn(`${prefix} DB dual-write failed: ${dbErr.message}`);
+          }
         }
       } catch (diagErr: any) {
         console.warn("[Worker] Zero-score diagnostics failed: " + diagErr.message);
