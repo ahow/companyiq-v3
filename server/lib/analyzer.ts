@@ -1299,6 +1299,7 @@ export async function analyzeCompanyMeasures(opts: {
           topicDescription: framework.topicDescription || framework.name,
           settings,
           temporalWarning: tw,
+          framework,
         });
       } else {
         // Single pass
@@ -1311,6 +1312,7 @@ export async function analyzeCompanyMeasures(opts: {
           provider: scoringProvider,
           temporalWarning: tw,
           scoringMode: settings.scoringMode,
+          framework,
         });
       }
 
@@ -1419,6 +1421,7 @@ export async function analyzeCompanyMeasures(opts: {
                   topicDescription: framework.topicDescription || framework.name,
                   settings,
                   temporalWarning: tw,
+                  framework,
                 });
               } else {
                 deepResult = await scoreSingleMeasure({
@@ -1430,6 +1433,7 @@ export async function analyzeCompanyMeasures(opts: {
                   provider: scoringProvider,
                   temporalWarning: tw,
                   scoringMode: settings.scoringMode,
+                  framework,
                 });
               }
               // Verify provenance of any quotes against the deep evidence.
@@ -1600,6 +1604,7 @@ async function scoreSingleMeasure(opts: {
   provider: string;
   temporalWarning?: string | null;
   scoringMode?: string;
+  framework?: Framework;
 }): Promise<MeasureResult> {
   const { companyName, measure, scoringMode } = opts;
   const usePartial = scoringMode === "partial";
@@ -1667,14 +1672,15 @@ async function scoreSingleMeasurePass(opts: {
   provider: string;
   temporalWarning?: string | null;
   scoringMode?: string;
+  framework?: Framework;
 }): Promise<MeasureResult> {
-  const { companyName, measure, evidenceText, terminology, topicDescription, provider, temporalWarning, scoringMode } = opts;
+  const { companyName, measure, evidenceText, terminology, topicDescription, provider, temporalWarning, scoringMode, framework } = opts;
 
   // Choose prompt based on scoring mode
   const usePartial = scoringMode === "partial";
   const { system, prompt } = usePartial
-    ? buildPartialScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning })
-    : buildBinaryScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning });
+    ? buildPartialScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning, framework })
+    : buildBinaryScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning, framework });
 
   try {
     const { text, provider: gradedBy } = await completeScoring(provider, {
@@ -1751,8 +1757,9 @@ async function scoreWithEnsemble(opts: {
   topicDescription: string;
   settings: AnalysisSettings;
   temporalWarning?: string | null;
+  framework?: Framework;
 }): Promise<MeasureResult> {
-  const { companyName, measure, evidenceText, terminology, topicDescription, settings, temporalWarning } = opts;
+  const { companyName, measure, evidenceText, terminology, topicDescription, settings, temporalWarning, framework } = opts;
 
   const providers = [settings.pipelineLlm1, settings.pipelineLlm2, settings.pipelineLlm3];
   const iterations = Math.min(settings.ensembleIterations, providers.length);
@@ -1770,6 +1777,7 @@ async function scoreWithEnsemble(opts: {
       provider,
       temporalWarning,
       scoringMode: settings.scoringMode,
+      framework,
     });
     results.push(result);
   }
