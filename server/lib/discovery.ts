@@ -460,23 +460,29 @@ export interface CoverageMetric {
   hasProxyOrDEF14A: boolean;
   hasInvestorPresentation: boolean;
   hasGovernancePage: boolean;
-  hasAIPolicy: boolean;
+  /** Framework-agnostic: which requiredDocTypes were found in the corpus */
+  requiredDocsFound: Record<string, boolean>;
   coverageLevel: "full" | "adequate" | "low" | "minimal";
   missingTier1Types: string[];
 }
 
-export function computeCoverageMetric(documents: DiscoveryCandidate[]): CoverageMetric {
+export function computeCoverageMetric(
+  documents: DiscoveryCandidate[],
+  frameworkSignals?: { topicSlugs?: string[]; requiredDocSlugs?: string[]; requiredDocTypes?: string[] },
+): CoverageMetric {
   let tier1Count = 0, tier2Count = 0, tier3Count = 0, tier4Count = 0;
   let has10KOrAnnualReport = false;
   let hasProxyOrDEF14A = false;
   let hasInvestorPresentation = false;
   let hasGovernancePage = false;
-  let hasAIPolicy = false;
+  const requiredDocsFound: Record<string, boolean> = {};
+  const requiredDocTypes = frameworkSignals?.requiredDocTypes || [];
 
   for (const doc of documents) {
-    const tier = classifyDocumentTier(doc.url, doc.title);
+    const tier = classifyDocumentTier(doc.url, doc.title, frameworkSignals);
     const urlLower = doc.url.toLowerCase();
     const titleLower = doc.title.toLowerCase();
+    const combined = urlLower + " " + titleLower;
 
     switch (tier) {
       case 1: tier1Count++; break;
@@ -485,21 +491,28 @@ export function computeCoverageMetric(documents: DiscoveryCandidate[]): Coverage
       case 4: tier4Count++; break;
     }
 
-    // Specific type detection
-    if (/10-?k|20-?f|annual.?report|integrated.?report/i.test(urlLower + " " + titleLower)) {
+    // Universal type detection
+    if (/10-?k|20-?f|annual.?report|integrated.?report/i.test(combined)) {
       has10KOrAnnualReport = true;
     }
-    if (/def.?14a|proxy.?statement|agm.?circular/i.test(urlLower + " " + titleLower)) {
+    if (/def.?14a|proxy.?statement|agm.?circular/i.test(combined)) {
       hasProxyOrDEF14A = true;
     }
-    if (/investor.?presentation|investor.?day|capital.?markets/i.test(urlLower + " " + titleLower)) {
+    if (/investor.?presentation|investor.?day|capital.?markets/i.test(combined)) {
       hasInvestorPresentation = true;
     }
-    if (/governance|board.?of.?directors/i.test(urlLower + " " + titleLower)) {
+    if (/governance|board.?of.?directors/i.test(combined)) {
       hasGovernancePage = true;
     }
-    if (/responsible.?ai|ai.?policy|ai.?ethics|ai.?principles/i.test(urlLower + " " + titleLower)) {
-      hasAIPolicy = true;
+    // Framework-agnostic: check each requiredDocType
+    for (const docType of requiredDocTypes) {
+      if (requiredDocsFound[docType]) continue;
+      const words = docType.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 3);
+      if (words.length === 0) continue;
+      const matched = words.filter((w: string) => combined.includes(w)).length;
+      if (matched >= Math.min(2, words.length)) {
+        requiredDocsFound[docType] = true;
+      }
     }
   }
 
@@ -522,7 +535,7 @@ export function computeCoverageMetric(documents: DiscoveryCandidate[]): Coverage
   return {
     tier1Count, tier2Count, tier3Count, tier4Count,
     has10KOrAnnualReport, hasProxyOrDEF14A, hasInvestorPresentation,
-    hasGovernancePage, hasAIPolicy,
+    hasGovernancePage, requiredDocsFound,
     coverageLevel, missingTier1Types,
   };
 }
@@ -1395,7 +1408,7 @@ async function buildAShareFilingQueries(
   const topicPhraseCJK = cjkPhrase || (topicPhrases && topicPhrases[0]);
   if (!topicPhraseCJK) {
     console.warn(`[${companyName}] CJK query lane skipped: no topic phrases available`);
-    return queries;
+    return { queries, code, chineseName };
   }
   // Lead with the board-code queries: the 6-digit code is resolved reliably and
   // `site:cninfo.com.cn <code> 年度报告` returns the exact issuer's reports.
@@ -2694,6 +2707,8 @@ async function searchCompanyDocumentsInner(opts: {
     companyDomain: effectiveDomain || companyDomain || null,
     topicPhrases,
     nativeNonLatinMarket,
+    frameworkRegistries: (framework as any).authoritativeRegistries || undefined,
+    frameworkFilingTypes: (framework as any).authoritativeFilingTypes || undefined,
   });
 
   // §4: candidate-pool fingerprint over the FULL gated set BEFORE the cap, so
@@ -2738,7 +2753,12 @@ async function searchCompanyDocumentsInner(opts: {
   const finalDocs = rankedKept.slice(0, MAX_DOCS_RETURNED).map((r) => r.doc);
 
   // Compute coverage metric
-  const coverage = computeCoverageMetric(finalDocs);
+  const coverageSignals = {
+    topicSlugs: topicPhrases.map((p: string) => p.toLowerCase().replace(/\s+/g, "-")),
+    requiredDocSlugs: ((framework.requiredDocTypes as string[] | null) || []).map((s: string) => s.toLowerCase().replace(/\s+/g, "-")),
+    requiredDocTypes: (framework.requiredDocTypes as string[] | null) || [],
+  };
+  const coverage = computeCoverageMetric(finalDocs, coverageSignals);
   console.log(`[${companyName}] Coverage: ${coverage.coverageLevel} (Tier1: ${coverage.tier1Count}, Tier2: ${coverage.tier2Count}, Tier3: ${coverage.tier3Count})`);
   console.log(`[${companyName}] Ranker: distinctTop20=${rankerDiagnostics.distinctPrioritiesInTop20} largestTie=${rankerDiagnostics.largestTieCountPreUrlHash} urlHashFrac=${rankerDiagnostics.urlhashDecisionFraction.toFixed(3)}`);
   if (coverage.missingTier1Types.length > 0) {

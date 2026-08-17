@@ -298,7 +298,8 @@ function pdfVsLandingSignal(url: string, title: string, isCompanyDomain: boolean
   // Boost: company-domain PDFs are the actual reports
   if (isCompanyDomain && /\.pdf(\?|$)/i.test(u)) score += 8;
   // Penalise: section landing pages (navigation, not content)
-  if (/\/(sustainability|esg|responsibility|ir|reports?)\/?$/i.test(u)) score -= 6;
+  // Universal: any topic can have an IR/reports landing page
+  if (/\/(ir|reports?)\/?$/i.test(u)) score -= 6;
   // Penalise: report library / download centre pages (index, not document)
   if (/reports?.and.presentations|report.library|download.centre|document.library/i.test(t) && !/\.pdf/i.test(u)) score -= 4;
   return score;
@@ -391,14 +392,22 @@ function yearKey(s: string): string {
 }
 
 /** Coarse form key for collapse grouping (10-K / proxy / annual / sustainability / other). */
-function formKey(s: string): string {
+function formKey(
+  s: string,
+  frameworkFilingTypes?: Array<{ pattern: string; weight: number }>,
+): string {
   if (/10-?k\b|10k\b/.test(s)) return "10-K";
   if (/20-?f\b/.test(s)) return "20-F";
   if (/40-?f\b/.test(s)) return "40-F";
   if (/def.?14a|proxy/.test(s)) return "proxy";
   if (/annual.?report|integrated.?report|年度报告|年报/.test(s)) return "annual";
-  if (/sustainab|esg\b|csr\b/.test(s)) return "sustainability";
-  if (/\bcdp\b|tcfd/.test(s)) return "cdp";
+  // Framework-declared filing types for near-duplicate grouping
+  if (frameworkFilingTypes) {
+    for (const ft of frameworkFilingTypes) {
+      const rx = new RegExp(ft.pattern, "i");
+      if (rx.test(s)) return ft.pattern.slice(0, 20);
+    }
+  }
   return "other";
 }
 
@@ -431,7 +440,8 @@ export function collapseNearDuplicates<T extends RankableDoc>(
   for (const doc of docs) {
     const signals = computeRankSignals(doc, typeof opts === "function" ? opts(doc) : opts);
     const s = (doc.url + " " + (doc.title || "")).toLowerCase();
-    const form = formKey(s);
+    const resolvedOpts = typeof opts === "function" ? opts(doc) : opts;
+    const form = formKey(s, resolvedOpts.frameworkFilingTypes);
     const yr = yearKey(s);
     const stem = normTitleStem(doc.title || "");
     if (form === "other" || yr === "noyear" || stem.length < 4) {

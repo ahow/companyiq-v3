@@ -626,8 +626,9 @@ async function summarizeDocuments(opts: {
   documentUrls: string[];
   documentTitles?: string[];
   topicDescription: string;
+  framework: Framework;
 }): Promise<{ text: string; model: string; reservedAnnualUrl?: string }> {
-  const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription } = opts;
+  const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription, framework } = opts;
 
   // Check summary cache. v3g: salt the cache key so the OLD header-lossy LLM
   // summaries (which dropped document URLs) are never reused; only the new
@@ -709,7 +710,12 @@ async function summarizeDocuments(opts: {
     const cls = classifyDoc(url, title);
     // Keyword density is CAPPED so it only breaks ties WITHIN a class, never
     // overrides the structural class priority above.
-    const score = CLASS_BOOST[cls] + Math.min(density, 800) + (/ai|ethics|responsible|governance|policy/i.test(url) ? 200 : 0);
+    // Defect 3 fix: derive URL slug bonus from framework.requiredDocTypes (not hardcoded AI terms)
+    const requiredDocSlugs = ((framework as any).requiredDocTypes as string[] | null) || [];
+    const slugWords = requiredDocSlugs.flatMap((s: string) => s.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 3));
+    const slugRe = slugWords.length > 0 ? new RegExp(slugWords.join("|"), "i") : null;
+    const slugBonus = slugRe && slugRe.test(url) ? 200 : 0;
+    const score = CLASS_BOOST[cls] + Math.min(density, 800) + slugBonus;
     return { text, url, score, idx, cls };
   });
 
@@ -1122,6 +1128,7 @@ export async function analyzeCompanyMeasures(opts: {
       documentUrls,
       documentTitles,
       topicDescription: framework.topicDescription || framework.name,
+      framework,
     });
     combinedText = result.text;
     summarizerModel = result.model;
