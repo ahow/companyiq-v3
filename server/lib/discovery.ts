@@ -1978,7 +1978,7 @@ ACCEPT ONLY:
 - The document must be plausibly relevant to the ANALYSIS TOPIC described below — not just any page about the company
 
 REJECT:
-- Documents about a DIFFERENT company, even if in the same industry (e.g., if searching for BNP Paribas, reject documents about DBS Bank, AXA, Santander, etc.)
+- Documents about a DIFFERENT company, even if in the same industry (e.g., if searching for a specific bank, reject documents about a different bank or a different financial services company)
 - Generic industry articles that mention multiple companies without focusing on the target company
 - Documents about a DIFFERENT entity that happens to share a similar name or acronym
 - News articles, marketing content, job postings, product pages
@@ -1988,7 +1988,7 @@ REJECT:
 - Pages that are about the company but CLEARLY UNRELATED to the analysis topic (e.g., product catalogs, careers pages, investor relations boilerplate with no topic content)
 
 CRITICAL RULES:
-1. If the URL domain belongs to ANOTHER company (e.g., dbs.com, axa-im.ch when searching for BNP Paribas), REJECT it unless it explicitly discusses the target company
+1. If the URL domain belongs to ANOTHER company's corporate site, REJECT it unless it explicitly discusses the target company
 2. If the title mentions another company name prominently, REJECT it
 3. When in doubt, REJECT rather than accept — false positives are more harmful than false negatives
 4. Pay close attention to the company identity (sector, country, domain) to distinguish from similarly-named entities`,
@@ -2094,6 +2094,7 @@ export async function searchCompanyDocuments(opts: {
   trustedSources: TrustedSource[];
   searchDepth?: number; // Number of results per query (default: 10)
   queryVariants?: number; // Number of LLM-generated query variants (default: 3)
+  peerCompanyNames?: string[]; // Fix C: workspace-derived peer list for anti-contamination
 }): Promise<DiscoveryResult> {
   // Wrap the entire discovery in a hard timeout
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -2115,6 +2116,7 @@ async function searchCompanyDocumentsInner(opts: {
   trustedSources: TrustedSource[];
   searchDepth?: number;
   queryVariants?: number;
+  peerCompanyNames?: string[];
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
   const localeProfile = resolveLocaleProfile(opts.country);
@@ -2517,14 +2519,9 @@ async function searchCompanyDocumentsInner(opts: {
   // cheaply before the LLM gate runs.
   const companyNameLower = companyName.toLowerCase();
   const companyNameWords = companyNameLower.split(/[\s,\.\-&]+/).filter(w => w.length >= 3 && !['inc', 'ltd', 'plc', 'corp', 'group', 'the', 'and', 'company', 'limited', 'corporation', 'holdings', 'international'].includes(w));
-  const KNOWN_OTHER_COMPANIES = [
-    "blackrock", "vanguard", "state street", "fidelity", "jpmorgan", "goldman sachs",
-    "morgan stanley", "citigroup", "bank of america", "wells fargo", "hsbc", "barclays",
-    "deutsche bank", "ubs", "credit suisse", "bnp paribas", "societe generale",
-    "atlassian", "salesforce", "microsoft", "google", "amazon", "meta", "apple",
-    "nvidia", "tesla", "oracle", "ibm", "intel", "cisco", "adobe", "netflix",
-    "glaukos", "cirrus logic", "american integrity",
-  ];
+  // Fix C: Use workspace-derived peer company names for anti-contamination filtering.
+  // No hardcoded company names — the list is self-maintaining from the workspace universe.
+  const KNOWN_OTHER_COMPANIES = (opts.peerCompanyNames || []);
 
   // Entity-specific exclusions: distinct issuers that share an ambiguous token
   // with the target (e.g. "360" → Qifu / 360 DigiTech / 360 Finance). These must

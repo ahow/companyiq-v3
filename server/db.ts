@@ -641,6 +641,27 @@ export async function initializeDatabase(): Promise<void> {
              OR name ~* '\\bai\\b|artificial.?intelligence')
     `);
 
+    // Fix B: Add prior_best_score column for below-prior-best diagnostics
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS prior_best_score INTEGER`);
+
+    // Backfill multiDocumentQueryTemplates for modern slavery / human rights frameworks
+    await db.execute(sql`
+      UPDATE frameworks SET multi_document_query_templates = ${JSON.stringify([
+        "\"{company}\" supply chain audit OR supplier audit",
+        "\"{company}\" human rights due diligence",
+        "\"{company}\" ethical trading initiative",
+        "\"{company}\" supplier code of conduct",
+        "\"{company}\" living wage commitment",
+        "\"{company}\" grievance mechanism OR whistleblowing",
+        "\"{company}\" responsible sourcing framework",
+        "\"{company}\" child labour policy OR forced labour policy"
+      ])}::jsonb
+      WHERE multi_document_query_templates IS NULL
+        AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
+             OR topic_description ILIKE '%forced labour%' OR topic_description ILIKE '%forced labor%'
+             OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
+    `);
+
     // NOTE: Company-specific pins and domain fixes have been removed from core code
     // (Instruction 21 — no company names in server/**/*.ts). These are now managed
     // via the PATCH /api/companies/:id endpoint at runtime.

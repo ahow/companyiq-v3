@@ -211,6 +211,21 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
       await storage.completeJob(jobId);
       console.log("[Worker] Job " + jobId + " completed successfully (attempt " + currentAttempt + ")");
 
+      // Fix B: Update priorBestScore if this run's total exceeds the stored value.
+      // This enables the below-prior-best diagnostics path (Instruction 8).
+      try {
+        const scores = await storage.getMeasureScores(companyId, frameworkId);
+        const runTotal = scores.reduce((sum: number, s: any) => sum + (s.score || 0), 0);
+        const existing = (company as any).priorBestScore || 0;
+        if (runTotal > existing) {
+          await storage.updateCompany(companyId, workspaceId, {
+            priorBestScore: runTotal,
+          } as any);
+        }
+      } catch (e: any) {
+        console.warn(`[${company.name}] priorBestScore update failed: ${e.message}`);
+      }
+
       // Instruction 13: Multi-line diagnostics + DB dual-write for zero-score and
       // below-prior-best companies. Split into short prefixed lines so Railway's
       // log viewer doesn't truncate/filter the single JSON blob.

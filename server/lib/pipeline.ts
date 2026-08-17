@@ -140,6 +140,13 @@ async function runFetchPhase(opts: {
   const queryVariants = parseInt(settings.discovery_query_variants || "3");
   console.log(`[${companyName}] Using search depth: ${searchDepth}, query variants: ${queryVariants}`);
 
+  // Fix C: Derive peer company names from the workspace for anti-contamination filtering
+  const workspaceCompanies = await storage.listCompanies(workspaceId);
+  const peerCompanyNames = workspaceCompanies
+    .filter((c: any) => c.id !== companyId)
+    .map((c: any) => (c.name || "").toLowerCase())
+    .filter((n: string) => n && n.length >= 4);
+
   const discoveryResult: DiscoveryResult = await searchCompanyDocuments({
     companyName,
     companyId,
@@ -153,6 +160,7 @@ async function runFetchPhase(opts: {
     trustedSources,
     searchDepth,
     queryVariants,
+    peerCompanyNames,
   });
 
   console.log(`[${companyName}] Discovery found ${discoveryResult.documents.length} accepted documents`);

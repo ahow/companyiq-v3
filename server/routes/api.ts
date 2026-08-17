@@ -471,6 +471,17 @@ apiRouter.get("/frameworks/:id", async (req: Request, res: Response) => {
 apiRouter.post("/frameworks", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
+    // Fix D: Reject empty dataPatterns at framework creation time (Instruction 21c strictness)
+    if (!req.body.dataPatterns || !Array.isArray(req.body.dataPatterns) || req.body.dataPatterns.length === 0) {
+      return res.status(400).json({
+        error: "dataPatterns is required — provide ≥2 regex patterns that identify topic-relevant content in fetched documents. See the framework-builder docs for examples.",
+      });
+    }
+    if (req.body.dataPatterns.length < 2) {
+      return res.status(400).json({
+        error: "dataPatterns must contain at least 2 patterns (used for the ≥2-distinct-hits corpus-validity check).",
+      });
+    }
     const framework = await storage.createFramework({ ...req.body, workspaceId });
     res.json(framework);
   } catch (error: any) {
