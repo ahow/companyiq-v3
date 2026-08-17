@@ -46,7 +46,16 @@ const fixture = [
 
 section("authorityClass mapping");
 ok(authorityClass(fixture[0].url, COMPANY_DOMAIN) === 0, "EDGAR primary HTML → class 0");
-ok(authorityClass(fixture[4].url, COMPANY_DOMAIN) === 2, "CDP → class 2 (voluntary registry)");
+// B3: CDP is framework-scoped after Instruction 31: class 2 only when the
+// active framework declares it in authoritativeRegistries.
+ok(
+  authorityClass(fixture[4].url, COMPANY_DOMAIN, ["cdp.net"]) === 2,
+  "CDP → class 2 (voluntary registry) when framework declares cdp.net"
+);
+ok(
+  authorityClass(fixture[4].url, COMPANY_DOMAIN) === 4,
+  "CDP → class 4 (secondary) when framework does not declare cdp.net"
+);
 ok(authorityClass(fixture[3].url, COMPANY_DOMAIN) === 3, "company IR domain → class 3");
 ok(authorityClass(fixture[5].url, COMPANY_DOMAIN) === 4, "reuters → class 4 (secondary)");
 ok(authorityClass(fixture[7].url, COMPANY_DOMAIN) === 4, "seekingalpha → class 4 (secondary)");

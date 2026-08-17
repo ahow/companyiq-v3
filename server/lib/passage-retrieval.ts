@@ -544,7 +544,7 @@ function relevantSecSections(measure: FrameworkMeasure): Set<string> {
   const isFilingBound = reqTypes.some((t) =>
     /regulatory|filing|10-?k|20-?f|annual|periodic/i.test(String(t)),
   );
-  if (isFilingBound || /^9\./.test(measure.measureId)) {
+  if (isFilingBound) {
     out.add("item1a");
     out.add("item7");
     out.add("item7a");
@@ -581,7 +581,7 @@ function requiresRegulatoryFiling(measure: FrameworkMeasure): boolean {
     return true;
   }
   const hay = `${measure.measureId} ${measure.title} ${measure.definition || ""}`.toLowerCase();
-  return /^9\.|10-?k|20-?f|form\s*10|annual report|risk-?factor|risk factor|regulatory filing|securities filing/.test(hay);
+  return /10-?k|20-?f|form\s*10|annual report|risk-?factor|risk factor|regulatory filing|securities filing/.test(hay);
 }
 
 // v3g (Bug 2): does this document URL/title look like a regulatory ANNUAL filing

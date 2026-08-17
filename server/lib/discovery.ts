@@ -1813,7 +1813,9 @@ function calculatePriority(
   // Trusted disclosure platform bonus (Tier 1: priority domains from curated sources list)
   // These are statutory filing repositories, ESG registries, voluntary frameworks,
   // certification registries, and national company registers
-  const priorityDomains = [
+  // B2: Universal priority domains — statutory filers, national registries, and
+  // cross-topic frameworks. These apply on any topic.
+  const UNIVERSAL_PRIORITY_DOMAINS = [
     // Statutory / securities filing repositories
     "sec.gov", "efts.sec.gov", "fca.org.uk", "data.fca.org.uk",
     "find-and-update.company-information.service.gov.uk", "esap.europa.eu",
@@ -1830,26 +1832,16 @@ function calculatePriority(
     "cninfo.com.cn", "sse.com.cn", "gsxt.gov.cn", "maya.tase.co.il",
     "saudiexchange.sa", "adx.ae", "dfm.ae", "kap.org.tr",
     "clientportal.jse.co.za", "b3.com.br", "rad.cvm.gov.br", "mca.gov.in",
-    // UK-specific statutory ESG
-    "modern-slavery-statement-registry.service.gov.uk",
-    "gender-pay-gap.service.gov.uk", "gov.uk",
-    // Country-specific ESG registries
-    "modernslaveryregister.gov.au", "wgea.gov.au",
+    // Cross-topic voluntary frameworks and multilateral bodies
+    "unglobalcompact.org", "oecd.org", "gov.uk", "frc.org.uk", "fsa.go.jp",
+    // Cross-topic gov / regulator disclosure surfaces
+    "gender-pay-gap.service.gov.uk",
     "natural-resources.canada.ca", "publicsafety.gc.ca",
-    "enviro.epa.gov", "industry.eea.europa.eu", "eea.europa.eu",
-    "environment.data.gov.uk", "ec.europa.eu", "ww2.arb.ca.gov",
-    "hatvp.fr", "lda.senate.gov", "fec.gov",
-    "transparency-register.europa.eu",
-    // Voluntary global frameworks
-    "cdp.net", "tnfd.global", "sciencebasedtargets.org",
-    "sciencebasedtargetsnetwork.org", "unglobalcompact.org",
-    // Finance-sector pledges
-    "netzeroassetmanagers.org", "unepfi.org", "unpri.org",
-    "equator-principles.com", "financeforbiodiversity.org",
-    "frc.org.uk", "fsa.go.jp", "carbonaccountingfinancials.com",
-    // UN-backed campaigns
-    "climateaction.unfccc.int", "there100.org", "theclimategroup.org", "weps.org",
-    // Sector-specific & certification registries
+    "hatvp.fr", "lda.senate.gov", "fec.gov", "transparency-register.europa.eu",
+    // Cross-topic certifications
+    "bcorporation.net", "usgbc.org", "tools.breeam.com",
+    "account.wellcertified.com", "dgnb.de",
+    // Sector-specific & certification registries (universal across topics)
     "eiti.org", "icmm.com", "rspo.org", "search.fsc.org", "connect.fsc.org",
     "pefc.org", "responsiblesoy.org", "bonsucro.com", "rsb.org",
     "responsiblemining.net", "aluminium-stewardship.org",
@@ -1857,15 +1849,13 @@ function calculatePriority(
     "bettercotton.org", "fisheries.msc.org", "asc-aqua.org",
     "knowledge.rainforest-alliance.org", "flocert.net", "goodweave.org",
     "fairlabor.org", "iafcertsearch.org",
-    // Certification & verified-status registries
-    "bcorporation.net", "usgbc.org", "tools.breeam.com",
-    "account.wellcertified.com", "dgnb.de",
-    // Human rights & social
-    "hrc.org", "disabilityin.org", "ungpreporting.org",
-    // Other regulatory/reporting
-    "oecd.org",
+    // Human rights & social (universal)
+    "hrc.org", "disabilityin.org", "ungpreporting.org", "unpri.org", "weps.org",
   ];
-  if (priorityDomains.some((d) => urlLower.includes(d))) {
+  // Framework-scoped priority domains from framework.authoritativeRegistries
+  const frameworkRegistries = ((framework as any).authoritativeRegistries as string[] | null) || [];
+  const allPriorityDomains = [...UNIVERSAL_PRIORITY_DOMAINS, ...frameworkRegistries];
+  if (allPriorityDomains.some((d) => urlLower.includes(d))) {
     priority -= 4;
   }
 

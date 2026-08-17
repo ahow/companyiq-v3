@@ -142,8 +142,9 @@ function buildBinaryScoringPrompt(opts: {
   terminology?: TerminologyMap;
   topicDescription: string;
   temporalWarning?: string | null;
+  framework?: Framework;
 }): { system: string; prompt: string } {
-  const { companyName, measure, evidenceText, terminology, topicDescription, temporalWarning } = opts;
+  const { companyName, measure, evidenceText, terminology, topicDescription, temporalWarning, framework } = opts;
 
   let terminologyBlock = "";
   if (terminology && flattenTerms(terminology).length > 0) {
@@ -173,12 +174,11 @@ CONFIDENCE LEVELS:
 
 CRITICAL ANTI-INFERENCE RULES:
 1. You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided.
-2. DO NOT infer that a company has a specific target or policy because they are a member of an alliance or initiative (e.g., NZBA, SBTi, Climate Action 100+). Alliance membership alone does not constitute evidence of a specific company-level commitment.
-3. DO NOT infer that a policy applies to all sectors or all activities if the text only names specific sectors. If a measure asks about "oil and gas" but the evidence only mentions "energy", you must evaluate whether the evidence explicitly confirms oil and gas is included.
-4. DO NOT conflate different types of financing activity. "Financed emissions" (balance-sheet lending, PCAF Part A) is distinct from "facilitated emissions" (capital markets underwriting, PCAF Part B). Score each strictly according to what the measure asks for.
-5. DO NOT conflate absolute emissions targets (measured in MtCO2e or % absolute reduction) with emissions intensity targets (measured in gCO2e/kWh, kgCO2e/$M invested). If the measure asks for an absolute target, an intensity-only target does not satisfy it.
-6. If the evidence does not contain an explicit, direct statement satisfying the measure, you MUST score it 0 (No or Partial), even if you believe the company likely has such a policy based on other context.
-7. Pay careful attention to the TEMPORAL VALIDITY of evidence. If the evidence indicates a policy or target has been withdrawn, discontinued, or superseded, score based on the current state, not the historical commitment.
+2. DO NOT infer that a company has a specific target or policy because they are a member of an alliance or initiative. Alliance membership alone does not constitute evidence of a specific company-level commitment.
+3. DO NOT infer that a policy applies to all sectors or all activities if the text only names specific sectors.
+${((framework as any)?.antiInferenceRules as string[] | null || []).map((rule: string, i: number) => `${4 + i}. ${rule}`).join("\n")}
+${((framework as any)?.antiInferenceRules as string[] | null || []).length + 4}. If the evidence does not contain an explicit, direct statement satisfying the measure, you MUST score it 0 (No or Partial), even if you believe the company likely has such a policy based on other context.
+${((framework as any)?.antiInferenceRules as string[] | null || []).length + 5}. Pay careful attention to the TEMPORAL VALIDITY of evidence. If the evidence indicates a policy or target has been withdrawn, discontinued, or superseded, score based on the current state, not the historical commitment.
 
 CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
 CRITICAL: For the "source" field in quotes, you MUST use the EXACT document title as it appears in the "--- DOCUMENT: <title> [<url>] ---" headers in the evidence text. Use the title portion (before the [url]), not an invented or paraphrased name.
@@ -245,8 +245,9 @@ function buildPartialScoringPrompt(opts: {
   terminology?: TerminologyMap;
   topicDescription: string;
   temporalWarning?: string | null;
+  framework?: Framework;
 }): { system: string; prompt: string } {
-  const { companyName, measure, evidenceText, terminology, topicDescription, temporalWarning } = opts;
+  const { companyName, measure, evidenceText, terminology, topicDescription, temporalWarning, framework } = opts;
 
   let terminologyBlock = "";
   if (terminology) {
@@ -270,7 +271,7 @@ SCORING RULES (Partial Credit Mode):
 - Score 0 (No): No evidence found, or evidence is too vague/generic to confirm any aspect of the specific requirement.
 
 WHEN TO USE PARTIAL (0.5):
-- The company addresses the topic generally but not the specific requirement (e.g., mentions AI but not AI governance specifically)
+- ${((framework as any)?.scoringExamples as string[] | null || [])[0] || "The company addresses the topic generally but not the specific requirement"}
 - Evidence exists for some but not all components of a multi-part measure
 - The evidence is from a related initiative or programme that implies but does not explicitly confirm the requirement
 - A policy or commitment exists but lacks specificity, metrics, or implementation details
@@ -285,10 +286,9 @@ CRITICAL ANTI-INFERENCE RULES:
 1. You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided.
 2. DO NOT infer that a company has a specific target or policy because they are a member of an alliance or initiative. Alliance membership alone does not constitute evidence of a specific company-level commitment.
 3. DO NOT infer that a policy applies to all sectors or all activities if the text only names specific sectors.
-4. DO NOT conflate different types of financing activity.
-5. DO NOT conflate absolute emissions targets with emissions intensity targets.
-6. If the evidence does not contain an explicit, direct statement satisfying the measure, you MUST score it 0 or 0.5 (not 1).
-7. Pay careful attention to the TEMPORAL VALIDITY of evidence.
+${((framework as any)?.antiInferenceRules as string[] | null || []).map((rule: string, i: number) => `${4 + i}. ${rule}`).join("\n")}
+${((framework as any)?.antiInferenceRules as string[] | null || []).length + 4}. If the evidence does not contain an explicit, direct statement satisfying the measure, you MUST score it 0 or 0.5 (not 1).
+${((framework as any)?.antiInferenceRules as string[] | null || []).length + 5}. Pay careful attention to the TEMPORAL VALIDITY of evidence.
 
 CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
 CRITICAL: For the "source" field in quotes, you MUST use the EXACT document title as it appears in the "--- DOCUMENT: <title> [<url>] ---" headers in the evidence text.
@@ -634,7 +634,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3l-topicaware")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3m-govterms")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -657,7 +657,25 @@ async function summarizeDocuments(opts: {
         .flatMap((p: string) => p.replace(/[\\^$.|?*+()\[\]{}]/g, " ").split(/\s+/))
         .filter((t: string) => t.length >= 4)
     : [];
-  const allQueryTerms = [...new Set([...topicKeywords, ...derivedTerms, ...dataPatternTokens])];
+
+  // Instruction 34: Universal governance / disclosure vocabulary. Topic-agnostic
+  // anchor set present in authoritative corporate disclosures across ANY topic.
+  // These terms mark disclosure SHAPE (how a company reports), not SUBJECT.
+  // Without them, narrow topic terms collapse in IDF when the corpus is heavily
+  // topic-saturated (fw8 modern-slavery case) and Stage-1 BM25 loses
+  // discriminative power over authoritative chunks.
+  const UNIVERSAL_GOVERNANCE_TERMS = [
+    "policy", "framework", "committee", "oversight", "accountability",
+    "governance", "due diligence", "risk management",
+    "board", "audit", "compliance", "disclosure", "material", "commitment",
+  ];
+
+  const allQueryTerms = [...new Set([
+    ...topicKeywords,
+    ...derivedTerms,
+    ...dataPatternTokens,
+    ...UNIVERSAL_GOVERNANCE_TERMS,
+  ])];
 
   // v3g-fix: TYPE-AWARE document prioritisation. The previous pure keyword-density
   // ranking let a long, AI-keyword-dense ESG/sustainability PDF (e.g. Apple's

@@ -112,6 +112,9 @@ export const frameworks = pgTable("frameworks", {
   // Instruction 31: Framework-declared authoritative registries and filing-type weights
   authoritativeRegistries: jsonb("authoritative_registries").$type<string[]>(),
   authoritativeFilingTypes: jsonb("authoritative_filing_types").$type<Array<{ pattern: string; weight: number }>>(),
+  // B1: Framework-declared scoring examples and anti-inference rules
+  scoringExamples: jsonb("scoring_examples").$type<string[]>(),
+  antiInferenceRules: jsonb("anti_inference_rules").$type<string[]>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

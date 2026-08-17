@@ -362,6 +362,30 @@ initializeDatabase().then(async () => {
     console.warn("[Recovery] Snapshot self-heal failed (non-fatal): " + e.message);
   }
 
+  // B7: Validate framework regex patterns on startup
+  try {
+    const storage = await import("./storage.js");
+    // Get all frameworks across all workspaces for validation
+    const { db } = await import("./db.js");
+    const { frameworks: frameworksTable } = await import("../shared/schema.js");
+    const allFw = await db.select().from(frameworksTable);
+    const frameworks = allFw;
+    for (const fw of frameworks) {
+      const patterns = ((fw as any).authoritativeFilingTypes as Array<{pattern: string}> | null) || [];
+      for (const {pattern} of patterns) {
+        if (/[\x00-\x1f]/.test(pattern)) {
+          console.error(`[startup] Framework ${fw.id} has corrupted authoritativeFilingTypes pattern (contains control chars): ${JSON.stringify(pattern)}`);
+        }
+        try { new RegExp(pattern, "i"); }
+        catch (e) {
+          console.error(`[startup] Framework ${fw.id} has invalid authoritativeFilingTypes regex "${pattern}": ${e}`);
+        }
+      }
+    }
+  } catch (e: any) {
+    console.warn("[startup] Framework regex validation failed (non-fatal):", e.message);
+  }
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Server] CompanyIQ v3 running on port ${PORT}`);
     console.log(`[Server] Environment: ${process.env.NODE_ENV || "development"}`);
