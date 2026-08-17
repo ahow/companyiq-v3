@@ -2209,6 +2209,8 @@ export interface DiscoveryDiagnostics {
   nearDupCollapsedGroups?: number;
   // v3l: the cap applied to this run (MAX_DOCS_RETURNED at selection time).
   capUsed?: number;
+  // Generalised recency check: per-requiredDocType status
+  recencyStatus?: Record<string, { status: string; bestYear: number | null; researchAttempted: boolean }>;
 }
 
 export interface DiscoveryResult {
@@ -2876,6 +2878,81 @@ async function searchCompanyDocumentsInner(opts: {
     console.warn(`[${companyName}] Missing mandatory sources: ${coverage.missingTier1Types.join(", ")}`);
   }
 
+  // ── GENERALISED REQUIRED DOCUMENT RECENCY CHECK ──────────────────────────────
+  // For each requiredDocType declared by the framework, verify that at least one
+  // document in the final corpus is from the "current period" (current year or
+  // last year). If a required doc type is only represented by stale documents
+  // (>2 years old), trigger a targeted re-search for that doc type + current year.
+  // This is the generalised fix for the HSBC/SMFG class of problem where the
+  // system finds an old report but misses the current one.
+  const requiredDocTypes = ((framework as any).requiredDocTypes as string[] | null) || [];
+  const currentYear = new Date().getFullYear();
+  const lastYear = currentYear - 1;
+  const recencyStatus: Record<string, { status: string; bestYear: number | null; researchAttempted: boolean }> = {};
+
+  if (requiredDocTypes.length > 0) {
+    for (const docType of requiredDocTypes) {
+      const docTypeLower = docType.toLowerCase();
+      const docTypeWords = docTypeLower.split(/\s+/).filter(w => w.length >= 3);
+      // Find documents in the final corpus that match this doc type
+      const matchingDocs = finalDocs.filter(d => {
+        const haystack = (d.title + " " + d.url).toLowerCase();
+        return docTypeWords.filter(w => haystack.includes(w)).length >= Math.min(2, docTypeWords.length);
+      });
+      // Detect the best (most recent) year among matching docs
+      let bestYear: number | null = null;
+      for (const d of matchingDocs) {
+        const year = detectFilingYear(d.url, d.title);
+        if (year && (bestYear === null || year > bestYear)) bestYear = year;
+      }
+      const isCurrent = bestYear !== null && bestYear >= lastYear;
+      if (isCurrent || matchingDocs.length === 0) {
+        recencyStatus[docType] = { status: matchingDocs.length === 0 ? "not_found" : "current", bestYear, researchAttempted: false };
+        continue;
+      }
+      // Stale-only: trigger targeted re-search for current year
+      console.log(`[${companyName}] RECENCY-CHECK: "${docType}" only has year=${bestYear}, searching for ${currentYear}/${lastYear}`);
+      recencyStatus[docType] = { status: "stale", bestYear, researchAttempted: true };
+      try {
+        const reSearchQueries = [
+          `"${companyName}" "${docType}" ${currentYear}`,
+          `"${companyName}" "${docType}" ${lastYear}`,
+          `"${companyName}" ${docType} ${currentYear} filetype:pdf`,
+        ];
+        for (const q of reSearchQueries) {
+          const results = await webSearch(q, { num: 5 });
+          for (const r of results) {
+            const normUrl = normaliseUrl(r.link);
+            if (seenUrls.has(normUrl)) continue;
+            const year = detectFilingYear(normUrl, r.title);
+            if (year && year >= lastYear) {
+              // Found a current-period document! Add it to the corpus.
+              seenUrls.add(normUrl);
+              const priority = calculatePriority(normUrl, r.title, companyDomain || null, framework, topicPhrases);
+              finalDocs.push({
+                url: normUrl,
+                title: r.title,
+                snippet: r.snippet,
+                lane: "recency-backfill",
+                priority,
+              });
+              recencyStatus[docType] = { status: "backfilled", bestYear: year, researchAttempted: true };
+              console.log(`[${companyName}] RECENCY-CHECK: backfilled "${docType}" with year=${year}: ${normUrl}`);
+              break;
+            }
+          }
+          if (recencyStatus[docType].status === "backfilled") break;
+        }
+      } catch (err: any) {
+        console.warn(`[${companyName}] RECENCY-CHECK: re-search for "${docType}" failed: ${err?.message}`);
+      }
+    }
+    const staleTypes = Object.entries(recencyStatus).filter(([, v]) => v.status === "stale").map(([k]) => k);
+    if (staleTypes.length > 0) {
+      console.warn(`[${companyName}] RECENCY-CHECK: still stale after re-search: ${staleTypes.join(", ")}`);
+    }
+  }
+
   // §4: final-corpus fingerprint (sorted KEPT URL set). Identical => scoring
   // should be identical. Retained as `candidateFingerprint` for back-compat.
   const candidateFingerprint = createHash("sha1")
@@ -2900,6 +2977,7 @@ async function searchCompanyDocumentsInner(opts: {
     rankerDiagnostics,
     nearDupCollapsedGroups: collapse.collapsedGroups,
     capUsed: MAX_DOCS_RETURNED,
+    recencyStatus: Object.keys(recencyStatus).length > 0 ? recencyStatus : undefined,
   };
 
   return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected };
