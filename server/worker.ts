@@ -211,12 +211,17 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
       await storage.completeJob(jobId);
       console.log("[Worker] Job " + jobId + " completed successfully (attempt " + currentAttempt + ")");
 
-      // Instruction 3: Zero-score diagnostics — log detailed fetch/discovery info
-      // for any company that scores 0, enabling root-cause analysis.
+      // Instruction 3+8: Zero-score and below-prior-best diagnostics — log detailed
+      // fetch/discovery info for any company that scores 0 OR below its prior best.
       try {
         const companyScores = await storage.getMeasureScores(companyId, frameworkId);
         const totalScore = companyScores.reduce((sum: number, s: any) => sum + (s.score || 0), 0);
-        if (totalScore === 0) {
+        const priorBest: Record<string, number> = { "SMFG": 7, "HSBC": 10 };
+        const compName = (company.name || "");
+        const priorBestEntry = Object.entries(priorBest).find(([k]) => compName.toUpperCase().includes(k));
+        const threshold = priorBestEntry?.[1];
+        const isBelowPriorBest = threshold !== undefined && totalScore < threshold && totalScore > 0;
+        if (totalScore === 0 || isBelowPriorBest) {
           const allDocs = await storage.getAcceptedDocuments(companyId);
           const okDocs = allDocs.filter((d: any) => d.fetchStatus === "ok");
           const deadDocs = allDocs.filter((d: any) => d.fetchStatus === "dead");
@@ -229,8 +234,10 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
           }
           const diag = (company as any).discoveryDiagnostics || {};
           console.log(JSON.stringify({
-            tag: "zero-score-diag",
+            tag: isBelowPriorBest ? "below-prior-best-diag" : "zero-score-diag",
             companyName: company.name,
+            totalScore,
+            priorBestThreshold: threshold || null,
             frameworkId,
             documentsDiscovered: allDocs.length,
             documentsFetched: okDocs.length,

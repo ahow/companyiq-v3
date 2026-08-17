@@ -2345,7 +2345,13 @@ async function searchCompanyDocumentsInner(opts: {
     // limiting the API volume increase to a bounded 6 extra calls.
     if (results.length < 3 && queryIndex < 6) {
       const unfiltered = await webSearch(query, { num: searchDepth });
-      for (const r of unfiltered) addCandidate(r, "general-unfiltered");
+      // Limit unfiltered contribution per query — the fallback is for recall,
+      // not for corpus dominance. This prevents older documents from crowding
+      // out recent ones in the LLM's scoring context.
+      const UNFILTERED_QUERY_CAP = 3;
+      for (const r of unfiltered.slice(0, UNFILTERED_QUERY_CAP)) {
+        addCandidate(r, "general-unfiltered");
+      }
     }
     queryIndex++;
   }
