@@ -132,32 +132,11 @@ export function bm25Score(
 // corpus DOES contain topic-relevant passages, they are preferred and guaranteed
 // to reach the evidence pack.
 
-// Default topic lexicon (AI / ML). Can be overridden per framework via
-// `deriveTopicTerms`. Kept deliberately high-precision to avoid false matches.
-const DEFAULT_AI_TOPIC_TERMS = [
-  "ai", "a.i.", "artificial intelligence", "machine learning", "deep learning",
-  "generative ai", "genai", "gen ai", "large language model", "llm", "llms",
-  "neural network", "natural language processing", "nlp", "computer vision",
-  "responsible ai", "ai governance", "ai strategy", "ai ethics", "ai risk",
-  "ai model", "ai models", "ai system", "ai systems", "ai tool", "ai tools",
-  "ai-powered", "ai powered", "ai-driven", "ai driven", "ai capabilities",
-  "algorithmic", "automation", "predictive model", "foundation model",
-  "frontier model", "transformer model", "diffusion model", "ai-enabled",
-  "chatbot", "copilot", "intelligent automation", "data science",
-  // Multilingual AI terms so foreign-language passages are recognized by the
-  // topic floor (French, German, Spanish, Italian, Portuguese, Dutch, Nordic,
-  // Japanese, Chinese, Korean). High-precision terms only.
-  "intelligence artificielle", // FR
-  "k\u00fcnstliche intelligenz", "ki-strategie", "ki-governance", // DE
-  "inteligencia artificial", // ES
-  "intelligenza artificiale", // IT
-  "intelig\u00eancia artificial", // PT
-  "kunstmatige intelligentie", // NL
-  "artificiell intelligens", "teko\u00e4ly", "kunstig intelligens", // SV/FI/DA-NO
-  "\u4eba\u5de5\u77e5\u80fd", "\u751f\u6210ai", // JA (artificial intelligence, generative AI)
-  "\u4eba\u5de5\u667a\u80fd", "\u4eba\u5de5\u667a\u6167", // ZH-CN / ZH-TW
-  "\uc778\uacf5\uc9c0\ub2a5", // KO
-];
+// Instruction 28: No hardcoded topic vocabulary. When callers cannot supply
+// framework-derived topicTerms (unit tests, diagnostic scripts, degraded paths),
+// an empty list disables topic-based BM25 augmentation cleanly rather than
+// silently substituting AI-specific vocab.
+const DEFAULT_TOPIC_TERMS: string[] = [];
 
 const TOPIC_TERM_PATTERN_CACHE = new Map<string, RegExp>();
 
@@ -182,18 +161,38 @@ function buildTopicRegex(terms: string[]): RegExp {
   return re;
 }
 
+// Deliberately small stopword set — measure text is already high-signal.
+const TOPIC_TERM_STOPWORDS = new Set([
+  "the", "and", "for", "with", "that", "this", "from", "their", "they",
+  "have", "will", "must", "should", "would", "could", "into", "over",
+  "company", "companies", "framework", "assessment", "measure", "measures",
+  "disclosure", "disclosures", "report", "reports", "such", "these", "those",
+]);
+
 /**
- * Derive the topic lexicon for a framework. For AI-related frameworks we use the
- * AI lexicon (plus any framework search-term hints); otherwise we fall back to
- * tokens drawn from the topic description so the mechanism stays generic.
+ * Derive a topic lexicon from the framework's text (topic description + name +
+ * evidence keywords). Topic-agnostic: multi-char content tokens with a small
+ * stopword filter, deterministic and cheap. For higher-quality lexicons, callers
+ * should use `deriveTopicLexicon` (LLM-backed, cached) upstream and pass the
+ * result explicitly; this function is the safe fallback.
  */
-export function deriveTopicTerms(topicDescription?: string, frameworkName?: string): string[] {
-  const haystack = `${topicDescription || ""} ${frameworkName || ""}`.toLowerCase();
-  const isAI = /artificial intelligence|\bai\b|machine learning|generative|responsible ai|ai governance|ai strategy|\bllm\b|\bgenai\b/.test(haystack);
-  if (isAI || !topicDescription) return DEFAULT_AI_TOPIC_TERMS;
-  // Generic fallback: use distinctive multi-char tokens from the topic description.
-  const generic = [...new Set(tokenize(topicDescription))].filter((t) => t.length >= 4).slice(0, 40);
-  return generic.length > 0 ? generic : DEFAULT_AI_TOPIC_TERMS;
+export function deriveTopicTerms(
+  topicDescription?: string,
+  frameworkName?: string,
+  evidenceKeywords?: string[],
+  dataPatterns?: string[],
+): string[] {
+  const parts: string[] = [];
+  if (topicDescription) parts.push(topicDescription);
+  if (frameworkName) parts.push(frameworkName);
+  if (evidenceKeywords) parts.push(...evidenceKeywords);
+  if (dataPatterns) parts.push(...dataPatterns.map(p => p.replace(/[^a-z0-9\s]/gi, " ")));
+  const text = parts.join(" ").toLowerCase();
+  if (!text.trim()) return DEFAULT_TOPIC_TERMS;
+  const tokens = [...new Set(tokenize(text))]
+    .filter((t) => t.length >= 4 && !TOPIC_TERM_STOPWORDS.has(t))
+    .slice(0, 60);
+  return tokens.length > 0 ? tokens : DEFAULT_TOPIC_TERMS;
 }
 
 /** Count topic-term occurrences in a piece of text. */
@@ -753,7 +752,7 @@ export function buildEvidencePackForMeasure(opts: {
     chunks,
     bm25Index,
     terminology,
-    topicTerms = DEFAULT_AI_TOPIC_TERMS,
+    topicTerms = DEFAULT_TOPIC_TERMS,
     topK = EVIDENCE_TOP_K,
     maxChars = EVIDENCE_MAX_CHARS,
     maxChunksPerDoc = MAX_CHUNKS_PER_DOC,
@@ -1466,7 +1465,7 @@ export function buildEvidencePacksForCategory(opts: {
   // DEF 14A proxy whose cover page did not survive compression cannot win.
   reservedAnnualUrl?: string;
 }): EvidencePack[] {
-  const { measures, combinedText, terminology, topicTerms = DEFAULT_AI_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl } = opts;
+  const { measures, combinedText, terminology, topicTerms = DEFAULT_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl } = opts;
 
   const chunks = chunkDocuments(combinedText);
   if (chunks.length === 0) {
@@ -1615,7 +1614,7 @@ export function computePreferredAnnualUrl(chunks: Chunk[]): string | undefined {
  * Layer D helper — corpus-level topic statistics, used to compute an honest
  * coverage/evidence signal (topic evidence actually present, not document count).
  */
-export function computeCorpusTopicStats(combinedText: string, topicTerms: string[] = DEFAULT_AI_TOPIC_TERMS): {
+export function computeCorpusTopicStats(combinedText: string, topicTerms: string[] = DEFAULT_TOPIC_TERMS): {
   totalChunks: number;
   topicChunks: number;
   topicHits: number;
@@ -1631,7 +1630,7 @@ export function computeCorpusTopicStats(combinedText: string, topicTerms: string
   return { totalChunks: chunks.length, topicChunks, topicHits };
 }
 
-export { DEFAULT_AI_TOPIC_TERMS };
+export { DEFAULT_TOPIC_TERMS };
 
 // Exposed for offline diagnostics/tests only (not used by the analyzer).
 export const __testHooks = {

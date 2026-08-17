@@ -50,16 +50,15 @@ const STATUTORY_REGISTRY_HOSTS = [
   "clientportal.jse.co.za", "mca.gov.in", "connectonline.asic.gov.au",
 ];
 // Voluntary registries / global frameworks (Class 2).
-const VOLUNTARY_REGISTRY_HOSTS = [
-  "cdp.net", "tnfd.global", "sciencebasedtargets.org",
-  "sciencebasedtargetsnetwork.org", "unglobalcompact.org",
-  "netzeroassetmanagers.org", "unepfi.org", "unpri.org",
-  "equator-principles.com", "financeforbiodiversity.org",
-  "carbonaccountingfinancials.com", "climateaction.unfccc.int",
-  "there100.org", "theclimategroup.org", "weps.org", "eiti.org", "icmm.com",
-  "rspo.org", "fsc.org", "pefc.org", "bcorporation.net", "usgbc.org",
-  "ungpreporting.org", "oecd.org", "gov.uk",
+// Instruction 31: Universal voluntary registries — applicable to ANY topic.
+const UNIVERSAL_VOLUNTARY_REGISTRY_HOSTS = [
+  "unglobalcompact.org", "oecd.org", "gov.uk", "unpri.org",
+  "weps.org", "eiti.org", "bcorporation.net",
 ];
+// Topic-scoped registries are passed in from the framework via
+// framework.authoritativeRegistries. The framework config for a climate
+// framework includes cdp.net, tnfd.global, sciencebasedtargets.org, etc.;
+// for a slavery framework: modernslaveryregister.gov.au, etc.
 // Secondary / news / aggregator hosts (Class 4).
 const SECONDARY_HOSTS = [
   "reuters.com", "bloomberg.com", "cnbc.com", "bbc.com", "medium.com",
@@ -81,7 +80,7 @@ function isEdgarPrimaryHtml(url: string): boolean {
     && !/-index\.html?|\/index\.html?/.test(u);
 }
 
-export function authorityClass(url: string, companyDomain: string | null): number {
+export function authorityClass(url: string, companyDomain: string | null, frameworkRegistries?: string[]): number {
   const host = hostOf(url);
   const u = url.toLowerCase();
   // Class 0 — regulatory primary: SEC EDGAR primary HTML.
@@ -91,8 +90,9 @@ export function authorityClass(url: string, companyDomain: string | null): numbe
   if (REGULATORY_PRIMARY_HOST.test(host)) return 1;
   // Class 1 — statutory registries / regulatory mirrors.
   if (STATUTORY_REGISTRY_HOSTS.some(d => host === d || host.endsWith("." + d) || u.includes(d))) return 1;
-  // Class 2 — voluntary registries / global frameworks.
-  if (VOLUNTARY_REGISTRY_HOSTS.some(d => host === d || host.endsWith("." + d) || u.includes(d))) return 2;
+  // Class 2 — universal + framework-scoped voluntary registries.
+  const allVoluntary = [...UNIVERSAL_VOLUNTARY_REGISTRY_HOSTS, ...(frameworkRegistries || [])];
+  if (allVoluntary.some(d => host === d || host.endsWith("." + d) || u.includes(d))) return 2;
   // Class 4 — secondary / news / aggregators.
   if (SECONDARY_HOSTS.some(d => host === d || host.endsWith("." + d))) return 4;
   // Class 3 — company's own IR/ESG domain.
@@ -107,15 +107,25 @@ export function authorityClass(url: string, companyDomain: string | null): numbe
 const CURRENT_YEAR = new Date().getUTCFullYear();
 
 /** Component 1 — filing-type weight (0..15). */
-function filingTypeWeight(s: string): number {
+function filingTypeWeight(
+  s: string,
+  frameworkFilingTypes?: Array<{ pattern: string; weight: number }>,
+): number {
+  // Universal filing types — the same weights for any topic
   if (/10-?k\b|10k\b|20-?f\b|40-?f\b/.test(s)) return 12.0;
   if (/def.?14a|proxy.?statement|agm.?circular|proxy.?circular|notice.?of.?meeting/.test(s)) return 10.0;
   if (/integrated.?report/.test(s)) return 7.5;
   if (/annual.?report|年度报告|年度報告|年报|年報/.test(s)) return 7.5;
   if (/10-?q\b/.test(s)) return 7.0;
-  if (/\bcdp\b|tcfd|climate.?report/.test(s)) return 8.0;
   if (/8-?k\b|6-?k\b/.test(s)) return 5.0;
-  if (/sustainab|esg\b|csr\b|responsibility/.test(s)) return 6.0;
+
+  // Framework-declared topic-specific filing types (replaces hardcoded TCFD/CDP/sustainability)
+  if (frameworkFilingTypes) {
+    for (const ft of frameworkFilingTypes) {
+      const rx = new RegExp(ft.pattern, "i");
+      if (rx.test(s)) return ft.weight;
+    }
+  }
   return 0.0;
 }
 
@@ -303,17 +313,21 @@ export interface ComputeOpts {
   nativeNonLatinMarket?: boolean;
   /** Pre-resolved content length in bytes for this URL (best-effort HEAD). */
   sizeBytes?: number | null;
+  /** Instruction 31: Framework-declared authoritative registry hostnames */
+  frameworkRegistries?: string[];
+  /** Instruction 31: Framework-declared filing-type patterns with weights */
+  frameworkFilingTypes?: Array<{ pattern: string; weight: number }>;
 }
 
 export function computeRankSignals(doc: RankableDoc, opts: ComputeOpts = {}): RankSignals {
   const url = doc.url;
   const title = doc.title || "";
   const s = (url + " " + title).toLowerCase();
-  const authClass = authorityClass(url, opts.companyDomain ?? null);
+  const authClass = authorityClass(url, opts.companyDomain ?? null, opts.frameworkRegistries);
   const isCompanyDomain = opts.companyDomain ? url.toLowerCase().includes(opts.companyDomain.toLowerCase()) : false;
 
   const components: Record<string, number> = {
-    filingType: filingTypeWeight(s),
+    filingType: filingTypeWeight(s, opts.frameworkFilingTypes),
     recency: recencyWeight(s),
     topicDensity: topicDensity(url, title, opts.topicPhrases || []),
     slugSpecificity: slugSpecificity(url),

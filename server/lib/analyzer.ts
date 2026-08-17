@@ -633,7 +633,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3k-r14")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3l-topicaware")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -646,13 +646,17 @@ async function summarizeDocuments(opts: {
   // Sort documents by relevance to the topic BEFORE combining, so AI-specific
   // content appears first and doesn't get truncated.
   const topicKeywords = tokenize(topicDescription);
-  const aiKeywords = [
-    "ai", "artificial", "intelligence", "ethics", "responsible", "governance",
-    "transparency", "accountability", "risk", "bias", "fairness", "privacy",
-    "workforce", "training", "security", "algorithm", "machine", "learning",
-    "automated", "decision", "oversight", "committee", "policy", "framework",
-  ];
-  const allQueryTerms = [...new Set([...topicKeywords, ...aiKeywords])];
+  // Instruction 25: Use framework-aware topic-term derivation instead of hardcoded
+  // AI keywords. deriveTopicTerms produces distinctive tokens from the topic
+  // description and framework name. dataPatternTokens add the exact strings the
+  // framework author declared as topic-defining.
+  const derivedTerms = deriveTopicTerms(topicDescription, undefined);
+  const dataPatternTokens = (framework as any).dataPatterns
+    ? ((framework as any).dataPatterns as string[])
+        .flatMap((p: string) => p.replace(/[\\^$.|?*+()\[\]{}]/g, " ").split(/\s+/))
+        .filter((t: string) => t.length >= 4)
+    : [];
+  const allQueryTerms = [...new Set([...topicKeywords, ...derivedTerms, ...dataPatternTokens])];
 
   // v3g-fix: TYPE-AWARE document prioritisation. The previous pure keyword-density
   // ranking let a long, AI-keyword-dense ESG/sustainability PDF (e.g. Apple's
@@ -662,24 +666,34 @@ async function summarizeDocuments(opts: {
   // strong structural priority to authoritative filings and dedicated AI/governance
   // pages, while CAPPING the keyword-density contribution so no single long PDF can
   // crowd out the primary disclosures.
-  type DocClass = "regulatory" | "proxy" | "ai-governance" | "sustainability" | "other";
+  // Instruction 26: Framework-declared topic-primary classification.
+  // No hardcoded topic categories — recognises universal doc types (regulatory, proxy)
+  // plus framework-declared requiredDocTypes as the topic-primary class.
+  type DocClass = "regulatory" | "proxy" | "topic-primary" | "other";
   const classifyDoc = (url: string, title: string): DocClass => {
     const u = (url || "").toLowerCase();
     const t = (title || "").toLowerCase();
-    // SEC primary filings: EDGAR archives path, ticker-dated primary docs, or form tokens
-    if (/sec\.gov\/archives\/edgar/.test(u) || /\b(10-?k|20-?f|40-?f)\b/.test(u + " " + t) || /-\d{8}\.htm/.test(u)) return "regulatory";
-    if (/proxy|def.?14a/.test(u + " " + t)) return "proxy";
-    if (/(responsible|trustworthy)[-_ ]?ai|ai[-_ ]?(governance|principles|ethics|policy|safety|framework)|\bai-governance\b/.test(u + " " + t)) return "ai-governance";
-    if (/environment|sustainab|esg|csr|climate|carbon/.test(u + " " + t)) return "sustainability";
+    const haystack = u + " " + t;
+    // Universal: SEC primary filings
+    if (/sec\.gov\/archives\/edgar/.test(u) || /\b(10-?k|20-?f|40-?f)\b/.test(haystack) || /-\d{8}\.htm/.test(u)) return "regulatory";
+    // Universal: proxy statements
+    if (/proxy|def.?14a/.test(haystack)) return "proxy";
+    // Framework-driven: does the doc's title/URL match any of the framework's requiredDocTypes?
+    const requiredDocTypes = ((framework as any).requiredDocTypes as string[] | null) || [];
+    for (const docType of requiredDocTypes) {
+      const words = docType.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 3);
+      if (words.length === 0) continue;
+      const matched = words.filter((w: string) => haystack.includes(w)).length;
+      if (matched >= Math.min(2, words.length)) return "topic-primary";
+    }
     return "other";
   };
   // Structural priority weights (dominate keyword density, which is capped below).
   const CLASS_BOOST: Record<DocClass, number> = {
     regulatory: 100000,
     proxy: 90000,
-    "ai-governance": 80000,
+    "topic-primary": 80000,
     other: 1000,
-    sustainability: 500, // keyword-dense but rarely the primary AI-disclosure source
   };
   interface DocEntry { text: string; url: string; score: number; idx: number; cls: DocClass }
   const docEntries: DocEntry[] = documentTexts.map((text, idx) => {
@@ -721,9 +735,8 @@ async function summarizeDocuments(opts: {
   const CAP_BY_CLASS: Record<DocClass, number> = {
     regulatory: 480000,
     proxy: 360000,
-    "ai-governance": 160000,
+    "topic-primary": 160000,
     other: 120000,
-    sustainability: 90000,
   };
 
   let combined = "";
@@ -998,10 +1011,10 @@ async function summarizeDocuments(opts: {
     companyId,
     documentHash: docHash,
     summary: relevantText,
-    summarizerModel: "bm25-headers-v3k",
+    summarizerModel: "bm25-headers-v3l-topicaware",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3k", reservedAnnualUrl };
+  return { text: relevantText, model: "bm25-headers-v3l-topicaware", reservedAnnualUrl };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────

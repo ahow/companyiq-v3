@@ -662,6 +662,38 @@ export async function initializeDatabase(): Promise<void> {
              OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
     `);
 
+    // Instruction 31: Add authoritative_registries and authoritative_filing_types columns
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS authoritative_registries JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS authoritative_filing_types JSONB`);
+
+    // Backfill: climate frameworks
+    await db.execute(sql`
+      UPDATE frameworks SET
+        authoritative_registries = '["cdp.net","tnfd.global","sciencebasedtargets.org","sciencebasedtargetsnetwork.org","netzeroassetmanagers.org","unepfi.org","equator-principles.com","financeforbiodiversity.org","carbonaccountingfinancials.com","climateaction.unfccc.int","there100.org","theclimategroup.org"]'::jsonb,
+        authoritative_filing_types = '[{"pattern":"\\bcdp\\b|tcfd|climate.?report","weight":8.0},{"pattern":"sustainab|esg\\b|csr\\b|responsibility","weight":6.0}]'::jsonb
+      WHERE authoritative_registries IS NULL
+        AND (topic_description ILIKE '%climate%' OR topic_description ILIKE '%emission%'
+             OR topic_description ILIKE '%carbon%' OR name ILIKE '%climate%')
+    `);
+    // Backfill: modern slavery frameworks
+    await db.execute(sql`
+      UPDATE frameworks SET
+        authoritative_registries = '["modernslaveryregister.gov.au","modern-slavery-statement-registry.service.gov.uk","wgea.gov.au","ungpreporting.org"]'::jsonb,
+        authoritative_filing_types = '[{"pattern":"modern.?slavery.?statement","weight":8.0},{"pattern":"human.?rights.?report|human.?rights.?statement","weight":7.0},{"pattern":"supplier.?code.?of.?conduct","weight":6.0}]'::jsonb
+      WHERE authoritative_registries IS NULL
+        AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
+             OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
+    `);
+    // Backfill: AI governance frameworks
+    await db.execute(sql`
+      UPDATE frameworks SET
+        authoritative_registries = '["partnershiponai.org","nist.gov","oecd.org"]'::jsonb,
+        authoritative_filing_types = '[{"pattern":"responsible.?ai|ai.?governance|ai.?ethics|ai.?policy","weight":8.0},{"pattern":"governance.?report|corporate.?governance","weight":6.0}]'::jsonb
+      WHERE authoritative_registries IS NULL
+        AND (topic_description ILIKE '%artificial intelligence%' OR topic_description ILIKE '%ai governance%'
+             OR name ILIKE '%ai%' OR name ILIKE '%artificial intelligence%')
+    `);
+
     // NOTE: Company-specific pins and domain fixes have been removed from core code
     // (Instruction 21 — no company names in server/**/*.ts). These are now managed
     // via the PATCH /api/companies/:id endpoint at runtime.

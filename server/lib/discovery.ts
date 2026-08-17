@@ -25,44 +25,59 @@ const SEARCH_TIMEOUT = 15000;
 
 export type DocumentTier = 1 | 2 | 3 | 4;
 
-export function classifyDocumentTier(url: string, title: string): DocumentTier {
+export function classifyDocumentTier(
+  url: string,
+  title: string,
+  frameworkSignals?: {
+    /** Slugified topic phrases from deriveTopicLexicon */
+    topicSlugs?: string[];
+    /** Required doc-type slugs from the framework's requiredDocTypes */
+    requiredDocSlugs?: string[];
+  },
+): DocumentTier {
   const urlLower = url.toLowerCase();
   const titleLower = title.toLowerCase();
+  const combined = urlLower + " " + titleLower;
 
-  // ─── Tier 4: Noise (deny-listed sources) ─────────────────────────────
+  // ─── Tier 4: Noise (deny-listed sources) ─────────────────────
   if (isUrlDenied(urlLower)) return 4;
 
-  // ─── Tier 1: Mandatory filings ───────────────────────────────────────
+  // ─── Tier 1: Universal mandatory filings ─ genuinely topic-agnostic ───
   const tier1Patterns = [
     /10-?k/i, /20-?f/i, /def.?14a/i, /proxy.?statement/i,
     /annual.?report/i, /agm.?circular/i, /annual.?general.?meeting/i,
     /integrated.?report/i,
   ];
   const tier1Domains = ["sec.gov", "sedarplus.ca", "asx.com.au", "hkexnews.hk"];
-
   if (tier1Domains.some(d => urlLower.includes(d))) return 1;
-  if (tier1Patterns.some(p => p.test(urlLower) || p.test(titleLower))) return 1;
+  if (tier1Patterns.some(p => p.test(combined))) return 1;
 
-  // ─── Tier 2: Priority corporate disclosures ──────────────────────────
+  // ─── Tier 2a: Framework-declared required-doc slugs ─────────────
+  if (frameworkSignals?.requiredDocSlugs?.length) {
+    for (const slug of frameworkSignals.requiredDocSlugs) {
+      const rx = new RegExp(slug.replace(/[-_\s]+/g, "[.\\-_\\s]?"), "i");
+      if (rx.test(combined)) return 2;
+    }
+  }
+
+  // ─── Tier 2b: Universal priority disclosures ─ topic-agnostic types only
   const tier2Patterns = [
     /investor.?relation/i, /investor.?presentation/i, /investor.?day/i,
-    /capital.?markets.?day/i, /earnings/i, /governance/i,
-    /responsible.?ai/i, /ai.?policy/i, /ai.?ethics/i, /ai.?principles/i,
-    /corporate.?governance/i, /board.?of.?directors/i,
+    /capital.?markets.?day/i, /earnings/i,
+    /governance/i, /corporate.?governance/i, /board.?of.?directors/i,
     /press.?release/i, /newsroom/i, /media.?release/i,
     /strategy.?presentation/i, /pillar.?3/i, /risk.?factor/i,
     /r&d.?day/i, /research.?day/i, /science.?day/i,
   ];
+  if (tier2Patterns.some(p => p.test(combined))) return 2;
 
-  if (tier2Patterns.some(p => p.test(urlLower) || p.test(titleLower))) return 2;
-
-  // ─── Tier 3: Supplementary (ESG, sustainability, CDP, etc.) ──────────
-  const tier3Patterns = [
-    /sustainab/i, /esg/i, /cdp/i, /tcfd/i, /tnfd/i,
-    /climate/i, /environment/i, /csr/i, /social.?responsibility/i,
-  ];
-
-  if (tier3Patterns.some(p => p.test(urlLower) || p.test(titleLower))) return 3;
+  // ─── Tier 3: Framework-derived topic slugs (replaces hardcoded climate/AI list)
+  if (frameworkSignals?.topicSlugs?.length) {
+    for (const slug of frameworkSignals.topicSlugs) {
+      const rx = new RegExp(slug.replace(/[-_\s]+/g, "[.\\-_\\s]?"), "i");
+      if (rx.test(combined)) return 3;
+    }
+  }
 
   // Default: Tier 3 (supplementary — unknown type, not noise)
   return 3;
@@ -561,68 +576,66 @@ function buildUniversalDisclosureQueries(
 function buildSectorSpecificQueries(
   companyName: string,
   sector: string | null | undefined,
-  framework: Framework
+  framework: Framework,
+  topicPhrases?: string[],
 ): string[] {
   if (!sector) return [];
   const sectorLower = sector.toLowerCase();
-  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
   const queries: string[] = [];
+  const topPhrase = topicPhrases && topicPhrases[0];
+  const topPhrase2 = topicPhrases && topicPhrases[1];
 
-  // Financials: Pillar 3 (Basel III specific), CCAR/DFAST stress testing, Solvency II
+  // Financials: legitimately universal anchors
   if (/financ|bank|insurance|asset.?manage/i.test(sectorLower)) {
     queries.push(
       `"${companyName}" Pillar 3 disclosure 2024 OR 2023`,
       `"${companyName}" operational risk OR model risk management`,
     );
-    if (/ai|artificial|machine/i.test(topic)) {
+    // Sector × topic — fires for ANY topic if topicPhrases were supplied
+    if (topPhrase) {
       queries.push(
-        `"${companyName}" model risk management AI OR "machine learning" SR 11-7`,
+        `"${companyName}" ${topPhrase} risk framework`,
+        `"${companyName}" ${topPhrase} disclosure Pillar 3`,
       );
+    }
+    if (topPhrase2) {
+      queries.push(`"${companyName}" ${topPhrase2} risk management`);
     }
   }
 
-  // Pharma / Healthcare: R&D day, pipeline day, FDA-specific terminology
+  // Pharma / Healthcare
   if (/pharma|health|biotech|life.?science|medical/i.test(sectorLower)) {
     queries.push(
       `"${companyName}" R&D day OR research day OR pipeline day presentation`,
       `"${companyName}" science day presentation`,
     );
-    if (/ai|artificial|machine/i.test(topic)) {
-      queries.push(
-        `"${companyName}" AI drug discovery OR clinical AI`,
-        `"${companyName}" real world evidence AI OR machine learning`,
-      );
+    if (topPhrase) {
+      queries.push(`"${companyName}" ${topPhrase} clinical development`);
     }
   }
 
-  // Industrials: OT-specific terminology
+  // Industrials
   if (/industrial|manufactur|engineer|aerospace|defense|auto/i.test(sectorLower)) {
-    queries.push(
-      `"${companyName}" operational technology OT strategy`,
-    );
-    if (/ai|artificial|machine/i.test(topic)) {
-      queries.push(
-        `"${companyName}" autonomous systems OR digital twin`,
-      );
+    queries.push(`"${companyName}" operational technology OT strategy`);
+    if (topPhrase) {
+      queries.push(`"${companyName}" ${topPhrase} operations`);
     }
   }
 
-  // Energy / Utilities: Grid-specific, exploration-specific
+  // Energy / Utilities — topic-agnostic
   if (/energy|utilit|oil|gas|mining|basic.?material/i.test(sectorLower)) {
-    if (/ai|artificial|machine/i.test(topic)) {
+    if (topPhrase) {
       queries.push(
-        `"${companyName}" grid optimization AI OR predictive analytics`,
-        `"${companyName}" exploration technology AI OR seismic interpretation`,
+        `"${companyName}" ${topPhrase} operations`,
+        `"${companyName}" ${topPhrase} exploration`,
       );
     }
   }
 
-  // Real Estate: PropTech-specific
+  // Real Estate
   if (/real.?estate|property|reit/i.test(sectorLower)) {
-    if (/ai|artificial|machine/i.test(topic)) {
-      queries.push(
-        `"${companyName}" smart building AI OR proptech`,
-      );
+    if (topPhrase) {
+      queries.push(`"${companyName}" ${topPhrase} portfolio`);
     }
   }
 
@@ -1034,32 +1047,34 @@ interface LocaleProfile {
   gl: string; // Google country code
   hl: string; // Google interface language
   lang: string; // human-readable language label
-  aiTerms: string[]; // native-language AI / strategy / governance terms
   reportTerms: string[]; // native-language annual report / filing terms
+  // Instruction 32: aiTerms removed. Rely on framework-derived topicPhrases
+  // (from deriveTopicLexicon, which produces native-language synonyms) instead
+  // of hardcoded per-topic vocabulary.
 }
 
 const LOCALE_PROFILES: Record<string, LocaleProfile> = {
-  france: { gl: "fr", hl: "fr", lang: "French", aiTerms: ["intelligence artificielle", "IA strat\u00e9gie", "gouvernance de l'IA", "IA responsable"], reportTerms: ["document d'enregistrement universel", "rapport annuel"] },
-  germany: { gl: "de", hl: "de", lang: "German", aiTerms: ["k\u00fcnstliche Intelligenz", "KI-Strategie", "KI-Governance", "verantwortungsvolle KI"], reportTerms: ["Gesch\u00e4ftsbericht", "Jahresabschluss"] },
-  switzerland: { gl: "ch", hl: "de", lang: "German/French", aiTerms: ["k\u00fcnstliche Intelligenz", "intelligence artificielle", "KI-Strategie"], reportTerms: ["Gesch\u00e4ftsbericht", "rapport annuel"] },
-  spain: { gl: "es", hl: "es", lang: "Spanish", aiTerms: ["inteligencia artificial", "estrategia de IA", "gobernanza de la IA", "IA responsable"], reportTerms: ["informe anual", "cuentas anuales"] },
-  mexico: { gl: "mx", hl: "es", lang: "Spanish", aiTerms: ["inteligencia artificial", "estrategia de IA", "gobernanza de la IA"], reportTerms: ["informe anual"] },
-  italy: { gl: "it", hl: "it", lang: "Italian", aiTerms: ["intelligenza artificiale", "strategia di IA", "governance dell'IA"], reportTerms: ["relazione annuale", "bilancio"] },
-  brazil: { gl: "br", hl: "pt", lang: "Portuguese", aiTerms: ["intelig\u00eancia artificial", "estrat\u00e9gia de IA", "governan\u00e7a de IA"], reportTerms: ["relat\u00f3rio anual"] },
-  portugal: { gl: "pt", hl: "pt", lang: "Portuguese", aiTerms: ["intelig\u00eancia artificial", "estrat\u00e9gia de IA"], reportTerms: ["relat\u00f3rio anual"] },
-  netherlands: { gl: "nl", hl: "nl", lang: "Dutch", aiTerms: ["kunstmatige intelligentie", "AI-strategie", "AI-governance"], reportTerms: ["jaarverslag"] },
-  japan: { gl: "jp", hl: "ja", lang: "Japanese", aiTerms: ["\u4eba\u5de5\u77e5\u80fd", "AI\u6226\u7565", "AI\u30ac\u30d0\u30ca\u30f3\u30b9", "\u8cac\u4efb\u3042\u308bAI"], reportTerms: ["\u6709\u4fa1\u8a3c\u5238\u5831\u544a\u66f8", "\u7d71\u5408\u5831\u544a\u66f8"] },
-  china: { gl: "cn", hl: "zh-cn", lang: "Chinese", aiTerms: ["\u4eba\u5de5\u667a\u80fd", "AI\u6218\u7565", "\u4eba\u5de5\u667a\u80fd\u6cbb\u7406"], reportTerms: ["\u5e74\u5ea6\u62a5\u544a", "\u5e74\u62a5"] },
-  "hong kong": { gl: "hk", hl: "zh-tw", lang: "Chinese", aiTerms: ["\u4eba\u5de5\u667a\u80fd", "AI\u6230\u7565"], reportTerms: ["\u5e74\u5831", "\u5e74\u5ea6\u5831\u544a"] },
-  taiwan: { gl: "tw", hl: "zh-tw", lang: "Chinese", aiTerms: ["\u4eba\u5de5\u667a\u6167", "AI\u7b56\u7565"], reportTerms: ["\u5e74\u5831"] },
-  "south korea": { gl: "kr", hl: "ko", lang: "Korean", aiTerms: ["\uc778\uacf5\uc9c0\ub2a5", "AI \uc804\ub7b5", "AI \uac70\ubc84\ub10c\uc2a4"], reportTerms: ["\uc0ac\uc5c5\ubcf4\uace0\uc11c", "\uc5f0\ucc28\ubcf4\uace0\uc11c"] },
-  korea: { gl: "kr", hl: "ko", lang: "Korean", aiTerms: ["\uc778\uacf5\uc9c0\ub2a5", "AI \uc804\ub7b5"], reportTerms: ["\uc0ac\uc5c5\ubcf4\uace0\uc11c"] },
-  sweden: { gl: "se", hl: "sv", lang: "Swedish", aiTerms: ["artificiell intelligens", "AI-strategi"], reportTerms: ["\u00e5rsredovisning"] },
-  finland: { gl: "fi", hl: "fi", lang: "Finnish", aiTerms: ["teko\u00e4ly", "teko\u00e4lystrategia"], reportTerms: ["vuosikertomus"] },
-  denmark: { gl: "dk", hl: "da", lang: "Danish", aiTerms: ["kunstig intelligens", "AI-strategi"], reportTerms: ["\u00e5rsrapport"] },
-  norway: { gl: "no", hl: "no", lang: "Norwegian", aiTerms: ["kunstig intelligens", "KI-strategi"], reportTerms: ["\u00e5rsrapport"] },
-  belgium: { gl: "be", hl: "nl", lang: "Dutch/French", aiTerms: ["kunstmatige intelligentie", "intelligence artificielle"], reportTerms: ["jaarverslag", "rapport annuel"] },
-  austria: { gl: "at", hl: "de", lang: "German", aiTerms: ["k\u00fcnstliche Intelligenz", "KI-Strategie"], reportTerms: ["Gesch\u00e4ftsbericht"] },
+  france: { gl: "fr", hl: "fr", lang: "French", reportTerms: ["document d'enregistrement universel", "rapport annuel"] },
+  germany: { gl: "de", hl: "de", lang: "German", reportTerms: ["Gesch\u00e4ftsbericht", "Jahresabschluss"] },
+  switzerland: { gl: "ch", hl: "de", lang: "German/French", reportTerms: ["Gesch\u00e4ftsbericht", "rapport annuel"] },
+  spain: { gl: "es", hl: "es", lang: "Spanish", reportTerms: ["informe anual", "cuentas anuales"] },
+  mexico: { gl: "mx", hl: "es", lang: "Spanish", reportTerms: ["informe anual"] },
+  italy: { gl: "it", hl: "it", lang: "Italian", reportTerms: ["relazione annuale", "bilancio"] },
+  brazil: { gl: "br", hl: "pt", lang: "Portuguese", reportTerms: ["relat\u00f3rio anual"] },
+  portugal: { gl: "pt", hl: "pt", lang: "Portuguese", reportTerms: ["relat\u00f3rio anual"] },
+  netherlands: { gl: "nl", hl: "nl", lang: "Dutch", reportTerms: ["jaarverslag"] },
+  japan: { gl: "jp", hl: "ja", lang: "Japanese", reportTerms: ["\u6709\u4fa1\u8a3c\u5238\u5831\u544a\u66f8", "\u7d71\u5408\u5831\u544a\u66f8"] },
+  china: { gl: "cn", hl: "zh-cn", lang: "Chinese", reportTerms: ["\u5e74\u5ea6\u62a5\u544a", "\u5e74\u62a5"] },
+  "hong kong": { gl: "hk", hl: "zh-tw", lang: "Chinese", reportTerms: ["\u5e74\u5831", "\u5e74\u5ea6\u5831\u544a"] },
+  taiwan: { gl: "tw", hl: "zh-tw", lang: "Chinese", reportTerms: ["\u5e74\u5831"] },
+  "south korea": { gl: "kr", hl: "ko", lang: "Korean", reportTerms: ["\uc0ac\uc5c5\ubcf4\uace0\uc11c", "\uc5f0\ucc28\ubcf4\uace0\uc11c"] },
+  korea: { gl: "kr", hl: "ko", lang: "Korean", reportTerms: ["\uc0ac\uc5c5\ubcf4\uace0\uc11c"] },
+  sweden: { gl: "se", hl: "sv", lang: "Swedish", reportTerms: ["\u00e5rsredovisning"] },
+  finland: { gl: "fi", hl: "fi", lang: "Finnish", reportTerms: ["vuosikertomus"] },
+  denmark: { gl: "dk", hl: "da", lang: "Danish", reportTerms: ["\u00e5rsrapport"] },
+  norway: { gl: "no", hl: "no", lang: "Norwegian", reportTerms: ["\u00e5rsrapport"] },
+  belgium: { gl: "be", hl: "nl", lang: "Dutch/French", reportTerms: ["jaarverslag", "rapport annuel"] },
+  austria: { gl: "at", hl: "de", lang: "German", reportTerms: ["Gesch\u00e4ftsbericht"] },
 };
 
 // ISO-2 / ISO-3 code aliases mapping to the country keys above
@@ -1103,35 +1118,36 @@ function resolveLocaleProfile(country?: string | null): LocaleProfile | null {
  * locale profile. Only emitted when the framework is AI-related and a profile
  * exists. Returns the queries plus the gl/hl to use for them.
  */
-function buildLocalizedAIQueries(
+function buildLocalizedTopicQueries(
   companyName: string,
   framework: Framework,
   profile: LocaleProfile,
   topicPhrases?: string[]
 ): string[] {
-  // Instruction 21b: Renamed to buildLocalizedQueries conceptually.
-  // No longer AI-specific — uses topicPhrases for any framework.
+  // Instruction 32: Fully topic-agnostic. Uses topicPhrases for any framework.
   const queries: string[] = [];
+  if (!topicPhrases || topicPhrases.length === 0) return queries;
 
-  // For ANY framework: use topic lexicon terms with the company name
-  if (topicPhrases && topicPhrases.length > 0) {
-    for (const term of topicPhrases.slice(0, 4)) {
-      queries.push(`"${companyName}" ${term}`);
-    }
-    // Pair first topic phrase with native report term
-    if (profile.reportTerms[0]) {
-      queries.push(`"${companyName}" ${topicPhrases[0]} ${profile.reportTerms[0]}`);
+  // Pair topic phrases with native report term
+  if (profile.reportTerms[0]) {
+    queries.push(`"${companyName}" ${topicPhrases[0]} ${profile.reportTerms[0]}`);
+    if (topicPhrases[1]) {
+      queries.push(`"${companyName}" ${topicPhrases[1]} ${profile.reportTerms[0]}`);
     }
   }
 
-  // Also use the locale's native AI terms if they overlap with topicPhrases
-  // (this is data-driven: profile.aiTerms is locale data, not topic-specific code)
-  if (profile.aiTerms.length > 0 && topicPhrases && topicPhrases.some(p => /\bai\b|artificial|intelligence|machine.?learn/i.test(p))) {
-    for (const term of profile.aiTerms.slice(0, 3)) {
-      queries.push(`"${companyName}" ${term}`);
+  // Use any topic phrases that appear to be in the locale's language.
+  // Heuristic: CJK char present → CJK profile; non-ASCII Latin → European profile.
+  const localeTopicPhrases = topicPhrases.filter(p => {
+    if (profile.hl.startsWith("zh") || profile.hl === "ja" || profile.hl === "ko") {
+      return /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/.test(p);
     }
+    if (profile.hl === "en") return true;
+    return /[àâçéèêëîïôùûüÿñæœäöüß]/i.test(p) || /^[a-z\s]+$/i.test(p);
+  });
+  for (const phrase of localeTopicPhrases.slice(0, 3)) {
+    queries.push(`"${companyName}" ${phrase}`);
   }
-
   return queries;
 }
 
@@ -1374,9 +1390,13 @@ async function buildAShareFilingQueries(
   // TOPIC-AGNOSTIC topic phrase: prefer a framework-derived CJK/topic phrase over
   // the previously hard-coded 人工智能. Pick the first phrase containing CJK
   // characters if present (best for a Chinese-language query), else the first
-  // phrase. Falls back to 人工智能 only when no lexicon is threaded through.
+  // Instruction 32: skip CJK lane rather than fall back to hardcoded AI term.
   const cjkPhrase = (topicPhrases || []).find((p) => /[\u4e00-\u9fff]/.test(p));
-  const topicPhraseCJK = cjkPhrase || (topicPhrases && topicPhrases[0]) || "人工智能";
+  const topicPhraseCJK = cjkPhrase || (topicPhrases && topicPhrases[0]);
+  if (!topicPhraseCJK) {
+    console.warn(`[${companyName}] CJK query lane skipped: no topic phrases available`);
+    return queries;
+  }
   // Lead with the board-code queries: the 6-digit code is resolved reliably and
   // `site:cninfo.com.cn <code> 年度报告` returns the exact issuer's reports.
   if (code) {
@@ -1836,15 +1856,12 @@ function calculatePriority(
     priority -= 4;
   }
 
-  // URL slug bonuses
+  // URL slug bonuses — universal document-shape hints only (no topic-specific slugs)
   const slugBonuses: Record<string, number> = {
     governance: -5,
-    sustainability: -4,
-    "responsible-ai": -5,
     ethics: -3,
     policy: -3,
     report: -2,
-    esg: -4,
     "annual-report": -4,
     proxy: -3,
     "def-14a": -5,
@@ -1852,9 +1869,9 @@ function calculatePriority(
     "10k": -5,
     "20-f": -5,
     "investor-relations": -4,
-    "investors": -3,
+    investors: -3,
     "investor-presentation": -4,
-    "earnings": -3,
+    earnings: -3,
     "integrated-report": -4,
   };
   for (const [slug, bonus] of Object.entries(slugBonuses)) {
@@ -2319,7 +2336,7 @@ async function searchCompanyDocumentsInner(opts: {
   // home-country Google locale (gl/hl) so foreign-language AI disclosures are
   // surfaced. Gated by an env flag and only runs for non-English locales.
   if (process.env.MULTILINGUAL_DISCOVERY_ENABLED !== "false" && localeProfile) {
-    const localizedQueries = buildLocalizedAIQueries(companyName, framework, localeProfile, topicPhrases);
+    const localizedQueries = buildLocalizedTopicQueries(companyName, framework, localeProfile, topicPhrases);
     if (localizedQueries.length > 0) {
       console.log(`[${companyName}] Running localized ${localeProfile.lang} search lane (gl=${localeProfile.gl}, hl=${localeProfile.hl})`);
       for (const query of localizedQueries) {
@@ -2470,7 +2487,7 @@ async function searchCompanyDocumentsInner(opts: {
   // R&D day for pharma, OT strategy for industrials).
   if (opts.sector) {
     console.log(`[${companyName}] Running sector-specific search lane (sector: ${opts.sector})`);
-    const sectorQueries = buildSectorSpecificQueries(companyName, opts.sector, framework);
+    const sectorQueries = buildSectorSpecificQueries(companyName, opts.sector, framework, topicPhrases);
     for (const query of sectorQueries) {
       const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
       for (const r of results) addCandidate(r, "sector-specific");

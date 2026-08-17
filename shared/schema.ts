@@ -109,6 +109,9 @@ export const frameworks = pgTable("frameworks", {
   // multiDocumentQueryTemplates: ancillary/policy/regulatory query classes
   legacyQueryTemplates: jsonb("legacy_query_templates").$type<string[]>(),
   multiDocumentQueryTemplates: jsonb("multi_document_query_templates").$type<string[]>(),
+  // Instruction 31: Framework-declared authoritative registries and filing-type weights
+  authoritativeRegistries: jsonb("authoritative_registries").$type<string[]>(),
+  authoritativeFilingTypes: jsonb("authoritative_filing_types").$type<Array<{ pattern: string; weight: number }>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
