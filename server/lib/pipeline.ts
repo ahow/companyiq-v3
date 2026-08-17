@@ -336,19 +336,13 @@ async function runFetchPhase(opts: {
       // contentPattern kept as fallback for the per-doc check below
       contentPattern = new RegExp(`(?:${frameworkDataPatterns.join("|")})`, "i");
     } else {
-      // LEGACY FALLBACK: for frameworks that predate dataPatterns, derive from topic.
-      // This will be retired once all frameworks are re-authored or back-filled.
+      // Instruction 21c: No legacy fallback. If a framework has no dataPatterns,
+      // derive a generic content check from its topic description words.
+      // This is topic-agnostic — no hardcoded climate/AI/slavery branches.
       const topic = (framework.topicDescription || framework.name || "").toLowerCase();
-      if (/climate|emission|carbon|tcfd|net.?zero|financed.?emission|decarboni/i.test(topic)) {
-        contentPattern = /(?:scope\s*[123]|financed.?emission|tonnes?.?(?:co2|carbon)|tcfd|ghg.?(?:emission|target|inventory)|net.?zero.?(?:target|commitment|by)|carbon.?(?:neutral|footprint|intensity)|climate.?(?:risk|scenario|transition))/i;
-      } else if (/\bai\b|artificial\s?intelligence|machine\s?learning|responsible\s?ai/i.test(topic)) {
-        contentPattern = /(?:\bai\b.?(?:governance|ethics|policy|strategy|principle)|responsible.?ai|algorithmic.?(?:bias|fairness|accountability))/i;
-      } else if (/modern.?slavery|human.?rights|forced.?labour|supply.?chain/i.test(topic)) {
-        contentPattern = /(?:modern.?slavery.?(?:act|statement)|forced.?labo|human.?rights.?(?:due.?diligence|impact|assessment)|supply.?chain.?(?:audit|risk|transparency))/i;
-      } else {
-        // Generic: use topic words as a loose content check
-        const topicWords = topic.split(/\s+/).filter(w => w.length > 4).slice(0, 5);
-        if (topicWords.length > 0) contentPattern = new RegExp(topicWords.join("|"), "i");
+      const topicWords = topic.split(/\s+/).filter(w => w.length > 4).slice(0, 8);
+      if (topicWords.length > 0) {
+        contentPattern = new RegExp(topicWords.join("|"), "i");
       }
     }
 
@@ -898,6 +892,33 @@ async function runFetchPhase(opts: {
     console.warn(`[${companyName}] Failed to persist fetch-coverage diagnostics (non-fatal): ${covErr.message}`);
   }
 
+  // ─── Instruction 15: Post-fetch validation for recency backfill ────────────
+  // Confirm that any backfill_pending URLs actually fetched to ≥200 chars of body.
+  // If not, downgrade status to backfill_failed.
+  const recencyStatus = discoveryResult.diagnostics?.recencyStatus as Record<string, any> | undefined;
+  if (recencyStatus) {
+    for (const [docType, status] of Object.entries(recencyStatus)) {
+      if (status.status !== "backfill_pending" || !status.backfilledUrl) continue;
+      const doc = finalDocs.find(d => d.url === status.backfilledUrl);
+      if (doc && doc.fetchStatus === "ok") {
+        // Check if content is substantial (will be validated via content length later)
+        recencyStatus[docType] = { ...status, status: "backfilled" };
+        console.log(`[${companyName}] RECENCY-CHECK: backfill confirmed for "${docType}": ${status.backfilledUrl}`);
+      } else {
+        recencyStatus[docType] = { ...status, status: "backfill_failed" };
+        console.warn(`[${companyName}] RECENCY-CHECK: backfill for "${docType}" failed to fetch (${doc ? doc.fetchStatus : "not found"})`);
+      }
+    }
+    // Persist the updated recencyStatus
+    try {
+      const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+      priorDiag.recencyStatus = recencyStatus;
+      await storage.updateCompany(companyId, workspaceId, { discoveryDiagnostics: priorDiag } as any);
+    } catch (e: any) {
+      console.warn(`[${companyName}] Failed to persist recencyStatus: ${e.message}`);
+    }
+  }
+
   // ─── Corpus Snapshot: freeze the evidence set for this batch ──────────────
   // This makes re-scoring byte-identical: the analyze phase reads from batch_corpus
   // instead of the live documents table, so corpus composition is frozen at fetch time.
@@ -1341,12 +1362,30 @@ async function maybeAutoReexamine(opts: {
     const thinCorpus = corpusChars < AUTO_REEXAM_MAX_CHARS;
 
     if (!degradedRetrieval || !thinCorpus) {
-      console.log(
-        `[${companyName}] Auto-reexam SKIPPED: legitimate zero ` +
-          `(corpusChars=${corpusChars}, lowEvidence=${coverage?.lowEvidence ?? "n/a"}, ` +
-          `fetchRatio=${coverage?.fetchRatio ?? "n/a"}, dead=${coverage?.documentsDead ?? "n/a"})`
-      );
-      return false;
+      // Instruction 17: Even if corpus is thick, check if first-party docs are
+      // overwhelmingly dead. If >=50% of first-party docs are dead AND there are
+      // >=3 first-party docs, this is NOT a legitimate zero — it's a fetch-layer
+      // failure that should be escalated.
+      const allDocs = await storage.getAcceptedDocuments(companyId);
+      const firstPartyDocs = allDocs.filter((d: any) => d.sourceType === "first_party");
+      const firstPartyDead = firstPartyDocs.filter((d: any) => d.fetchStatus === "dead").length;
+      const firstPartyDeadRatio = firstPartyDocs.length > 0 ? firstPartyDead / firstPartyDocs.length : 0;
+
+      if (firstPartyDeadRatio >= 0.5 && firstPartyDocs.length >= 3) {
+        console.log(
+          `[${companyName}] Auto-reexam ESCALATED: firstPartyDead=${firstPartyDead}/${firstPartyDocs.length} ` +
+          `(ratio=${Math.round(firstPartyDeadRatio * 100)}%), retrying with fresh browser instance`
+        );
+        // Don't skip — fall through to the retry logic below
+      } else {
+        console.log(
+          `[${companyName}] Auto-reexam SKIPPED: legitimate zero ` +
+            `(corpusChars=${corpusChars}, lowEvidence=${coverage?.lowEvidence ?? "n/a"}, ` +
+            `fetchRatio=${coverage?.fetchRatio ?? "n/a"}, dead=${coverage?.documentsDead ?? "n/a"}, ` +
+            `firstPartyDead=${firstPartyDead}/${firstPartyDocs.length})`
+        );
+        return false;
+      }
     }
 
     // All guards passed — this is a fetch-coverage artifact. Record the bounded

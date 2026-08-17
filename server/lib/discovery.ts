@@ -526,7 +526,8 @@ function buildUniversalDisclosureQueries(
   const frameworkName = (framework.name || "").toLowerCase();
   const queries: string[] = [];
 
-  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+  // Instruction 21b: No topic-specific branches. Universal queries only.
+  // Topic-specific queries are handled by legacyQueryTemplates and searchTemplates.
 
   // Capital markets day / investor day / strategy day — every sector holds these
   queries.push(
@@ -544,19 +545,6 @@ function buildUniversalDisclosureQueries(
     `"${companyName}" digital transformation strategy`,
     `"${companyName}" technology strategy OR technology investment`,
   );
-
-  // Responsible AI / AI governance — relevant for ANY company using AI, not just tech
-  if (isAIRelated) {
-    queries.push(
-      `"${companyName}" responsible AI report OR responsible AI principles`,
-      `"${companyName}" AI governance framework OR AI policy`,
-      `"${companyName}" AI safety OR AI ethics OR AI transparency`,
-      `"${companyName}" AI impact assessment OR model card`,
-      `"${companyName}" operational resilience AI OR automation`,
-      `"${companyName}" predictive maintenance AI OR machine learning`,
-      `"${companyName}" digital operations AI OR automation`,
-    );
-  }
 
   // Regulatory submissions — universal (every regulated company files with some authority)
   queries.push(
@@ -899,54 +887,28 @@ function buildGeneralQueries(companyName: string, framework: Framework, companyD
   }
   const templateEnd = allQueries.length;
 
-  // LAYER 2: Legacy topic-tuned queries (proven breadth, always included)
-  const topic = framework.topicDescription || framework.name;
-  const frameworkName = (framework.name || "").toLowerCase();
-  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
-  const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
-  const isSlaveryRelated = /slavery|human rights|forced labo/i.test(topic + " " + frameworkName);
-
-  if (isAIRelated) {
+  // LAYER 2: Data-driven legacy queries from framework.legacyQueryTemplates.
+  // These are topic-tuned queries stored as data on the framework record.
+  // Placeholders: {company}, {currentYear}, {lastYear}
+  const legacyTemplates = (framework as any).legacyQueryTemplates as string[] | null;
+  if (legacyTemplates && legacyTemplates.length > 0) {
+    for (const t of legacyTemplates) {
+      addQuery(t.replace(/\{company\}/g, companyName)
+                .replace(/\{currentYear\}/g, String(currentYear))
+                .replace(/\{lastYear\}/g, String(lastYear)));
+    }
+  } else {
+    // Generic fallback for frameworks that haven't been configured with legacyQueryTemplates.
+    // Uses the framework's topic description to build broad queries.
+    const topic = (framework.topicDescription || framework.name || "");
+    const topicWords = topic.split(/\s+/).filter((w: string) => w.length > 3).slice(0, 5).join(" ");
     for (const q of [
-      `"${companyName}" AI strategy`,
-      `"${companyName}" artificial intelligence governance`,
-      `"${companyName}" responsible AI`,
-      `"${companyName}" AI policy`,
-      `"${companyName}" AI annual report`,
-      `"${companyName}" machine learning governance`,
-    ]) addQuery(q);
-  }
-  if (isClimateRelated) {
-    for (const q of [
-      `"${companyName}" sustainability report ${currentYear}`,
-      `"${companyName}" climate report ${currentYear} OR ${lastYear}`,
-      `"${companyName}" TCFD report ${currentYear} OR ${lastYear}`,
-      `"${companyName}" net zero target`,
-      `"${companyName}" transition plan ${currentYear}`,
-      `"${companyName}" financed emissions report`,
-      `"${companyName}" sustainability report`,
-      `"${companyName}" TCFD report`,
-      `"${companyName}" climate report filetype:pdf`,
-    ]) addQuery(q);
-  }
-  if (isSlaveryRelated) {
-    for (const q of [
-      `"${companyName}" modern slavery statement ${currentYear}`,
-      `"${companyName}" modern slavery act statement`,
-      `"${companyName}" human rights report ${currentYear} OR ${lastYear}`,
-      `"${companyName}" supplier code of conduct`,
-      `"${companyName}" modern slavery statement filetype:pdf`,
-    ]) addQuery(q);
-  }
-  // Generic fallback if no topic matched
-  if (!isAIRelated && !isClimateRelated && !isSlaveryRelated) {
-    for (const q of [
-      `"${companyName}" ${topic}`,
+      `"${companyName}" ${topicWords}`,
+      `"${companyName}" ${topicWords} ${currentYear}`,
       `"${companyName}" annual report`,
       `"${companyName}" governance`,
       `"${companyName}" policy framework`,
       `"${companyName}" corporate responsibility report`,
-      `"${companyName}" ESG report`,
     ]) addQuery(q);
   }
 
@@ -988,98 +950,33 @@ function buildGeneralQueries(companyName: string, framework: Framework, companyD
  * targets in investor presentations, not in the main climate report).
  */
 function buildMultiDocumentQueries(companyName: string, framework: Framework): string[] {
-  const queries: string[] = [];
-  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
-
-  // Topic-gated queries for relevance (not memory — server has 8GB)
-  const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
-  const isESGBroad = /esg|sustainability|environmental|social|governance/i.test(topic);
-
-  if (isClimateRelated) {
-    // Class 1: Specialized Policy Documents
-    queries.push(
-      `"${companyName}" environmental social policy framework`,
-      `"${companyName}" fossil fuel policy OR coal policy`,
-      `"${companyName}" sector exclusion policy`,
-      `"${companyName}" environmental and social risk framework`,
-      `"${companyName}" responsible lending policy`,
+  // Instruction 21b: Data-driven multi-document queries from framework record.
+  // No hardcoded topic branches — reads from framework.multiDocumentQueryTemplates.
+  const currentYear = new Date().getFullYear();
+  const lastYear = currentYear - 1;
+  const templates = (framework as any).multiDocumentQueryTemplates as string[] | null;
+  if (templates && templates.length > 0) {
+    return templates.map(t =>
+      t.replace(/\{company\}/g, companyName)
+       .replace(/\{currentYear\}/g, String(currentYear))
+       .replace(/\{lastYear\}/g, String(lastYear))
     );
-
-    // Class 2: Ancillary Disclosures & Announcements
-    queries.push(
-      `"${companyName}" sustainable finance target OR green bond framework`,
-      `"${companyName}" transition plan OR climate transition`,
-      `"${companyName}" 2030 target announcement OR interim target`,
-      `"${companyName}" financed emissions target OR net zero commitment`,
-      `"${companyName}" investor presentation climate`,
-    );
-
-    // Class 3: Regulatory & Voluntary Framework Filings
-    queries.push(
-      `"${companyName}" TCFD report OR climate-related financial disclosures`,
-      `"${companyName}" CDP climate response OR CDP submission`,
-      `"${companyName}" NZBA progress report OR net-zero banking`,
-    );
-  } else if (isESGBroad) {
-    // Broader ESG policy documents
-    queries.push(
-      `"${companyName}" sustainable finance framework OR green bond framework`,
-      `"${companyName}" sustainability report 2024 OR sustainability report 2023`,
-      `"${companyName}" ESG policy framework OR responsible investment`,
-      `"${companyName}" TCFD report OR climate-related financial disclosures`,
-      `"${companyName}" CDP response OR sustainability disclosure`,
-    );
-  } else {
-    // Topic-aware multi-document expansion for non-climate/ESG topics
-    // Extract meaningful topic keywords for search
-    const topicWords = topic.split(/\s+/).filter(w => w.length > 3).slice(0, 5).join(" ");
-    const frameworkName = (framework.name || "").toLowerCase();
-
-    // AI/Technology-specific queries
-    const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
-    if (isAIRelated) {
-      // Class 1: AI Policy & Governance Documents
-      queries.push(
-        `"${companyName}" responsible AI policy OR AI ethics policy`,
-        `"${companyName}" AI governance framework OR AI principles`,
-        `"${companyName}" artificial intelligence strategy OR AI roadmap`,
-        `"${companyName}" AI risk management OR AI risk framework`,
-        `"${companyName}" AI transparency report OR algorithmic accountability`,
-      );
-      // Class 2: AI Deployment & Use Cases
-      queries.push(
-        `"${companyName}" AI use cases OR machine learning deployment`,
-        `"${companyName}" generative AI OR large language model`,
-        `"${companyName}" AI investment OR AI budget OR AI spending`,
-        `"${companyName}" AI partnership OR AI collaboration`,
-      );
-      // Class 3: AI Governance & Oversight
-      queries.push(
-        `"${companyName}" AI board oversight OR AI committee`,
-        `"${companyName}" chief AI officer OR head of AI`,
-        `"${companyName}" AI bias OR AI fairness OR AI audit`,
-        `"${companyName}" EU AI Act compliance OR AI regulation`,
-      );
-    } else {
-      // Generic topic-aware queries
-      queries.push(
-        `"${companyName}" ${topicWords} policy OR framework`,
-        `"${companyName}" ${topicWords} report OR disclosure`,
-        `"${companyName}" ${topicWords} governance OR strategy`,
-        `"${companyName}" ${topicWords} annual report`,
-        `"${companyName}" ${topicWords} risk management`,
-      );
-    }
   }
-
-  return queries;
+  // Generic fallback for frameworks without multiDocumentQueryTemplates
+  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+  const topicWords = topic.split(/\s+/).filter(w => w.length > 3).slice(0, 5).join(" ");
+  return [
+    `"${companyName}" ${topicWords} policy OR framework`,
+    `"${companyName}" ${topicWords} report OR disclosure`,
+    `"${companyName}" ${topicWords} governance OR strategy`,
+    `"${companyName}" ${topicWords} annual report`,
+    `"${companyName}" ${topicWords} risk management`,
+  ];
 }
 
 function buildDomainQueries(companyName: string, domain: string, framework: Framework, topicPhrases?: string[]): string[] {
-  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
-  const frameworkName = (framework.name || "").toLowerCase();
-
-  // Always include generic corporate disclosure queries
+  // Instruction 21b: Fully data-driven domain queries. No hardcoded topic branches.
+  // Uses topicPhrases (derived from framework's topic lexicon) + requiredDocTypes.
   const baseQueries = [
     `site:${domain} annual report`,
     `site:${domain} governance`,
@@ -1087,60 +984,29 @@ function buildDomainQueries(companyName: string, domain: string, framework: Fram
     `site:${domain}/investors`,
   ];
 
-  // Topic-specific domain queries (legacy hard-coded branches kept for backward compat)
-  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
-  const isClimateRelated = /climate|emission|carbon|net.?zero|fossil|coal|energy transition/i.test(topic);
-  const isESGBroad = /esg|sustainability|environmental|social/i.test(topic);
-
-  if (isAIRelated) {
-    baseQueries.push(
-      `site:${domain} responsible AI`,
-      `site:${domain} AI policy`,
-      `site:${domain} artificial intelligence`,
-      `site:${domain} AI ethics`,
-      `site:${domain} AI governance`,
-      `site:${domain} AI principles`,
-      `site:${domain} machine learning`,
-      `site:${domain} AI risk`,
-      `site:${domain} AI transparency`,
-      `site:${domain} data privacy AI`,
-      `site:${domain} AI strategy`,
-      `site:${domain} generative AI`,
-    );
-  } else if (isClimateRelated) {
-    baseQueries.push(
-      `site:${domain} sustainability report`,
-      `site:${domain} ESG`,
-      `site:${domain} climate report`,
-      `site:${domain} TCFD`,
-      `site:${domain} net zero`,
-      `site:${domain} emissions`,
-      `site:${domain} transition plan`,
-    );
-  } else if (isESGBroad) {
-    baseQueries.push(
-      `site:${domain} sustainability report`,
-      `site:${domain} ESG`,
-      `site:${domain} corporate responsibility`,
-      `site:${domain} sustainability`,
-    );
-  } else {
-    // Generic topic-aware queries
-    const topicWords = topic.split(/\s+/).filter(w => w.length > 3).slice(0, 3).join(" ");
-    baseQueries.push(
-      `site:${domain} ${topicWords}`,
-      `site:${domain} sustainability report`,
-      `site:${domain} ESG`,
-    );
+  // Add requiredDocTypes as domain queries
+  const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
+  if (requiredDocTypes && requiredDocTypes.length > 0) {
+    for (const docType of requiredDocTypes.slice(0, 5)) {
+      const q = `site:${domain} ${docType}`;
+      if (!baseQueries.includes(q)) baseQueries.push(q);
+    }
   }
 
   // Topic-lexicon-driven queries (topic-agnostic, works for any framework)
-  // These complement the hard-coded branches above and ensure coverage for
-  // novel frameworks where no hard-coded branch matches.
   if (topicPhrases && topicPhrases.length > 0) {
     const lexiconQueries = topicPhrases.slice(0, 8).map(term => `site:${domain} ${term}`);
     for (const q of lexiconQueries) {
       if (!baseQueries.includes(q)) baseQueries.push(q);
+    }
+  }
+
+  // Fallback: extract topic words from framework description
+  if ((!topicPhrases || topicPhrases.length === 0) && (!requiredDocTypes || requiredDocTypes.length === 0)) {
+    const topic = (framework.topicDescription || framework.name || "").toLowerCase();
+    const topicWords = topic.split(/\s+/).filter(w => w.length > 3).slice(0, 4);
+    for (const w of topicWords) {
+      baseQueries.push(`site:${domain} ${w}`);
     }
   }
 
@@ -1243,32 +1109,26 @@ function buildLocalizedAIQueries(
   profile: LocaleProfile,
   topicPhrases?: string[]
 ): string[] {
-  const topic = framework.topicDescription || framework.name || "";
-  const frameworkName = (framework.name || "").toLowerCase();
-  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
+  // Instruction 21b: Renamed to buildLocalizedQueries conceptually.
+  // No longer AI-specific — uses topicPhrases for any framework.
   const queries: string[] = [];
 
-  // Use locale's hard-coded AI terms for AI-related frameworks
-  if (isAIRelated) {
-    for (const term of profile.aiTerms) {
-      queries.push(`"${companyName}" ${term}`);
-    }
-    // Pair the strongest AI term with a native annual-report term to surface filings
-    if (profile.aiTerms[0] && profile.reportTerms[0]) {
-      queries.push(`"${companyName}" ${profile.aiTerms[0]} ${profile.reportTerms[0]}`);
-    }
-  }
-
-  // For ANY framework: also use topic lexicon terms with report terms
-  // This ensures localized search fires for climate, ESG, or novel frameworks too
+  // For ANY framework: use topic lexicon terms with the company name
   if (topicPhrases && topicPhrases.length > 0) {
-    // Use up to 3 topic phrases paired with the company name
-    for (const term of topicPhrases.slice(0, 3)) {
+    for (const term of topicPhrases.slice(0, 4)) {
       queries.push(`"${companyName}" ${term}`);
     }
     // Pair first topic phrase with native report term
     if (profile.reportTerms[0]) {
       queries.push(`"${companyName}" ${topicPhrases[0]} ${profile.reportTerms[0]}`);
+    }
+  }
+
+  // Also use the locale's native AI terms if they overlap with topicPhrases
+  // (this is data-driven: profile.aiTerms is locale data, not topic-specific code)
+  if (profile.aiTerms.length > 0 && topicPhrases && topicPhrases.some(p => /\bai\b|artificial|intelligence|machine.?learn/i.test(p))) {
+    for (const term of profile.aiTerms.slice(0, 3)) {
+      queries.push(`"${companyName}" ${term}`);
     }
   }
 
@@ -1721,14 +1581,11 @@ async function resolveAuthoritativeAnnualFilings(opts: {
 function buildInvestorRelationsQueries(
   companyName: string,
   effectiveDomain: string | null,
-  framework: Framework
+  framework: Framework,
+  topicPhrases?: string[]
 ): string[] {
+  // Instruction 21b: No topic-specific branches. Uses topicPhrases for topic-aware IR queries.
   const queries: string[] = [];
-  const topic = (framework.topicDescription || framework.name || "").toLowerCase();
-  const frameworkName = (framework.name || "").toLowerCase();
-
-  const isAIRelated = /artificial intelligence|\bai\b|machine learning|generative ai|responsible ai|ai governance|ai strategy/i.test(topic + " " + frameworkName);
-
   // Domain-anchored IR queries (most valuable — finds the actual IR page)
   if (effectiveDomain) {
     queries.push(
@@ -1736,29 +1593,25 @@ function buildInvestorRelationsQueries(
       `site:${effectiveDomain} annual report 2024 OR 2023`,
       `site:${effectiveDomain} proxy statement`,
     );
-    if (isAIRelated) {
-      queries.push(
-        `site:${effectiveDomain} investor presentation AI`,
-        `site:${effectiveDomain} earnings AI OR "artificial intelligence"`,
-        `site:${effectiveDomain} strategy AI`,
-      );
+    // Topic-aware domain queries from topicPhrases
+    if (topicPhrases && topicPhrases.length > 0) {
+      for (const term of topicPhrases.slice(0, 3)) {
+        queries.push(`site:${effectiveDomain} ${term}`);
+      }
     }
   }
-
   // General IR queries
   queries.push(
     `"${companyName}" investor presentation 2024 OR 2025`,
     `"${companyName}" investor day OR capital markets day`,
   );
-
-  if (isAIRelated) {
+  // Topic-aware general queries from topicPhrases
+  if (topicPhrases && topicPhrases.length > 0) {
     queries.push(
-      `"${companyName}" investor presentation AI strategy`,
-      `"${companyName}" earnings call AI OR "artificial intelligence" transcript`,
-      `"${companyName}" capital expenditure AI OR "artificial intelligence"`,
+      `"${companyName}" investor presentation ${topicPhrases[0]}`,
+      `"${companyName}" earnings call ${topicPhrases[0]} transcript`,
     );
   }
-
   return queries;
 }
 
@@ -2594,7 +2447,7 @@ async function searchCompanyDocumentsInner(opts: {
   // Targets investor presentations, earnings transcripts, and annual reports
   // that often contain strategy/governance disclosures missed by ESG-focused queries.
   console.log(`[${companyName}] Running investor relations search lane`);
-  const irQueries = buildInvestorRelationsQueries(companyName, effectiveDomain, framework);
+  const irQueries = buildInvestorRelationsQueries(companyName, effectiveDomain, framework, topicPhrases);
   for (const query of irQueries) {
     const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
     for (const r of results) addCandidate(r, "investor-relations");
@@ -2878,17 +2731,15 @@ async function searchCompanyDocumentsInner(opts: {
     console.warn(`[${companyName}] Missing mandatory sources: ${coverage.missingTier1Types.join(", ")}`);
   }
 
-  // ── GENERALISED REQUIRED DOCUMENT RECENCY CHECK ──────────────────────────────
-  // For each requiredDocType declared by the framework, verify that at least one
-  // document in the final corpus is from the "current period" (current year or
-  // last year). If a required doc type is only represented by stale documents
-  // (>2 years old), trigger a targeted re-search for that doc type + current year.
-  // This is the generalised fix for the HSBC/SMFG class of problem where the
-  // system finds an old report but misses the current one.
+  // ── GENERALISED REQUIRED DOCUMENT RECENCY CHECK (Instructions 15+16+20) ──────
+  // For each requiredDocType, verify current-period coverage. If stale-only,
+  // trigger a targeted re-search. The backfill AUGMENTS (never replaces) existing
+  // docs, uses deterministic candidate selection, and marks status as
+  // "backfill_pending" until post-fetch validation confirms the content landed.
   const requiredDocTypes = ((framework as any).requiredDocTypes as string[] | null) || [];
   const currentYear = new Date().getFullYear();
   const lastYear = currentYear - 1;
-  const recencyStatus: Record<string, { status: string; bestYear: number | null; researchAttempted: boolean }> = {};
+  const recencyStatus: Record<string, { status: string; bestYear: number | null; researchAttempted: boolean; backfilledUrl?: string }> = {};
 
   if (requiredDocTypes.length > 0) {
     for (const docType of requiredDocTypes) {
@@ -2906,12 +2757,13 @@ async function searchCompanyDocumentsInner(opts: {
         if (year && (bestYear === null || year > bestYear)) bestYear = year;
       }
       const isCurrent = bestYear !== null && bestYear >= lastYear;
-      if (isCurrent || matchingDocs.length === 0) {
-        recencyStatus[docType] = { status: matchingDocs.length === 0 ? "not_found" : "current", bestYear, researchAttempted: false };
+      // Instruction 16: trigger re-search whenever NOT current (even if no matches)
+      if (isCurrent) {
+        recencyStatus[docType] = { status: "current", bestYear, researchAttempted: false };
         continue;
       }
-      // Stale-only: trigger targeted re-search for current year
-      console.log(`[${companyName}] RECENCY-CHECK: "${docType}" only has year=${bestYear}, searching for ${currentYear}/${lastYear}`);
+      // Stale or not found: trigger targeted re-search for current year
+      console.log(`[${companyName}] RECENCY-CHECK: "${docType}" bestYear=${bestYear ?? "none"}, searching for ${currentYear}/${lastYear}`);
       recencyStatus[docType] = { status: "stale", bestYear, researchAttempted: true };
       try {
         const reSearchQueries = [
@@ -2919,6 +2771,8 @@ async function searchCompanyDocumentsInner(opts: {
           `"${companyName}" "${docType}" ${lastYear}`,
           `"${companyName}" ${docType} ${currentYear} filetype:pdf`,
         ];
+        // Instruction 20: Collect ALL candidates from ALL queries, then sort deterministically
+        const allCandidates: Array<{ normUrl: string; title: string; snippet: string; year: number }> = [];
         for (const q of reSearchQueries) {
           const results = await webSearch(q, { num: 5 });
           for (const r of results) {
@@ -2926,22 +2780,27 @@ async function searchCompanyDocumentsInner(opts: {
             if (seenUrls.has(normUrl)) continue;
             const year = detectFilingYear(normUrl, r.title);
             if (year && year >= lastYear) {
-              // Found a current-period document! Add it to the corpus.
-              seenUrls.add(normUrl);
-              const priority = calculatePriority(normUrl, r.title, companyDomain || null, framework, topicPhrases);
-              finalDocs.push({
-                url: normUrl,
-                title: r.title,
-                snippet: r.snippet,
-                lane: "recency-backfill",
-                priority,
-              });
-              recencyStatus[docType] = { status: "backfilled", bestYear: year, researchAttempted: true };
-              console.log(`[${companyName}] RECENCY-CHECK: backfilled "${docType}" with year=${year}: ${normUrl}`);
-              break;
+              allCandidates.push({ normUrl, title: r.title, snippet: r.snippet, year });
             }
           }
-          if (recencyStatus[docType].status === "backfilled") break;
+        }
+        // Instruction 20: Sort deterministically (newest year first, then URL lexicographic)
+        allCandidates.sort((a, b) => (b.year - a.year) || a.normUrl.localeCompare(b.normUrl));
+        if (allCandidates.length > 0) {
+          const pick = allCandidates[0];
+          seenUrls.add(pick.normUrl);
+          const priority = calculatePriority(pick.normUrl, pick.title, companyDomain || null, framework, topicPhrases);
+          // Instruction 16: AUGMENT — push alongside existing docs, never evict
+          finalDocs.push({
+            url: pick.normUrl,
+            title: pick.title,
+            snippet: pick.snippet,
+            lane: "recency-backfill",
+            priority,
+          });
+          // Instruction 15: Mark as backfill_pending (not backfilled) until post-fetch validates
+          recencyStatus[docType] = { status: "backfill_pending", bestYear: pick.year, researchAttempted: true, backfilledUrl: pick.normUrl };
+          console.log(`[${companyName}] RECENCY-CHECK: added backfill_pending for "${docType}" year=${pick.year} (keeping existing year=${bestYear ?? "none"} in corpus): ${pick.normUrl}`);
         }
       } catch (err: any) {
         console.warn(`[${companyName}] RECENCY-CHECK: re-search for "${docType}" failed: ${err?.message}`);

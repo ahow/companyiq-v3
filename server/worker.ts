@@ -217,11 +217,10 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
       try {
         const companyScores = await storage.getMeasureScores(companyId, frameworkId);
         const totalScore = companyScores.reduce((sum: number, s: any) => sum + (s.score || 0), 0);
-        const priorBest: Record<string, number> = { "SMFG": 7, "HSBC": 10 };
-        const compName = (company.name || "");
-        const priorBestEntry = Object.entries(priorBest).find(([k]) => compName.toUpperCase().includes(k));
-        const threshold = priorBestEntry?.[1];
-        const isBelowPriorBest = threshold !== undefined && totalScore < threshold && totalScore > 0;
+        // Instruction 21: No hardcoded company names. Use the company's own
+        // historical best score as the threshold for below-prior-best diagnostics.
+        const priorBestScore = (company as any).priorBestScore || 0;
+        const isBelowPriorBest = priorBestScore > 0 && totalScore < priorBestScore && totalScore > 0;
         if (totalScore === 0 || isBelowPriorBest) {
           const allDocs = await storage.getAcceptedDocuments(companyId);
           const okDocs = allDocs.filter((d: any) => d.fetchStatus === "ok");
@@ -239,7 +238,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
             tag,
             companyName: company.name,
             totalScore,
-            priorBestThreshold: threshold || null,
+            priorBestThreshold: priorBestScore || null,
             frameworkId,
             documentsDiscovered: allDocs.length,
             documentsFetched: okDocs.length,

@@ -549,26 +549,101 @@ export async function initializeDatabase(): Promise<void> {
              OR name ~* '\\bai\\b|artificial.?intelligence')
     `);
 
-    // P5: Pin known disclosure URLs for repeat-failing defended sites.
-    // These get force-headless fetch treatment in the pipeline.
-    // FORCE UPDATE (no guard clause) — the previous broken migration may have set
-    // a bad value, so we unconditionally overwrite to ensure the correct pins.
+    // Instruction 21a: Add legacyQueryTemplates and multiDocumentQueryTemplates columns
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS legacy_query_templates JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS multi_document_query_templates JSONB`);
+
+    // Instruction 21: Backfill legacyQueryTemplates for climate frameworks
     await db.execute(sql`
-      UPDATE companies SET
-        pinned_documents = '["https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/", "https://www.smfg.co.jp/english/sustainability/materiality/environment/climate/pdf/tcfd_report_e.pdf"]'::jsonb,
-        domain = 'smfg.co.jp'
-      WHERE LOWER(name) LIKE '%sumitomo mitsui financial%'
+      UPDATE frameworks SET legacy_query_templates = ${JSON.stringify([
+        "\"{company}\" sustainability report {currentYear}",
+        "\"{company}\" climate report {currentYear} OR {lastYear}",
+        "\"{company}\" TCFD report {currentYear} OR {lastYear}",
+        "\"{company}\" net zero target",
+        "\"{company}\" transition plan {currentYear}",
+        "\"{company}\" financed emissions report",
+        "\"{company}\" sustainability report",
+        "\"{company}\" TCFD report",
+        "\"{company}\" climate report filetype:pdf"
+      ])}::jsonb
+      WHERE legacy_query_templates IS NULL
+        AND (topic_description ILIKE '%emission%' OR topic_description ILIKE '%climate%'
+             OR topic_description ILIKE '%financed%' OR topic_description ILIKE '%carbon%'
+             OR name ILIKE '%emission%' OR name ILIKE '%climate%' OR name ILIKE '%financed%')
+    `);
+    // Backfill multiDocumentQueryTemplates for climate frameworks
+    await db.execute(sql`
+      UPDATE frameworks SET multi_document_query_templates = ${JSON.stringify([
+        "\"{company}\" environmental social policy framework",
+        "\"{company}\" fossil fuel policy OR coal policy",
+        "\"{company}\" sector exclusion policy",
+        "\"{company}\" environmental and social risk framework",
+        "\"{company}\" responsible lending policy",
+        "\"{company}\" sustainable finance target OR green bond framework",
+        "\"{company}\" transition plan OR climate transition",
+        "\"{company}\" 2030 target announcement OR interim target",
+        "\"{company}\" financed emissions target OR net zero commitment",
+        "\"{company}\" investor presentation climate",
+        "\"{company}\" TCFD report OR climate-related financial disclosures",
+        "\"{company}\" CDP climate response OR CDP submission",
+        "\"{company}\" NZBA progress report OR net-zero banking"
+      ])}::jsonb
+      WHERE multi_document_query_templates IS NULL
+        AND (topic_description ILIKE '%emission%' OR topic_description ILIKE '%climate%'
+             OR topic_description ILIKE '%financed%' OR topic_description ILIKE '%carbon%'
+             OR name ILIKE '%emission%' OR name ILIKE '%climate%' OR name ILIKE '%financed%')
+    `);
+    // Backfill legacyQueryTemplates for modern slavery frameworks
+    await db.execute(sql`
+      UPDATE frameworks SET legacy_query_templates = ${JSON.stringify([
+        "\"{company}\" modern slavery statement {currentYear}",
+        "\"{company}\" modern slavery act statement",
+        "\"{company}\" human rights report {currentYear} OR {lastYear}",
+        "\"{company}\" supplier code of conduct",
+        "\"{company}\" modern slavery statement filetype:pdf"
+      ])}::jsonb
+      WHERE legacy_query_templates IS NULL
+        AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
+             OR topic_description ILIKE '%forced labo%'
+             OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
+    `);
+    // Backfill legacyQueryTemplates for AI frameworks
+    await db.execute(sql`
+      UPDATE frameworks SET legacy_query_templates = ${JSON.stringify([
+        "\"{company}\" AI strategy",
+        "\"{company}\" artificial intelligence governance",
+        "\"{company}\" responsible AI",
+        "\"{company}\" AI policy",
+        "\"{company}\" AI annual report",
+        "\"{company}\" machine learning governance"
+      ])}::jsonb
+      WHERE legacy_query_templates IS NULL
+        AND (topic_description ~* '\\bai\\b|artificial.?intelligence|machine.?learning'
+             OR name ~* '\\bai\\b|artificial.?intelligence')
+    `);
+    // Backfill multiDocumentQueryTemplates for AI frameworks
+    await db.execute(sql`
+      UPDATE frameworks SET multi_document_query_templates = ${JSON.stringify([
+        "\"{company}\" responsible AI policy OR AI ethics policy",
+        "\"{company}\" AI governance framework OR AI principles",
+        "\"{company}\" artificial intelligence strategy OR AI roadmap",
+        "\"{company}\" AI risk management OR AI risk framework",
+        "\"{company}\" AI transparency report OR algorithmic accountability",
+        "\"{company}\" AI use cases OR machine learning deployment",
+        "\"{company}\" generative AI OR large language model",
+        "\"{company}\" AI board oversight OR AI committee",
+        "\"{company}\" chief AI officer OR head of AI",
+        "\"{company}\" AI bias OR AI fairness OR AI audit",
+        "\"{company}\" EU AI Act compliance OR AI regulation"
+      ])}::jsonb
+      WHERE multi_document_query_templates IS NULL
+        AND (topic_description ~* '\\bai\\b|artificial.?intelligence|machine.?learning'
+             OR name ~* '\\bai\\b|artificial.?intelligence')
     `);
 
-    // Fix incorrect/missing domains for zero-scoring companies
-    await db.execute(sql`UPDATE companies SET domain = 'hdfcbank.com' WHERE LOWER(name) = 'hdfc bank limited' AND (domain IS NULL OR domain = 'hdfc.bank.in')`);
-    await db.execute(sql`UPDATE companies SET domain = 'ccb.com' WHERE LOWER(name) LIKE '%china construction bank%' AND domain IS NULL`);
-    // Pin Santander's modern slavery statement for headless fetch
-    await db.execute(sql`
-      UPDATE companies SET pinned_documents = '["https://www.santander.com/content/dam/santander-com/en/documentos/informe-anual-de-sostenibilidad/2023/ias-2023-modern-slavery-statement-en.pdf"]'::jsonb
-      WHERE LOWER(name) = 'banco santander, s.a.'
-        AND (pinned_documents IS NULL OR pinned_documents = '[]'::jsonb OR pinned_documents = 'null'::jsonb)
-    `);
+    // NOTE: Company-specific pins and domain fixes have been removed from core code
+    // (Instruction 21 — no company names in server/**/*.ts). These are now managed
+    // via the PATCH /api/companies/:id endpoint at runtime.
 
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();

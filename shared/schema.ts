@@ -104,6 +104,11 @@ export const frameworks = pgTable("frameworks", {
   // checks work for ANY framework without code changes.
   requiredDocTypes: jsonb("required_doc_types").$type<string[]>(),
   dataPatterns: jsonb("data_patterns").$type<string[]>(),
+  // Instruction 21: Topic-tuned query templates stored as framework data (not hardcoded).
+  // legacyQueryTemplates: proven-breadth queries with {company}, {currentYear}, {lastYear} placeholders
+  // multiDocumentQueryTemplates: ancillary/policy/regulatory query classes
+  legacyQueryTemplates: jsonb("legacy_query_templates").$type<string[]>(),
+  multiDocumentQueryTemplates: jsonb("multi_document_query_templates").$type<string[]>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
