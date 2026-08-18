@@ -11,7 +11,7 @@
 
 import { Worker, Job } from "bullmq";
 import { getRedisConnection } from "./redis.js";
-import { runAnalysisPipeline, type PipelineResult } from "./lib/pipeline.js";
+import { runAnalysisPipeline, type PipelineResult, type BatchFetchState, newBatchFetchState } from "./lib/pipeline.js";
 import * as storage from "./storage.js";
 import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
@@ -26,6 +26,8 @@ const RETRY_DELAY_MS = 30000; // 30 seconds between retries
 
 // Track cancelled batches
 const cancelledBatches = new Set<number>();
+// 42-F: Batch-scoped circuit-breaker state, keyed by batchId.
+const batchFetchStates = new Map<number, BatchFetchState>();
 
 export interface AnalysisJobData {
   jobId: number;
@@ -198,6 +200,11 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
         batchId,
         cancelCheck,
         skipFetch,
+        // 42-F: Share circuit-breaker state across all companies in the batch
+        batchFetchState: (() => {
+          if (!batchFetchStates.has(batchId)) batchFetchStates.set(batchId, newBatchFetchState());
+          return batchFetchStates.get(batchId)!;
+        })(),
       }),
       new Promise<PipelineResult>((_, reject) =>
         setTimeout(
@@ -370,6 +377,8 @@ async function maybeHandleBatchCompletion(
   const failed = Number(batchRow.failed_jobs);
   const total = Number(batchRow.total_jobs);
   if (completed + failed < total) return; // not done yet
+  // 42-F: Clean up batch-scoped circuit-breaker state
+  batchFetchStates.delete(batchId);
 
   // Only the first caller that observes a still-active batch proceeds.
   const status = String(batchRow.status || "");

@@ -15,6 +15,7 @@ import {
 } from "./ranking.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 import { deriveAliases, resolveCompanyFIGI } from "./issuer-resolver.js";
+import { PIPELINE_VERSION } from "./pipeline-version.js";
 
 const MAX_DOCS_RETURNED = 90;
 const PRE_GATE_CAP = 180;
@@ -2148,19 +2149,31 @@ async function discoverCrossBrandSiblings(
     console.warn(`[discovery] Cross-brand Serper query failed: ${e.message}`);
   }
 
-  // Method 2 (my alternative): Name-token scan of Lane 1 candidates.
-  // Split the issuer name into distinctive tokens and check if any Lane 1
-  // candidate domain contains a token that the primary domain does NOT.
-  // This catches chase.com for "JPMorgan Chase" (primary: jpmorganchase.com).
+  // 42-D: Name-token scan of Lane 1 candidates.
+  // For composite-stem primaries (jpmorganchase contains both "jpmorgan" and
+  // "chase"), every individual token IS in the stem — so the old
+  // "tokensNotInPrimary" filter was empty and Method 2 contributed nothing.
+  //
+  // Fix: detect composite stems (2+ distinctive tokens in the stem) and treat
+  // each individual token as a sibling candidate. For single-brand stems,
+  // only tokens NOT in the stem qualify (original logic).
   const nameTokens = deriveAliases(issuerName, null).filter(a => a.length >= 4);
   const primaryStem = primaryDomain.split(".")[0].toLowerCase();
-  const tokensNotInPrimary = nameTokens.filter(t => !primaryStem.includes(t));
+  const primaryTokenCount = nameTokens.filter(t => primaryStem.includes(t)).length;
+  const isCompositeStem = primaryTokenCount >= 2;
+
+  // If composite: every individual token is a sibling candidate (except the
+  // full stem itself). If single-brand: only tokens not in the stem qualify.
+  const siblingTokens = isCompositeStem
+    ? nameTokens.filter(t => t.length >= 4 && t !== primaryStem)
+    : nameTokens.filter(t => t.length >= 4 && !primaryStem.includes(t));
 
   for (const [domain, count] of laneOneFrequency) {
     if (alreadyKnown.has(domain) || EXCLUDED_DOMAINS_FOR_RELATED.has(domain)) continue;
     if (count < 2) continue;
     const dl = domain.split(".")[0].toLowerCase();
-    if (tokensNotInPrimary.some(t => dl.includes(t) && t.length >= 4)) {
+    if (dl === primaryStem) continue; // don't re-add the primary
+    if (siblingTokens.some(t => dl.includes(t))) {
       siblings.push(domain);
       alreadyKnown.add(domain);
     }
@@ -2672,16 +2685,23 @@ async function searchCompanyDocumentsInner(opts: {
   let relatedDomains: string[] = [];
   let domainAutoDetected = false;
 
-  // 41-B: Use cached family if available and fresh.
+  // 42-A + 41-B: Use cached family if available, fresh, AND same pipeline version.
   // Distinguish null (never resolved) from [] (resolved, legitimately empty).
   // NOTE: Drizzle returns camelCase properties (figiName, relatedDomains, etc.)
   const cachedDomain = companyDomain ? normaliseToRegistrableDomain(companyDomain) : null;
   const cachedRelated = companyRow.relatedDomains as string[] | null; // null = not yet resolved
+  const cachedRdVersion = companyRow.relatedDomainsPipelineVersion as string | null;
   const figiResolvedAt = companyRow.figiResolvedAt ? new Date(companyRow.figiResolvedAt) : null;
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  // 41-B: Cache HIT when: domain is set AND relatedDomains is not null (even if []) AND FIGI is fresh.
-  if (cachedDomain && cachedRelated !== null && figiResolvedAt && figiResolvedAt > thirtyDaysAgo) {
+  // 42-A: Cache HIT requires: domain set AND relatedDomains not null AND version match AND wall-clock fresh.
+  if (
+    cachedDomain &&
+    cachedRelated !== null &&
+    cachedRdVersion === PIPELINE_VERSION &&
+    figiResolvedAt &&
+    figiResolvedAt > thirtyDaysAgo
+  ) {
     // Short-circuit: use cached family
     effectiveDomain = cachedDomain;
     relatedDomains = cachedRelated;
@@ -2700,7 +2720,8 @@ async function searchCompanyDocumentsInner(opts: {
         figiResolvedAt: companyRow.figiResolvedAt,
         figiName: companyRow.figiName,
         figiTicker: companyRow.figiTicker,
-        domain: companyRow.domain, // 41-D: for stale-domain detection
+        figiPipelineVersion: companyRow.figiPipelineVersion, // 42-A
+        domain: companyRow.domain,
       });
       if (figiResult.name) figiName = figiResult.name;
       if (figiResult.ticker) figiTicker = figiResult.ticker;
@@ -2751,14 +2772,15 @@ async function searchCompanyDocumentsInner(opts: {
         relatedDomains = [...new Set([...relatedDomains, ...manualDomains])];
       }
 
-      // Persist resolved family to DB
+      // Persist resolved family to DB (42-A: include pipeline version)
       if (companyRow.id) {
         try {
           const domainsJson = JSON.stringify(relatedDomains);
           await db.execute(sql`
             UPDATE companies SET
               domain = ${effectiveDomain},
-              related_domains = ${domainsJson}::jsonb
+              related_domains = ${domainsJson}::jsonb,
+              related_domains_pipeline_version = ${PIPELINE_VERSION}
             WHERE id = ${companyRow.id}
           `);
         } catch (e: any) {
@@ -2770,11 +2792,13 @@ async function searchCompanyDocumentsInner(opts: {
     } else {
       // 41-B: Even when no domain found, persist empty [] to mark as "resolved, empty"
       // so the next battery doesn't re-run the full ladder.
+      // 42-A: Also persist pipeline version.
       if (companyRow.id) {
         try {
           await db.execute(sql`
             UPDATE companies SET
               related_domains = '[]'::jsonb,
+              related_domains_pipeline_version = ${PIPELINE_VERSION},
               figi_resolved_at = NOW()
             WHERE id = ${companyRow.id}
           `);

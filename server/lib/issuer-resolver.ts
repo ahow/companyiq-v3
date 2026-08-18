@@ -5,10 +5,14 @@
  *
  * P2: Includes exponential-backoff retry (up to 3 attempts) and a simple
  * token-bucket rate limiter (20 req/min) to stay within the free tier.
+ *
+ * 42-A: Cache freshness is tied to PIPELINE_VERSION, not just wall-clock.
+ * 42-B: Stale-domain detection runs on every call (cache hit or miss).
  */
 import axios from "axios";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
+import { PIPELINE_VERSION } from "./pipeline-version.js";
 
 const OPENFIGI_URL = "https://api.openfigi.com/v3/mapping";
 const OPENFIGI_API_KEY = process.env.OPENFIGI_API_KEY || "";
@@ -147,47 +151,22 @@ export async function resolveViaOpenFIGI(isin: string): Promise<FigiResult> {
 }
 
 /**
- * Resolve and persist FIGI data for a company.
- * Skips if already resolved within the last 30 days.
- *
- * P3 improvement: When the cache is fresh, returns the CACHED name/ticker
- * from the company row (passed in) rather than returning nulls. This makes
- * the function self-contained — callers don't need to separately read from
- * the row.
+ * 42-B refactor: Extract the HTTP-call-and-persist block into a helper.
  */
-export async function resolveCompanyFIGI(company: {
-  id: number;
-  isin?: string | null;
-  figiResolvedAt?: Date | string | null;
-  figiName?: string | null;
-  figiTicker?: string | null;
-  domain?: string | null; // 41-D: needed for stale-domain detection
-}): Promise<FigiResult> {
-  // Short-circuit if already resolved within 30 days — return cached values
-  if (company.figiResolvedAt) {
-    const resolvedAt = new Date(company.figiResolvedAt);
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    if (resolvedAt > thirtyDaysAgo) {
-      return {
-        name: company.figiName || null,
-        ticker: company.figiTicker || null,
-      };
-    }
-  }
-
-  if (!company.isin) {
-    return { name: null, ticker: null };
-  }
+async function callAndPersistFigi(company: { id: number; isin?: string | null }): Promise<FigiResult> {
+  if (!company.isin) return { name: null, ticker: null };
 
   const result = await resolveViaOpenFIGI(company.isin);
 
   // Persist to DB regardless of success (marks as resolved to prevent re-calls)
+  // 42-A: Also persist figi_pipeline_version
   try {
     await db.execute(sql`
       UPDATE companies SET
         figi_name = ${result.name},
         figi_ticker = ${result.ticker},
-        figi_resolved_at = NOW()
+        figi_resolved_at = NOW(),
+        figi_pipeline_version = ${PIPELINE_VERSION}
       WHERE id = ${company.id}
     `);
   } catch (e: any) {
@@ -200,8 +179,53 @@ export async function resolveCompanyFIGI(company: {
     console.log(`[issuer-resolver] No OpenFIGI match for ISIN ${company.isin} (company ${company.id})`);
   }
 
-  // 41-D: Check if the existing domain is stale (disagrees with FIGI name).
-  // If stale, null it out so the discovery ladder re-derives from scratch.
+  return result;
+}
+
+/**
+ * Resolve and persist FIGI data for a company.
+ *
+ * 42-A: Cache hit requires BOTH wall-clock freshness AND pipeline-version match.
+ * 42-B: Stale-domain detection runs on EVERY call (cache hit or miss), using
+ *       whatever FIGI name/ticker is available.
+ */
+export async function resolveCompanyFIGI(company: {
+  id: number;
+  isin?: string | null;
+  figiResolvedAt?: Date | string | null;
+  figiName?: string | null;
+  figiTicker?: string | null;
+  figiPipelineVersion?: string | null; // 42-A
+  domain?: string | null;
+}): Promise<FigiResult> {
+  let result: FigiResult;
+
+  // 42-A: Cache HIT only if fresh AND same pipeline version
+  if (
+    company.figiResolvedAt &&
+    company.figiPipelineVersion === PIPELINE_VERSION
+  ) {
+    const resolvedAt = new Date(company.figiResolvedAt);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    if (resolvedAt > thirtyDaysAgo) {
+      result = {
+        name: company.figiName || null,
+        ticker: company.figiTicker || null,
+      };
+    } else {
+      // Expired wall-clock — re-fetch
+      result = await callAndPersistFigi(company);
+    }
+  } else if (company.isin) {
+    // Version mismatch or never resolved — re-fetch
+    result = await callAndPersistFigi(company);
+  } else {
+    result = { name: null, ticker: null };
+  }
+
+  // 42-B: Stale-domain check runs on EVERY call, cache hit or miss.
+  // FIGI result may be from cache; that's fine — the check compares
+  // FIGI name tokens against the current domain, both stable across this call.
   if (result.name && company.domain) {
     if (isDomainStale(company.domain, result)) {
       console.warn(
@@ -210,7 +234,11 @@ export async function resolveCompanyFIGI(company: {
       );
       try {
         await db.execute(sql`
-          UPDATE companies SET domain = NULL, related_domains = NULL, updated_at = NOW()
+          UPDATE companies SET
+            domain = NULL,
+            related_domains = NULL,
+            related_domains_pipeline_version = NULL,
+            updated_at = NOW()
           WHERE id = ${company.id}
         `);
         company.domain = null;

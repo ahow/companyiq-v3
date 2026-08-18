@@ -501,10 +501,23 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS figi_name TEXT`);
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS figi_ticker TEXT`);
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS figi_resolved_at TIMESTAMPTZ`);
+    // 42-A: Pipeline version tags for cache invalidation
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS figi_pipeline_version TEXT`);
     // 40-D: Evidence-gated related domains
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains JSONB`);
     // 40-E: Manual override for cross-brand domain siblings
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains_manual JSONB`);
+    // 42-A: Pipeline version for related domains cache
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains_pipeline_version TEXT`);
+
+    // 42-G: Explicitly null out pipeline version on existing rows so the new
+    // cache-check treats them as needing re-derivation. Idempotent.
+    await db.execute(sql`
+      UPDATE companies SET
+        figi_pipeline_version = NULL,
+        related_domains_pipeline_version = NULL
+      WHERE figi_pipeline_version IS NULL OR related_domains_pipeline_version IS NULL
+    `);
 
     // Instruction 31: Add authoritative_registries and authoritative_filing_types columns
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS authoritative_registries JSONB`);

@@ -45,8 +45,10 @@ export const companies = pgTable("companies", {
   figiName: text("figi_name"),
   figiTicker: text("figi_ticker"),
   figiResolvedAt: timestamp("figi_resolved_at"),
+  figiPipelineVersion: text("figi_pipeline_version"),                     // 42-A
   relatedDomains: jsonb("related_domains").$type<string[]>(),
   relatedDomainsManual: jsonb("related_domains_manual").$type<string[]>(),
+  relatedDomainsPipelineVersion: text("related_domains_pipeline_version"), // 42-A
   analysisStatus: text("analysis_status").notNull().default("idle"), // idle | fetching | fetched | analyzing | completed | failed
   totalScore: real("total_score"),
   measuresMetCount: integer("measures_met_count"),

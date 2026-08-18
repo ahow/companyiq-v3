@@ -649,7 +649,7 @@ export async function fullResetAllCompanies(workspaceId: number): Promise<number
       SELECT id FROM companies WHERE workspace_id = ${workspaceId}
     )
   `);
-  // Reset all companies
+  // Reset all companies (42-C: also clear FIGI + domain caches)
   await db.execute(sql`
     UPDATE companies SET
       analysis_status = 'idle',
@@ -658,6 +658,12 @@ export async function fullResetAllCompanies(workspaceId: number): Promise<number
       measures_met_count = NULL,
       measures_total_count = NULL,
       discovery_diagnostics = NULL,
+      figi_name = NULL,
+      figi_ticker = NULL,
+      figi_resolved_at = NULL,
+      figi_pipeline_version = NULL,
+      related_domains = NULL,
+      related_domains_pipeline_version = NULL,
       updated_at = NOW()
     WHERE workspace_id = ${workspaceId}
   `);
@@ -679,7 +685,7 @@ export async function fullResetListCompanies(listId: number, workspaceId: number
       SELECT company_id FROM company_list_members WHERE list_id = ${listId}
     )
   `);
-  // Reset companies in this list
+  // Reset companies in this list (42-C: also clear FIGI + domain caches)
   await db.execute(sql`
     UPDATE companies SET
       analysis_status = 'idle',
@@ -688,6 +694,12 @@ export async function fullResetListCompanies(listId: number, workspaceId: number
       measures_met_count = NULL,
       measures_total_count = NULL,
       discovery_diagnostics = NULL,
+      figi_name = NULL,
+      figi_ticker = NULL,
+      figi_resolved_at = NULL,
+      figi_pipeline_version = NULL,
+      related_domains = NULL,
+      related_domains_pipeline_version = NULL,
       updated_at = NOW()
     WHERE id IN (
       SELECT company_id FROM company_list_members WHERE list_id = ${listId}
@@ -697,6 +709,38 @@ export async function fullResetListCompanies(listId: number, workspaceId: number
   return (countResult.rows[0] as any)?.cnt || 0;
 }
 
+
+// ─── Discovery Cache Reset (42-C) ───────────────────────────────────────────
+
+export async function resetCompanyDiscoveryCache(companyId: number, workspaceId: number) {
+  await db.execute(sql`
+    UPDATE companies SET
+      figi_name = NULL,
+      figi_ticker = NULL,
+      figi_resolved_at = NULL,
+      figi_pipeline_version = NULL,
+      related_domains = NULL,
+      related_domains_pipeline_version = NULL,
+      updated_at = NOW()
+    WHERE id = ${companyId} AND workspace_id = ${workspaceId}
+  `);
+}
+
+export async function resetListDiscoveryCache(listId: number, workspaceId: number): Promise<number> {
+  const result = await db.execute(sql`
+    UPDATE companies SET
+      figi_name = NULL,
+      figi_ticker = NULL,
+      figi_resolved_at = NULL,
+      figi_pipeline_version = NULL,
+      related_domains = NULL,
+      related_domains_pipeline_version = NULL,
+      updated_at = NOW()
+    WHERE workspace_id = ${workspaceId}
+      AND id IN (SELECT company_id FROM company_list_members WHERE list_id = ${listId})
+  `);
+  return (result as any).rowCount ?? 0;
+}
 // ─── Measure Score Operations ───────────────────────────────────────────────
 
 export async function getMeasureScores(companyId: number, frameworkId?: number) {

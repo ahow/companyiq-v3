@@ -65,6 +65,7 @@ export interface PipelineOptions {
   batchId?: number; // For corpus snapshot (batch_corpus table)
   cancelCheck?: () => boolean;
   skipFetch?: boolean; // If true, skip fetch phase (reuse existing documents)
+  batchFetchState?: BatchFetchState; // 42-F: batch-scoped circuit-breaker
 }
 
 export interface PipelineResult {
@@ -99,12 +100,26 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 // ─── Phase 1: Fetch Documents (Company-Level) ───────────────────────────────
 
+// 42-F: Batch-scoped circuit-breaker state.
+export interface BatchFetchState {
+  hostSlowFetches: Map<string, number>;
+  hostCircuitBroken: Set<string>;
+}
+
+export function newBatchFetchState(): BatchFetchState {
+  return {
+    hostSlowFetches: new Map(),
+    hostCircuitBroken: new Set(),
+  };
+}
+
 async function runFetchPhase(opts: {
   company: Company;
   framework: Framework;
   workspaceId: number;
   batchId?: number;
   cancelCheck?: () => boolean;
+  batchFetchState?: BatchFetchState; // 42-F
 }): Promise<{ fetchedCount: number; totalAccepted: number }> {
   const { company, framework, workspaceId, batchId, cancelCheck } = opts;
   const companyId = company.id;
@@ -563,13 +578,14 @@ async function runFetchPhase(opts: {
     // pool or the LLM rate limit. Quality is unchanged: every doc is still
     // fetched and verified with the same checks.
 
-    // 41-K: Per-batch circuit breaker for slow hosts.
-    // If 3 consecutive fetches from the same host exceed SLOW_FETCH_THRESHOLD_MS,
-    // circuit-break that host for the remainder of this company's fetch phase.
+    // 42-F: Batch-scoped circuit breaker for slow hosts.
+    // State is shared across companies within a batch. If 3 consecutive fetches
+    // from the same host exceed SLOW_FETCH_THRESHOLD_MS, circuit-break that host
+    // for the remainder of the batch.
     const SLOW_FETCH_THRESHOLD_MS = 15_000;
     const CIRCUIT_BREAK_THRESHOLD = 3;
-    const hostSlowFetches = new Map<string, number>();
-    const hostCircuitBroken = new Set<string>();
+    const batchState = opts.batchFetchState ?? newBatchFetchState();
+    const { hostSlowFetches, hostCircuitBroken } = batchState;
 
     const processOne = async (doc: typeof sortedPending[number]): Promise<void> => {
       if (cancelCheck?.()) return;
@@ -1490,7 +1506,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // Phase 1: Fetch (unless skipping to reuse cached docs)
       let fetchResult = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
-        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck });
+        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck, batchFetchState: opts.batchFetchState });
         
         if (cancelCheck?.()) {
           return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
