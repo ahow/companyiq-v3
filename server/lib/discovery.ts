@@ -1,5 +1,7 @@
 import axios from "axios";
 import { createHash } from "crypto";
+import { db } from "../db";
+import { sql } from "drizzle-orm";
 import * as storage from "../storage.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
@@ -1863,7 +1865,11 @@ function normaliseToRegistrableDomain(hostname: string): string {
   return clean;
 }
 
-function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: string): string | null {
+function inferDomainFromResults(
+  candidates: DiscoveryCandidate[],
+  companyName: string,
+  aliases: string[] = []
+): string | null {
   const excludedDomains = new Set([
     "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com", "instagram.com",
     "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
@@ -1935,31 +1941,142 @@ function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: s
   // A company-name match is now REQUIRED — we no longer accept a domain solely
   // because it "appears 3+ times", which previously caused mis-anchoring to
   // shared hosts and unrelated high-frequency domains.
-  const nameMatch = matchWords.some(word => domainLower.includes(word));
-  if (nameMatch) {
+  // 40-A: Check both distinctive tokens AND derived aliases against each candidate domain.
+  const allMatchTerms = [...matchWords, ...aliases.filter(a => a.length >= 2)];
+
+  // Helper: check if a domain matches any of our terms, with short-alias guard
+  const domainMatchesTerms = (domain: string, freq: number): boolean => {
+    const dl = domain.toLowerCase();
+    // Standard token match (length >= 3 words from company name)
+    if (matchWords.some(word => dl.includes(word))) return true;
+    // Alias match with short-alias guard: 2-3 char aliases require freq >= 5
+    for (const alias of aliases) {
+      if (alias.length >= 2 && dl.includes(alias)) {
+        if (alias.length <= 3 && freq < 5) continue; // short alias guard
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (domainMatchesTerms(topDomain, sorted[0][1])) {
     const normalised = normaliseToRegistrableDomain(topDomain);
     console.log(`[${companyName}] Auto-detected domain: ${topDomain} \u2192 normalised to ${normalised}`);
     return normalised;
   }
 
-  // Try other frequent domains that DO match the company name (scan the top few,
-  // not just the second). This recovers cases where a news/aggregator domain is
-  // the most common but the company's own domain is also present.
+  // Try other frequent domains that DO match the company name or aliases
   for (let i = 1; i < Math.min(sorted.length, 6); i++) {
     const [candidateDomain, count] = sorted[i];
     if (count < 2) break;
-    if (matchWords.some(word => candidateDomain.toLowerCase().includes(word))) {
+    if (domainMatchesTerms(candidateDomain, count)) {
       const normalised = normaliseToRegistrableDomain(candidateDomain);
       console.log(`[${companyName}] Auto-detected domain: ${candidateDomain} \u2192 normalised to ${normalised}`);
       return normalised;
     }
   }
 
-  // No domain confidently matches the company name — return null rather than
-  // guessing, so the company is left with no domain (surfaced on the Domains page).
+  // 40-B: Frequency-dominance fallback.
+  // If no candidate matches tokens or aliases, accept the top domain if it
+  // dominates by >= 3x the runner-up AND has >= 10 hits.
+  if (sorted[0][1] >= 10) {
+    const runnerUp = sorted.length > 1 ? sorted[1][1] : 0;
+    if (sorted[0][1] >= 3 * Math.max(runnerUp, 1)) {
+      const normalised = normaliseToRegistrableDomain(sorted[0][0]);
+      console.log(`[${companyName}] 40-B frequency-dominance: ${sorted[0][0]} (${sorted[0][1]} hits, runner-up ${runnerUp}) \u2192 ${normalised}`);
+      return normalised;
+    }
+  }
+
+  // No domain confidently matches the company name \u2014 return null.
+  // Control passes to 40-C (explicit corporate-domain query) in the caller.
   return null;
 }
 
+
+/**
+ * 40-C: Explicit corporate-domain query.
+ * When 40-A and 40-B both fail, issue one Serper query to find the company's
+ * official website via real-index anchoring.
+ */
+async function discoverPrimaryDomainViaExplicitQuery(
+  issuerName: string,
+  companyName: string
+): Promise<string | null> {
+  const query = `"${issuerName}" official website OR investor relations OR sustainability`;
+  try {
+    const results = await webSearch(query, { num: 5 });
+    if (results.length === 0) return null;
+
+    const excludedForExplicit = new Set([
+      "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
+      "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
+      "google.com", "amazon.com", "reddit.com", "medium.com",
+    ]);
+
+    const rootCounts = new Map<string, number>();
+    for (const r of results) {
+      try {
+        const url = new URL(r.link);
+        const root = normaliseToRegistrableDomain(url.hostname);
+        if (excludedForExplicit.has(root)) continue;
+        rootCounts.set(root, (rootCounts.get(root) || 0) + 1);
+      } catch {}
+    }
+
+    if (rootCounts.size === 0) return null;
+
+    const sorted = [...rootCounts.entries()].sort((a, b) => b[1] - a[1]);
+    const winner = sorted[0][0];
+    console.log(`[${companyName}] 40-C explicit query resolved domain: ${winner}`);
+    return winner;
+  } catch (err: any) {
+    console.warn(`[${companyName}] 40-C explicit query failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * 40-D: Evidence-gated related-domain discovery.
+ * Scans Lane 1 candidate domains and includes any domain that shares a coreToken
+ * with the primary domain and appears >= 3 times.
+ */
+function discoverRelatedDomains(
+  primaryDomain: string,
+  candidates: DiscoveryCandidate[],
+  coreTokens: string[]
+): string[] {
+  const excludedForRelated = new Set([
+    "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
+    "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
+    "google.com", "amazon.com", "reddit.com", "medium.com", "sec.gov",
+    "companieshouse.gov.uk", "indeed.com", "glassdoor.com",
+  ]);
+
+  const domainCounts = new Map<string, number>();
+  for (const c of candidates) {
+    try {
+      const url = new URL(c.url);
+      const root = normaliseToRegistrableDomain(url.hostname);
+      if (root === primaryDomain) continue;
+      if (excludedForRelated.has(root)) continue;
+      domainCounts.set(root, (domainCounts.get(root) || 0) + 1);
+    } catch {}
+  }
+
+  const related: string[] = [];
+  for (const [domain, count] of domainCounts) {
+    if (count < 3) continue;
+    const dl = domain.toLowerCase();
+    const sharesToken = coreTokens.some(token => dl.includes(token));
+    if (sharesToken) {
+      related.push(domain);
+    }
+  }
+
+  related.sort();
+  return related;
+}
 // ─── Ranking and Demotion ────────────────────────────────────────────────────
 
 function calculatePriority(
@@ -2294,6 +2411,7 @@ export async function searchCompanyDocuments(opts: {
   searchDepth?: number; // Number of results per query (default: 10)
   queryVariants?: number; // Number of LLM-generated query variants (default: 3)
   peerCompanyNames?: string[]; // Fix C: workspace-derived peer list for anti-contamination
+  companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
 }): Promise<DiscoveryResult> {
   // Wrap the entire discovery in a hard timeout
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -2316,6 +2434,7 @@ async function searchCompanyDocumentsInner(opts: {
   searchDepth?: number;
   queryVariants?: number;
   peerCompanyNames?: string[];
+  companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
   const localeProfile = resolveLocaleProfile(opts.country);
@@ -2455,24 +2574,122 @@ async function searchCompanyDocumentsInner(opts: {
   }
 
   // Lane 2: Domain-anchored search (with auto-detection if no domain set)
-  // 39-A: normalise stored companyDomain to registrable root (e.g. stories.td.com → td.com)
-  let effectiveDomain = companyDomain ? normaliseToRegistrableDomain(companyDomain) : null;
+  // 40-G: Short-circuit if company already has cached domain family (< 30 days old)
+  // Import aliases from issuer-resolver for 40-A
+  const { deriveAliases, resolveCompanyFIGI } = await import("./issuer-resolver");
+  const companyRow = opts.companyRow || {};
+  let effectiveDomain: string | null = null;
+  let relatedDomains: string[] = [];
   let domainAutoDetected = false;
-  if (!effectiveDomain) {
-    // Auto-detect domain from general search results
-    effectiveDomain = inferDomainFromResults(allCandidates, companyName);
+
+  // 40-G: Use cached family if available and fresh
+  const cachedDomain = companyDomain ? normaliseToRegistrableDomain(companyDomain) : null;
+  const cachedRelated = (companyRow.related_domains as string[] | null) || [];
+  const figiResolvedAt = companyRow.figi_resolved_at ? new Date(companyRow.figi_resolved_at) : null;
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  if (cachedDomain && cachedRelated.length > 0 && figiResolvedAt && figiResolvedAt > thirtyDaysAgo) {
+    // Short-circuit: use cached family
+    effectiveDomain = cachedDomain;
+    relatedDomains = cachedRelated;
+    console.log(`[${companyName}] 40-G: using cached domain family: ${effectiveDomain} + [${relatedDomains.join(", ")}]`);
+  } else {
+    // Full resolution ladder: 40-0 → 40-A → 40-B → 40-C → 40-D
+
+    // 40-0: Resolve canonical name via OpenFIGI (if ISIN available)
+    let figiName = companyRow.figi_name || null;
+    let figiTicker = companyRow.figi_ticker || null;
+    if (!figiResolvedAt || figiResolvedAt < thirtyDaysAgo) {
+      if (companyRow.isin) {
+        const figiResult = await resolveCompanyFIGI({
+          id: companyRow.id || 0,
+          isin: companyRow.isin,
+          figi_resolved_at: companyRow.figi_resolved_at,
+        });
+        if (figiResult.name) figiName = figiResult.name;
+        if (figiResult.ticker) figiTicker = figiResult.ticker;
+      }
+    }
+
+    // 40-A: Derive aliases from canonical name (or company.name fallback)
+    const nameForAliases = figiName || companyName;
+    const aliases = deriveAliases(nameForAliases, figiTicker);
+
+    // 39-A + 40-A: normalise stored domain, then try inference with aliases
+    effectiveDomain = cachedDomain || null;
+    if (!effectiveDomain) {
+      effectiveDomain = inferDomainFromResults(allCandidates, companyName, aliases);
+      if (effectiveDomain) {
+        domainAutoDetected = true;
+        console.log(`[${companyName}] 40-A/B: resolved domain: ${effectiveDomain}`);
+      }
+    }
+
+    // 40-C: If still unresolved, try explicit corporate-domain query
+    if (!effectiveDomain) {
+      const issuerName = figiName || companyName;
+      effectiveDomain = await discoverPrimaryDomainViaExplicitQuery(issuerName, companyName);
+    }
+
+    // 40-D: Discover related domains (evidence-gated)
     if (effectiveDomain) {
-      domainAutoDetected = true;
-      console.log(`[${companyName}] Auto-detected domain: ${effectiveDomain}`);
+      // Core tokens = distinctive words from the primary domain
+      const domainParts = effectiveDomain.split(".")[0].toLowerCase();
+      const coreTokens = aliases.filter(a => a.length >= 3 && domainParts.includes(a));
+      // Also add the domain root itself as a core token
+      if (domainParts.length >= 3) coreTokens.push(domainParts);
+      relatedDomains = discoverRelatedDomains(effectiveDomain, allCandidates, [...new Set(coreTokens)]);
+
+      // Union with manual overrides
+      const manualDomains = (companyRow.related_domains_manual as string[] | null) || [];
+      if (manualDomains.length > 0) {
+        relatedDomains = [...new Set([...relatedDomains, ...manualDomains])];
+      }
+
+      // Persist resolved family to DB
+      if (companyRow.id) {
+        try {
+          const domainsJson = JSON.stringify(relatedDomains);
+          await db.execute(sql`
+            UPDATE companies SET
+              domain = ${effectiveDomain},
+              related_domains = ${domainsJson}::jsonb
+            WHERE id = ${companyRow.id}
+          `);
+        } catch (e: any) {
+          console.warn(`[${companyName}] Failed to persist domain family: ${e.message}`);
+        }
+      }
+
+      console.log(`[${companyName}] 40-D: domain family: ${effectiveDomain} + [${relatedDomains.join(", ")}]`);
+    } else {
+      console.log(`[${companyName}] domain-unresolved: no domain found after full 40 ladder`);
     }
   }
-  if (effectiveDomain) {
-    console.log(`[${companyName}] Running domain-anchored search lane (domain: ${effectiveDomain})`);
-    const domainQueries = buildDomainQueries(companyName, effectiveDomain, framework, topicPhrases);
-    for (const query of domainQueries) {
-      const results = await webSearch(query, { num: searchDepth });
-      for (const r of results) addCandidate(r, "domain");
+
+  // 40-F: Lane 2 query-budget cap
+  const MAX_LANE2_QUERIES = parseInt(process.env.MAX_LANE2_QUERIES_PER_COMPANY || "60", 10);
+  const allDomains = effectiveDomain ? [effectiveDomain, ...relatedDomains] : [];
+  let lane2QueryCount = 0;
+
+  if (allDomains.length > 0) {
+    // Build queries for each domain in the family, respecting the budget
+    const queriesPerDomain = Math.max(5, Math.floor(MAX_LANE2_QUERIES / allDomains.length));
+    console.log(`[${companyName}] Lane 2: ${allDomains.length} domains, budget ${MAX_LANE2_QUERIES}, ~${queriesPerDomain}/domain`);
+
+    for (const domain of allDomains) {
+      const domainQueries = buildDomainQueries(companyName, domain, framework, topicPhrases);
+      const budgetSlice = domain === effectiveDomain
+        ? Math.min(domainQueries.length, queriesPerDomain + 5) // primary gets a bonus
+        : Math.min(domainQueries.length, queriesPerDomain);
+
+      for (let qi = 0; qi < budgetSlice && lane2QueryCount < MAX_LANE2_QUERIES; qi++) {
+        const results = await webSearch(domainQueries[qi], { num: searchDepth });
+        for (const r of results) addCandidate(r, "domain");
+        lane2QueryCount++;
+      }
     }
+    console.log(`[${companyName}] Lane 2 total queries: ${lane2QueryCount}/${MAX_LANE2_QUERIES}`);
   } else {
     console.log(`[${companyName}] No domain available, skipping domain-anchored search`);
   }

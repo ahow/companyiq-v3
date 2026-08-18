@@ -497,6 +497,15 @@ export async function initializeDatabase(): Promise<void> {
     // Fix B: Add prior_best_score column for below-prior-best diagnostics
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS prior_best_score INTEGER`);
 
+    // 40-0: OpenFIGI canonical-name resolution fields
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS figi_name TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS figi_ticker TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS figi_resolved_at TIMESTAMPTZ`);
+    // 40-D: Evidence-gated related domains
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains JSONB`);
+    // 40-E: Manual override for cross-brand domain siblings
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains_manual JSONB`);
+
     // Instruction 31: Add authoritative_registries and authoritative_filing_types columns
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS authoritative_registries JSONB`);
     // B1: Add scoring_examples and anti_inference_rules columns

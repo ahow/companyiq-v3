@@ -161,6 +161,7 @@ async function runFetchPhase(opts: {
     searchDepth,
     queryVariants,
     peerCompanyNames,
+    companyRow: company, // 40-G: pass full row for cached domain family + FIGI fields
   });
 
   console.log(`[${companyName}] Discovery found ${discoveryResult.documents.length} accepted documents`);

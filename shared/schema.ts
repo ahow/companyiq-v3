@@ -41,6 +41,12 @@ export const companies = pgTable("companies", {
   country: text("country"),
   ticker: text("ticker"),
   pinnedDocuments: jsonb("pinned_documents").$type<string[]>(),
+  // 40-G: OpenFIGI resolution cache + domain family
+  figiName: text("figi_name"),
+  figiTicker: text("figi_ticker"),
+  figiResolvedAt: timestamp("figi_resolved_at"),
+  relatedDomains: jsonb("related_domains").$type<string[]>(),
+  relatedDomainsManual: jsonb("related_domains_manual").$type<string[]>(),
   analysisStatus: text("analysis_status").notNull().default("idle"), // idle | fetching | fetched | analyzing | completed | failed
   totalScore: real("total_score"),
   measuresMetCount: integer("measures_met_count"),
