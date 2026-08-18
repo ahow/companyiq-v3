@@ -14,6 +14,7 @@ import {
   type ComputeOpts,
 } from "./ranking.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
+import { deriveAliases, resolveCompanyFIGI } from "./issuer-resolver.js";
 
 const MAX_DOCS_RETURNED = 90;
 const PRE_GATE_CAP = 180;
@@ -1154,7 +1155,7 @@ function buildDomainQueries(companyName: string, domain: string, framework: Fram
     `site:${domain} annual report`,
     `site:${domain} governance`,
     `site:${domain} policy`,
-    `site:${domain}/investors`,
+    `site:${domain} investor relations`,
   ];
 
   // Add requiredDocTypes as domain queries
@@ -2575,17 +2576,17 @@ async function searchCompanyDocumentsInner(opts: {
 
   // Lane 2: Domain-anchored search (with auto-detection if no domain set)
   // 40-G: Short-circuit if company already has cached domain family (< 30 days old)
-  // Import aliases from issuer-resolver for 40-A
-  const { deriveAliases, resolveCompanyFIGI } = await import("./issuer-resolver");
+  // P3: Static import moved to top of file (see import block)
   const companyRow = opts.companyRow || {};
   let effectiveDomain: string | null = null;
   let relatedDomains: string[] = [];
   let domainAutoDetected = false;
 
   // 40-G: Use cached family if available and fresh
+  // NOTE: Drizzle returns camelCase properties (figiName, relatedDomains, etc.)
   const cachedDomain = companyDomain ? normaliseToRegistrableDomain(companyDomain) : null;
-  const cachedRelated = (companyRow.related_domains as string[] | null) || [];
-  const figiResolvedAt = companyRow.figi_resolved_at ? new Date(companyRow.figi_resolved_at) : null;
+  const cachedRelated = (companyRow.relatedDomains as string[] | null) || [];
+  const figiResolvedAt = companyRow.figiResolvedAt ? new Date(companyRow.figiResolvedAt) : null;
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
   if (cachedDomain && cachedRelated.length > 0 && figiResolvedAt && figiResolvedAt > thirtyDaysAgo) {
@@ -2597,18 +2598,19 @@ async function searchCompanyDocumentsInner(opts: {
     // Full resolution ladder: 40-0 → 40-A → 40-B → 40-C → 40-D
 
     // 40-0: Resolve canonical name via OpenFIGI (if ISIN available)
-    let figiName = companyRow.figi_name || null;
-    let figiTicker = companyRow.figi_ticker || null;
-    if (!figiResolvedAt || figiResolvedAt < thirtyDaysAgo) {
-      if (companyRow.isin) {
-        const figiResult = await resolveCompanyFIGI({
-          id: companyRow.id || 0,
-          isin: companyRow.isin,
-          figi_resolved_at: companyRow.figi_resolved_at,
-        });
-        if (figiResult.name) figiName = figiResult.name;
-        if (figiResult.ticker) figiTicker = figiResult.ticker;
-      }
+    // P3: resolveCompanyFIGI now returns cached values when fresh, so we always call it.
+    let figiName = companyRow.figiName || null;
+    let figiTicker = companyRow.figiTicker || null;
+    if (companyRow.isin) {
+      const figiResult = await resolveCompanyFIGI({
+        id: companyRow.id || 0,
+        isin: companyRow.isin,
+        figiResolvedAt: companyRow.figiResolvedAt,
+        figiName: companyRow.figiName,
+        figiTicker: companyRow.figiTicker,
+      });
+      if (figiResult.name) figiName = figiResult.name;
+      if (figiResult.ticker) figiTicker = figiResult.ticker;
     }
 
     // 40-A: Derive aliases from canonical name (or company.name fallback)
@@ -2641,7 +2643,7 @@ async function searchCompanyDocumentsInner(opts: {
       relatedDomains = discoverRelatedDomains(effectiveDomain, allCandidates, [...new Set(coreTokens)]);
 
       // Union with manual overrides
-      const manualDomains = (companyRow.related_domains_manual as string[] | null) || [];
+      const manualDomains = (companyRow.relatedDomainsManual as string[] | null) || [];
       if (manualDomains.length > 0) {
         relatedDomains = [...new Set([...relatedDomains, ...manualDomains])];
       }
@@ -2698,16 +2700,20 @@ async function searchCompanyDocumentsInner(opts: {
   // Uses the framework's derived topic lexicon to search the company's own domain
   // for dedicated topic pages that may not rank for generic queries.
   // This catches pages like aboutamazon.com/ai, company.com/sustainability, etc.
-  if (effectiveDomain && topicPhrases.length > 0) {
-    console.log(`[${companyName}] Running topic-lexicon own-site probe (${topicPhrases.length} terms)`);
+  // P1 fix: Lane 2b/2c now count against the same MAX_LANE2_QUERIES budget.
+  if (effectiveDomain && topicPhrases.length > 0 && lane2QueryCount < MAX_LANE2_QUERIES) {
+    console.log(`[${companyName}] Running topic-lexicon own-site probe (budget remaining: ${MAX_LANE2_QUERIES - lane2QueryCount})`);
     // Use the top 6 topic phrases as individual site-scoped queries
     const probeTerms = topicPhrases.slice(0, 6);
     for (const term of probeTerms) {
+      if (lane2QueryCount >= MAX_LANE2_QUERIES) break;
       const query = `site:${effectiveDomain} ${term}`;
       const results = await webSearch(query, { num: 5 });
       for (const r of results) addCandidate(r, "topic-probe");
+      lane2QueryCount++;
     }
     // Also try common corporate URL patterns with slugified topic terms
+    // (these are synthetic candidates, not search queries — no budget cost)
     const slugTerms = topicPhrases.slice(0, 3).map(t => t.toLowerCase().replace(/\s+/g, "-"));
     for (const slug of slugTerms) {
       const probeUrls = [
@@ -2735,9 +2741,10 @@ async function searchCompanyDocumentsInner(opts: {
   // Some companies host disclosures on subdomains (about.bankofamerica.com, investor.citigroup.com).
   // After Lane 1 populates candidates, identify the top subdomains of the root domain
   // and generate site: queries against each for each requiredDocType.
+  // P1 fix: Also counts against MAX_LANE2_QUERIES budget.
   const reqDocTypes39B = ((framework as any).requiredDocTypes as string[] | null) || [];
   const rootDomain = effectiveDomain;
-  if (rootDomain && reqDocTypes39B.length > 0) {
+  if (rootDomain && reqDocTypes39B.length > 0 && lane2QueryCount < MAX_LANE2_QUERIES) {
     const subdomainCounts = new Map<string, number>();
     for (const c of allCandidates) {
       try {
@@ -2754,16 +2761,20 @@ async function searchCompanyDocumentsInner(opts: {
       .map(([host]) => host);
 
     if (topSubdomains.length > 0) {
-      console.log(`[${companyName}] 39-B: subdomain-variant queries for ${topSubdomains.join(", ")}`);
+      console.log(`[${companyName}] 39-B: subdomain-variant queries for ${topSubdomains.join(", ")} (budget remaining: ${MAX_LANE2_QUERIES - lane2QueryCount})`);
       for (const subdomain of topSubdomains) {
         for (const docType of reqDocTypes39B.slice(0, 5)) {
+          if (lane2QueryCount >= MAX_LANE2_QUERIES) break;
           const q = `site:${subdomain} ${docType}`;
           const results = await webSearch(q, { num: 15 });
           for (const r of results) addCandidate(r, "domain-variant");
+          lane2QueryCount++;
         }
+        if (lane2QueryCount >= MAX_LANE2_QUERIES) break;
       }
     }
   }
+  console.log(`[${companyName}] Lane 2 final query count (all sub-lanes): ${lane2QueryCount}/${MAX_LANE2_QUERIES}`);
 
   // Lane 3: Trusted source search (framework-specific sources take priority)
   const frameworkSourceIds = framework.trustedSourceIds as number[] | null;
