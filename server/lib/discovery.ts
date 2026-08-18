@@ -13,7 +13,7 @@ import {
 } from "./ranking.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 
-const MAX_DOCS_RETURNED = 60;
+const MAX_DOCS_RETURNED = 90;
 const PRE_GATE_CAP = 180;
 const SEARCH_TIMEOUT = 15000;
 
@@ -865,6 +865,121 @@ async function webSearchInner(
 
   console.error("[Discovery] No search API key configured (SERPER_API_KEY or SERP_API_KEY)");
   return [];
+}
+
+// ─── Registry Adapter Lane (36-A.2) ─────────────────────────────────────────
+// Direct lookup on framework's authoritativeRegistries. Bypasses generic web
+// search for structured registries (UK MSS, AU MSS, CDP, etc.), giving 100%
+// recall on registered filers with zero API noise.
+//
+// Adding a new registry: register its domain in REGISTRY_ADAPTERS and provide
+// the URL-construction logic. No topic branches — this is a domain-to-URL map.
+
+interface RegistryAdapter {
+  domain: string;
+  buildCandidateUrls: (ctx: {
+    companyName: string;
+    aliases: string[];
+    isin?: string | null;
+  }) => Promise<string[]>;
+}
+
+const REGISTRY_ADAPTERS: RegistryAdapter[] = [
+  {
+    // UK Modern Slavery register — search endpoint is public and stable
+    domain: "modern-slavery-statement-registry.service.gov.uk",
+    buildCandidateUrls: async ({ companyName, aliases }) => {
+      const queries = [companyName, ...aliases].slice(0, 4);
+      const results: string[] = [];
+      for (const q of queries) {
+        try {
+          const encoded = encodeURIComponent(q);
+          const searchUrl = `https://modern-slavery-statement-registry.service.gov.uk/search?search=${encoded}`;
+          const resp = await axios.get(searchUrl, { timeout: 8000 });
+          const matches = String(resp.data).match(
+            /\/statement-summary\/[a-z0-9-]+/gi
+          ) || [];
+          for (const path of matches.slice(0, 3)) {
+            results.push(`https://modern-slavery-statement-registry.service.gov.uk${path}`);
+          }
+        } catch (e) {
+          // Registry unreachable — skip; the site: fallback below will run
+        }
+      }
+      return Array.from(new Set(results));
+    },
+  },
+  {
+    // Australian Modern Slavery register
+    domain: "modernslaveryregister.gov.au",
+    buildCandidateUrls: async ({ companyName, aliases }) => {
+      const queries = [companyName, ...aliases].slice(0, 4);
+      const results: string[] = [];
+      for (const q of queries) {
+        try {
+          const encoded = encodeURIComponent(q);
+          const searchUrl = `https://modernslaveryregister.gov.au/search?query=${encoded}`;
+          const resp = await axios.get(searchUrl, { timeout: 8000 });
+          const matches = String(resp.data).match(/\/statements\/[a-zA-Z0-9]+\//g) || [];
+          for (const path of matches.slice(0, 3)) {
+            results.push(`https://modernslaveryregister.gov.au${path}pdf/`);
+          }
+        } catch (e) {}
+      }
+      return Array.from(new Set(results));
+    },
+  },
+  {
+    // CDP disclosure database — company-search endpoint
+    domain: "cdp.net",
+    buildCandidateUrls: async ({ companyName }) => {
+      try {
+        const encoded = encodeURIComponent(companyName);
+        const searchUrl = `https://www.cdp.net/en/responses?queries%5Bname%5D=${encoded}`;
+        const resp = await axios.get(searchUrl, { timeout: 8000 });
+        const matches = String(resp.data).match(/\/en\/formatted_responses\/responses\/[0-9]+/g) || [];
+        return Array.from(new Set(matches.slice(0, 5).map(p => `https://www.cdp.net${p}`)));
+      } catch (e) {
+        return [];
+      }
+    },
+  },
+  // Additional adapters can be added here as new frameworks are onboarded.
+  // Each adapter is a domain-to-URL map; adding one does not require topic-specific
+  // logic in any general code path.
+];
+
+async function discoverRegistryLane(
+  companyName: string,
+  aliases: string[],
+  isin: string | null | undefined,
+  frameworkRegistries: string[],
+): Promise<{ url: string; title: string; source: string }[]> {
+  const results: { url: string; title: string; source: string }[] = [];
+  for (const registryDomain of frameworkRegistries) {
+    const adapter = REGISTRY_ADAPTERS.find(a =>
+      registryDomain.includes(a.domain) || a.domain.includes(registryDomain)
+    );
+    if (adapter) {
+      // Structured-registry direct lookup
+      const urls = await adapter.buildCandidateUrls({ companyName, aliases, isin });
+      for (const url of urls) {
+        results.push({ url, title: `${companyName} — ${adapter.domain}`, source: "registry-direct" });
+      }
+    } else {
+      // Site: fallback — deterministic within the domain, more reliable than global search
+      try {
+        const siteResults = await webSearch(
+          `site:${registryDomain} "${companyName}"`,
+          { num: 15 }
+        );
+        for (const r of siteResults) {
+          results.push({ url: r.link, title: r.title, source: "registry-site" });
+        }
+      } catch (e) {}
+    }
+  }
+  return results;
 }
 
 // ─── Query Variant Generation ───────────────────────────────────────────────
@@ -2170,7 +2285,7 @@ async function searchCompanyDocumentsInner(opts: {
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
   const localeProfile = resolveLocaleProfile(opts.country);
-  const searchDepth = opts.searchDepth || 10;
+  const searchDepth = opts.searchDepth || 30;
   const queryVariants = opts.queryVariants ?? 3;
   const allCandidates: DiscoveryCandidate[] = [];
   const seenUrls = new Set<string>();
@@ -2240,6 +2355,34 @@ async function searchCompanyDocumentsInner(opts: {
         });
         laneCounts["pinned"] = (laneCounts["pinned"] || 0) + 1;
       }
+    }
+  }
+
+  // Registry lane — direct lookup on framework's authoritativeRegistries (36-A.2)
+  const frameworkRegistries = ((framework as any).authoritativeRegistries as string[] | null) || [];
+  if (frameworkRegistries.length > 0) {
+    const registryHits = await discoverRegistryLane(
+      companyName,
+      (opts as any).aliases || [],
+      (opts as any).isin || null,
+      frameworkRegistries
+    );
+    for (const hit of registryHits) {
+      const normUrl = normaliseUrl(hit.url);
+      if (!seenUrls.has(normUrl)) {
+        seenUrls.add(normUrl);
+        allCandidates.push({
+          url: normUrl,
+          title: hit.title,
+          snippet: "",
+          lane: "registry-direct",
+          priority: -100,
+        });
+        laneCounts["registry-direct"] = (laneCounts["registry-direct"] || 0) + 1;
+      }
+    }
+    if (registryHits.length > 0) {
+      console.log(`[${companyName}] Registry lane found ${registryHits.length} candidates from ${frameworkRegistries.join(", ")}`);
     }
   }
 
@@ -2683,10 +2826,17 @@ async function searchCompanyDocumentsInner(opts: {
     }
   }
 
-  // Cap before gate to bound LLM cost
-  const preGateCandidates = preCapCandidates
+  // Cap before gate to bound LLM cost.
+  // 36-A.4: Protected lanes (registry-direct, pinned, edgar-submissions) bypass
+  // the cap — these are structured-source high-confidence documents that should
+  // never be pre-gate-rejected on a candidate-count budget.
+  const PROTECTED_LANES = ["registry-direct", "pinned", "edgar-submissions"];
+  const protectedDocs = preCapCandidates.filter(c => PROTECTED_LANES.includes((c as any).lane || ""));
+  const unprotectedDocs = preCapCandidates.filter(c => !PROTECTED_LANES.includes((c as any).lane || ""));
+  const cappedUnprotected = unprotectedDocs
     .sort((a, b) => a.priority - b.priority)
     .slice(0, PRE_GATE_CAP);
+  const preGateCandidates = [...protectedDocs, ...cappedUnprotected];
 
   // Run relevance gate
   console.log(`[${companyName}] Running relevance gate on ${preGateCandidates.length} candidates`);

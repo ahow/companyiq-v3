@@ -1285,6 +1285,7 @@ export async function analyzeCompanyMeasures(opts: {
         // Ensemble: run multiple passes
         measureResult = await scoreWithEnsemble({
           companyName,
+          companyId,
           measure,
           evidenceText: finalEvidence,
           terminology,
@@ -1297,6 +1298,7 @@ export async function analyzeCompanyMeasures(opts: {
         // Single pass
         measureResult = await scoreSingleMeasure({
           companyName,
+          companyId,
           measure,
           evidenceText: finalEvidence,
           terminology,
@@ -1407,6 +1409,7 @@ export async function analyzeCompanyMeasures(opts: {
               if (settings.ensembleScoring) {
                 deepResult = await scoreWithEnsemble({
                   companyName,
+                  companyId,
                   measure,
                   evidenceText: deepPack.text,
                   terminology,
@@ -1418,6 +1421,7 @@ export async function analyzeCompanyMeasures(opts: {
               } else {
                 deepResult = await scoreSingleMeasure({
                   companyName,
+                  companyId,
                   measure,
                   evidenceText: deepPack.text,
                   terminology,
@@ -1592,13 +1596,25 @@ export async function analyzeCompanyMeasures(opts: {
 const VERDICT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const verdictCache = new Map<string, { result: MeasureResult; ts: number }>();
 
-function verdictCacheKey(measureId: string, evidenceText: string, provider: string, scoringMode: string): string {
+function verdictCacheKey(measureId: string, evidenceText: string, provider: string, scoringMode: string, promptText?: string): string {
   const evidenceHash = createHash("sha256").update(evidenceText).digest("hex").slice(0, 16);
-  return `${measureId}:${provider}:${scoringMode}:${evidenceHash}`;
+  // 36-B.2: Include prompt hash so cache auto-invalidates on prompt template changes
+  const promptHash = promptText ? createHash("sha256").update(promptText).digest("hex").slice(0, 8) : "noprompt";
+  return `${measureId}:${provider}:${scoringMode}:${evidenceHash}:${promptHash}`;
+}
+
+// 36-B.1: Deterministic seed per (measureId, companyId, providerIndex).
+// Gives each measure a unique seed, reducing systematic bias across measures.
+function deterministicSeed(measureId: string, companyId: number, providerIndex: number): number {
+  const h = createHash("sha256")
+    .update(`${measureId}:${companyId}:${providerIndex}`)
+    .digest();
+  return h.readUInt32BE(0);
 }
 
 async function scoreSingleMeasure(opts: {
   companyName: string;
+  companyId?: number;
   measure: FrameworkMeasure;
   evidenceText: string;
   terminology?: TerminologyMap;
@@ -1612,7 +1628,8 @@ async function scoreSingleMeasure(opts: {
   const usePartial = scoringMode === "partial";
 
   // I36-B: Check verdict cache — identical evidence + measure + provider = identical result
-  const vKey = verdictCacheKey(measure.measureId, opts.evidenceText, opts.provider, scoringMode || "binary");
+  // The cache salt (bumped on prompt changes) is included as the promptText proxy
+  const vKey = verdictCacheKey(measure.measureId, opts.evidenceText, opts.provider, scoringMode || "binary", "v3n-no-govterms");
   const cachedVerdict = verdictCache.get(vKey);
   if (cachedVerdict && (Date.now() - cachedVerdict.ts) < VERDICT_CACHE_TTL_MS) {
     return { ...cachedVerdict.result };
@@ -1625,13 +1642,13 @@ async function scoreSingleMeasure(opts: {
   const passes = Math.max(1, parseInt(process.env.SCORING_SELF_CONSISTENCY || "3", 10));
 
   if (passes === 1) {
-    return scoreSingleMeasurePass(opts);
+    return scoreSingleMeasurePass({ ...opts, providerIndex: 0 });
   }
 
   const passResults: MeasureResult[] = [];
   const gradedBy = new Set<string>();
   for (let i = 0; i < passes; i++) {
-    const r = await scoreSingleMeasurePass(opts);
+    const r = await scoreSingleMeasurePass({ ...opts, providerIndex: i });
     passResults.push(r);
     if ((r as any)._gradedBy) gradedBy.add((r as any)._gradedBy);
   }
@@ -1688,16 +1705,18 @@ async function scoreSingleMeasure(opts: {
 // silent cross-model fallback path.
 async function scoreSingleMeasurePass(opts: {
   companyName: string;
+  companyId?: number;
   measure: FrameworkMeasure;
   evidenceText: string;
   terminology?: TerminologyMap;
   topicDescription: string;
   provider: string;
+  providerIndex?: number;
   temporalWarning?: string | null;
   scoringMode?: string;
   framework?: Framework;
 }): Promise<MeasureResult> {
-  const { companyName, measure, evidenceText, terminology, topicDescription, provider, temporalWarning, scoringMode, framework } = opts;
+  const { companyName, companyId, measure, evidenceText, terminology, topicDescription, provider, providerIndex, temporalWarning, scoringMode, framework } = opts;
 
   // Choose prompt based on scoring mode
   const usePartial = scoringMode === "partial";
@@ -1705,12 +1724,16 @@ async function scoreSingleMeasurePass(opts: {
     ? buildPartialScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning, framework })
     : buildBinaryScoringPrompt({ companyName, measure, evidenceText, terminology, topicDescription, temporalWarning, framework });
 
+  // 36-B.1: Deterministic seed per (measureId, companyId, providerIndex)
+  const seed = companyId != null ? deterministicSeed(measure.measureId, companyId, providerIndex ?? 0) : undefined;
+
   try {
     const { text, provider: gradedBy } = await completeScoring(provider, {
       system,
       prompt,
       json: true,
       maxTokens: 2000,
+      seed,
     });
 
     const parsed = extractAndParseJSON(text);
@@ -1774,6 +1797,7 @@ async function scoreSingleMeasurePass(opts: {
 
 async function scoreWithEnsemble(opts: {
   companyName: string;
+  companyId?: number;
   measure: FrameworkMeasure;
   evidenceText: string;
   terminology?: TerminologyMap;
@@ -1782,7 +1806,7 @@ async function scoreWithEnsemble(opts: {
   temporalWarning?: string | null;
   framework?: Framework;
 }): Promise<MeasureResult> {
-  const { companyName, measure, evidenceText, terminology, topicDescription, settings, temporalWarning, framework } = opts;
+  const { companyName, companyId, measure, evidenceText, terminology, topicDescription, settings, temporalWarning, framework } = opts;
 
   const providers = [settings.pipelineLlm1, settings.pipelineLlm2, settings.pipelineLlm3];
   const iterations = Math.min(settings.ensembleIterations, providers.length);
@@ -1793,6 +1817,7 @@ async function scoreWithEnsemble(opts: {
     const provider = providers[i] || settings.scoringProvider;
     const result = await scoreSingleMeasure({
       companyName,
+      companyId,
       measure,
       evidenceText,
       terminology,

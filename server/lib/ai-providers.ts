@@ -126,6 +126,7 @@ class ClaudeProvider implements AIProvider {
           model: this.model,
           max_tokens: Math.min(opts.maxTokens ?? 4096, 8192),
           temperature: opts.temperature ?? 0,
+          top_p: 1, // 36-B.1: deterministic sampling
           system: opts.system,
           messages: [{ role: "user", content: opts.prompt }],
         });
@@ -216,6 +217,7 @@ class OpenAICompatibleProvider implements AIProvider {
     maxTokens?: number;
     json?: boolean;
     temperature?: number;
+    seed?: number;
   }): Promise<string> {
     const body: any = {
       model: this.model,
@@ -225,9 +227,10 @@ class OpenAICompatibleProvider implements AIProvider {
       ],
       max_tokens: Math.min(opts.maxTokens ?? 4096, this.maxOutputTokens),
       temperature: opts.temperature ?? 0,
+      top_p: 1, // 36-B.1: deterministic sampling
     };
 
-    if (this.seed !== undefined && this.supportsSeed) body.seed = this.seed;
+    if (this.seed !== undefined && this.supportsSeed) body.seed = opts.seed ?? this.seed;
     if (opts.json && this.supportsJsonMode) body.response_format = { type: "json_object" };
 
     // Try each available key once; rotate on rate-limit (429) or auth (401) errors
@@ -296,6 +299,7 @@ class GeminiProvider implements AIProvider {
       systemInstruction: { parts: [{ text: opts.system }] },
       generationConfig: {
         temperature: opts.temperature ?? 0,
+        topK: 1, // 36-B.1: deterministic sampling
         maxOutputTokens: opts.maxTokens ?? 4096,
       },
     };
@@ -559,7 +563,7 @@ export async function completeWithFallback(
 // many times the same provider is retried before any fallback.
 export async function completeScoring(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
 ): Promise<{ text: string; provider: string }> {
   await acquireLlmSlot();
   try {
