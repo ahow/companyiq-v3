@@ -627,7 +627,7 @@ async function summarizeDocuments(opts: {
   documentTitles?: string[];
   topicDescription: string;
   framework: Framework;
-}): Promise<{ text: string; model: string; reservedAnnualUrl?: string }> {
+}): Promise<{ text: string; model: string; reservedAnnualUrl?: string; corpusTopicWarning?: string }> {
   const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription, framework } = opts;
 
   // Check summary cache. v3g: salt the cache key so the OLD header-lossy LLM
@@ -706,7 +706,17 @@ async function summarizeDocuments(opts: {
     "topic-primary": 80000,
     other: 1000,
   };
-  interface DocEntry { text: string; url: string; score: number; idx: number; cls: DocClass }
+  interface DocEntry { text: string; url: string; score: number; precision: number; idx: number; cls: DocClass }
+
+  // 37-B.1: topic-precision score using framework dataPatterns.
+  // dataPatterns are framework-declared regexes that fire only on topic-specific text.
+  // This differentiates documents that mention the topic generically from documents
+  // that materially discuss it.
+  const dataPatterns = ((framework as any).dataPatterns as string[] | null) || [];
+  const dataPatternRegexes = dataPatterns.map((p: string) => {
+    try { return new RegExp(p, "gi"); } catch { return null; }
+  }).filter((r): r is RegExp => r !== null);
+
   const docEntries: DocEntry[] = documentTexts.map((text, idx) => {
     const lower = text.toLowerCase();
     let density = 0;
@@ -715,22 +725,35 @@ async function summarizeDocuments(opts: {
       const matches = lower.match(regex);
       density += Math.min(matches?.length || 0, 10);
     }
+    // 37-B.1: topic precision — hits on framework's dataPatterns, uncapped.
+    // These regex are framework-declared and topic-specific by design; more hits
+    // means the document is materially about the framework's actual subject.
+    let precision = 0;
+    for (const rx of dataPatternRegexes) {
+      rx.lastIndex = 0;
+      const matches = lower.match(rx);
+      precision += matches?.length || 0;
+    }
     const url = documentUrls[idx] || "";
     const title = documentTitles?.[idx] || "";
     const cls = classifyDoc(url, title);
     // Keyword density is CAPPED so it only breaks ties WITHIN a class, never
     // overrides the structural class priority above.
-    // Defect 3 fix: derive URL slug bonus from framework.requiredDocTypes (not hardcoded AI terms)
     const requiredDocSlugs = ((framework as any).requiredDocTypes as string[] | null) || [];
     const slugWords = requiredDocSlugs.flatMap((s: string) => s.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 3));
     const slugRe = slugWords.length > 0 ? new RegExp(slugWords.join("|"), "i") : null;
     const slugBonus = slugRe && slugRe.test(url) ? 200 : 0;
     const score = CLASS_BOOST[cls] + Math.min(density, 800) + slugBonus;
-    return { text, url, score, idx, cls };
+    return { text, url, score, precision, idx, cls };
   });
 
-  // Sort by relevance score descending
-  docEntries.sort((a, b) => b.score - a.score);
+  // 37-B.1: sort by (class-score DESC, precision DESC, idx ASC).
+  // idx ASC breaks final ties deterministically (37-A guarantees stable idx).
+  docEntries.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.precision !== a.precision) return b.precision - a.precision;
+    return a.idx - b.idx;
+  });
 
   console.log(`[${companyName}] Document priority ordering (top 5):`);
   for (const d of docEntries.slice(0, 5)) {
@@ -755,16 +778,48 @@ async function summarizeDocuments(opts: {
     other: 120000,
   };
 
-  let combined = "";
+  // 37-B.2: reserve budget for documents with high topic-precision.
+  // A document with >= 3 dataPattern hits is materially about the framework topic;
+  // guarantee at least one such document per class survives the class-cap sequence.
+  const HIGH_PRECISION_THRESHOLD = 3;
+  const highPrecisionByClass = new Map<DocClass, DocEntry>();
   for (const entry of docEntries) {
+    if (entry.precision >= HIGH_PRECISION_THRESHOLD && !highPrecisionByClass.has(entry.cls)) {
+      highPrecisionByClass.set(entry.cls, entry);
+    }
+  }
+
+  let combined = "";
+  const includedIndexes = new Set<number>();
+  // First pass: include one high-precision doc per class at its full cap.
+  for (const [cls, entry] of highPrecisionByClass) {
+    const cap = CAP_BY_CLASS[cls];
+    const docTitle = documentTitles?.[entry.idx] || entry.url;
+    combined += `\n\n--- DOCUMENT: ${docTitle} [${entry.url}] ---\n\n` + entry.text.slice(0, cap);
+    includedIndexes.add(entry.idx);
+  }
+  // Second pass: remaining documents in the existing sorted order.
+  for (const entry of docEntries) {
+    if (includedIndexes.has(entry.idx)) continue;
     const cap = CAP_BY_CLASS[entry.cls];
     const docTitle = documentTitles?.[entry.idx] || entry.url;
     combined += `\n\n--- DOCUMENT: ${docTitle} [${entry.url}] ---\n\n` + entry.text.slice(0, cap);
+    includedIndexes.add(entry.idx);
+  }
+
+  // 37-B.3: emit warning when the assembled corpus fires zero dataPattern hits.
+  // This is a diagnostic signal, not a hard block.
+  const totalPrecision = docEntries.reduce((sum, e) => sum + (includedIndexes.has(e.idx) ? e.precision : 0), 0);
+  const corpusTopicWarning = totalPrecision === 0 && dataPatternRegexes.length > 0
+    ? `Corpus contains zero hits on framework dataPatterns (${dataPatterns.slice(0,3).join(", ")}...). Retrieval may have failed to surface topic-material evidence.`
+    : undefined;
+  if (corpusTopicWarning) {
+    console.warn(`[${companyName}] 37-B.3: ${corpusTopicWarning}`);
   }
 
   // If total is small enough, skip summarization and use BM25 directly
   if (combined.length < 600000) {
-    return { text: combined, model: "raw-pass" };
+    return { text: combined, model: "raw-pass", corpusTopicWarning };
   }
 
   // ─── HEADER-PRESERVING BM25 PRE-FILTER (v3g quote sourceUrl fix) ─────────────
@@ -1030,7 +1085,7 @@ async function summarizeDocuments(opts: {
     summarizerModel: "bm25-headers-v3l-topicaware",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3l-topicaware", reservedAnnualUrl };
+  return { text: relevantText, model: "bm25-headers-v3l-topicaware", reservedAnnualUrl, corpusTopicWarning };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────

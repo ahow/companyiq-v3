@@ -342,7 +342,8 @@ export async function getAcceptedDocuments(companyId: number) {
       createdAt: schema.documents.createdAt,
     })
     .from(schema.documents)
-    .where(and(eq(schema.documents.companyId, companyId), eq(schema.documents.gateVerdict, "accept")));
+    .where(and(eq(schema.documents.companyId, companyId), eq(schema.documents.gateVerdict, "accept")))
+    .orderBy(asc(schema.documents.id));  // 37-A.1: deterministic ordering
 }
 
 /**
@@ -392,6 +393,7 @@ export async function getFetchedDocuments(companyId: number) {
     FROM documents d
     LEFT JOIN document_content dc ON dc.id = d.content_id
     WHERE d.company_id = ${companyId} AND d.fetch_status = 'ok'
+    ORDER BY d.id                             -- 37-A.2: deterministic ordering
   `);
   return rows.rows as Array<{
     id: number;
