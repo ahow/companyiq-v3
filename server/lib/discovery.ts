@@ -665,6 +665,19 @@ function getSerpApiKey(): string | null {
   return process.env.SERP_API_KEY || null;
 }
 
+// ─── Search Result Cache (I36-A: eliminate cross-battery non-determinism) ────
+// Caches search results by query+opts for 24 hours. Two batteries on the same
+// commit within 24h will see identical discovery candidates, making the only
+// remaining variance source the fetch phase (which is already stabilised by
+// the document pool and batch_corpus snapshot).
+
+const SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const searchCache = new Map<string, { results: SearchResult[]; ts: number }>();
+
+function searchCacheKey(query: string, opts: Record<string, any>): string {
+  return createHash("sha256").update(JSON.stringify({ q: query, ...opts })).digest("hex").slice(0, 16);
+}
+
 // ─── Search Provider (Serper.dev primary, SerpAPI fallback) ─────────────────
 
 interface SearchResult {
@@ -787,10 +800,27 @@ async function webSearch(
   query: string,
   opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {}
 ): Promise<SearchResult[]> {
+  // I36-A: Check in-memory search cache first (24h TTL)
+  const cKey = searchCacheKey(query, opts);
+  const cached = searchCache.get(cKey);
+  if (cached && (Date.now() - cached.ts) < SEARCH_CACHE_TTL_MS) {
+    return cached.results;
+  }
+
   // Global rate limiter: acquire a token before making any search API call
   await acquireSearchToken();
   try {
-    return await webSearchInner(query, opts);
+    const results = await webSearchInner(query, opts);
+    // Store in cache
+    searchCache.set(cKey, { results, ts: Date.now() });
+    // Evict stale entries periodically (keep cache bounded)
+    if (searchCache.size > 5000) {
+      const now = Date.now();
+      for (const [k, v] of searchCache) {
+        if (now - v.ts > SEARCH_CACHE_TTL_MS) searchCache.delete(k);
+      }
+    }
+    return results;
   } finally {
     releaseSearchToken();
   }

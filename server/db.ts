@@ -507,12 +507,13 @@ export async function initializeDatabase(): Promise<void> {
 
     // B7 repair: fix corrupted authoritativeFilingTypes patterns containing literal
     // backspace characters (0x08) where \b word boundaries were intended.
+    // Idempotent: only rows whose JSONB-cast-to-text contains the two-char sequence
+    // `\b` are updated. This condition alone scopes to affected rows (only fw3 patterns
+    // used \b word boundaries), so no topic branch is needed.
     await db.execute(sql`
       UPDATE frameworks SET
         authoritative_filing_types = '[{"pattern":"\\\\bcdp\\\\b|tcfd|climate.?report","weight":8.0},{"pattern":"sustainab|esg\\\\b|csr\\\\b|responsibility","weight":6.0}]'::jsonb
       WHERE authoritative_filing_types::text LIKE '%\\b%'
-        AND (topic_description ILIKE '%climate%' OR topic_description ILIKE '%emission%'
-             OR topic_description ILIKE '%carbon%' OR name ILIKE '%climate%')
     `);
 
     // ─── Seed Default Settings for All Workspaces ──────────────────────

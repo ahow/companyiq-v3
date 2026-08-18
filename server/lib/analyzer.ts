@@ -1587,6 +1587,16 @@ export async function analyzeCompanyMeasures(opts: {
 
 // ─── Single Measure Scoring ──────────────────────────────────────────────────
 
+// I36-B: Verdict cache — identical evidence + measure + provider = identical result.
+// Eliminates scorer non-determinism from provider-side sampling noise.
+const VERDICT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const verdictCache = new Map<string, { result: MeasureResult; ts: number }>();
+
+function verdictCacheKey(measureId: string, evidenceText: string, provider: string, scoringMode: string): string {
+  const evidenceHash = createHash("sha256").update(evidenceText).digest("hex").slice(0, 16);
+  return `${measureId}:${provider}:${scoringMode}:${evidenceHash}`;
+}
+
 async function scoreSingleMeasure(opts: {
   companyName: string;
   measure: FrameworkMeasure;
@@ -1600,6 +1610,13 @@ async function scoreSingleMeasure(opts: {
 }): Promise<MeasureResult> {
   const { companyName, measure, scoringMode } = opts;
   const usePartial = scoringMode === "partial";
+
+  // I36-B: Check verdict cache — identical evidence + measure + provider = identical result
+  const vKey = verdictCacheKey(measure.measureId, opts.evidenceText, opts.provider, scoringMode || "binary");
+  const cachedVerdict = verdictCache.get(vKey);
+  if (cachedVerdict && (Date.now() - cachedVerdict.ts) < VERDICT_CACHE_TTL_MS) {
+    return { ...cachedVerdict.result };
+  }
 
   // Self-consistency: run N passes on the SAME provider (no silent cross-model
   // fallback) and take the majority verdict. This bounds the residual best-effort
@@ -1637,11 +1654,16 @@ async function scoreSingleMeasure(opts: {
   }
   const winners = tally.get(winningBucket)!;
   // Pick the winner with the richest quotes/evidence as the representative result.
-  const chosen = winners.reduce((a, b) => {
-    const aScore = a.quotes.length * 1000 + (a.evidenceSummary?.length || 0);
-    const bScore = b.quotes.length * 1000 + (b.evidenceSummary?.length || 0);
-    return bScore > aScore ? b : a;
+  // I36-B: Deterministic tie-break: sort by (quotes.length DESC, evidenceSummary.length DESC,
+  // evidenceSummary text ASC) so identical-quality results always pick the same one.
+  winners.sort((a, b) => {
+    const aq = a.quotes.length, bq = b.quotes.length;
+    if (aq !== bq) return bq - aq;
+    const ae = a.evidenceSummary?.length || 0, be = b.evidenceSummary?.length || 0;
+    if (ae !== be) return be - ae;
+    return (a.evidenceSummary || "").localeCompare(b.evidenceSummary || "");
   });
+  const chosen = winners[0];
   const unanimous = winningCount === passes;
   const gradedByLabel = Array.from(gradedBy).join("+") || "unknown";
   chosen.confidence = unanimous ? "High" : winningCount >= Math.ceil(passes / 2) ? "Medium" : "Low";
@@ -1649,6 +1671,15 @@ async function scoreSingleMeasure(opts: {
     `[Self-consistency ${winningCount}/${passes} on ${gradedByLabel}]`;
   // Propagate model identity for methodology stamping
   (chosen as any)._gradedBy = gradedByLabel;
+
+  // I36-B: Store in verdict cache
+  verdictCache.set(vKey, { result: { ...chosen }, ts: Date.now() });
+  if (verdictCache.size > 10000) {
+    const now = Date.now();
+    for (const [k, v] of verdictCache) {
+      if (now - v.ts > VERDICT_CACHE_TTL_MS) verdictCache.delete(k);
+    }
+  }
   return chosen;
 }
 
