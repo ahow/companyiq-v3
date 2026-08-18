@@ -778,27 +778,31 @@ async function summarizeDocuments(opts: {
     other: 120000,
   };
 
-  // 37-B.2: reserve budget for documents with high topic-precision.
-  // A document with >= 3 dataPattern hits is materially about the framework topic;
-  // guarantee at least one such document per class survives the class-cap sequence.
+  // 38: uncapped reserve for high-precision documents.
+  // Documents with >= HIGH_PRECISION_THRESHOLD dataPattern hits are materially about
+  // the framework topic. Include ALL of them in the first pass in precision-DESC order,
+  // each at its full class-cap. This eliminates the "which one wins reservation"
+  // non-determinism when multiple documents in the same class share high precision.
+  //
+  // Design note: this is not unbounded — the total corpus is capped by
+  // MAX_DOCS_RETURNED (90) upstream, and the summariser's downstream 600k skip
+  // threshold + 560k BM25 pool cap the total content that reaches the scorer.
+  // Reserving more high-precision documents just changes which ones get full-cap
+  // allocation vs which ones get second-pass class-cap fill.
   const HIGH_PRECISION_THRESHOLD = 3;
-  const highPrecisionByClass = new Map<DocClass, DocEntry>();
-  for (const entry of docEntries) {
-    if (entry.precision >= HIGH_PRECISION_THRESHOLD && !highPrecisionByClass.has(entry.cls)) {
-      highPrecisionByClass.set(entry.cls, entry);
-    }
-  }
+  const highPrecisionEntries = docEntries.filter(e => e.precision >= HIGH_PRECISION_THRESHOLD);
 
   let combined = "";
   const includedIndexes = new Set<number>();
-  // First pass: include one high-precision doc per class at its full cap.
-  for (const [cls, entry] of highPrecisionByClass) {
-    const cap = CAP_BY_CLASS[cls];
+  // First pass: include ALL high-precision documents at their full class-cap,
+  // in the existing (class-score DESC, precision DESC, idx ASC) sort order.
+  for (const entry of highPrecisionEntries) {
+    const cap = CAP_BY_CLASS[entry.cls];
     const docTitle = documentTitles?.[entry.idx] || entry.url;
     combined += `\n\n--- DOCUMENT: ${docTitle} [${entry.url}] ---\n\n` + entry.text.slice(0, cap);
     includedIndexes.add(entry.idx);
   }
-  // Second pass: remaining documents in the existing sorted order.
+  // Second pass: remaining documents in sort order.
   for (const entry of docEntries) {
     if (includedIndexes.has(entry.idx)) continue;
     const cap = CAP_BY_CLASS[entry.cls];

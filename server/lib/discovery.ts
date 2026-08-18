@@ -1835,6 +1835,34 @@ function isSharedHost(domain: string): boolean {
   );
 }
 
+// 39-A: normalise a hostname to its registrable root domain.
+// Handles common patterns: subdomain.example.com → example.com,
+// example.co.uk → example.co.uk (preserve second-level ccTLD),
+// stories.td.com → td.com, about.bankofamerica.com → bankofamerica.com.
+function normaliseToRegistrableDomain(hostname: string): string {
+  const clean = hostname.toLowerCase().replace(/^www\./, "");
+  const parts = clean.split(".");
+
+  // Handle common two-part ccTLDs (co.uk, com.au, co.jp, etc.).
+  const twoPartCcTlds = new Set([
+    "co.uk", "org.uk", "gov.uk", "ac.uk",
+    "com.au", "org.au", "gov.au",
+    "co.jp", "or.jp", "ne.jp",
+    "co.nz", "com.sg", "com.hk", "com.mx", "com.br",
+  ]);
+
+  if (parts.length >= 3) {
+    const lastTwo = parts.slice(-2).join(".");
+    if (twoPartCcTlds.has(lastTwo)) {
+      return parts.slice(-3).join(".");
+    }
+  }
+  if (parts.length >= 2) {
+    return parts.slice(-2).join(".");
+  }
+  return clean;
+}
+
 function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: string): string | null {
   const excludedDomains = new Set([
     "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com", "instagram.com",
@@ -1908,7 +1936,11 @@ function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: s
   // because it "appears 3+ times", which previously caused mis-anchoring to
   // shared hosts and unrelated high-frequency domains.
   const nameMatch = matchWords.some(word => domainLower.includes(word));
-  if (nameMatch) return topDomain;
+  if (nameMatch) {
+    const normalised = normaliseToRegistrableDomain(topDomain);
+    console.log(`[${companyName}] Auto-detected domain: ${topDomain} \u2192 normalised to ${normalised}`);
+    return normalised;
+  }
 
   // Try other frequent domains that DO match the company name (scan the top few,
   // not just the second). This recovers cases where a news/aggregator domain is
@@ -1917,7 +1949,9 @@ function inferDomainFromResults(candidates: DiscoveryCandidate[], companyName: s
     const [candidateDomain, count] = sorted[i];
     if (count < 2) break;
     if (matchWords.some(word => candidateDomain.toLowerCase().includes(word))) {
-      return candidateDomain;
+      const normalised = normaliseToRegistrableDomain(candidateDomain);
+      console.log(`[${companyName}] Auto-detected domain: ${candidateDomain} \u2192 normalised to ${normalised}`);
+      return normalised;
     }
   }
 
@@ -2421,7 +2455,8 @@ async function searchCompanyDocumentsInner(opts: {
   }
 
   // Lane 2: Domain-anchored search (with auto-detection if no domain set)
-  let effectiveDomain = companyDomain || null;
+  // 39-A: normalise stored companyDomain to registrable root (e.g. stories.td.com → td.com)
+  let effectiveDomain = companyDomain ? normaliseToRegistrableDomain(companyDomain) : null;
   let domainAutoDetected = false;
   if (!effectiveDomain) {
     // Auto-detect domain from general search results
@@ -2474,6 +2509,40 @@ async function searchCompanyDocumentsInner(opts: {
             priority: -30, // High priority — deterministic own-site topic page
           });
           laneCounts["topic-probe-url"] = (laneCounts["topic-probe-url"] || 0) + 1;
+        }
+      }
+    }
+  }
+
+  // Lane 2c (39-B): subdomain-variant site: queries for requiredDocTypes.
+  // Some companies host disclosures on subdomains (about.bankofamerica.com, investor.citigroup.com).
+  // After Lane 1 populates candidates, identify the top subdomains of the root domain
+  // and generate site: queries against each for each requiredDocType.
+  const reqDocTypes39B = ((framework as any).requiredDocTypes as string[] | null) || [];
+  const rootDomain = effectiveDomain;
+  if (rootDomain && reqDocTypes39B.length > 0) {
+    const subdomainCounts = new Map<string, number>();
+    for (const c of allCandidates) {
+      try {
+        const url = new URL(c.url);
+        const host = url.hostname.replace(/^www\./, "");
+        if (host !== rootDomain && host.endsWith("." + rootDomain)) {
+          subdomainCounts.set(host, (subdomainCounts.get(host) || 0) + 1);
+        }
+      } catch {}
+    }
+    const topSubdomains = Array.from(subdomainCounts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 3)
+      .map(([host]) => host);
+
+    if (topSubdomains.length > 0) {
+      console.log(`[${companyName}] 39-B: subdomain-variant queries for ${topSubdomains.join(", ")}`);
+      for (const subdomain of topSubdomains) {
+        for (const docType of reqDocTypes39B.slice(0, 5)) {
+          const q = `site:${subdomain} ${docType}`;
+          const results = await webSearch(q, { num: 15 });
+          for (const r of results) addCandidate(r, "domain-variant");
         }
       }
     }
