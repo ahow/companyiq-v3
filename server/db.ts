@@ -466,88 +466,12 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS required_doc_types JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS data_patterns JSONB`);
 
-    // Auto-populate strict dataPatterns for known framework topics.
-    // These require actual figures/targets in the content, not just topic keywords.
-    // Only sets if currently NULL (doesn't overwrite user-customized patterns).
-    await db.execute(sql`
-      UPDATE frameworks SET data_patterns = ${
-        JSON.stringify([
-          "scope\\s*[123]",
-          "financed.?emission",
-          "\\b20[23]\\d.*target",
-          "tonnes?\\s*(?:CO2|co2|carbon)",
-          "\\bMtCO2",
-          "intensity.?(?:target|reduction|pathway)",
-          "net.?zero.?(?:by|target|commitment|20[23])",
-          "GHG.?(?:emission|inventory|target)",
-          "carbon.?(?:neutral|footprint|intensity).?(?:target|20[23])",
-          "PCAF",
-          "transition.?plan"
-        ])
-      }::jsonb
-      WHERE data_patterns IS NULL
-        AND (topic_description ILIKE '%emission%' OR topic_description ILIKE '%climate%'
-             OR topic_description ILIKE '%financed%' OR topic_description ILIKE '%carbon%'
-             OR name ILIKE '%emission%' OR name ILIKE '%climate%' OR name ILIKE '%financed%')
-    `);
-    await db.execute(sql`
-      UPDATE frameworks SET required_doc_types = ${
-        JSON.stringify(["Climate/TCFD Report", "Sustainability Report", "CDP Response", "Transition Plan", "Annual Report"])
-      }::jsonb
-      WHERE required_doc_types IS NULL
-        AND (topic_description ILIKE '%emission%' OR topic_description ILIKE '%climate%'
-             OR topic_description ILIKE '%financed%' OR topic_description ILIKE '%carbon%'
-             OR name ILIKE '%emission%' OR name ILIKE '%climate%' OR name ILIKE '%financed%')
-    `);
-    await db.execute(sql`
-      UPDATE frameworks SET data_patterns = ${
-        JSON.stringify([
-          "modern.?slavery.?(?:act|statement)",
-          "forced.?labo",
-          "human.?trafficking",
-          "supply.?chain.?(?:audit|due.?diligence|transparency|risk)",
-          "human.?rights.?(?:impact|assessment|due.?diligence)",
-          "remediation.?(?:process|mechanism)",
-          "section.?54",
-          "transparency.?in.?supply.?chain"
-        ])
-      }::jsonb
-      WHERE data_patterns IS NULL
-        AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
-             OR topic_description ILIKE '%forced labo%'
-             OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
-    `);
-    await db.execute(sql`
-      UPDATE frameworks SET required_doc_types = ${
-        JSON.stringify(["Modern Slavery Statement", "Human Rights Report", "Modern Slavery Act Statement", "Supplier Code of Conduct", "Human Rights Policy"])
-      }::jsonb
-      WHERE required_doc_types IS NULL
-        AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
-             OR topic_description ILIKE '%forced labo%'
-             OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
-    `);
-    await db.execute(sql`
-      UPDATE frameworks SET data_patterns = ${
-        JSON.stringify([
-          "\\bai\\b.?(?:governance|ethics|policy|strategy|principle|framework)",
-          "responsible.?ai",
-          "algorithmic.?(?:bias|fairness|accountability|transparency)",
-          "model.?(?:risk|governance|validation)",
-          "ai.?(?:risk|safety|oversight|committee|board)"
-        ])
-      }::jsonb
-      WHERE data_patterns IS NULL
-        AND (topic_description ~* '\\bai\\b|artificial.?intelligence|machine.?learning'
-             OR name ~* '\\bai\\b|artificial.?intelligence')
-    `);
-    await db.execute(sql`
-      UPDATE frameworks SET required_doc_types = ${
-        JSON.stringify(["AI Governance Policy", "Responsible AI Report", "Technology Ethics Policy", "Annual Report", "ESG/Sustainability Report"])
-      }::jsonb
-      WHERE required_doc_types IS NULL
-        AND (topic_description ~* '\\bai\\b|artificial.?intelligence|machine.?learning'
-             OR name ~* '\\bai\\b|artificial.?intelligence')
-    `);
+    // B8: Topic-branched data-seed migrations REMOVED (Instruction 35 commit).
+    // These fields are now populated by the framework-builder route on framework
+    // creation, derived from the framework's own measures/evidenceKeywords.
+    // Existing production rows (fw3/fw8/fw AI) retain their values because the
+    // seeds only fired when the field was NULL, and they've already run.
+    // See server/routes/framework-builder.ts for the replacement derivation logic.
 
     // Instruction 21a: Add legacyQueryTemplates and multiDocumentQueryTemplates columns
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS legacy_query_templates JSONB`);
@@ -575,79 +499,18 @@ export async function initializeDatabase(): Promise<void> {
 
     // Instruction 31: Add authoritative_registries and authoritative_filing_types columns
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS authoritative_registries JSONB`);
-    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS authoritative_filing_types JSONB`);
-
-    // Backfill: climate frameworks
-    await db.execute(sql`
-      UPDATE frameworks SET
-        authoritative_registries = '["cdp.net","tnfd.global","sciencebasedtargets.org","sciencebasedtargetsnetwork.org","netzeroassetmanagers.org","unepfi.org","equator-principles.com","financeforbiodiversity.org","carbonaccountingfinancials.com","climateaction.unfccc.int","there100.org","theclimategroup.org"]'::jsonb,
-        authoritative_filing_types = '[{"pattern":"\\\\bcdp\\\\b|tcfd|climate.?report","weight":8.0},{"pattern":"sustainab|esg\\\\b|csr\\\\b|responsibility","weight":6.0}]'::jsonb
-      WHERE authoritative_registries IS NULL
-        AND (topic_description ILIKE '%climate%' OR topic_description ILIKE '%emission%'
-             OR topic_description ILIKE '%carbon%' OR name ILIKE '%climate%')
-    `);
-    // Backfill: modern slavery frameworks
-    await db.execute(sql`
-      UPDATE frameworks SET
-        authoritative_registries = '["modernslaveryregister.gov.au","modern-slavery-statement-registry.service.gov.uk","wgea.gov.au","ungpreporting.org"]'::jsonb,
-        authoritative_filing_types = '[{"pattern":"modern.?slavery.?statement","weight":8.0},{"pattern":"human.?rights.?report|human.?rights.?statement","weight":7.0},{"pattern":"supplier.?code.?of.?conduct","weight":6.0}]'::jsonb
-      WHERE authoritative_registries IS NULL
-        AND (topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
-             OR name ILIKE '%slavery%' OR name ILIKE '%human rights%')
-    `);
-    // Backfill: AI governance frameworks
-    await db.execute(sql`
-      UPDATE frameworks SET
-        authoritative_registries = '["partnershiponai.org","nist.gov","oecd.org"]'::jsonb,
-        authoritative_filing_types = '[{"pattern":"responsible.?ai|ai.?governance|ai.?ethics|ai.?policy","weight":8.0},{"pattern":"governance.?report|corporate.?governance","weight":6.0}]'::jsonb
-      WHERE authoritative_registries IS NULL
-        AND (topic_description ILIKE '%artificial intelligence%' OR topic_description ILIKE '%ai governance%'
-             OR name ILIKE '%ai%' OR name ILIKE '%artificial intelligence%')
-    `);
-
-    // NOTE: Company-specific pins and domain fixes have been removed from core code
-    // (Instruction 21 — no company names in server/**/*.ts). These are now managed
-    // via the PATCH /api/companies/:id endpoint at runtime.
-
     // B1: Add scoring_examples and anti_inference_rules columns
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS scoring_examples JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS anti_inference_rules JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS authoritative_filing_types JSONB`);
 
-    // B1: Seed scoring_examples and anti_inference_rules per topic
-    await db.execute(sql`
-      UPDATE frameworks SET
-        scoring_examples = '["The company addresses climate risk generally but not the specific financed-emissions measure"]'::jsonb,
-        anti_inference_rules = '["DO NOT conflate different types of financing activity. Financed emissions (balance-sheet lending, PCAF Part A) is distinct from facilitated emissions (capital markets underwriting, PCAF Part B). Score each strictly according to what the measure asks for.","DO NOT conflate absolute emissions targets (measured in MtCO2e or percentage absolute reduction) with emissions intensity targets (measured in gCO2e per kWh, kgCO2e per $M invested). If the measure asks for an absolute target, an intensity-only target does not satisfy it."]'::jsonb
-      WHERE scoring_examples IS NULL AND (
-        topic_description ILIKE '%climate%' OR topic_description ILIKE '%emission%'
-        OR topic_description ILIKE '%carbon%' OR name ILIKE '%climate%'
-      )
-    `);
-    await db.execute(sql`
-      UPDATE frameworks SET
-        scoring_examples = '["The company mentions supply chain generally but not specific forced-labour due diligence"]'::jsonb,
-        anti_inference_rules = '["DO NOT infer that a modern slavery statement addresses forced labour risks specifically unless it explicitly discusses forced labour, trafficking, or bonded labour. General references to human rights are insufficient.","DO NOT conflate a supplier code of conduct with an active due-diligence programme. A written code without evidence of monitoring or remediation does not satisfy diligence measures."]'::jsonb
-      WHERE scoring_examples IS NULL AND (
-        topic_description ILIKE '%slavery%' OR topic_description ILIKE '%human rights%'
-        OR name ILIKE '%slavery%' OR name ILIKE '%human rights%'
-      )
-    `);
-    await db.execute(sql`
-      UPDATE frameworks SET
-        scoring_examples = '["The company mentions AI generally but not the specific AI-governance measure"]'::jsonb,
-        anti_inference_rules = '["DO NOT conflate general digital-transformation strategy with AI governance. Digital strategy without explicit AI oversight structures is insufficient.","DO NOT infer AI risk management from generic technology risk statements unless the disclosure explicitly names AI, machine learning, or algorithmic systems."]'::jsonb
-      WHERE scoring_examples IS NULL AND (
-        topic_description ILIKE '%artificial intelligence%' OR topic_description ILIKE '%ai governance%'
-        OR name ILIKE '%ai%' OR name ILIKE '%artificial intelligence%'
-      )
-    `);
 
     // B7 repair: fix corrupted authoritativeFilingTypes patterns containing literal
     // backspace characters (0x08) where \b word boundaries were intended.
     await db.execute(sql`
       UPDATE frameworks SET
         authoritative_filing_types = '[{"pattern":"\\\\bcdp\\\\b|tcfd|climate.?report","weight":8.0},{"pattern":"sustainab|esg\\\\b|csr\\\\b|responsibility","weight":6.0}]'::jsonb
-      WHERE authoritative_filing_types::text LIKE E'%\\b%'
+      WHERE authoritative_filing_types::text LIKE '%\\b%'
         AND (topic_description ILIKE '%climate%' OR topic_description ILIKE '%emission%'
              OR topic_description ILIKE '%carbon%' OR name ILIKE '%climate%')
     `);

@@ -634,7 +634,7 @@ async function summarizeDocuments(opts: {
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v3m-govterms")
+    .update(generateDocumentHash(documentUrls) + ":corpus-v3n-no-govterms")
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -658,24 +658,16 @@ async function summarizeDocuments(opts: {
         .filter((t: string) => t.length >= 4)
     : [];
 
-  // Instruction 34: Universal governance / disclosure vocabulary. Topic-agnostic
-  // anchor set present in authoritative corporate disclosures across ANY topic.
-  // These terms mark disclosure SHAPE (how a company reports), not SUBJECT.
-  // Without them, narrow topic terms collapse in IDF when the corpus is heavily
-  // topic-saturated (fw8 modern-slavery case) and Stage-1 BM25 loses
-  // discriminative power over authoritative chunks.
-  const UNIVERSAL_GOVERNANCE_TERMS = [
-    "policy", "framework", "committee", "oversight", "accountability",
-    "governance", "due diligence", "risk management",
-    "board", "audit", "compliance", "disclosure", "material", "commitment",
-  ];
+  // Instruction 34 REVERTED (Instruction 35): the universal governance vocabulary
+  // hurt Stage-1 retrieval on document-rich corpora. Long compliance/annual-report
+  // documents saturated in governance language (HSBC AR 2025 etc.) dominated the
+  // ~560k character corpus pool and pushed topic-specific-evidence chunks out of
+  // the top-K. Battery on 610893a: fw3 HSBC 56 → 7 (18 of 27 measures cite the
+  // same weak sentence from AR-2025 vs 21 diverse quotes from Sustainability/TCFD
+  // reports prior). Reverted; see Instruction 33 (semantic embedding rerank) for
+  // the durable replacement.
 
-  const allQueryTerms = [...new Set([
-    ...topicKeywords,
-    ...derivedTerms,
-    ...dataPatternTokens,
-    ...UNIVERSAL_GOVERNANCE_TERMS,
-  ])];
+  const allQueryTerms = [...new Set([...topicKeywords, ...derivedTerms, ...dataPatternTokens])];
 
   // v3g-fix: TYPE-AWARE document prioritisation. The previous pure keyword-density
   // ranking let a long, AI-keyword-dense ESG/sustainability PDF (e.g. Apple's

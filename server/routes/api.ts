@@ -533,7 +533,7 @@ apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
     if (!framework) return res.status(404).json({ error: "Framework not found" });
 
-    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared"];
+    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared", "requiredDocTypes", "dataPatterns", "legacyQueryTemplates", "multiDocumentQueryTemplates", "authoritativeRegistries", "authoritativeFilingTypes", "scoringExamples", "antiInferenceRules"];
     const updates: Record<string, any> = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {

@@ -832,6 +832,53 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       categoryNumber++;
     }
 
+    // B8: Derive and populate framework metadata fields from measures
+    const allMeasures = await storage.getFrameworkMeasures(created.id);
+    const derivedUpdates: Record<string, any> = {};
+
+    // Derive dataPatterns from evidenceKeywords if not already set
+    if (!framework.dataPatterns || framework.dataPatterns.length === 0) {
+      const patterns = new Set<string>();
+      for (const m of allMeasures) {
+        for (const kw of ((m as any).evidenceKeywords || [])) {
+          const t = (kw as string).toLowerCase().trim();
+          if (t.length >= 4) patterns.add(t.replace(/\s+/g, ".?"));
+        }
+      }
+      if (patterns.size > 0) derivedUpdates.dataPatterns = Array.from(patterns).slice(0, 15);
+    }
+
+    // Derive requiredDocTypes from measure requiredSourceTypes if not already set
+    if (!framework.requiredDocTypes || framework.requiredDocTypes.length === 0) {
+      const types = new Set<string>();
+      for (const m of allMeasures) {
+        for (const t of ((m as any).requiredSourceTypes || [])) types.add(t as string);
+      }
+      if (types.size > 0) derivedUpdates.requiredDocTypes = Array.from(types);
+    }
+
+    // Derive legacyQueryTemplates from evidenceKeywords if not already set
+    if (!framework.legacyQueryTemplates) {
+      const templates = new Set<string>();
+      for (const m of allMeasures) {
+        for (const kw of ((m as any).evidenceKeywords || []).slice(0, 3)) {
+          templates.add(`"{company}" ${kw} {currentYear} OR {lastYear}`);
+        }
+      }
+      if (templates.size > 0) derivedUpdates.legacyQueryTemplates = Array.from(templates).slice(0, 12);
+    }
+
+    // authoritativeRegistries, scoringExamples, antiInferenceRules stay user-declared
+    // (populated via the framework-builder AI output or PATCH endpoint)
+    if (framework.authoritativeRegistries) derivedUpdates.authoritativeRegistries = framework.authoritativeRegistries;
+    if (framework.authoritativeFilingTypes) derivedUpdates.authoritativeFilingTypes = framework.authoritativeFilingTypes;
+    if (framework.scoringExamples) derivedUpdates.scoringExamples = framework.scoringExamples;
+    if (framework.antiInferenceRules) derivedUpdates.antiInferenceRules = framework.antiInferenceRules;
+
+    if (Object.keys(derivedUpdates).length > 0) {
+      await storage.updateFramework(created.id, derivedUpdates);
+    }
+
     // Activate the new framework
     await storage.setActiveFramework(created.id, workspaceId);
 
