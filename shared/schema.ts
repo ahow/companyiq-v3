@@ -121,6 +121,8 @@ export const frameworks = pgTable("frameworks", {
   // B1: Framework-declared scoring examples and anti-inference rules
   scoringExamples: jsonb("scoring_examples").$type<string[]>(),
   antiInferenceRules: jsonb("anti_inference_rules").$type<string[]>(),
+  // 41-C: Framework-specific withdrawal detection patterns
+  withdrawalPatterns: jsonb("withdrawal_patterns").$type<{ queries: string[]; documentRegex: string[] }>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

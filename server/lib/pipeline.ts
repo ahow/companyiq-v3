@@ -509,26 +509,34 @@ async function runFetchPhase(opts: {
     // Priority-sort so the fetch budget is always spent on the most
     // decision-relevant disclosures first (important for doc-heavy issuers whose
     // WAF PDFs are slow and may exceed the budget):
-    //   1. High-value content: primary filings (10-K/20-F/annual/proxy) AND
-    //      AI-governance material (ai ethics / responsible ai / ai policy / csr).
+    //   1. High-value content: primary filings + universal disclosure containers
+    //      + framework-specific document types (from requiredDocTypes/evidenceKeywords).
     //   2. Company-domain documents.
     //   3. PDFs over HTML.
     // Low-value periodic filings (old 10-Qs) and generic product/marketing pages
     // therefore sink to the bottom and are the first to be dropped on budget.
-    // HIGH_VALUE_RE: UNION of filings base + legacy topic pattern + metadata-derived pattern.
-    // The legacy pattern is ALWAYS included (it contains proven terms like 'esg', 'tcfd',
-    // 'sustainability.?report' that the metadata path may not reproduce exactly).
-    // The metadata pattern AUGMENTS by splitting doc-type labels on '/' and ',' into
-    // individual alternates (e.g. "Climate/TCFD Report" → "climate|tcfd|report").
-    const FILINGS_BASE = "10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy";
-    const LEGACY_TOPIC = "ai.?ethic|responsible.?ai|ai.?governance|csr.?report|sustainability.?report|esg|tcfd|climate.?report|transition.?plan|cdp|modern.?slavery|human.?rights";
+    // 41-A: Framework-agnostic fetch prioritisation.
+    // Universal filings — apply to any framework, always.
+    const FILINGS_BASE = "10-?k|20-?f|40-?f|annual.?report|integrated.?report|def.?14a|proxy";
+    // Cross-topic disclosure containers — these host any framework's disclosure.
+    // Contains NO topic-specific terms — only document container types.
+    const UNIVERSAL_DISCLOSURE = "esg\\b|sustainability.?report|integrated.?report|csr.?report|responsibility.?report";
+    // Framework-specific patterns come EXCLUSIVELY from framework.requiredDocTypes
+    // and framework.evidenceKeywords — no hardcoded topic literals.
     const frameworkDocTypesForRank = (framework as any).requiredDocTypes as string[] | null;
-    const metaTopic = (frameworkDocTypesForRank ?? [])
-      .flatMap(dt => dt.toLowerCase().split(/[\/,]+/))  // "Climate/TCFD Report" → ["climate", "tcfd report"]
+    const evidenceKeywords = (framework as any).evidenceKeywords as string[] | null;
+    const metaTopic = [
+      ...(frameworkDocTypesForRank ?? []),
+      ...(evidenceKeywords ?? []).slice(0, 20),  // cap to prevent regex overflow
+    ]
+      .flatMap(dt => dt.toLowerCase().split(/[\/,\s]+/))
       .map(f => f.trim().replace(/\s+/g, ".?"))
       .filter(f => f.length >= 3)
       .join("|");
-    const HIGH_VALUE_RE = new RegExp(`${FILINGS_BASE}|${LEGACY_TOPIC}${metaTopic ? "|" + metaTopic : ""}`, "i");
+    const HIGH_VALUE_RE = new RegExp(
+      `${FILINGS_BASE}|${UNIVERSAL_DISCLOSURE}${metaTopic ? "|" + metaTopic : ""}`,
+      "i"
+    );
     const LOW_VALUE_RE = /10-?q|transcript|glossary|generative-ai-vs|gen-ai-glossary|express\/web/i;
     const rank = (u: string): number => {
       const s = u.toLowerCase();
@@ -554,12 +562,30 @@ async function runFetchPhase(opts: {
     // INCOMPANY_FETCH_CONCURRENCY so we never overwhelm the shared browser-slot
     // pool or the LLM rate limit. Quality is unchanged: every doc is still
     // fetched and verified with the same checks.
+
+    // 41-K: Per-batch circuit breaker for slow hosts.
+    // If 3 consecutive fetches from the same host exceed SLOW_FETCH_THRESHOLD_MS,
+    // circuit-break that host for the remainder of this company's fetch phase.
+    const SLOW_FETCH_THRESHOLD_MS = 15_000;
+    const CIRCUIT_BREAK_THRESHOLD = 3;
+    const hostSlowFetches = new Map<string, number>();
+    const hostCircuitBroken = new Set<string>();
+
     const processOne = async (doc: typeof sortedPending[number]): Promise<void> => {
       if (cancelCheck?.()) return;
 
       // Check budget before starting this document
       if (Date.now() - fetchPhaseStart > FETCH_PHASE_BUDGET_MS) {
         fetchBudgetExceeded = true;
+        return;
+      }
+
+      // 41-K: Skip if host is circuit-broken
+      let docHost = "";
+      try { docHost = new URL(doc.url).hostname; } catch {}
+      if (docHost && hostCircuitBroken.has(docHost)) {
+        console.log(`[${companyName}] 41-K: skipping ${doc.url.slice(0, 60)} (host circuit-broken)`);
+        await storage.recordFetchFailure(companyId, doc.url, "circuit_broken");
         return;
       }
 
@@ -570,11 +596,24 @@ async function runFetchPhase(opts: {
         const gateReason = ((doc as any).gateReason || "").toLowerCase();
         const isPinnedOrKnown = gateReason.includes("lane: pinned") || gateReason.includes("lane: known");
         // Wrap processDocument with a per-document timeout
+        const fetchStart = Date.now();
         const content = await withTimeout(
           processDocument(doc.url, type, { forceHeadless: isPinnedOrKnown }),
           PER_DOCUMENT_TIMEOUT_MS,
           `[${companyName}] fetch ${doc.url.slice(0, 80)}`
         );
+        // 41-K: Track fetch latency for circuit-breaker
+        const fetchElapsed = Date.now() - fetchStart;
+        if (docHost && fetchElapsed >= SLOW_FETCH_THRESHOLD_MS) {
+          const n = (hostSlowFetches.get(docHost) || 0) + 1;
+          hostSlowFetches.set(docHost, n);
+          if (n >= CIRCUIT_BREAK_THRESHOLD) {
+            hostCircuitBroken.add(docHost);
+            console.warn(`[${companyName}] 41-K: circuit break: ${docHost} (${n} consecutive slow fetches)`);
+          }
+        } else if (docHost) {
+          hostSlowFetches.set(docHost, 0); // reset streak on fast fetch
+        }
 
         if (content && content.length > 50) {
           // POST-FETCH VALIDATION: Verify the document content actually relates

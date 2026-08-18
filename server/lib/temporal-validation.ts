@@ -35,49 +35,51 @@ export interface TemporalContext {
 
 // ─── Withdrawal Detection Queries ─────────────────────────────────────────────
 
+// 41-C: Framework-agnostic withdrawal query builder.
+// Universal queries apply to any framework. Topic-specific queries come
+// EXCLUSIVELY from framework.withdrawalPatterns.queries (declared per-framework).
 function buildWithdrawalQueries(companyName: string, framework: Framework): string[] {
-  const topicKeywords = framework.topicDescription || framework.name;
-  
-  // Generic withdrawal patterns
-  const queries = [
-    `"${companyName}" withdraws climate target OR drops net zero OR leaves NZBA`,
-    `"${companyName}" discontinues emissions target OR removes sustainability commitment`,
-    `"${companyName}" exits net-zero banking alliance OR withdraws 2030 target`,
+  // Universal — apply to any framework. Contains NO topic-specific terms.
+  const universal = [
+    `"${companyName}" discontinues target OR abandons commitment OR withdraws pledge`,
+    `"${companyName}" removes policy OR drops framework OR retires goal`,
   ];
-
-  // Topic-specific withdrawal queries
-  if (topicKeywords.toLowerCase().includes("emission") || topicKeywords.toLowerCase().includes("climate")) {
-    queries.push(
-      `"${companyName}" scraps financed emissions target OR abandons climate goal`,
-      `"${companyName}" removes coal policy OR drops fossil fuel exclusion`,
-    );
-  }
-
-  return queries;
+  // Framework-specific queries from withdrawalPatterns config
+  const frameworkSpecific = (((framework as any).withdrawalPatterns?.queries ?? []) as string[])
+    .map((q: string) => q.replace(/\{companyName\}/g, companyName));
+  return [...universal, ...frameworkSpecific];
 }
 
 // ─── Document Scan for Withdrawal Language ────────────────────────────────────
 
-const WITHDRAWAL_PATTERNS = [
+// 41-C: UNIVERSAL patterns only — no climate/slavery/AI terms in this constant.
+// Topic-specific document patterns come from framework.withdrawalPatterns.documentRegex.
+const UNIVERSAL_WITHDRAWAL_PATTERNS: RegExp[] = [
   /(?:we have|the (?:bank|company|group) has?) (?:discontinued|withdrawn|removed|dropped|scrapped|abandoned|exited)/i,
   /no longer (?:commit|target|pursue|maintain)/i,
-  /(?:withdrew|exited|left) (?:the )?(?:Net.?Zero|NZBA|SBTi|Climate Action)/i,
   /(?:target|commitment|goal|pledge) (?:has been|was) (?:discontinued|withdrawn|removed|superseded)/i,
   /(?:effective|as of) .{0,30}(?:discontinued|no longer|withdrawn)/i,
-  /(?:removed|deleted) .{0,30}(?:coal|fossil|climate|net.?zero) .{0,30}(?:policy|commitment|target)/i,
 ];
 
+// 41-C: Accepts framework to merge universal + framework-specific document patterns.
 function scanDocumentsForWithdrawals(
   documentTexts: string[],
-  documentUrls: string[]
+  documentUrls: string[],
+  framework?: Framework
 ): Array<{ text: string; url: string; pattern: string }> {
+  // Merge universal + framework-specific document regex patterns
+  const frameworkRegex = (((framework as any)?.withdrawalPatterns?.documentRegex ?? []) as string[])
+    .map((p: string) => { try { return new RegExp(p, "i"); } catch { return null; } })
+    .filter((r): r is RegExp => r !== null);
+  const allPatterns = [...UNIVERSAL_WITHDRAWAL_PATTERNS, ...frameworkRegex];
+
   const matches: Array<{ text: string; url: string; pattern: string }> = [];
 
   for (let i = 0; i < documentTexts.length; i++) {
     const text = documentTexts[i];
     const url = documentUrls[i] || "unknown";
 
-    for (const pattern of WITHDRAWAL_PATTERNS) {
+    for (const pattern of allPatterns) {
       const match = text.match(pattern);
       if (match) {
         // Extract surrounding context (200 chars before and after)
@@ -214,7 +216,7 @@ export async function runTemporalValidation(opts: {
   const allSnippets: Array<{ text: string; source: string }> = [];
 
   // Stage 1: Scan fetched documents for withdrawal language
-  const docMatches = scanDocumentsForWithdrawals(documentTexts, documentUrls);
+  const docMatches = scanDocumentsForWithdrawals(documentTexts, documentUrls, framework);
   for (const match of docMatches) {
     allSnippets.push({ text: match.text, source: match.url });
   }

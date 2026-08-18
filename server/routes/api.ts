@@ -1655,3 +1655,28 @@ apiRouter.post("/score-anomalies/seed", async (req: Request, res: Response) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// 41-F: Manual override for related_domains_manual
+apiRouter.post("/companies/:id/related-domains-manual", async (req: Request, res: Response) => {
+  const workspaceId = (req as any).session?.workspaceId;
+  if (!workspaceId) return res.status(401).json({ error: "Not authenticated" });
+  const cid = parseInt(req.params.id, 10);
+  const { domains } = req.body as { domains: string[] };
+  if (!Array.isArray(domains) || domains.some(d => typeof d !== "string")) {
+    return res.status(400).json({ error: "domains must be string[]" });
+  }
+  const cleaned = domains
+    .map(d => d.trim().toLowerCase())
+    .filter(d => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d));
+  try {
+    const { db } = await import("../db.js");
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`
+      UPDATE companies SET related_domains_manual = ${JSON.stringify(cleaned)}::jsonb, updated_at = NOW()
+      WHERE id = ${cid} AND workspace_id = ${workspaceId}
+    `);
+    res.json({ success: true, related_domains_manual: cleaned });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});

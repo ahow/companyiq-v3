@@ -48,6 +48,44 @@ export interface FigiResult {
 }
 
 /**
+ * 41-E: Pick the primary listing entry from an OpenFIGI mapping response.
+ * Preference order:
+ *   1. Common Stock listed on the ISIN's home exchange.
+ *   2. Any Common Stock listing.
+ *   3. First entry (fallback).
+ *
+ * The ISO 3166 → exchange code map is data, not a topic/company branch.
+ */
+interface FigiEntry {
+  name?: string;
+  ticker?: string;
+  exchCode?: string;
+  securityType?: string;
+}
+
+function pickPrimary(data: FigiEntry[], isin: string): FigiEntry | null {
+  if (!data || data.length === 0) return null;
+  const isinCountry = isin.slice(0, 2).toUpperCase();
+
+  // ISO 3166 country → Bloomberg exchange codes for common home listings.
+  const HOME_EXCH: Record<string, string[]> = {
+    GB: ["LN"], US: ["UN", "UW", "UA", "UF", "US"], CA: ["CT"],
+    AU: ["AT"], FR: ["FP"], DE: ["GY"], IT: ["IM"], ES: ["SM"],
+    NL: ["NA"], CH: ["SW", "SE"], JP: ["JT", "JP", "JN"],
+    HK: ["HK"], CN: ["CH"], SG: ["SP"], IN: ["IB", "IN"],
+    KR: ["KS"], TW: ["TT"], BR: ["BZ"], MX: ["MM"], ZA: ["SJ"],
+    SE: ["SS"], NO: ["NO"], DK: ["DC"], FI: ["FH"], BE: ["BB"],
+    AT: ["AV"], IE: ["ID"], IL: ["IT"], TR: ["TI"], AE: ["DH", "UH"],
+  };
+  const home = HOME_EXCH[isinCountry] ?? [];
+  const cs = data.filter(d => d.securityType === "Common Stock");
+  const homeCs = cs.filter(d => home.includes(d.exchCode ?? ""));
+  if (homeCs.length > 0) return homeCs[0];
+  if (cs.length > 0) return cs[0];
+  return data[0];
+}
+
+/**
  * Resolve canonical issuer name and ticker from ISIN via OpenFIGI.
  * Returns null fields on failure (network error, no match, etc.).
  * Never throws — all errors are caught and logged.
@@ -82,7 +120,9 @@ export async function resolveViaOpenFIGI(isin: string): Promise<FigiResult> {
         return { name: null, ticker: null };
       }
 
-      const entry = result.data[0];
+      // 41-E: Use pickPrimary to select the home-exchange listing, not data[0]
+      const entry = pickPrimary(result.data, isin);
+      if (!entry) return { name: null, ticker: null };
       return {
         name: entry.name || null,
         ticker: entry.ticker || null,
@@ -121,6 +161,7 @@ export async function resolveCompanyFIGI(company: {
   figiResolvedAt?: Date | string | null;
   figiName?: string | null;
   figiTicker?: string | null;
+  domain?: string | null; // 41-D: needed for stale-domain detection
 }): Promise<FigiResult> {
   // Short-circuit if already resolved within 30 days — return cached values
   if (company.figiResolvedAt) {
@@ -159,7 +200,43 @@ export async function resolveCompanyFIGI(company: {
     console.log(`[issuer-resolver] No OpenFIGI match for ISIN ${company.isin} (company ${company.id})`);
   }
 
+  // 41-D: Check if the existing domain is stale (disagrees with FIGI name).
+  // If stale, null it out so the discovery ladder re-derives from scratch.
+  if (result.name && company.domain) {
+    if (isDomainStale(company.domain, result)) {
+      console.warn(
+        `[issuer-resolver] Clearing stale domain for company ${company.id}: ` +
+        `"${company.domain}" (FIGI name: "${result.name}")`
+      );
+      try {
+        await db.execute(sql`
+          UPDATE companies SET domain = NULL, related_domains = NULL, updated_at = NOW()
+          WHERE id = ${company.id}
+        `);
+        company.domain = null;
+      } catch (e: any) {
+        console.warn(`[issuer-resolver] Failed to clear stale domain: ${e.message}`);
+      }
+    }
+  }
+
   return result;
+}
+
+/**
+ * 41-D: A company.domain is considered stale if it shares zero distinctive tokens
+ * with the FIGI-resolved canonical name. This catches DB imports pointing at
+ * unrelated entities (e.g. Mitsubishi UFJ → mitsubishi-hc-capital.com).
+ *
+ * No topic logic, no company literals. Works on token overlap alone.
+ */
+function isDomainStale(domain: string, figiResult: FigiResult): boolean {
+  if (!figiResult.name) return false;
+  const figiTokens = deriveAliases(figiResult.name, figiResult.ticker)
+    .filter(a => a.length >= 3);
+  if (figiTokens.length === 0) return false;
+  const dl = domain.toLowerCase();
+  return !figiTokens.some(t => dl.includes(t));
 }
 
 /**
@@ -215,9 +292,12 @@ export function deriveAliases(
     }
   }
 
-  // 4. Ticker as alias
+  // 4. Ticker as alias (41-E: reject ADR pink-sheet codes — 5 uppercase letters ending in F)
   if (ticker && ticker.length >= 2) {
-    aliases.push(ticker.toLowerCase());
+    const isAdrPinkSheet = /^[A-Z]{5}F$/.test(ticker);
+    if (!isAdrPinkSheet) {
+      aliases.push(ticker.toLowerCase());
+    }
   }
 
   // Deduplicate and filter

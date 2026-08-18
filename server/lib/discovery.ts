@@ -2042,41 +2042,131 @@ async function discoverPrimaryDomainViaExplicitQuery(
  * Scans Lane 1 candidate domains and includes any domain that shares a coreToken
  * with the primary domain and appears >= 3 times.
  */
+// Shared exclusion set for related-domain discovery
+const EXCLUDED_DOMAINS_FOR_RELATED = new Set([
+  "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
+  "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
+  "google.com", "amazon.com", "reddit.com", "medium.com", "sec.gov",
+  "companieshouse.gov.uk", "indeed.com", "glassdoor.com",
+]);
+
+/**
+ * 41-G: Test whether a candidate domain is a "family TLD variant" of the primary,
+ * i.e. same registrable-name stem but a different TLD.
+ *   primary=hsbc.com,  candidate=hsbc.co.uk    → true
+ *   primary=hsbc.com,  candidate=hsbc.com.hk   → true
+ *   primary=hsbc.com,  candidate=hsbcbank.com  → false (different stem)
+ *
+ * No topic or company semantics — pure string comparison on domain shape.
+ */
+function isFamilyTldVariant(candidate: string, primary: string): boolean {
+  const primaryStem = primary.split(".")[0];
+  const candidateStem = candidate.split(".")[0];
+  if (primaryStem !== candidateStem) return false;
+  const primaryTld = primary.slice(primaryStem.length + 1);
+  const candidateTld = candidate.slice(candidateStem.length + 1);
+  return primaryTld !== candidateTld && candidateTld.length > 0;
+}
+
 function discoverRelatedDomains(
   primaryDomain: string,
   candidates: DiscoveryCandidate[],
   coreTokens: string[]
 ): string[] {
-  const excludedForRelated = new Set([
-    "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
-    "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
-    "google.com", "amazon.com", "reddit.com", "medium.com", "sec.gov",
-    "companieshouse.gov.uk", "indeed.com", "glassdoor.com",
-  ]);
-
   const domainCounts = new Map<string, number>();
   for (const c of candidates) {
     try {
       const url = new URL(c.url);
       const root = normaliseToRegistrableDomain(url.hostname);
       if (root === primaryDomain) continue;
-      if (excludedForRelated.has(root)) continue;
+      if (EXCLUDED_DOMAINS_FOR_RELATED.has(root)) continue;
       domainCounts.set(root, (domainCounts.get(root) || 0) + 1);
     } catch {}
   }
 
   const related: string[] = [];
   for (const [domain, count] of domainCounts) {
-    if (count < 3) continue;
     const dl = domain.toLowerCase();
     const sharesToken = coreTokens.some(token => dl.includes(token));
-    if (sharesToken) {
-      related.push(domain);
-    }
+    if (!sharesToken) continue;
+
+    // 41-G: Two-tier evidence gate:
+    //   - Family-TLD variant (same stem, different TLD): accept with ≥ 1 hit.
+    //   - Other cross-token siblings: require ≥ 3 hits (existing gate).
+    const isVariant = isFamilyTldVariant(domain, primaryDomain);
+    const threshold = isVariant ? 1 : 3;
+    if (count < threshold) continue;
+
+    related.push(domain);
   }
 
   related.sort();
   return related;
+}
+
+/**
+ * 41-F: Cross-brand sibling discovery. Captures brand-sibling domains that
+ * don't share a core token with the primary (e.g. chase.com for JPMorgan Chase).
+ * Uses a targeted Serper query AND a name-token scan of Lane 1 candidates.
+ *
+ * Framework-agnostic: query text mentions no topic. Company name is a parameter.
+ */
+async function discoverCrossBrandSiblings(
+  issuerName: string,
+  primaryDomain: string,
+  existingFamily: string[],
+  laneOneCandidates: DiscoveryCandidate[]
+): Promise<string[]> {
+  // Build a frequency map of all Lane 1 candidate domains
+  const laneOneFrequency = new Map<string, number>();
+  for (const c of laneOneCandidates) {
+    try {
+      const root = normaliseToRegistrableDomain(new URL(c.url).hostname);
+      laneOneFrequency.set(root, (laneOneFrequency.get(root) || 0) + 1);
+    } catch {}
+  }
+
+  const alreadyKnown = new Set([primaryDomain, ...existingFamily]);
+  const siblings: string[] = [];
+
+  // Method 1: Serper query for subsidiary/brand pages
+  try {
+    const query = `"${issuerName}" official website subsidiary OR brand OR "operates as"`;
+    const results = await webSearch(query, { num: 5 });
+    for (const r of results) {
+      try {
+        const root = normaliseToRegistrableDomain(new URL(r.link).hostname);
+        if (alreadyKnown.has(root)) continue;
+        if (EXCLUDED_DOMAINS_FOR_RELATED.has(root)) continue;
+        // Evidence gate: must appear at least 2x in the Lane 1 pool
+        if ((laneOneFrequency.get(root) || 0) < 2) continue;
+        siblings.push(root);
+        alreadyKnown.add(root);
+      } catch {}
+    }
+  } catch (e: any) {
+    console.warn(`[discovery] Cross-brand Serper query failed: ${e.message}`);
+  }
+
+  // Method 2 (my alternative): Name-token scan of Lane 1 candidates.
+  // Split the issuer name into distinctive tokens and check if any Lane 1
+  // candidate domain contains a token that the primary domain does NOT.
+  // This catches chase.com for "JPMorgan Chase" (primary: jpmorganchase.com).
+  const nameTokens = deriveAliases(issuerName, null).filter(a => a.length >= 4);
+  const primaryStem = primaryDomain.split(".")[0].toLowerCase();
+  const tokensNotInPrimary = nameTokens.filter(t => !primaryStem.includes(t));
+
+  for (const [domain, count] of laneOneFrequency) {
+    if (alreadyKnown.has(domain) || EXCLUDED_DOMAINS_FOR_RELATED.has(domain)) continue;
+    if (count < 2) continue;
+    const dl = domain.split(".")[0].toLowerCase();
+    if (tokensNotInPrimary.some(t => dl.includes(t) && t.length >= 4)) {
+      siblings.push(domain);
+      alreadyKnown.add(domain);
+    }
+  }
+
+  return siblings;
 }
 // ─── Ranking and Demotion ────────────────────────────────────────────────────
 
@@ -2582,18 +2672,20 @@ async function searchCompanyDocumentsInner(opts: {
   let relatedDomains: string[] = [];
   let domainAutoDetected = false;
 
-  // 40-G: Use cached family if available and fresh
+  // 41-B: Use cached family if available and fresh.
+  // Distinguish null (never resolved) from [] (resolved, legitimately empty).
   // NOTE: Drizzle returns camelCase properties (figiName, relatedDomains, etc.)
   const cachedDomain = companyDomain ? normaliseToRegistrableDomain(companyDomain) : null;
-  const cachedRelated = (companyRow.relatedDomains as string[] | null) || [];
+  const cachedRelated = companyRow.relatedDomains as string[] | null; // null = not yet resolved
   const figiResolvedAt = companyRow.figiResolvedAt ? new Date(companyRow.figiResolvedAt) : null;
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  if (cachedDomain && cachedRelated.length > 0 && figiResolvedAt && figiResolvedAt > thirtyDaysAgo) {
+  // 41-B: Cache HIT when: domain is set AND relatedDomains is not null (even if []) AND FIGI is fresh.
+  if (cachedDomain && cachedRelated !== null && figiResolvedAt && figiResolvedAt > thirtyDaysAgo) {
     // Short-circuit: use cached family
     effectiveDomain = cachedDomain;
     relatedDomains = cachedRelated;
-    console.log(`[${companyName}] 40-G: using cached domain family: ${effectiveDomain} + [${relatedDomains.join(", ")}]`);
+    console.log(`[${companyName}] 41-B: using cached domain family: ${effectiveDomain} + [${relatedDomains.join(", ")}]`);
   } else {
     // Full resolution ladder: 40-0 → 40-A → 40-B → 40-C → 40-D
 
@@ -2608,6 +2700,7 @@ async function searchCompanyDocumentsInner(opts: {
         figiResolvedAt: companyRow.figiResolvedAt,
         figiName: companyRow.figiName,
         figiTicker: companyRow.figiTicker,
+        domain: companyRow.domain, // 41-D: for stale-domain detection
       });
       if (figiResult.name) figiName = figiResult.name;
       if (figiResult.ticker) figiTicker = figiResult.ticker;
@@ -2642,6 +2735,16 @@ async function searchCompanyDocumentsInner(opts: {
       if (domainParts.length >= 3) coreTokens.push(domainParts);
       relatedDomains = discoverRelatedDomains(effectiveDomain, allCandidates, [...new Set(coreTokens)]);
 
+      // 41-F: Cross-brand sibling discovery (e.g. chase.com for JPMorgan Chase)
+      const issuerNameForSiblings = figiName || companyName;
+      const crossBrandSiblings = await discoverCrossBrandSiblings(
+        issuerNameForSiblings, effectiveDomain, relatedDomains, allCandidates
+      );
+      if (crossBrandSiblings.length > 0) {
+        relatedDomains = [...new Set([...relatedDomains, ...crossBrandSiblings])];
+        console.log(`[${companyName}] 41-F: cross-brand siblings: [${crossBrandSiblings.join(", ")}]`);
+      }
+
       // Union with manual overrides
       const manualDomains = (companyRow.relatedDomainsManual as string[] | null) || [];
       if (manualDomains.length > 0) {
@@ -2665,6 +2768,20 @@ async function searchCompanyDocumentsInner(opts: {
 
       console.log(`[${companyName}] 40-D: domain family: ${effectiveDomain} + [${relatedDomains.join(", ")}]`);
     } else {
+      // 41-B: Even when no domain found, persist empty [] to mark as "resolved, empty"
+      // so the next battery doesn't re-run the full ladder.
+      if (companyRow.id) {
+        try {
+          await db.execute(sql`
+            UPDATE companies SET
+              related_domains = '[]'::jsonb,
+              figi_resolved_at = NOW()
+            WHERE id = ${companyRow.id}
+          `);
+        } catch (e: any) {
+          console.warn(`[${companyName}] Failed to persist empty domain family: ${e.message}`);
+        }
+      }
       console.log(`[${companyName}] domain-unresolved: no domain found after full 40 ladder`);
     }
   }
@@ -2675,15 +2792,35 @@ async function searchCompanyDocumentsInner(opts: {
   let lane2QueryCount = 0;
 
   if (allDomains.length > 0) {
-    // Build queries for each domain in the family, respecting the budget
-    const queriesPerDomain = Math.max(5, Math.floor(MAX_LANE2_QUERIES / allDomains.length));
-    console.log(`[${companyName}] Lane 2: ${allDomains.length} domains, budget ${MAX_LANE2_QUERIES}, ~${queriesPerDomain}/domain`);
+    // 41-I: Weight Lane 2 allocation by Lane 1 evidence (sqrt-dampened).
+    // Single-pass domain-hit count from allCandidates.
+    const domainHitCounts = new Map<string, number>();
+    for (const c of allCandidates) {
+      try {
+        const root = normaliseToRegistrableDomain(new URL(c.url).hostname);
+        domainHitCounts.set(root, (domainHitCounts.get(root) || 0) + 1);
+      } catch {}
+    }
+    const domainsWithHits = allDomains.map(d => ({
+      domain: d,
+      laneOneHits: domainHitCounts.get(d) || 0,
+    }));
+    const totalWeight = domainsWithHits.reduce(
+      (s, d) => s + Math.sqrt(Math.max(1, d.laneOneHits)), 0
+    );
+    const MIN_PER_DOMAIN = 3;
+    const budgetPerDomain = new Map<string, number>();
+    for (const d of domainsWithHits) {
+      const weight = Math.sqrt(Math.max(1, d.laneOneHits));
+      const share = Math.floor(MAX_LANE2_QUERIES * weight / totalWeight);
+      budgetPerDomain.set(d.domain, Math.max(MIN_PER_DOMAIN, share));
+    }
+    console.log(`[${companyName}] Lane 2: ${allDomains.length} domains, budget ${MAX_LANE2_QUERIES}, allocation: ${allDomains.map(d => `${d}=${budgetPerDomain.get(d)}`).join(", ")}`);
 
     for (const domain of allDomains) {
       const domainQueries = buildDomainQueries(companyName, domain, framework, topicPhrases);
-      const budgetSlice = domain === effectiveDomain
-        ? Math.min(domainQueries.length, queriesPerDomain + 5) // primary gets a bonus
-        : Math.min(domainQueries.length, queriesPerDomain);
+      const domainBudget = budgetPerDomain.get(domain) || MIN_PER_DOMAIN;
+      const budgetSlice = Math.min(domainQueries.length, domainBudget);
 
       for (let qi = 0; qi < budgetSlice && lane2QueryCount < MAX_LANE2_QUERIES; qi++) {
         const results = await webSearch(domainQueries[qi], { num: searchDepth });

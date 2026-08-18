@@ -525,6 +525,40 @@ export async function initializeDatabase(): Promise<void> {
       WHERE authoritative_filing_types::text LIKE '%\\b%'
     `);
 
+    // 41-C: Add withdrawal_patterns column
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS withdrawal_patterns JSONB DEFAULT '{"queries": [], "documentRegex": []}'::jsonb`);
+
+    // 41-C: Seed fw3 (climate) withdrawal patterns
+    await db.execute(sql`
+      UPDATE frameworks SET withdrawal_patterns = '{
+        "queries": [
+          "\\"\{companyName\}\\" withdraws climate target OR drops net zero OR leaves NZBA",
+          "\\"\{companyName\}\\" scraps financed emissions target OR abandons climate goal",
+          "\\"\{companyName\}\\" removes coal policy OR drops fossil fuel exclusion"
+        ],
+        "documentRegex": [
+          "(?:withdrew|exited|left) (?:the )?(?:Net.?Zero|NZBA|SBTi|Climate Action)",
+          "(?:removed|deleted) .{0,30}(?:coal|fossil|climate|net.?zero) .{0,30}(?:policy|commitment|target)"
+        ]
+      }'::jsonb
+      WHERE id = 3 AND (withdrawal_patterns IS NULL OR withdrawal_patterns->>'queries' = '[]')
+    `);
+
+    // 41-C: Seed fw8 (modern slavery) withdrawal patterns
+    await db.execute(sql`
+      UPDATE frameworks SET withdrawal_patterns = '{
+        "queries": [
+          "\\"\{companyName\}\\" withdraws modern slavery statement OR discontinues supplier code",
+          "\\"\{companyName\}\\" exits Ethical Trading Initiative OR leaves ETI"
+        ],
+        "documentRegex": [
+          "(?:withdrew|discontinued) (?:the )?(?:modern slavery|human trafficking) statement",
+          "(?:no longer) .{0,30}(?:supplier code|due diligence|human rights)"
+        ]
+      }'::jsonb
+      WHERE id = 8 AND (withdrawal_patterns IS NULL OR withdrawal_patterns->>'queries' = '[]')
+    `);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 

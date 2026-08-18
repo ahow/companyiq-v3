@@ -1625,7 +1625,17 @@ export async function analyzeCompanyMeasures(opts: {
   }
 
   // Generate summary narrative
-  const summary = await generateSummaryNarrative(companyName, allResults, scorePercentage, framework);
+  let summary = await generateSummaryNarrative(companyName, allResults, scorePercentage, framework);
+
+  // 41-H: Guard against contradictory 0-score summaries.
+  // If measuresMet === 0 but the summary claims robustness/completeness, replace with deterministic fallback.
+  const measuresMet = allResults.filter(r => r.verdict === "Yes").length;
+  if (measuresMet === 0 && scorePercentage === 0) {
+    const positiveClaims = /\b(robust|comprehensive|fully meet|fully meets|full alignment|strong|leading)\b/i;
+    if (positiveClaims.test(summary)) {
+      summary = `${companyName} scored 0% on the ${framework.name}, failing to meet any of the ${measuresTotal} assessment measures. The evidence pack did not contain material that satisfied the framework's criteria; retrieval or scoring conditions for this issuer should be reviewed before treating the zero as legitimate.`;
+    }
+  }
 
   // Group results by category for output
   const categoryResults = Array.from(categoryMap.entries()).map(([category, categoryMeasures]) => ({
