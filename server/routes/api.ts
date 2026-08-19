@@ -3,10 +3,11 @@ import multer from "multer";
 import * as storage from "../storage.js";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { addBatchJobs, removeBatchJobs, getQueueStats } from "../queue.js";
-import { cancelBatch, finalizeBatchAndSave, saveBatchSnapshot } from "../worker.js";
+import { cancelBatch, enqueueReliabilityFinalizer, finalizeBatchAndSave, saveBatchSnapshot } from "../worker.js";
 import { detectScoreAnomalies } from "../lib/anomaly-detection.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
+import { assertProductionFingerprint, computeRecoveryLabels, deploymentFingerprintFromEnvironment, isTerminalLifecycleState, type DeploymentFingerprint } from "../lib/reliability.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -570,12 +571,33 @@ apiRouter.post("/analyze", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
     const { frameworkId, listId, companyIds, offPeakOnly, scoreOnly } = req.body;
+    const testCycleId = typeof req.body.testCycleId === "string" ? req.body.testCycleId.trim() : "";
+    const batteryLabel = typeof req.body.batteryLabel === "string" ? req.body.batteryLabel.trim() : "";
+    const commitSha = typeof req.body.commitSha === "string" ? req.body.commitSha.trim() : "";
+    const diagnosticRun = req.body.diagnosticRun === true;
+    const requestedFingerprint = req.body.deploymentFingerprint as DeploymentFingerprint | undefined;
+    const liveFingerprint = deploymentFingerprintFromEnvironment();
 
-    // Get framework
+    // Reliability runs are explicit so ordinary interactive analysis remains
+    // backward-compatible. Battery runs are never allowed to proceed on mixed
+    // source/app/worker/static-analysis fingerprints unless diagnostic mode is on.
+    if (testCycleId || batteryLabel || commitSha || requestedFingerprint) {
+      if (!testCycleId || !batteryLabel || !commitSha) {
+        return res.status(400).json({ error: "testCycleId, batteryLabel, and commitSha are required for reliability runs" });
+      }
+      try {
+        if (requestedFingerprint && requestedFingerprint.sourceSha && requestedFingerprint.sourceSha !== commitSha && !diagnosticRun) {
+          throw new Error("Production battery refused: commit SHA does not match fingerprint source SHA");
+        }
+        assertProductionFingerprint(requestedFingerprint ?? liveFingerprint, liveFingerprint, diagnosticRun);
+      } catch (error: any) {
+        return res.status(409).json({ error: error.message, diagnosticRunAllowed: true, fingerprint: liveFingerprint });
+      }
+    }
+
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
     if (!framework) return res.status(404).json({ error: "Framework not found" });
 
-    // Determine companies to analyze
     let companies: any[];
     if (companyIds && companyIds.length > 0) {
       companies = [];
@@ -589,82 +611,77 @@ apiRouter.post("/analyze", async (req: Request, res: Response) => {
     } else {
       companies = await storage.getCompanies(workspaceId);
     }
+    if (companies.length === 0) return res.status(400).json({ error: "No companies to analyze" });
 
-    if (companies.length === 0) {
-      return res.status(400).json({ error: "No companies to analyze" });
+    let reliability: Awaited<ReturnType<typeof storage.createOrAdoptReliabilityRun>> | null = null;
+    let adopted = false;
+    if (testCycleId) {
+      reliability = await storage.createOrAdoptReliabilityRun({
+        workspaceId,
+        testCycleId,
+        commitSha,
+        frameworkId,
+        listId: listId ?? null,
+        batteryLabel,
+        deploymentFingerprint: requestedFingerprint ?? liveFingerprint,
+        diagnosticRun,
+      });
+      adopted = reliability.adopted;
+      const existingBatch = await storage.getBatchRunByReliabilityRunId(reliability.run.id, workspaceId);
+      if (isTerminalLifecycleState(reliability.run.lifecycleState)) {
+        return res.status(409).json({ error: "run_key already has a terminal result", terminal: true, adopted: true, runKey: reliability.run.runKey, batchId: existingBatch?.id ?? null });
+      }
+      if (existingBatch) {
+        const progress = await storage.getBatchProgress(existingBatch.id);
+        const pendingJobs = (await storage.getJobsForBatch(existingBatch.id)).filter((j: any) => j.status === "pending");
+        await addBatchJobs(pendingJobs.map((j: any) => ({ jobId: j.id, companyId: j.companyId, frameworkId: j.frameworkId, batchId: existingBatch.id, workspaceId, skipFetch: existingBatch.scoreOnly === true })), workspaceId, existingBatch.id);
+        return res.json({ success: true, adopted: true, runKey: reliability.run.runKey, batchId: existingBatch.id, scoreOnly: existingBatch.scoreOnly === true, totalJobs: existingBatch.totalJobs, progress });
+      }
     }
 
-    // Reset company statuses
-    for (const company of companies) {
-      await storage.updateCompany(company.id, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
+    if (!adopted) {
+      for (const company of companies) {
+        await storage.updateCompany(company.id, workspaceId, { analysisStatus: "idle", totalScore: null, summary: null });
+      }
+      storage.detectAndUpsertPlatformSources(3)
+        .then((d) => console.log(`[PlatformSources] Auto-detect at batch start: ${d.filter(x => x.added).length} new, ${d.length} qualifying (>=3 companies)`))
+        .catch((e) => console.warn(`[PlatformSources] Auto-detect failed (non-fatal): ${e?.message || e}`));
     }
 
-    // Auto-enforce the >=3-companies platform-source rule before a batch run.
-    // Non-blocking: a failure here must never block the analysis from starting.
-    storage.detectAndUpsertPlatformSources(3)
-      .then((d) => console.log(`[PlatformSources] Auto-detect at batch start: ${d.filter(x => x.added).length} new, ${d.length} qualifying (>=3 companies)`))
-      .catch((e) => console.warn(`[PlatformSources] Auto-detect failed (non-fatal): ${e?.message || e}`));
-
-    // SINGLE-ACTIVE-BATCH GUARD: prevent duplicate full-fleet batches caused by
-    // double-submit / retried requests. If a batch is already running for this
-    // workspace, refuse to spawn another and return the existing one. This is the
-    // root-cause fix for the 667/668/669 duplicate-batch backlog.
-    if (process.env.SINGLE_ACTIVE_BATCH !== "false") {
+    // Legacy interactive requests still use the existing workspace guard. The
+    // reliability path relies on a database-unique run_key instead of stale reads.
+    if (!testCycleId && process.env.SINGLE_ACTIVE_BATCH !== "false") {
       const existingActive = await storage.getActiveBatchRun(workspaceId);
       if (existingActive && existingActive.status === "running") {
-        return res.status(409).json({
-          error: "A batch is already running for this workspace.",
-          alreadyRunning: true,
-          batchId: existingActive.id,
-          completed: existingActive.completedJobs,
-          total: existingActive.totalJobs,
-        });
+        return res.status(409).json({ error: "A batch is already running for this workspace.", alreadyRunning: true, batchId: existingActive.id, completed: existingActive.completedJobs, total: existingActive.totalJobs });
       }
-      // Also block while a batch awaits review — the user must resolve it
-      // (re-examine or discard & finalise) before starting a new full run.
       const pendingReview = await storage.getLatestReviewableBatch(workspaceId);
       if (pendingReview) {
-        return res.status(409).json({
-          error: "A previous batch is awaiting review. Resolve it before starting a new analysis.",
-          pendingReview: true,
-          batchId: pendingReview.id,
-          failed: pendingReview.failedJobs,
-          completed: pendingReview.completedJobs,
-          total: pendingReview.totalJobs,
-        });
+        return res.status(409).json({ error: "A previous batch is awaiting review. Resolve it before starting a new analysis.", pendingReview: true, batchId: pendingReview.id, failed: pendingReview.failedJobs, completed: pendingReview.completedJobs, total: pendingReview.totalJobs });
       }
     }
 
-    // Create batch run
-    const batch = await storage.createBatchRun(workspaceId, frameworkId, companies.length, listId, offPeakOnly === true, scoreOnly === true);
-
-    // Create jobs in DB and add to BullMQ queue
-    const jobsData = companies.map((c) => ({
+    const batch = await storage.createBatchRun(
       workspaceId,
-      batchId: batch.id,
-      companyId: c.id,
-      companyName: c.name,
       frameworkId,
-    }));
-    const dbJobs = await storage.createAnalysisJobs(jobsData);
+      companies.length,
+      listId,
+      offPeakOnly === true,
+      scoreOnly === true,
+      reliability ? { runId: reliability.run.id, runKey: reliability.run.runKey, testCycleId, batteryLabel, deploymentFingerprint: requestedFingerprint ?? liveFingerprint } : undefined,
+    );
+    if (reliability) {
+      await storage.updateReliabilityRunLifecycle(reliability.run.id, "running", { lastHeartbeatAt: new Date(), lastProgressAt: new Date() });
+      await storage.recordReliabilityAuditEvent({ workspaceId, runId: reliability.run.id, batchId: batch.id, eventType: adopted ? "adoption" : "creation", fromState: reliability.run.lifecycleState, toState: "running", reason: adopted ? "concurrent request adopted the existing non-terminal run" : "reliability run created" });
+    }
 
-    // Add to BullMQ for processing
-    const queueJobs = dbJobs.map((j) => ({
-      jobId: j.id,
-      companyId: j.companyId,
-      frameworkId: j.frameworkId,
-      batchId: batch.id,
-      workspaceId,
-      skipFetch: scoreOnly === true,
-    }));
+    const jobsData = companies.map((c) => ({ workspaceId, batchId: batch.id, companyId: c.id, companyName: c.name, frameworkId }));
+    await storage.createAnalysisJobs(jobsData);
+    const allJobs = await storage.getJobsForBatch(batch.id);
+    const queueJobs = allJobs.filter((j: any) => j.status === "pending").map((j: any) => ({ jobId: j.id, companyId: j.companyId, frameworkId: j.frameworkId, batchId: batch.id, workspaceId, skipFetch: scoreOnly === true }));
     await addBatchJobs(queueJobs, workspaceId, batch.id);
 
-    res.json({
-      success: true,
-      batchId: batch.id,
-      scoreOnly: scoreOnly === true,
-      totalJobs: companies.length,
-    });
+    res.json({ success: true, adopted, runKey: reliability?.run.runKey ?? null, batchId: batch.id, scoreOnly: scoreOnly === true, totalJobs: companies.length });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -716,6 +733,29 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       return res.json({ running: !!activeRun, completed: 0, total: 0, failed: 0, review, activeRun });
     }
 
+    let reliabilityStatus: any = null;
+    try {
+      const run = await storage.getReliabilityRunForBatch(batch.id);
+      if (run) {
+        const thresholdMs = Number(process.env.RELIABILITY_STALL_THRESHOLD_MS || 45 * 60 * 1000);
+        const classified = await storage.classifyBatchStall(batch.id, thresholdMs);
+        await storage.recordReliabilityStatusTrace(run.id, batch.id, classified.progress, classified.classification);
+        reliabilityStatus = {
+          runId: run.id,
+          runKey: run.runKey,
+          lifecycleState: run.lifecycleState,
+          acceptanceState: run.acceptanceState,
+          lastHeartbeatAt: run.lastHeartbeatAt,
+          terminalAt: run.terminalAt,
+          ...classified.progress,
+          stalled: classified.stalled,
+          classification: classified.classification,
+        };
+      }
+    } catch (error: any) {
+      console.warn(`[Reliability] status trace failed (non-fatal): ${error?.message || error}`);
+    }
+
     // Surface any active system alert (e.g. API credit exhaustion) so the
     // dashboard can render a banner without an extra request.
     let alert: any = null;
@@ -736,6 +776,7 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       alert,
       review,
       activeRun,
+      reliabilityStatus,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -759,6 +800,60 @@ apiRouter.post("/system/alerts/resume", async (req: Request, res: Response) => {
     const { kind } = req.body || {};
     await storage.clearSystemAlert(kind || "credit_exhaustion");
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Reliability Run and Gate Report API ─────────────────────────────────────
+
+apiRouter.get("/reliability/run/:runKey", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const run = await storage.getReliabilityRunByKey(String(req.params.runKey), workspaceId);
+    if (!run) return res.status(404).json({ error: "Reliability run not found" });
+    const batch = await storage.getBatchRunByReliabilityRunId(run.id, workspaceId);
+    const progress = batch ? await storage.getBatchProgress(batch.id) : null;
+    res.json({ run, batch, progress });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/reliability/recovery-plan", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const testCycleId = String(req.body.testCycleId || "").trim();
+    const expectedLabels = Array.isArray(req.body.expectedLabels) ? req.body.expectedLabels.map((label: unknown) => String(label)) : [];
+    if (!testCycleId || expectedLabels.length === 0) return res.status(400).json({ error: "testCycleId and expectedLabels are required" });
+    const runs = await storage.getReliabilityRunsForCycle(testCycleId, workspaceId);
+    res.json({ testCycleId, ...computeRecoveryLabels(expectedLabels, runs) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.get("/reliability/gate-report/:testCycleId", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const report = await storage.getGateReport(String(req.params.testCycleId), workspaceId);
+    if (!report) return res.status(404).json({ error: "Gate Report not found", complete: false });
+    res.json({ complete: true, report });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/reliability/finalize", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const testCycleId = String(req.body.testCycleId || "").trim();
+    if (!testCycleId) return res.status(400).json({ error: "testCycleId is required" });
+    const snapshots = await storage.getAcceptedEvidenceSnapshots(testCycleId, workspaceId);
+    const expectedCompanyCount = Number(req.body.expectedCompanyCount || snapshots[0]?.companiesCount || 0);
+    const deploymentFingerprint = (req.body.deploymentFingerprint || snapshots[0]?.deploymentFingerprint || deploymentFingerprintFromEnvironment()) as DeploymentFingerprint;
+    await enqueueReliabilityFinalizer({ kind: "reliability_finalizer", testCycleId, workspaceId, expectedCompanyCount, deploymentFingerprint });
+    res.status(202).json({ queued: true, testCycleId, expectedCompanyCount });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

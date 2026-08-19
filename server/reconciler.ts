@@ -188,13 +188,14 @@ async function reconcilePass(): Promise<ReconcileStats> {
   try {
     const staleClaims = await db.execute(sql`
       SELECT j.id AS job_id, j.company_id, j.batch_id, j.attempts,
-             j.framework_id, j.workspace_id,
+             j.framework_id, j.workspace_id, b.last_heartbeat_at, j.last_progress_at,
              (SELECT COUNT(*) FROM measure_scores ms
                 WHERE ms.company_id = j.company_id AND ms.framework_id = j.framework_id) AS has_scores
       FROM analysis_jobs j
       JOIN batch_runs b ON b.id = j.batch_id
       WHERE j.status = 'claimed'
-        AND j.claimed_at < NOW() - INTERVAL '${sql.raw(String(REAP_CLAIM_MIN))} minutes'
+        AND COALESCE(b.last_heartbeat_at, 'epoch') < NOW() - INTERVAL '${sql.raw(String(REAP_CLAIM_MIN))} minutes'
+        AND COALESCE(j.last_progress_at, j.claimed_at, 'epoch') < NOW() - INTERVAL '${sql.raw(String(REAP_CLAIM_MIN))} minutes'
         AND b.status = 'running'
         AND b.total_jobs > 1
         AND j.id = (SELECT MAX(id) FROM analysis_jobs j2 WHERE j2.company_id = j.company_id)
@@ -244,11 +245,11 @@ async function reconcilePass(): Promise<ReconcileStats> {
            j.id AS job_id, j.framework_id, j.batch_id
     FROM companies c
     JOIN analysis_jobs j ON j.company_id = c.id
-    WHERE (
-            (j.status = 'claimed' AND j.claimed_at < NOW() - INTERVAL '${sql.raw(String(STUCK_THRESHOLD_MIN))} minutes')
-            OR
-            (c.analysis_status IN ('fetching','analyzing') AND c.updated_at < NOW() - INTERVAL '${sql.raw(String(STUCK_THRESHOLD_MIN))} minutes')
-          )
+    JOIN batch_runs b ON b.id = j.batch_id
+    WHERE b.status = 'running'
+      AND COALESCE(b.last_heartbeat_at, 'epoch') < NOW() - INTERVAL '${sql.raw(String(STUCK_THRESHOLD_MIN))} minutes'
+      AND COALESCE(j.last_progress_at, j.claimed_at, 'epoch') < NOW() - INTERVAL '${sql.raw(String(STUCK_THRESHOLD_MIN))} minutes'
+      AND j.status IN ('pending','claimed')
       AND j.id = (SELECT MAX(id) FROM analysis_jobs j2 WHERE j2.company_id = c.id)
   `);
 

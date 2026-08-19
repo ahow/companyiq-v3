@@ -3,6 +3,7 @@ import { eq, and, sql, desc, asc, inArray, isNull } from "drizzle-orm";
 import * as schema from "../shared/schema.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironment, isHeartbeatStalled, type DeploymentFingerprint, type RunKeyInput, type RunLifecycleState } from "./lib/reliability.js";
 
 // ─── URL Hashing for Content Deduplication ─────────────────────────────────
 
@@ -518,7 +519,7 @@ export async function recordFetchDead(companyId: number, url: string, failureRea
  * gate_reason for auditability. Any previously linked content reference is
  * cleared so the wrong-company text cannot leak into analysis.
  */
-export async function recordVerificationReject(companyId: number, url: string, reason: string) {
+export async function recordVerificationReject(companyId: number, url: string, reason: string, batchId?: number) {
   await db.execute(sql`
     UPDATE documents SET
       fetch_status = 'rejected',
@@ -529,6 +530,19 @@ export async function recordVerificationReject(companyId: number, url: string, r
       gate_reason = ${reason.slice(0, 500)}
     WHERE company_id = ${companyId} AND url = ${url}
   `);
+  if (batchId != null) {
+    const [batch] = await db.select({ workspaceId: schema.batchRuns.workspaceId, reliabilityRunId: schema.batchRuns.reliabilityRunId })
+      .from(schema.batchRuns).where(eq(schema.batchRuns.id, batchId)).limit(1);
+    await recordReliabilityAuditEvent({
+      workspaceId: batch?.workspaceId ?? 0,
+      runId: batch?.reliabilityRunId ?? null,
+      batchId,
+      artifactId: url,
+      eventType: "rejection",
+      reason: `document verification rejected: ${reason}`,
+      metadata: { companyId, url },
+    });
+  }
 }
 
 /**
@@ -619,10 +633,9 @@ export async function clearDiscoveredDocuments(companyId: number) {
   await db.delete(schema.documents).where(
     and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "dead"))
   );
-  // Clear REJECTED documents (verified as belonging to a different company).
-  await db.delete(schema.documents).where(
-    and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "rejected"))
-  );
+  // Rejected documents are terminal evidence artifacts. Preserve them with their
+  // gate_reason; only an explicit full reset may remove them, and that path audits
+  // the deletion. This prevents silent loss of contamination evidence.
   // Clear NEEDS_VERIFY documents (cache-linked but not yet issuer-verified) —
   // these are transient and must be re-evaluated on each re-discovery.
   await db.delete(schema.documents).where(
@@ -632,7 +645,12 @@ export async function clearDiscoveredDocuments(companyId: number) {
 
 // Full reset: purge ALL documents including successfully fetched ones
 export async function fullResetCompanyDocuments(companyId: number) {
+  const [company] = await db.select({ workspaceId: schema.companies.workspaceId }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1);
+  const count = await db.execute(sql`SELECT COUNT(*)::int AS n FROM documents WHERE company_id = ${companyId}`);
   await db.delete(schema.documents).where(eq(schema.documents.companyId, companyId));
+  if (company) {
+    await recordReliabilityAuditEvent({ workspaceId: company.workspaceId, eventType: "deletion", reason: "explicit company full reset deleted document artifacts", metadata: { companyId, deletedDocumentCount: Number((count.rows[0] as any)?.n || 0) } });
+  }
 }
 
 // Bulk full reset all companies in a workspace (purge ALL documents)
@@ -644,11 +662,13 @@ export async function fullResetAllCompanies(workspaceId: number): Promise<number
     )
   `);
   // Delete ALL documents (including ok) for a completely fresh start
-  await db.execute(sql`
-    DELETE FROM documents WHERE company_id IN (
-      SELECT id FROM companies WHERE workspace_id = ${workspaceId}
-    )
-  `);
+    const deletedDocs = await db.execute(sql`SELECT COUNT(*)::int AS n FROM documents WHERE company_id IN (SELECT id FROM companies WHERE workspace_id = ${workspaceId})`);
+    await db.execute(sql`
+      DELETE FROM documents WHERE company_id IN (
+        SELECT id FROM companies WHERE workspace_id = ${workspaceId}
+      )
+    `);
+    await recordReliabilityAuditEvent({ workspaceId, eventType: "deletion", reason: "explicit workspace full reset deleted document artifacts", metadata: { deletedDocumentCount: Number((deletedDocs.rows[0] as any)?.n || 0) } });
   // Reset all companies (42-C: also clear FIGI + domain caches)
   await db.execute(sql`
     UPDATE companies SET
@@ -680,11 +700,13 @@ export async function fullResetListCompanies(listId: number, workspaceId: number
     )
   `);
   // Delete ALL documents (including ok)
+  const deletedDocs = await db.execute(sql`SELECT COUNT(*)::int AS n FROM documents WHERE company_id IN (SELECT company_id FROM company_list_members WHERE list_id = ${listId})`);
   await db.execute(sql`
-    DELETE FROM documents WHERE company_id IN (
-      SELECT company_id FROM company_list_members WHERE list_id = ${listId}
-    )
-  `);
+      DELETE FROM documents WHERE company_id IN (
+        SELECT company_id FROM company_list_members WHERE list_id = ${listId}
+      )
+    `);
+  await recordReliabilityAuditEvent({ workspaceId, eventType: "deletion", reason: "explicit list full reset deleted document artifacts", metadata: { listId, deletedDocumentCount: Number((deletedDocs.rows[0] as any)?.n || 0) } });
   // Reset companies in this list (42-C: also clear FIGI + domain caches)
   await db.execute(sql`
     UPDATE companies SET
@@ -846,17 +868,245 @@ export async function getMostRecentFrameworkIdForCompany(companyId: number, work
   return rows?.[0]?.framework_id ?? null;
 }
 
+// ─── Reliability Run Operations ──────────────────────────────────────────────
+
+export type ReliabilityRunCreateInput = RunKeyInput & {
+  workspaceId: number;
+  commitSha: string;
+  deploymentFingerprint: DeploymentFingerprint;
+  diagnosticRun?: boolean;
+};
+
+export async function getReliabilityRunsForCycle(testCycleId: string, workspaceId: number) {
+  return db.select({ batteryLabel: schema.reliabilityRuns.batteryLabel, lifecycleState: schema.reliabilityRuns.lifecycleState, acceptanceState: schema.reliabilityRuns.acceptanceState, runKey: schema.reliabilityRuns.runKey })
+    .from(schema.reliabilityRuns)
+    .where(and(eq(schema.reliabilityRuns.testCycleId, testCycleId), eq(schema.reliabilityRuns.workspaceId, workspaceId)))
+    .orderBy(asc(schema.reliabilityRuns.id));
+}
+
+export async function getReliabilityRunByKey(runKey: string, workspaceId?: number) {
+  const conditions = workspaceId == null
+    ? eq(schema.reliabilityRuns.runKey, runKey)
+    : and(eq(schema.reliabilityRuns.runKey, runKey), eq(schema.reliabilityRuns.workspaceId, workspaceId));
+  const [run] = await db.select().from(schema.reliabilityRuns).where(conditions).limit(1);
+  return run || null;
+}
+
+export async function createOrAdoptReliabilityRun(input: ReliabilityRunCreateInput): Promise<{ run: schema.ReliabilityRun; adopted: boolean }> {
+  const runKey = buildRunKey(input);
+  const existing = await getReliabilityRunByKey(runKey, input.workspaceId);
+  if (existing) return { run: existing, adopted: true };
+  try {
+    const [run] = await db.insert(schema.reliabilityRuns).values({
+      workspaceId: input.workspaceId,
+      testCycleId: input.testCycleId,
+      runKey,
+      commitSha: input.commitSha,
+      frameworkId: input.frameworkId,
+      listId: input.listId ?? null,
+      batteryLabel: input.batteryLabel,
+      deploymentFingerprint: input.deploymentFingerprint,
+      diagnosticRun: input.diagnosticRun ?? false,
+      lifecycleState: "created",
+      acceptanceState: "pending",
+    }).returning();
+    if (!run) throw new Error("Reliability run insert returned no row");
+    return { run, adopted: false };
+  } catch (error: any) {
+    if (error?.code !== "23505") throw error;
+    const raced = await getReliabilityRunByKey(runKey, input.workspaceId);
+    if (!raced) throw error;
+    return { run: raced, adopted: true };
+  }
+}
+
+export async function updateReliabilityRunLifecycle(runId: number, state: RunLifecycleState, fields: {
+  acceptanceState?: string;
+  artifactId?: string | null;
+  rejectionReason?: string | null;
+  lastHeartbeatAt?: Date;
+  lastProgressAt?: Date;
+  terminalAt?: Date;
+} = {}) {
+  const now = new Date();
+  const values: Record<string, unknown> = { lifecycleState: state };
+  if (state === "running") values.startedAt = now;
+  if (state === "terminal_success" || state === "terminal_failed" || state === "cancelled" || state === "accepted" || state === "rejected") {
+    values.terminalAt = fields.terminalAt ?? now;
+  }
+  if (fields.acceptanceState !== undefined) values.acceptanceState = fields.acceptanceState;
+  if (fields.artifactId !== undefined) values.artifactId = fields.artifactId;
+  if (fields.rejectionReason !== undefined) values.rejectionReason = fields.rejectionReason;
+  if (fields.lastHeartbeatAt !== undefined) values.lastHeartbeatAt = fields.lastHeartbeatAt;
+  if (fields.lastProgressAt !== undefined) values.lastProgressAt = fields.lastProgressAt;
+  const [run] = await db.update(schema.reliabilityRuns).set(values as any).where(eq(schema.reliabilityRuns.id, runId)).returning();
+  return run || null;
+}
+
+export async function markReliabilityRunAccepted(runId: number, batchId: number, artifactId: string, reason = "complete evidence snapshot accepted") {
+  const [run] = await db.select().from(schema.reliabilityRuns).where(eq(schema.reliabilityRuns.id, runId)).limit(1);
+  if (!run) return null;
+  const updated = await updateReliabilityRunLifecycle(runId, "accepted", { acceptanceState: "accepted", artifactId, rejectionReason: null });
+  await db.execute(sql`UPDATE batch_runs SET acceptance_state = 'accepted', artifact_id = ${artifactId}, rejection_reason = NULL WHERE id = ${batchId}`);
+  await db.execute(sql`UPDATE analysis_results SET acceptance_state = 'accepted', accepted_at = NOW(), rejection_reason = NULL WHERE batch_id = ${batchId} AND run_key = ${run.runKey} AND immutable_snapshot = TRUE`);
+  await recordReliabilityAuditEvent({ workspaceId: run.workspaceId, runId, batchId, artifactId, eventType: "acceptance", fromState: run.lifecycleState, toState: "accepted", reason });
+  return updated;
+}
+
+export async function markReliabilityRunRejected(runId: number, batchId: number, reason: string, artifactId?: string | null) {
+  const [run] = await db.select().from(schema.reliabilityRuns).where(eq(schema.reliabilityRuns.id, runId)).limit(1);
+  if (!run) return null;
+  const updated = await updateReliabilityRunLifecycle(runId, "rejected", { acceptanceState: "rejected", artifactId: artifactId ?? null, rejectionReason: reason });
+  await db.execute(sql`UPDATE batch_runs SET acceptance_state = 'rejected', artifact_id = ${artifactId ?? null}, rejection_reason = ${reason} WHERE id = ${batchId}`);
+  await db.execute(sql`UPDATE analysis_results SET acceptance_state = 'rejected', rejection_reason = ${reason} WHERE batch_id = ${batchId} AND run_key = ${run.runKey} AND immutable_snapshot = TRUE`);
+  await recordReliabilityAuditEvent({ workspaceId: run.workspaceId, runId, batchId, artifactId: artifactId ?? null, eventType: "rejection", fromState: run.lifecycleState, toState: "rejected", reason });
+  return updated;
+}
+
+export async function recordReliabilityAuditEvent(data: {
+  workspaceId: number;
+  runId?: number | null;
+  batchId?: number | null;
+  artifactId?: string | null;
+  eventType: string;
+  fromState?: string | null;
+  toState?: string | null;
+  reason: string;
+  metadata?: unknown;
+}) {
+  const [event] = await db.insert(schema.reliabilityAuditEvents).values({
+    workspaceId: data.workspaceId,
+    runId: data.runId ?? null,
+    batchId: data.batchId ?? null,
+    artifactId: data.artifactId ?? null,
+    eventType: data.eventType,
+    fromState: data.fromState ?? null,
+    toState: data.toState ?? null,
+    reason: data.reason,
+    metadata: data.metadata ?? null,
+  }).returning();
+  return event;
+}
+
+export async function getBatchRunByRunKey(runKey: string, workspaceId: number) {
+  const [batch] = await db.select().from(schema.batchRuns)
+    .where(and(eq(schema.batchRuns.runKey, runKey), eq(schema.batchRuns.workspaceId, workspaceId)))
+    .orderBy(asc(schema.batchRuns.id))
+    .limit(1);
+  return batch || null;
+}
+
+export async function getBatchRunByReliabilityRunId(runId: number, workspaceId: number) {
+  const [batch] = await db.select().from(schema.batchRuns)
+    .where(and(eq(schema.batchRuns.reliabilityRunId, runId), eq(schema.batchRuns.workspaceId, workspaceId)))
+    .orderBy(asc(schema.batchRuns.id))
+    .limit(1);
+  return batch || null;
+}
+
+export async function getReliabilityRunForBatch(batchId: number) {
+  const [run] = await db.select({ run: schema.reliabilityRuns })
+    .from(schema.batchRuns)
+    .innerJoin(schema.reliabilityRuns, eq(schema.batchRuns.reliabilityRunId, schema.reliabilityRuns.id))
+    .where(eq(schema.batchRuns.id, batchId))
+    .limit(1);
+  return run?.run || null;
+}
+
+export async function touchBatchHeartbeat(batchId: number, progress?: { lastProgressAt?: Date; detail?: unknown }) {
+  const now = new Date();
+  await db.execute(sql`
+    UPDATE batch_runs SET last_heartbeat_at = ${now}, last_progress_at = COALESCE(${progress?.lastProgressAt ?? null}, last_progress_at)
+    WHERE id = ${batchId}
+  `);
+  const run = await getReliabilityRunForBatch(batchId);
+  if (run) {
+    await db.execute(sql`
+      UPDATE reliability_runs SET last_heartbeat_at = ${now}, last_progress_at = COALESCE(${progress?.lastProgressAt ?? now}, last_progress_at)
+      WHERE id = ${run.id} AND lifecycle_state = 'running'
+    `);
+  }
+}
+
+export async function getBatchProgress(batchId: number) {
+  const rows = await db.execute(sql`
+    SELECT id, status, last_progress_at, completed_at, claimed_at, progress_detail
+    FROM analysis_jobs WHERE batch_id = ${batchId} ORDER BY id ASC
+  `);
+  const jobs = (rows.rows as any[]).map((row) => ({
+    id: Number(row.id),
+    status: String(row.status),
+    lastProgressAt: row.last_progress_at ?? row.completed_at ?? row.claimed_at ?? null,
+  }));
+  return computeProgressSnapshot(jobs);
+}
+
+export async function recordReliabilityStatusTrace(runId: number, batchId: number | null, progress: ReturnType<typeof computeProgressSnapshot>, classification: string) {
+  return db.insert(schema.reliabilityStatusTraces).values({
+    runId,
+    batchId,
+    total: progress.total,
+    completed: progress.completed,
+    active: progress.active,
+    pending: progress.pending,
+    failed: progress.failed,
+    oldestActiveJobAgeMs: progress.oldestActiveJobAgeMs,
+    lastProgressAt: progress.lastProgressAt ? new Date(progress.lastProgressAt) : null,
+    classification,
+    jobProgress: progress.jobs,
+  }).returning();
+}
+
+export async function classifyBatchStall(batchId: number, thresholdMs: number) {
+  const batch = await db.select().from(schema.batchRuns).where(eq(schema.batchRuns.id, batchId)).limit(1);
+  const row = batch[0];
+  if (!row) return { stalled: false, progress: computeProgressSnapshot([]), classification: "unknown" };
+  const progress = await getBatchProgress(batchId);
+  const stalled = isHeartbeatStalled({
+    lifecycleState: row.status,
+    lastHeartbeatAt: row.lastHeartbeatAt,
+    activeJobs: progress.jobs.filter((job) => job.status === "claimed" || job.status === "active"),
+    thresholdMs,
+  });
+  return { stalled, progress, classification: stalled ? "stalled" : "active" };
+}
+
 // ─── Batch Run Operations (Workspace-Scoped) ────────────────────────────────
 
-export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number, offPeakOnly: boolean = false, scoreOnly: boolean = false) {
-  // Cancel any existing running batches for this workspace
-  await db
-    .update(schema.batchRuns)
-    .set({ status: "cancelled", completedAt: new Date() })
-    .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "running")));
+export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number, offPeakOnly: boolean = false, scoreOnly: boolean = false, reliability?: { runId: number; runKey: string; testCycleId: string; batteryLabel: string; deploymentFingerprint: DeploymentFingerprint }) {
+  // Legacy interactive runs retain the existing single-active behaviour. Reliability
+  // runs are protected by their immutable run_key and never cancel a concurrent run.
+  if (!reliability) {
+    await db.update(schema.batchRuns)
+      .set({ status: "cancelled", completedAt: new Date(), terminalAt: new Date(), acceptanceState: "rejected", rejectionReason: "superseded by a newer interactive batch" })
+      .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "running")));
+  }
 
-  const [batch] = await db.insert(schema.batchRuns).values({ workspaceId, frameworkId, listId, totalJobs, offPeakOnly, scoreOnly }).returning();
-  return batch;
+  try {
+    const [batch] = await db.insert(schema.batchRuns).values({
+      workspaceId,
+      reliabilityRunId: reliability?.runId,
+      runKey: reliability?.runKey,
+      testCycleId: reliability?.testCycleId,
+      batteryLabel: reliability?.batteryLabel,
+      deploymentFingerprint: reliability?.deploymentFingerprint,
+      frameworkId,
+      listId,
+      totalJobs,
+      offPeakOnly,
+      scoreOnly,
+      status: "running",
+      lastHeartbeatAt: new Date(),
+      lastProgressAt: new Date(),
+      acceptanceState: "pending",
+    }).returning();
+    return batch;
+  } catch (error: any) {
+    if (error?.code !== "23505" || !reliability?.runKey) throw error;
+    const raced = await getBatchRunByRunKey(reliability.runKey, workspaceId);
+    if (!raced) throw error;
+    return raced;
+  }
 }
 
 export async function getActiveBatchRun(workspaceId: number) {
@@ -983,30 +1233,59 @@ export async function getBatchRunById(batchId: number, workspaceId: number) {
 }
 
 export async function incrementBatchCompleted(batchId: number) {
+  const now = new Date();
   const [batch] = await db.execute(sql`
-    UPDATE batch_runs SET completed_jobs = completed_jobs + 1
+    UPDATE batch_runs SET completed_jobs = completed_jobs + 1, last_heartbeat_at = ${now}, last_progress_at = ${now}
     WHERE id = ${batchId}
     RETURNING id, completed_jobs, failed_jobs, total_jobs
   `).then(r => r.rows);
+  await touchBatchHeartbeat(batchId, { lastProgressAt: now });
   return batch;
 }
 
 export async function incrementBatchFailed(batchId: number) {
+  const now = new Date();
   const [batch] = await db.execute(sql`
-    UPDATE batch_runs SET failed_jobs = failed_jobs + 1
+    UPDATE batch_runs SET failed_jobs = failed_jobs + 1, last_heartbeat_at = ${now}, last_progress_at = ${now}
     WHERE id = ${batchId}
     RETURNING id, completed_jobs, failed_jobs, total_jobs
   `).then(r => r.rows);
+  await touchBatchHeartbeat(batchId, { lastProgressAt: now });
   return batch;
 }
 
 export async function completeBatchRun(batchId: number) {
-  await db.update(schema.batchRuns).set({ status: "completed", completedAt: new Date() }).where(eq(schema.batchRuns.id, batchId));
+  const now = new Date();
+  await db.update(schema.batchRuns).set({ status: "completed", completedAt: now, terminalAt: now, lastHeartbeatAt: now, lastProgressAt: now }).where(eq(schema.batchRuns.id, batchId));
+  const run = await getReliabilityRunForBatch(batchId);
+  if (run) await updateReliabilityRunLifecycle(run.id, "terminal_success", { lastHeartbeatAt: now, lastProgressAt: now, terminalAt: now });
 }
 
 /** Set an arbitrary batch status (e.g. "pending_review", "running"). */
-export async function setBatchRunStatus(batchId: number, status: string) {
-  await db.execute(sql`UPDATE batch_runs SET status = ${status} WHERE id = ${batchId}`);
+export async function setBatchRunStatus(batchId: number, status: string, reason?: string) {
+  const previous = await db.select({ status: schema.batchRuns.status, workspaceId: schema.batchRuns.workspaceId, reliabilityRunId: schema.batchRuns.reliabilityRunId })
+    .from(schema.batchRuns).where(eq(schema.batchRuns.id, batchId)).limit(1);
+  await db.execute(sql`UPDATE batch_runs SET status = ${status}, last_heartbeat_at = NOW() WHERE id = ${batchId}`);
+  const prior = previous[0];
+  if (prior?.reliabilityRunId) {
+    if (status === "running") {
+      await updateReliabilityRunLifecycle(prior.reliabilityRunId, "running", { acceptanceState: "pending", rejectionReason: null, lastHeartbeatAt: new Date(), lastProgressAt: new Date() });
+    } else if (["completed", "pending_review", "cancelled"].includes(status)) {
+      const lifecycle: RunLifecycleState = status === "cancelled" ? "cancelled" : status === "completed" ? "terminal_success" : "terminal_failed";
+      await updateReliabilityRunLifecycle(prior.reliabilityRunId, lifecycle, { acceptanceState: status === "completed" ? "pending" : "rejected", rejectionReason: reason ?? null });
+    }
+  }
+  if (prior && prior.status !== status) {
+    await recordReliabilityAuditEvent({
+      workspaceId: prior.workspaceId,
+      runId: prior.reliabilityRunId,
+      batchId,
+      eventType: "lifecycle_transition",
+      fromState: prior.status,
+      toState: status,
+      reason: reason ?? `batch transitioned from ${prior.status} to ${status}`,
+    });
+  }
 }
 
 /** Mark a batch's snapshot as successfully saved. */
@@ -1057,7 +1336,7 @@ export async function getJobsForBatch(
   batchId: number,
 ): Promise<Array<{ id: number; companyId: number; companyName: string; status: string }>> {
   const r = await db.execute(sql`
-    SELECT id, company_id, company_name, status
+    SELECT id, company_id, company_name, framework_id, workspace_id, status
     FROM analysis_jobs
     WHERE batch_id = ${batchId}
     ORDER BY id ASC
@@ -1066,6 +1345,8 @@ export async function getJobsForBatch(
     id: Number(row.id),
     companyId: Number(row.company_id),
     companyName: String(row.company_name || ""),
+    frameworkId: Number(row.framework_id),
+    workspaceId: Number(row.workspace_id),
     status: String(row.status || ""),
   }));
 }
@@ -1130,15 +1411,35 @@ export async function requeueFailedJobsForBatch(
   }));
 }
 
-export async function cancelBatchRun(batchId: number) {
-  await db.update(schema.batchRuns).set({ status: "cancelled", completedAt: new Date() }).where(eq(schema.batchRuns.id, batchId));
+export async function cancelBatchRun(batchId: number, reason = "cancelled by user") {
+  const [batch] = await db.select().from(schema.batchRuns).where(eq(schema.batchRuns.id, batchId)).limit(1);
+  const now = new Date();
+  await db.update(schema.batchRuns).set({ status: "cancelled", completedAt: now, terminalAt: now, acceptanceState: "rejected", rejectionReason: reason }).where(eq(schema.batchRuns.id, batchId));
+  const run = await getReliabilityRunForBatch(batchId);
+  if (run) {
+    await db.execute(sql`UPDATE analysis_results SET acceptance_state = 'rejected', rejection_reason = ${reason} WHERE batch_id = ${batchId} AND immutable_snapshot = TRUE`);
+    await updateReliabilityRunLifecycle(run.id, "cancelled", { acceptanceState: "rejected", rejectionReason: reason, terminalAt: now });
+    await recordReliabilityAuditEvent({
+      workspaceId: batch?.workspaceId ?? run.workspaceId,
+      runId: run.id,
+      batchId,
+      artifactId: run.artifactId,
+      eventType: "cancellation",
+      fromState: batch?.status ?? null,
+      toState: "cancelled",
+      reason,
+    });
+  }
 }
 
 // ─── Job Queue Operations ───────────────────────────────────────────────────
 
 export async function createAnalysisJobs(jobs: Array<{ workspaceId: number; batchId: number; companyId: number; companyName: string; frameworkId: number }>) {
   if (jobs.length === 0) return [];
-  return db.insert(schema.analysisJobs).values(jobs).returning();
+  const now = new Date();
+  const rows = await db.insert(schema.analysisJobs).values(jobs.map((job) => ({ ...job, lastProgressAt: now }))).onConflictDoNothing({ target: [schema.analysisJobs.batchId, schema.analysisJobs.companyId] }).returning();
+  await touchBatchHeartbeat(jobs[0].batchId, { lastProgressAt: now });
+  return rows;
 }
 
 /**
@@ -1163,6 +1464,7 @@ export async function enqueueReexamination(opts: {
   companyName: string;
   frameworkId: number;
   workspaceId: number;
+  recoveryReason?: string;
 }): Promise<{ batchId: number; jobId: number } | null> {
   const { companyId, companyName, frameworkId, workspaceId } = opts;
 
@@ -1193,18 +1495,40 @@ export async function enqueueReexamination(opts: {
     console.warn(`[enqueueReexamination] Dedup check failed (proceeding): ${e?.message}`);
   }
 
-  // Dedicated single-job batch so portfolio batch counters are untouched.
-  const [batch] = await db
-    .insert(schema.batchRuns)
-    .values({ workspaceId, frameworkId, totalJobs: 1 })
-    .returning();
+  // Dedicated single-job batch so portfolio batch counters are untouched. Every
+  // recovery is a replacement run with a fresh immutable run_key.
+  const recoveryLabel = `recovery-${companyId}-${Date.now()}`;
+  const recoveryRun = await createOrAdoptReliabilityRun({
+    workspaceId,
+    testCycleId: "recovery",
+    commitSha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || "unknown",
+    frameworkId,
+    listId: null,
+    batteryLabel: recoveryLabel,
+    deploymentFingerprint: deploymentFingerprintFromEnvironment(),
+    diagnosticRun: true,
+  });
+  const batch = await createBatchRun(workspaceId, frameworkId, 1, undefined, false, false, {
+    runId: recoveryRun.run.id,
+    runKey: recoveryRun.run.runKey,
+    testCycleId: "recovery",
+    batteryLabel: recoveryLabel,
+    deploymentFingerprint: recoveryRun.run.deploymentFingerprint as DeploymentFingerprint,
+  });
   if (!batch) return null;
 
   const [job] = await db
     .insert(schema.analysisJobs)
-    .values({ workspaceId, batchId: batch.id, companyId, companyName, frameworkId })
+    .values({ workspaceId, batchId: batch.id, companyId, companyName, frameworkId, lastProgressAt: new Date() })
+    .onConflictDoNothing({ target: [schema.analysisJobs.batchId, schema.analysisJobs.companyId] })
     .returning();
-  if (!job) return null;
+  if (!job) {
+    const existingJobs = await db.select().from(schema.analysisJobs).where(and(eq(schema.analysisJobs.batchId, batch.id), eq(schema.analysisJobs.companyId, companyId))).limit(1);
+    if (!existingJobs[0]) return null;
+    return { batchId: batch.id, jobId: existingJobs[0].id };
+  }
+  await updateReliabilityRunLifecycle(recoveryRun.run.id, "running", { lastHeartbeatAt: new Date(), lastProgressAt: new Date() });
+  await recordReliabilityAuditEvent({ workspaceId, runId: recoveryRun.run.id, batchId: batch.id, eventType: "replacement", fromState: "created", toState: "running", reason: opts.recoveryReason || "resumable recovery created a fresh run_key" });
 
   // Force a genuine re-fetch: purge prior pending/dead/rejected docs so the next
   // fetch phase re-discovers and re-attempts the previously-dead URLs. Successful
@@ -1227,31 +1551,50 @@ export async function enqueueReexamination(opts: {
 }
 
 export async function claimJob(jobId: number) {
-  // Claim a specific job by ID
+  const now = new Date();
   const result = await db.execute(sql`
     UPDATE analysis_jobs SET
       status = 'claimed',
-      claimed_at = NOW(),
+      claimed_at = ${now},
+      last_progress_at = ${now},
       attempts = attempts + 1
     WHERE id = ${jobId} AND (status = 'pending' OR (status = 'claimed' AND attempts < 3))
     RETURNING *
   `);
-  return result.rows[0] || null;
+  const row = result.rows[0] as any;
+  if (row?.batch_id) await touchBatchHeartbeat(Number(row.batch_id), { lastProgressAt: now, detail: { jobId, status: "claimed" } });
+  return row || null;
 }
 
 export async function completeJob(jobId: number) {
-  await db.update(schema.analysisJobs).set({ status: "completed", completedAt: new Date() }).where(eq(schema.analysisJobs.id, jobId));
+  const now = new Date();
+  const result = await db.execute(sql`UPDATE analysis_jobs SET status = 'completed', completed_at = ${now}, last_progress_at = ${now} WHERE id = ${jobId} RETURNING batch_id`);
+  const batchId = (result.rows[0] as any)?.batch_id;
+  if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail: { jobId, status: "completed" } });
 }
 
 export async function failJob(jobId: number, error: string) {
-  await db.execute(sql`
+  const now = new Date();
+  const result = await db.execute(sql`
     UPDATE analysis_jobs SET
       status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END,
       last_error = ${error},
       worker_id = NULL,
-      claimed_at = NULL
+      claimed_at = NULL,
+      last_progress_at = ${now},
+      progress_detail = ${JSON.stringify({ error: String(error).slice(0, 500) })}::jsonb
     WHERE id = ${jobId}
+    RETURNING batch_id
   `);
+  const batchId = (result.rows[0] as any)?.batch_id;
+  if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail: { jobId, status: "failed", error } });
+}
+
+export async function updateJobProgress(jobId: number, detail: unknown = null) {
+  const now = new Date();
+  const result = await db.execute(sql`UPDATE analysis_jobs SET last_progress_at = ${now}, progress_detail = ${detail == null ? null : JSON.stringify(detail)}::jsonb WHERE id = ${jobId} RETURNING batch_id`);
+  const batchId = (result.rows[0] as any)?.batch_id;
+  if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail });
 }
 
 // ─── Summary Cache ──────────────────────────────────────────────────────────
@@ -1558,9 +1901,50 @@ export async function logProcessingError(data: { workspaceId?: number; companyId
 
 // ─── Analysis Results ───────────────────────────────────────────────────────
 
-export async function saveAnalysisResults(data: { workspaceId: number; batchId: number; frameworkId: number; frameworkName: string; listName?: string; resultsData: any; companiesCount: number; averageScore?: number; shareToken?: string }) {
-  const [result] = await db.insert(schema.analysisResults).values(data).returning();
-  return result;
+export async function getAnalysisResultByRunKey(runKey: string, workspaceId: number) {
+  const [row] = await db.select().from(schema.analysisResults)
+    .where(and(eq(schema.analysisResults.workspaceId, workspaceId), eq(schema.analysisResults.runKey, runKey)))
+    .limit(1);
+  return row || null;
+}
+
+export async function saveAnalysisResults(data: {
+  workspaceId: number;
+  batchId: number;
+  runId?: number | null;
+  runKey?: string | null;
+  deploymentFingerprint?: DeploymentFingerprint | null;
+  frameworkId: number;
+  frameworkName: string;
+  listName?: string;
+  resultsData: any;
+  companiesCount: number;
+  averageScore?: number;
+  shareToken?: string;
+  acceptanceState?: string;
+  acceptedAt?: Date | null;
+  rejectionReason?: string | null;
+}) {
+  if (data.runKey) {
+    const existing = await getAnalysisResultByRunKey(data.runKey, data.workspaceId);
+    if (existing) return existing;
+  }
+  try {
+    const [result] = await db.insert(schema.analysisResults).values({
+      ...data,
+      runId: data.runId ?? null,
+      runKey: data.runKey ?? null,
+      deploymentFingerprint: data.deploymentFingerprint ?? null,
+      acceptanceState: data.acceptanceState ?? "pending",
+      acceptedAt: data.acceptedAt ?? null,
+      rejectionReason: data.rejectionReason ?? null,
+      immutableSnapshot: true,
+    }).returning();
+    return result;
+  } catch (error: any) {
+    if (error?.code !== "23505" || !data.runKey) throw error;
+    return getAnalysisResultByRunKey(data.runKey, data.workspaceId);
+  }
 }
 
 export async function getAnalysisResults(workspaceId: number) {
@@ -1599,7 +1983,24 @@ export async function getAnalysisResultById(id: number, workspaceId: number) {
 }
 
 export async function deleteAnalysisResult(id: number, workspaceId: number) {
+  const [row] = await db.select().from(schema.analysisResults)
+    .where(and(eq(schema.analysisResults.id, id), eq(schema.analysisResults.workspaceId, workspaceId))).limit(1);
+  if (row?.acceptanceState === "accepted" && row.immutableSnapshot) {
+    await recordReliabilityAuditEvent({ workspaceId, runId: row.runId, batchId: row.batchId, artifactId: row.runKey, eventType: "deletion", reason: "deletion refused: accepted snapshot is immutable", metadata: { resultId: id } });
+    throw new Error("Accepted reliability snapshots are immutable and cannot be deleted");
+  }
   await db.delete(schema.analysisResults).where(and(eq(schema.analysisResults.id, id), eq(schema.analysisResults.workspaceId, workspaceId)));
+  if (row) {
+    await recordReliabilityAuditEvent({
+      workspaceId,
+      runId: row.runId,
+      batchId: row.batchId,
+      artifactId: row.runKey,
+      eventType: "deletion",
+      reason: "result artifact deleted by user",
+      metadata: { resultId: id, immutableSnapshot: row.immutableSnapshot },
+    });
+  }
 }
 
 // Bulk-delete multiple saved results in a single query, scoped to the workspace
@@ -1607,11 +2008,92 @@ export async function deleteAnalysisResult(id: number, workspaceId: number) {
 export async function deleteAnalysisResults(ids: number[], workspaceId: number): Promise<number> {
   const validIds = (ids || []).filter((n) => Number.isFinite(n));
   if (validIds.length === 0) return 0;
-  const deleted = await db
-    .delete(schema.analysisResults)
-    .where(and(inArray(schema.analysisResults.id, validIds), eq(schema.analysisResults.workspaceId, workspaceId)))
-    .returning({ id: schema.analysisResults.id });
+  const rows = await db.select({ id: schema.analysisResults.id, runId: schema.analysisResults.runId, batchId: schema.analysisResults.batchId, runKey: schema.analysisResults.runKey, acceptanceState: schema.analysisResults.acceptanceState, immutableSnapshot: schema.analysisResults.immutableSnapshot })
+    .from(schema.analysisResults)
+    .where(and(inArray(schema.analysisResults.id, validIds), eq(schema.analysisResults.workspaceId, workspaceId)));
+  const deletableIds = rows.filter((row) => !(row.acceptanceState === "accepted" && row.immutableSnapshot)).map((row) => row.id);
+  const deleted = deletableIds.length > 0
+    ? await db.delete(schema.analysisResults)
+      .where(and(inArray(schema.analysisResults.id, deletableIds), eq(schema.analysisResults.workspaceId, workspaceId)))
+      .returning({ id: schema.analysisResults.id })
+    : [];
+  for (const row of rows) {
+    const immutable = row.acceptanceState === "accepted" && row.immutableSnapshot;
+    await recordReliabilityAuditEvent({
+      workspaceId,
+      runId: row.runId,
+      batchId: row.batchId,
+      artifactId: row.runKey,
+      eventType: "deletion",
+      reason: immutable ? "deletion refused: accepted snapshot is immutable" : "result artifact deleted by user",
+      metadata: { resultId: row.id, bulk: true, deleted: !immutable },
+    });
+  }
   return deleted.length;
+}
+
+// ─── Durable Gate Reports ───────────────────────────────────────────────────
+
+export async function getAcceptedEvidenceSnapshots(testCycleId: string, workspaceId: number) {
+  const result = await db.execute(sql`
+    SELECT ar.id, ar.batch_id, ar.run_key, ar.acceptance_state,
+           ar.results_data, ar.companies_count, b.total_jobs,
+           rr.lifecycle_state, rr.battery_label, rr.deployment_fingerprint
+    FROM analysis_results ar
+    JOIN reliability_runs rr ON rr.id = ar.run_id
+    JOIN batch_runs b ON b.id = ar.batch_id
+    WHERE ar.workspace_id = ${workspaceId}
+      AND rr.test_cycle_id = ${testCycleId}
+      AND ar.acceptance_state = 'accepted'
+      AND rr.lifecycle_state = 'accepted'
+    ORDER BY ar.run_key ASC, ar.id ASC
+  `);
+  return (result.rows as any[]).map((row) => ({
+    id: Number(row.id),
+    batchId: Number(row.batch_id),
+    runKey: String(row.run_key || ""),
+    lifecycleState: String(row.lifecycle_state || ""),
+    acceptanceState: String(row.acceptance_state || ""),
+    deploymentFingerprint: row.deployment_fingerprint as DeploymentFingerprint | null,
+    totalJobs: Number(row.total_jobs || 0),
+    companiesCount: Number(row.companies_count || 0),
+    batteryLabel: row.battery_label ? String(row.battery_label) : null,
+    resultsData: row.results_data,
+  }));
+}
+
+export async function getGateReport(testCycleId: string, workspaceId: number) {
+  const [report] = await db.select().from(schema.gateReports)
+    .where(and(eq(schema.gateReports.workspaceId, workspaceId), eq(schema.gateReports.testCycleId, testCycleId)))
+    .limit(1);
+  return report || null;
+}
+
+export async function saveGateReportIdempotent(data: {
+  workspaceId: number;
+  testCycleId: string;
+  deploymentFingerprint: DeploymentFingerprint;
+  sourceRunKeys: string[];
+  reportData: unknown;
+  reportMarkdown: string;
+}) {
+  const existing = await getGateReport(data.testCycleId, data.workspaceId);
+  if (existing) return existing;
+  try {
+    const [report] = await db.insert(schema.gateReports).values({
+      workspaceId: data.workspaceId,
+      testCycleId: data.testCycleId,
+      deploymentFingerprint: data.deploymentFingerprint,
+      sourceRunKeys: data.sourceRunKeys,
+      reportData: data.reportData,
+      reportMarkdown: data.reportMarkdown,
+      schemaVersion: "1",
+    }).returning();
+    return report;
+  } catch (error: any) {
+    if (error?.code !== "23505") throw error;
+    return getGateReport(data.testCycleId, data.workspaceId);
+  }
 }
 
 // ─── Terminology Cache ──────────────────────────────────────────────────────

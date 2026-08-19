@@ -17,69 +17,71 @@ import { db } from "./db.js";
 import { sql } from "drizzle-orm";
 import { getQueue } from "./queue.js";
 
-// Activity window: if a running batch has had ANY job claimed or completed within
-// this many seconds, it is considered ALIVE and cleanup is skipped entirely.
-//
-// IMPORTANT: this must be based on recent *job activity*, NOT on how long ago the
-// batch started. Real batches run for many hours, so a start-time-based grace
-// period (the old behavior) would always expire mid-batch and a routine redeploy
-// would then cancel a batch the worker was actively processing. Judging by recent
-// job activity keeps long-running-but-live batches safe across deploys while still
-// cleaning up genuinely orphaned/stalled batches.
-const ACTIVITY_WINDOW_SECONDS = 600; // 10 minutes of no job activity => considered stalled
+// A running batch is preserved only when its persisted batch heartbeat and every
+// active job's progress heartbeat are fresh. An unchanged aggregate snapshot is
+// deliberately not part of this decision.
+const ACTIVITY_WINDOW_SECONDS = parseInt(process.env.RELIABILITY_STALL_THRESHOLD_SECONDS || String(45 * 60), 10);
 
 export async function cleanupOnStartup(): Promise<void> {
   console.log("[Startup] Cleaning up stale jobs from previous server session...");
 
   try {
-    // Is there a running batch with recent job activity (claimed or completed)?
+    // A live run must have both a fresh batch heartbeat and fresh progress on all
+    // currently active jobs. A single coarse unchanged snapshot cannot stall it.
     const activeBatchResult = await db.execute(sql`
       SELECT b.id,
-             GREATEST(
-               COALESCE(MAX(j.claimed_at), 'epoch'),
-               COALESCE(MAX(j.completed_at), 'epoch'),
-               b.started_at
-             ) AS last_activity
+             COALESCE(b.last_heartbeat_at, MAX(j.last_progress_at), 'epoch') AS last_heartbeat,
+             COUNT(*) FILTER (WHERE j.status IN ('pending','claimed')) AS open_jobs,
+             COUNT(*) FILTER (WHERE j.status = 'claimed' AND COALESCE(j.last_progress_at, 'epoch') <= NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds') AS stale_active_jobs
       FROM batch_runs b
       JOIN analysis_jobs j ON j.batch_id = b.id
       WHERE b.status = 'running'
-      GROUP BY b.id, b.started_at
-      HAVING GREATEST(
-               COALESCE(MAX(j.claimed_at), 'epoch'),
-               COALESCE(MAX(j.completed_at), 'epoch'),
-               b.started_at
-             ) > NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds'
+      GROUP BY b.id, b.last_heartbeat_at
+      HAVING COALESCE(b.last_heartbeat_at, MAX(j.last_progress_at), 'epoch') > NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds'
+         AND COUNT(*) FILTER (WHERE j.status = 'claimed' AND COALESCE(j.last_progress_at, 'epoch') <= NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds') = 0
+      ORDER BY b.id ASC
       LIMIT 1
     `);
 
     if (activeBatchResult.rows.length > 0) {
       const activeBatch = activeBatchResult.rows[0] as any;
       console.log(
-        `[Startup] Found ACTIVE batch ${activeBatch.id} (last job activity ${activeBatch.last_activity}, ` +
-        `within ${ACTIVITY_WINDOW_SECONDS}s) — SKIPPING cleanup to preserve in-flight processing`
+        `[Startup] Preserving live batch ${activeBatch.id} (heartbeat ${activeBatch.last_heartbeat}, ` +
+        `all active job heartbeats within ${ACTIVITY_WINDOW_SECONDS}s) — SKIPPING cleanup`
       );
       console.log("[Startup] The worker will resume processing the existing queue on reconnect");
       return;
     }
 
-    // No recent batches — safe to clean up orphaned state from a previous session
+    // No batch has a fresh batch-and-job heartbeat — safe to quarantine stale state.
 
-    // 1. Mark all "running" batches as "cancelled"
+    // 1. Mark stale running batches as cancelled, preserving their provenance.
+    const staleBatches = await db.execute(sql`
+      SELECT id, workspace_id, reliability_run_id, run_key, status
+      FROM batch_runs WHERE status = 'running' ORDER BY id ASC
+    `);
     const batchResult = await db.execute(sql`
-      UPDATE batch_runs 
-      SET status = 'cancelled', completed_at = NOW() 
+      UPDATE batch_runs
+      SET status = 'cancelled', completed_at = NOW(), terminal_at = NOW(), acceptance_state = 'rejected', rejection_reason = 'startup heartbeat timeout'
       WHERE status = 'running'
       RETURNING id
     `);
     const cancelledBatches = batchResult.rows.length;
     if (cancelledBatches > 0) {
       console.log(`[Startup] Cancelled ${cancelledBatches} stale batch run(s)`);
+      for (const stale of staleBatches.rows as any[]) {
+        await db.execute(sql`UPDATE reliability_runs SET lifecycle_state = 'cancelled', acceptance_state = 'rejected', rejection_reason = 'startup heartbeat timeout', terminal_at = NOW() WHERE id = ${stale.reliability_run_id}`);
+        await db.execute(sql`
+          INSERT INTO reliability_audit_events (workspace_id, run_id, batch_id, artifact_id, event_type, from_state, to_state, reason, metadata)
+          VALUES (${stale.workspace_id}, ${stale.reliability_run_id}, ${stale.id}, ${stale.run_key}, 'cancellation', ${stale.status}, 'cancelled', 'startup heartbeat timeout', ${JSON.stringify({ activityWindowSeconds: ACTIVITY_WINDOW_SECONDS })}::jsonb)
+        `);
+      }
     }
 
     // 2. Mark any "pending" or "claimed" analysis_jobs as "failed" with a clear reason
     const jobResult = await db.execute(sql`
-      UPDATE analysis_jobs 
-      SET status = 'failed', last_error = 'Server restarted — job was orphaned'
+      UPDATE analysis_jobs
+      SET status = 'failed', last_error = 'Server restarted — job was orphaned', last_progress_at = NOW(), progress_detail = '{"reason":"startup heartbeat timeout"}'::jsonb
       WHERE status IN ('pending', 'claimed')
       RETURNING id
     `);

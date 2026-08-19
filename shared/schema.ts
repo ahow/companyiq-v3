@@ -227,11 +227,100 @@ export const measureScores = pgTable("measure_scores", {
   companyFrameworkIdx: index("scores_company_framework_idx").on(table.companyId, table.frameworkId),
 }));
 
+// ─── Reliability Runs, Provenance, and Gate Reports ─────────────────────────
+
+export const reliabilityRuns = pgTable("reliability_runs", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  testCycleId: text("test_cycle_id").notNull(),
+  runKey: text("run_key").notNull().unique(),
+  commitSha: text("commit_sha").notNull(),
+  frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
+  listId: integer("list_id").references(() => companyLists.id),
+  batteryLabel: text("battery_label").notNull(),
+  deploymentFingerprint: jsonb("deployment_fingerprint").$type<{
+    sourceSha: string;
+    liveAppSha: string;
+    liveWorkerSha: string;
+    tsCount: number;
+    executableGeneralisationCount: number;
+  }>().notNull(),
+  lifecycleState: text("lifecycle_state").notNull().default("created"),
+  acceptanceState: text("acceptance_state").notNull().default("pending"),
+  diagnosticRun: boolean("diagnostic_run").notNull().default(false),
+  artifactId: text("artifact_id"),
+  rejectionReason: text("rejection_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  lastHeartbeatAt: timestamp("last_heartbeat_at"),
+  lastProgressAt: timestamp("last_progress_at"),
+  terminalAt: timestamp("terminal_at"),
+}, (table) => ({
+  runKeyIdx: uniqueIndex("reliability_runs_run_key_idx").on(table.runKey),
+  cycleIdx: index("reliability_runs_cycle_idx").on(table.workspaceId, table.testCycleId),
+  lifecycleIdx: index("reliability_runs_lifecycle_idx").on(table.workspaceId, table.lifecycleState),
+}));
+
+export const reliabilityStatusTraces = pgTable("reliability_status_traces", {
+  id: serial("id").primaryKey(),
+  runId: integer("run_id").references(() => reliabilityRuns.id).notNull(),
+  batchId: integer("batch_id").references(() => batchRuns.id),
+  polledAt: timestamp("polled_at").defaultNow().notNull(),
+  total: integer("total").notNull().default(0),
+  completed: integer("completed").notNull().default(0),
+  active: integer("active").notNull().default(0),
+  pending: integer("pending").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+  oldestActiveJobAgeMs: integer("oldest_active_job_age_ms"),
+  lastProgressAt: timestamp("last_progress_at"),
+  classification: text("classification").notNull().default("active"),
+  jobProgress: jsonb("job_progress"),
+}, (table) => ({
+  runPollIdx: index("reliability_status_traces_run_poll_idx").on(table.runId, table.polledAt),
+}));
+
+export const reliabilityAuditEvents = pgTable("reliability_audit_events", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  runId: integer("run_id").references(() => reliabilityRuns.id),
+  batchId: integer("batch_id").references(() => batchRuns.id),
+  artifactId: text("artifact_id"),
+  eventType: text("event_type").notNull(),
+  fromState: text("from_state"),
+  toState: text("to_state"),
+  reason: text("reason").notNull(),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  workspaceEventIdx: index("reliability_audit_workspace_event_idx").on(table.workspaceId, table.eventType),
+  runEventIdx: index("reliability_audit_run_event_idx").on(table.runId, table.createdAt),
+}));
+
+export const gateReports = pgTable("gate_reports", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  testCycleId: text("test_cycle_id").notNull(),
+  deploymentFingerprint: jsonb("deployment_fingerprint").notNull(),
+  sourceRunKeys: jsonb("source_run_keys").$type<string[]>().notNull(),
+  reportData: jsonb("report_data").notNull(),
+  reportMarkdown: text("report_markdown").notNull(),
+  schemaVersion: text("schema_version").notNull().default("1"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  cycleIdx: uniqueIndex("gate_reports_cycle_idx").on(table.workspaceId, table.testCycleId),
+}));
+
 // ─── Batch Runs (Workspace-Scoped) ─────────────────────────────────────────
 
 export const batchRuns = pgTable("batch_runs", {
   id: serial("id").primaryKey(),
   workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  reliabilityRunId: integer("reliability_run_id").references(() => reliabilityRuns.id),
+  runKey: text("run_key"),
+  testCycleId: text("test_cycle_id"),
+  batteryLabel: text("battery_label"),
+  deploymentFingerprint: jsonb("deployment_fingerprint"),
   frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
   listId: integer("list_id").references(() => companyLists.id),
   status: text("status").notNull().default("running"), // running | completed | cancelled
@@ -242,6 +331,12 @@ export const batchRuns = pgTable("batch_runs", {
   scoreOnly: boolean("score_only").notNull().default(false),
   startedAt: timestamp("started_at").defaultNow().notNull(),
   completedAt: timestamp("completed_at"),
+  lastHeartbeatAt: timestamp("last_heartbeat_at"),
+  lastProgressAt: timestamp("last_progress_at"),
+  terminalAt: timestamp("terminal_at"),
+  acceptanceState: text("acceptance_state").notNull().default("pending"),
+  artifactId: text("artifact_id"),
+  rejectionReason: text("rejection_reason"),
 }, (table) => ({
   workspaceIdx: index("batch_workspace_idx").on(table.workspaceId),
   statusIdx: index("batch_status_idx").on(table.status),
@@ -262,11 +357,14 @@ export const analysisJobs = pgTable("analysis_jobs", {
   lastError: text("last_error"),
   claimedAt: timestamp("claimed_at"),
   completedAt: timestamp("completed_at"),
+  lastProgressAt: timestamp("last_progress_at").defaultNow().notNull(),
+  progressDetail: jsonb("progress_detail"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   statusIdx: index("jobs_status_idx").on(table.status),
   batchIdx: index("jobs_batch_idx").on(table.batchId),
   workspaceIdx: index("jobs_workspace_idx").on(table.workspaceId),
+  batchCompanyIdx: uniqueIndex("analysis_jobs_batch_company_idx").on(table.batchId, table.companyId),
 }));
 
 // ─── Summary Cache ─────────────────────────────────────────────────────────
@@ -373,6 +471,8 @@ export const analysisResults = pgTable("analysis_results", {
   id: serial("id").primaryKey(),
   workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
   batchId: integer("batch_id").references(() => batchRuns.id).notNull(),
+  runId: integer("run_id").references(() => reliabilityRuns.id),
+  runKey: text("run_key"),
   frameworkId: integer("framework_id").references(() => frameworks.id).notNull(),
   frameworkName: text("framework_name").notNull(),
   listName: text("list_name"),
@@ -382,9 +482,15 @@ export const analysisResults = pgTable("analysis_results", {
   shareToken: text("share_token"),
   isPublic: boolean("is_public").notNull().default(false),
   shareExpiresAt: timestamp("share_expires_at"),
+  deploymentFingerprint: jsonb("deployment_fingerprint"),
+  acceptanceState: text("acceptance_state").notNull().default("pending"),
+  acceptedAt: timestamp("accepted_at"),
+  rejectionReason: text("rejection_reason"),
+  immutableSnapshot: boolean("immutable_snapshot").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   workspaceIdx: index("results_workspace_idx").on(table.workspaceId),
+  uniqueRunIdx: uniqueIndex("analysis_results_workspace_run_idx").on(table.workspaceId, table.runKey).where(sql`${table.runKey} IS NOT NULL`),
 }));
 
 // ─── Score Anomalies (Expected-Score Outlier Detection) ─────────────────────
@@ -431,6 +537,10 @@ export type DocumentContent = typeof documentContent.$inferSelect;
 export type InsertDocumentContent = typeof documentContent.$inferInsert;
 export type Document = typeof documents.$inferSelect;
 export type MeasureScore = typeof measureScores.$inferSelect;
+export type ReliabilityRun = typeof reliabilityRuns.$inferSelect;
+export type ReliabilityStatusTrace = typeof reliabilityStatusTraces.$inferSelect;
+export type ReliabilityAuditEvent = typeof reliabilityAuditEvents.$inferSelect;
+export type GateReport = typeof gateReports.$inferSelect;
 export type BatchRun = typeof batchRuns.$inferSelect;
 export type AnalysisJob = typeof analysisJobs.$inferSelect;
 export type TrustedSource = typeof trustedSources.$inferSelect;

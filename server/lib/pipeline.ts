@@ -286,19 +286,19 @@ async function runFetchPhase(opts: {
             reuseKept++;
           } else {
             console.warn(`[${companyName}] REUSE VERIFY ERROR (${vr.reason}); no name mention — rejected: ${d.url.slice(0, 80)}`);
-            await storage.recordVerificationReject(companyId, d.url, `error — ${vr.reason}`);
+            await storage.recordVerificationReject(companyId, d.url, `error — ${vr.reason}`, batchId);
             reuseRejected++;
           }
         } else {
           const issuer = vr.detectedIssuer ? `: ${vr.detectedIssuer}` : '';
           console.warn(`[${companyName}] REUSE POST-FETCH REJECT (${vr.verdict}${issuer}): ${d.url.slice(0, 80)} — ${vr.reason}`);
-          await storage.recordVerificationReject(companyId, d.url, `${vr.verdict}${issuer} — ${vr.reason}`);
+          await storage.recordVerificationReject(companyId, d.url, `${vr.verdict}${issuer} — ${vr.reason}`, batchId);
           reuseRejected++;
         }
       } catch (e: any) {
         // On unexpected error, reject conservatively to avoid contamination.
         console.warn(`[${companyName}] REUSE VERIFY EXCEPTION; rejected: ${d.url.slice(0, 80)} — ${e?.message?.slice(0, 120)}`);
-        await storage.recordVerificationReject(companyId, d.url, `error — verify exception`);
+        await storage.recordVerificationReject(companyId, d.url, `error — verify exception`, batchId);
         reuseRejected++;
       }
     }
@@ -710,7 +710,7 @@ async function runFetchPhase(opts: {
               // purged on the next re-discovery.
               const issuer = vr.detectedIssuer ? `: ${vr.detectedIssuer}` : '';
               console.warn(`[${companyName}] POST-FETCH REJECT (${vr.verdict}${issuer}): ${doc.url.slice(0, 80)} — ${vr.reason}`);
-              await storage.recordVerificationReject(companyId, doc.url, `${vr.verdict}${issuer} — ${vr.reason}`);
+              await storage.recordVerificationReject(companyId, doc.url, `${vr.verdict}${issuer} — ${vr.reason}`, batchId);
             }
           }
         } else {

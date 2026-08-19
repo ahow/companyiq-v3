@@ -219,6 +219,34 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS abstained BOOLEAN NOT NULL DEFAULT false`);
     await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS evidence_fingerprint TEXT`);
 
+    // ─── Reliability Runs ────────────────────────────────────────────────────
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS reliability_runs (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+        test_cycle_id TEXT NOT NULL,
+        run_key TEXT NOT NULL UNIQUE,
+        commit_sha TEXT NOT NULL,
+        framework_id INTEGER NOT NULL REFERENCES frameworks(id),
+        list_id INTEGER REFERENCES company_lists(id),
+        battery_label TEXT NOT NULL,
+        deployment_fingerprint JSONB NOT NULL,
+        lifecycle_state TEXT NOT NULL DEFAULT 'created',
+        acceptance_state TEXT NOT NULL DEFAULT 'pending',
+        diagnostic_run BOOLEAN NOT NULL DEFAULT FALSE,
+        artifact_id TEXT,
+        rejection_reason TEXT,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        started_at TIMESTAMP,
+        last_heartbeat_at TIMESTAMP,
+        last_progress_at TIMESTAMP,
+        terminal_at TIMESTAMP
+      )
+    `);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS reliability_runs_run_key_idx ON reliability_runs(run_key)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS reliability_runs_cycle_idx ON reliability_runs(workspace_id, test_cycle_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS reliability_runs_lifecycle_idx ON reliability_runs(workspace_id, lifecycle_state)`);
+
     // ─── Batch Runs ─────────────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS batch_runs (
@@ -234,6 +262,19 @@ export async function initializeDatabase(): Promise<void> {
         completed_at TIMESTAMP
       )
     `);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS reliability_run_id INTEGER REFERENCES reliability_runs(id)`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS run_key TEXT`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS test_cycle_id TEXT`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS battery_label TEXT`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS deployment_fingerprint JSONB`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMP`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS last_progress_at TIMESTAMP`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS terminal_at TIMESTAMP`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS acceptance_state TEXT NOT NULL DEFAULT 'pending'`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS artifact_id TEXT`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS rejection_reason TEXT`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS batch_runs_run_key_idx ON batch_runs(run_key) WHERE run_key IS NOT NULL`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS batch_runs_reliability_run_idx ON batch_runs(reliability_run_id)`);
 
     // ─── Analysis Jobs ──────────────────────────────────────────────────────
     await db.execute(sql`
@@ -252,6 +293,75 @@ export async function initializeDatabase(): Promise<void> {
         completed_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       )
+    `);
+    await db.execute(sql`ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS last_progress_at TIMESTAMP DEFAULT NOW()`);
+    await db.execute(sql`ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS progress_detail JSONB`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS analysis_jobs_progress_idx ON analysis_jobs(batch_id, last_progress_at)`);
+    // Quarantine duplicate job rows from historical race windows before enforcing
+    // one company job per batch. Rows are retained with an explicit reason.
+    await db.execute(sql`
+      WITH ranked AS (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY batch_id, company_id ORDER BY id ASC) AS rn
+        FROM analysis_jobs
+      )
+      UPDATE analysis_jobs j SET
+        status = 'failed',
+        last_error = COALESCE(j.last_error, 'superseded duplicate analysis job'),
+        completed_at = COALESCE(j.completed_at, NOW()),
+        last_progress_at = NOW()
+      FROM ranked r
+      WHERE j.id = r.id AND r.rn > 1 AND j.status NOT IN ('failed')
+    `);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_batch_company_idx ON analysis_jobs(batch_id, company_id)`);
+
+    // ─── Reliability Status Traces ───────────────────────────────────────────
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS reliability_status_traces (
+        id SERIAL PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES reliability_runs(id),
+        batch_id INTEGER REFERENCES batch_runs(id),
+        polled_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        total INTEGER NOT NULL DEFAULT 0,
+        completed INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 0,
+        pending INTEGER NOT NULL DEFAULT 0,
+        failed INTEGER NOT NULL DEFAULT 0,
+        oldest_active_job_age_ms INTEGER,
+        last_progress_at TIMESTAMP,
+        classification TEXT NOT NULL DEFAULT 'active',
+        job_progress JSONB
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS reliability_status_traces_run_poll_idx ON reliability_status_traces(run_id, polled_at)`);
+
+    // ─── Reliability Audit Events ────────────────────────────────────────────
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS reliability_audit_events (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+        run_id INTEGER REFERENCES reliability_runs(id),
+        batch_id INTEGER REFERENCES batch_runs(id),
+        artifact_id TEXT,
+        event_type TEXT NOT NULL,
+        from_state TEXT,
+        to_state TEXT,
+        reason TEXT NOT NULL,
+        metadata JSONB,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS reliability_audit_workspace_event_idx ON reliability_audit_events(workspace_id, event_type)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS reliability_audit_run_event_idx ON reliability_audit_events(run_id, created_at)`);
+    await db.execute(sql`
+      INSERT INTO reliability_audit_events (workspace_id, run_id, batch_id, artifact_id, event_type, reason, metadata)
+      SELECT b.workspace_id, b.reliability_run_id, b.id, b.run_key, 'rejection', 'historical duplicate analysis job quarantined', '{"source":"startup_migration"}'::jsonb
+      FROM analysis_jobs j
+      JOIN batch_runs b ON b.id = j.batch_id
+      WHERE j.last_error = 'superseded duplicate analysis job'
+        AND NOT EXISTS (
+          SELECT 1 FROM reliability_audit_events e
+          WHERE e.batch_id = j.batch_id AND e.artifact_id = b.run_key AND e.reason = 'historical duplicate analysis job quarantined'
+        )
     `);
 
     // ─── Summary Cache ──────────────────────────────────────────────────────
@@ -354,6 +464,32 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS list_name TEXT`);
     await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS average_score INTEGER`);
     await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS share_token TEXT`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS run_id INTEGER REFERENCES reliability_runs(id)`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS run_key TEXT`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS deployment_fingerprint JSONB`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS acceptance_state TEXT NOT NULL DEFAULT 'pending'`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMP`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS rejection_reason TEXT`);
+    await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS immutable_snapshot BOOLEAN NOT NULL DEFAULT TRUE`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS analysis_results_workspace_run_idx ON analysis_results(workspace_id, run_key) WHERE run_key IS NOT NULL`);
+
+    // ─── Durable Gate Reports ────────────────────────────────────────────────
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS gate_reports (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+        test_cycle_id TEXT NOT NULL,
+        deployment_fingerprint JSONB NOT NULL,
+        source_run_keys JSONB NOT NULL,
+        report_data JSONB NOT NULL,
+        report_markdown TEXT NOT NULL,
+        schema_version TEXT NOT NULL DEFAULT '1',
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        UNIQUE(workspace_id, test_cycle_id)
+      )
+    `);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS gate_reports_cycle_idx ON gate_reports(workspace_id, test_cycle_id)`);
 
     // ─── Indexes ────────────────────────────────────────────────────────────
     await db.execute(sql`CREATE INDEX IF NOT EXISTS companies_workspace_idx ON companies(workspace_id)`);

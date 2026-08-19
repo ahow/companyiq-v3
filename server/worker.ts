@@ -17,6 +17,7 @@ import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
 import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
 import { isCreditAlertActive } from "./lib/credit-breaker.js";
+import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -30,12 +31,98 @@ const cancelledBatches = new Set<number>();
 const batchFetchStates = new Map<number, BatchFetchState>();
 
 export interface AnalysisJobData {
+  kind?: "analysis";
   jobId: number;
   companyId: number;
   frameworkId: number;
   batchId: number;
   workspaceId: number;
   skipFetch?: boolean;
+}
+
+export interface ReliabilityFinalizerData {
+  kind: "reliability_finalizer";
+  testCycleId: string;
+  workspaceId: number;
+  expectedCompanyCount: number;
+  deploymentFingerprint: ReturnType<typeof deploymentFingerprintFromEnvironment>;
+}
+
+export type QueueJobData = AnalysisJobData | ReliabilityFinalizerData;
+
+async function finalizeReliabilityCycle(data: ReliabilityFinalizerData): Promise<PipelineResult> {
+  const existing = await storage.getGateReport(data.testCycleId, data.workspaceId);
+  if (existing) return { success: true, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+
+  const snapshots = await storage.getAcceptedEvidenceSnapshots(data.testCycleId, data.workspaceId) as EvidenceSnapshot[];
+  const selection = (await import("./lib/reliability.js")).selectValidEvidenceSnapshots(snapshots, {
+    expectedCompanyCount: data.expectedCompanyCount,
+    deploymentFingerprint: data.deploymentFingerprint,
+    requiredSnapshotCount: 4,
+  });
+  for (const rejected of selection.rejected) {
+    await storage.recordReliabilityAuditEvent({
+      workspaceId: data.workspaceId,
+      batchId: rejected.snapshot.batchId,
+      artifactId: rejected.snapshot.runKey,
+      eventType: "rejection",
+      reason: rejected.reason,
+      metadata: { testCycleId: data.testCycleId, finalizer: true },
+    });
+  }
+  if (selection.accepted.length !== 4) {
+    throw new Error(`Gate Report waiting for four valid accepted snapshots; found ${selection.accepted.length}`);
+  }
+
+  const report = buildGateReport(data.testCycleId, selection.accepted, data.deploymentFingerprint, data.expectedCompanyCount);
+  if (report.gates.length !== 7 || report.gates.some((gate) => !gate.passed)) {
+    throw new Error("Gate Report schema or gate validation failed");
+  }
+  const reportMarkdown = [
+    `# Gate Report: ${data.testCycleId}`,
+    "",
+    `Source run keys: ${report.sourceRunKeys.join(", ")}`,
+    "",
+    "## Gates",
+    ...report.gates.map((gate) => `- Gate ${gate.id} (${gate.name}): ${gate.passed ? "PASS" : "FAIL"} — ${gate.reason}`),
+    "",
+    "## Machine-readable report",
+    "```json",
+    JSON.stringify(report, null, 2),
+    "```",
+  ].join("\\n");
+  const saved = await storage.saveGateReportIdempotent({
+    workspaceId: data.workspaceId,
+    testCycleId: data.testCycleId,
+    deploymentFingerprint: data.deploymentFingerprint,
+    sourceRunKeys: report.sourceRunKeys,
+    reportData: report,
+    reportMarkdown,
+  });
+  if (!saved) throw new Error("Gate Report persistence returned no row");
+  await storage.recordReliabilityAuditEvent({
+    workspaceId: data.workspaceId,
+    eventType: "finalization",
+    reason: "idempotent Gate Report persisted after four accepted snapshots",
+    metadata: { testCycleId: data.testCycleId, reportId: saved.id, sourceRunKeys: report.sourceRunKeys },
+  });
+  return { success: true, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+}
+
+export async function enqueueReliabilityFinalizer(data: ReliabilityFinalizerData): Promise<void> {
+  const { getQueue } = await import("./queue.js");
+  const q = getQueue();
+  const jobId = `reliability-finalizer-${data.testCycleId}`;
+  const existing = await q.getJob(jobId);
+  if (existing) {
+    const state = await existing.getState();
+    if (state === "completed" || state === "waiting" || state === "active" || state === "delayed") return;
+    if (state === "failed") await existing.remove();
+  }
+  await q.add(`reliability-finalizer-${data.testCycleId}`, data, {
+    priority: 0,
+    jobId,
+  });
 }
 
 // ─── Retry Helpers ─────────────────────────────────────────────────────────
@@ -75,7 +162,10 @@ async function reEnqueueForRetry(jobData: AnalysisJobData, attemptNumber: number
 
 // ─── Job Processor ──────────────────────────────────────────────────────────
 
-async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineResult> {
+async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResult> {
+  if (job.data.kind === "reliability_finalizer") {
+    return finalizeReliabilityCycle(job.data);
+  }
   const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch } = job.data;
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
@@ -182,37 +272,44 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<PipelineRe
   // in-flight pipeline aborts within ~2s of a cancel on any replica.
   const cancelCheck = () => cancelledBatches.has(batchId) || isBatchCancelledCached(batchId);
 
+  const heartbeatIntervalMs = parseInt(process.env.JOB_HEARTBEAT_MS || "30000", 10);
+  const heartbeatTimer = setInterval(() => {
+    void storage.updateJobProgress(jobId, { stage: "pipeline", companyId, frameworkId }).catch((error: any) => {
+      console.warn(`[Worker] heartbeat failed for job ${jobId}: ${error?.message || error}`);
+    });
+  }, heartbeatIntervalMs);
+
   try {
     // Hard watchdog: the analysis pipeline can occasionally hang on a network
-    // fetch/discovery step that has no inner socket timeout (e.g. companies with
-    // no domain whose document discovery never returns). Without this race, such
-    // a job awaits forever, permanently occupying a concurrency slot and freezing
-    // the batch counter (BullMQ does NOT abort a still-running async function;
-    // lockDuration/stalledInterval only trigger if the worker process dies).
-    // Racing against JOB_TIMEOUT guarantees the slot is freed and the job is
-    // marked failed so the batch can always reach completion.
-    const result = await Promise.race([
-      runAnalysisPipeline({
-        company,
-        framework,
-        measures,
-        workspaceId,
-        batchId,
-        cancelCheck,
-        skipFetch,
-        // 42-F: Share circuit-breaker state across all companies in the batch
-        batchFetchState: (() => {
-          if (!batchFetchStates.has(batchId)) batchFetchStates.set(batchId, newBatchFetchState());
-          return batchFetchStates.get(batchId)!;
-        })(),
-      }),
-      new Promise<PipelineResult>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms")),
-          JOB_TIMEOUT
-        )
-      ),
-    ]);
+    // fetch/discovery step that has no inner socket timeout. The heartbeat above
+    // records genuine work even when aggregate counters remain unchanged.
+    let result: PipelineResult;
+    try {
+      result = await Promise.race([
+        runAnalysisPipeline({
+          company,
+          framework,
+          measures,
+          workspaceId,
+          batchId,
+          cancelCheck,
+          skipFetch,
+          // 42-F: Share circuit-breaker state across all companies in the batch
+          batchFetchState: (() => {
+            if (!batchFetchStates.has(batchId)) batchFetchStates.set(batchId, newBatchFetchState());
+            return batchFetchStates.get(batchId)!;
+          })(),
+        }),
+        new Promise<PipelineResult>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms")),
+            JOB_TIMEOUT
+          )
+        ),
+      ]);
+    } finally {
+      clearInterval(heartbeatTimer);
+    }
 
     if (result.success) {
       await storage.completeJob(jobId);
@@ -528,6 +625,7 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
   savingBatches.add(batchId);
 
   try {
+    const reliabilityRun = await storage.getReliabilityRunForBatch(batchId);
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
     if (!framework) return;
 
@@ -541,8 +639,9 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
     const { db } = await import("./db.js");
     const { sql } = await import("drizzle-orm");
     const jobsResult = await db.execute(sql`
-      SELECT company_id, company_name FROM analysis_jobs
+      SELECT id, company_id, company_name FROM analysis_jobs
       WHERE batch_id = ${batchId}
+      ORDER BY id ASC
     `);
 
     if (jobsResult.rows.length === 0) return;
@@ -632,7 +731,10 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       });
     }
 
-    if (resultsData.length === 0) return;
+    const expectedCompanyCount = Number((await storage.getBatchRunById(batchId, workspaceId))?.totalJobs || jobsResult.rows.length);
+    const snapshotIsComplete = resultsData.length === expectedCompanyCount && jobsResult.rows.length === expectedCompanyCount;
+    const rejectionReason = snapshotIsComplete ? null : `snapshot company coverage ${resultsData.length}/${expectedCompanyCount}`;
+    if (resultsData.length === 0 && !reliabilityRun) return;
     // Get list name
     let listName: string | undefined;
     if (listId) {
@@ -667,15 +769,18 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
 
     // Calculate average score (exclude null/backfilled measures from per-company scores)
     // Each company's totalScore is already computed from assessed measures only (see below).
-    const avgScore = Math.round(
-      resultsData.reduce((sum, r) => sum + (r.totalScore || 0), 0) / resultsData.length
-    );
+    const avgScore = resultsData.length > 0
+      ? Math.round(resultsData.reduce((sum, r) => sum + (r.totalScore || 0), 0) / resultsData.length)
+      : 0;
 
-    const shareToken = crypto.randomUUID();
-
-    await storage.saveAnalysisResults({
+    const shareToken = reliabilityRun ? undefined : crypto.randomUUID();
+    const artifactId = reliabilityRun ? `artifact-${reliabilityRun.runKey}` : null;
+    const saved = await storage.saveAnalysisResults({
       workspaceId,
       batchId,
+      runId: reliabilityRun?.id ?? null,
+      runKey: reliabilityRun?.runKey ?? null,
+      deploymentFingerprint: (reliabilityRun?.deploymentFingerprint as any) ?? null,
       frameworkId,
       frameworkName: framework.name,
       listName,
@@ -683,9 +788,30 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       companiesCount: resultsData.length,
       averageScore: avgScore,
       shareToken,
+      acceptanceState: reliabilityRun && !snapshotIsComplete ? "rejected" : "pending",
+      rejectionReason,
     });
 
-    console.log("[Worker] Saved analysis results for batch " + batchId + " (" + resultsData.length + " companies, avg " + avgScore + "%)");
+    const persistedSnapshotIsComplete = snapshotIsComplete && !!saved && Number((saved as any).companiesCount || 0) === expectedCompanyCount;
+    if (reliabilityRun) {
+      if (persistedSnapshotIsComplete) {
+        await storage.markReliabilityRunAccepted(reliabilityRun.id, batchId, artifactId!, "complete immutable snapshot accepted");
+        const acceptedSnapshots = await storage.getAcceptedEvidenceSnapshots(reliabilityRun.testCycleId, workspaceId);
+        if (reliabilityRun.testCycleId !== "recovery" && acceptedSnapshots.length >= 4) {
+          await enqueueReliabilityFinalizer({
+            kind: "reliability_finalizer",
+            testCycleId: reliabilityRun.testCycleId,
+            workspaceId,
+            expectedCompanyCount,
+            deploymentFingerprint: reliabilityRun.deploymentFingerprint as any,
+          });
+        }
+      } else {
+        await storage.markReliabilityRunRejected(reliabilityRun.id, batchId, rejectionReason || "snapshot failed acceptance validation", artifactId);
+      }
+    }
+
+    console.log("[Worker] Saved analysis results for batch " + batchId + " (" + resultsData.length + " companies, avg " + avgScore + "%, acceptance=" + (persistedSnapshotIsComplete ? "accepted" : "rejected") + ")");
 
     // ── Reconciliation guarantee ──────────────────────────────────────────
     // Every company in the batch must be accounted for as either SAVED (in the
@@ -808,7 +934,7 @@ let worker: Worker | null = null;
 export function startWorker(workerId?: string): Worker {
   const connection = getRedisConnection();
 
-  worker = new Worker<AnalysisJobData>(
+  worker = new Worker<QueueJobData>(
     QUEUE_NAME,
     processAnalysisJob,
     {
