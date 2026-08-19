@@ -693,7 +693,7 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       // corpus validity precision, determinism, and dead-fetch composition.
       const corpusValidityWarning = diagnostics?.corpusValidityWarning || null;
       const hasRequiredDataDoc = !corpusValidityWarning; // true if corpus passed validity check
-      // Dead-fetch breakdown by reason
+      // Dead-fetch breakdown by reason (live documents — diagnostics only)
       const allAccepted = await storage.getAcceptedDocuments(company.id);
       const deadDocs = allAccepted.filter((d: any) => d.fetchStatus === "dead");
       const deadByReason: Record<string, number> = {};
@@ -701,9 +701,36 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         const reason = (d as any).failureReason || "unknown";
         deadByReason[reason] = (deadByReason[reason] || 0) + 1;
       }
-      // Corpus hash: sorted accepted document IDs for determinism tracking
-      const acceptedOk = allAccepted.filter((d: any) => d.fetchStatus === "ok");
-      const corpusHash = acceptedOk.map((d: any) => d.id).sort((a: number, b: number) => a - b).join(",");
+      // FIX 3 (I44-FU): Compute corpusHash from the frozen batch_corpus snapshot
+      // when a batchId exists, using deterministic ORDER BY document_id. This
+      // ensures the hash reflects the immutable snapshot rather than the live
+      // documents table (which may have been augmented by concurrent discovery).
+      // Fallback to live accepted documents only for non-batch contexts.
+      let corpusHash: string;
+      if (batchId) {
+        try {
+          const batchCorpusRows = await db.execute(sql`
+            SELECT document_id FROM batch_corpus
+            WHERE batch_id = ${batchId} AND company_id = ${company.id}
+            ORDER BY document_id ASC
+          `);
+          if (batchCorpusRows.rows.length > 0) {
+            corpusHash = batchCorpusRows.rows.map((r: any) => r.document_id).join(",");
+          } else {
+            // No batch_corpus rows — fall back to live docs (should not happen for
+            // properly snapshotted batches, but keeps backward compat)
+            const acceptedOk = allAccepted.filter((d: any) => d.fetchStatus === "ok");
+            corpusHash = acceptedOk.map((d: any) => d.id).sort((a: number, b: number) => a - b).join(",");
+          }
+        } catch (bcErr: any) {
+          console.warn(`[Worker] batch_corpus hash failed for batch ${batchId}, company ${company.id}: ${bcErr.message}`);
+          const acceptedOk = allAccepted.filter((d: any) => d.fetchStatus === "ok");
+          corpusHash = acceptedOk.map((d: any) => d.id).sort((a: number, b: number) => a - b).join(",");
+        }
+      } else {
+        const acceptedOk = allAccepted.filter((d: any) => d.fetchStatus === "ok");
+        corpusHash = acceptedOk.map((d: any) => d.id).sort((a: number, b: number) => a - b).join(",");
+      }
 
       resultsData.push({
         companyId: company.id,

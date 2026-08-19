@@ -987,18 +987,30 @@ async function runFetchPhase(opts: {
   // ─── Corpus Snapshot: freeze the evidence set for this batch ──────────────
   // This makes re-scoring byte-identical: the analyze phase reads from batch_corpus
   // instead of the live documents table, so corpus composition is frozen at fetch time.
+  // FIX 1 (I44-FU): Only INSERT if no rows exist for this batch+company. This prevents
+  // a rerun of the fetch phase from augmenting an already-frozen snapshot with newly
+  // discovered documents, which was the root cause of A/B corpus divergence.
   if (batchId) {
     try {
       const { db } = await import("../db.js");
       const { sql } = await import("drizzle-orm");
-      await db.execute(sql`
-        INSERT INTO batch_corpus (batch_id, company_id, document_id)
-        SELECT ${batchId}, ${companyId}, id FROM documents
-        WHERE company_id = ${companyId}
-          AND (fetch_status = 'ok' OR content_id IS NOT NULL)
-        ON CONFLICT DO NOTHING
+      const existing = await db.execute(sql`
+        SELECT 1 FROM batch_corpus
+        WHERE batch_id = ${batchId} AND company_id = ${companyId}
+        LIMIT 1
       `);
-      console.log(`[${companyName}] CORPUS SNAPSHOT: frozen for batch ${batchId}`);
+      if (existing.rows.length > 0) {
+        console.log(`[${companyName}] CORPUS SNAPSHOT: already frozen for batch ${batchId} — skipping INSERT (snapshot immutability)`);
+      } else {
+        await db.execute(sql`
+          INSERT INTO batch_corpus (batch_id, company_id, document_id)
+          SELECT ${batchId}, ${companyId}, id FROM documents
+          WHERE company_id = ${companyId}
+            AND (fetch_status = 'ok' OR content_id IS NOT NULL)
+          ON CONFLICT DO NOTHING
+        `);
+        console.log(`[${companyName}] CORPUS SNAPSHOT: frozen for batch ${batchId}`);
+      }
     } catch (snapErr: any) {
       console.warn(`[${companyName}] Corpus snapshot failed (non-fatal): ${snapErr.message}`);
     }

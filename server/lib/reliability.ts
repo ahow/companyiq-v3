@@ -270,7 +270,7 @@ export type GateReportData = {
   deploymentFingerprint: DeploymentFingerprint;
   sourceRunKeys: string[];
   fleetAverages: Array<{ runKey: string; batteryLabel: string | null; averageScore: number }>;
-  companyABDelta: Array<{ companyId: number; scoreA: number | null; scoreB: number | null; delta: number | null }>;
+  companyABDelta: Array<{ framework: string; companyId: number; scoreA: number | null; scoreB: number | null; delta: number | null }>;
   gates: Array<{ id: number; name: string; passed: boolean; reason: string }>;
   developerInstructionSpec: Record<string, unknown>;
 };
@@ -340,23 +340,43 @@ export function buildGateReport(
     };
   });
 
-  const byCompany = new Map<number, { a?: number; b?: number }>();
+  // FIX 2 (I44-FU): Scope A/B deltas by framework. Extract a framework key
+  // generically from battery labels ending in _a/_b (e.g. "fw3_a" → "fw3",
+  // "fw8_b" → "fw8"). Group by (framework, companyId) so cross-framework
+  // deltas are never mixed.
+  const byFrameworkCompany = new Map<string, Map<number, { a?: number; b?: number }>>();
   for (const snapshot of ordered) {
     const label = (snapshot.batteryLabel ?? "").toLowerCase();
-    const variant = label.endsWith("a") ? "a" : label.endsWith("b") ? "b" : null;
-    if (!variant) continue;
+    // Extract variant (a/b) and framework key from labels like "fw3_a", "battery_alpha_a"
+    const abMatch = label.match(/^(.+)[_-]([ab])$/);
+    if (!abMatch) continue;
+    const frameworkKey = abMatch[1];
+    const variant = abMatch[2] as "a" | "b";
+    let companyMap = byFrameworkCompany.get(frameworkKey);
+    if (!companyMap) {
+      companyMap = new Map();
+      byFrameworkCompany.set(frameworkKey, companyMap);
+    }
     for (const row of snapshotResults(snapshot)) {
-      const current = byCompany.get(row.companyId) ?? {};
+      const current = companyMap.get(row.companyId) ?? {};
       current[variant] = row.totalScore;
-      byCompany.set(row.companyId, current);
+      companyMap.set(row.companyId, current);
     }
   }
-  const companyABDelta = [...byCompany.entries()].sort(([a], [b]) => a - b).map(([companyId, values]) => ({
-    companyId,
-    scoreA: values.a ?? null,
-    scoreB: values.b ?? null,
-    delta: values.a != null && values.b != null ? Number((values.b - values.a).toFixed(6)) : null,
-  }));
+  // Flatten to deterministic sorted output: sort by framework key, then companyId
+  const companyABDelta: GateReportData["companyABDelta"] = [];
+  for (const frameworkKey of [...byFrameworkCompany.keys()].sort()) {
+    const companyMap = byFrameworkCompany.get(frameworkKey)!;
+    for (const [companyId, values] of [...companyMap.entries()].sort(([a], [b]) => a - b)) {
+      companyABDelta.push({
+        framework: frameworkKey,
+        companyId,
+        scoreA: values.a ?? null,
+        scoreB: values.b ?? null,
+        delta: values.a != null && values.b != null ? Number((values.b - values.a).toFixed(6)) : null,
+      });
+    }
+  }
 
   const sameFingerprint = ordered.every((snapshot) => fingerprintsEqual(snapshot.deploymentFingerprint, fingerprint));
   const complete = ordered.every((snapshot) => snapshot.companiesCount === expectedCompanyCount && snapshot.totalJobs === expectedCompanyCount);
