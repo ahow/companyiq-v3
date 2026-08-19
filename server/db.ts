@@ -708,6 +708,10 @@ export async function initializeDatabase(): Promise<void> {
       WHERE id = 8 AND (withdrawal_patterns IS NULL OR withdrawal_patterns->>'queries' = '[]')
     `);
 
+    // ─── Corpus Replay Provenance (G4 stability fix) ──────────────────
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS source_batch_id INTEGER REFERENCES batch_runs(id)`);
+    await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS corpus_replay_provenance JSONB`);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 

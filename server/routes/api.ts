@@ -859,6 +859,133 @@ apiRouter.post("/reliability/finalize", async (req: Request, res: Response) => {
   }
 });
 
+// ─── Corpus Replay (G4 stability fix) ─────────────────────────────────────────
+// Enqueue a score-only batch that replays the exact corpus from a source batch,
+// eliminating corpus-selection instability in A/B reliability comparisons.
+apiRouter.post("/analyze/replay", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const { sourceBatchId, testCycleId, batteryLabel, commitSha, diagnosticRun } = req.body;
+    const requestedFingerprint = req.body.deploymentFingerprint as DeploymentFingerprint | undefined;
+    const liveFingerprint = deploymentFingerprintFromEnvironment();
+
+    if (!sourceBatchId || !testCycleId || !batteryLabel || !commitSha) {
+      return res.status(400).json({ error: "sourceBatchId, testCycleId, batteryLabel, and commitSha are required for corpus replay" });
+    }
+
+    // Validate source batch exists, is in this workspace, and is accepted/terminal-success
+    const sourceBatch = await storage.getBatchRunById(Number(sourceBatchId), workspaceId);
+    if (!sourceBatch) {
+      return res.status(404).json({ error: "Source batch not found in this workspace" });
+    }
+    const sourceRun = sourceBatch.reliabilityRunId ? await storage.getReliabilityRunForBatch(sourceBatch.id) : null;
+    if (sourceRun && sourceRun.acceptanceState !== "accepted") {
+      return res.status(409).json({ error: "Source batch is not accepted (terminal-success)", acceptanceState: sourceRun.acceptanceState });
+    }
+    if (!sourceBatch.frameworkId) {
+      return res.status(409).json({ error: "Source batch has no framework" });
+    }
+
+    // Validate deployment fingerprint
+    if (requestedFingerprint) {
+      try {
+        assertProductionFingerprint(requestedFingerprint, liveFingerprint, diagnosticRun === true);
+      } catch (fpErr: any) {
+        return res.status(409).json({ error: fpErr.message, fingerprint: liveFingerprint });
+      }
+    }
+
+    // Compute source corpus fingerprint from batch_corpus
+    const { db: dbLocal } = await import("../db.js");
+    const { sql: sqlLocal } = await import("drizzle-orm");
+    const corpusRows = await dbLocal.execute(sqlLocal`
+      SELECT DISTINCT company_id, document_id FROM batch_corpus
+      WHERE batch_id = ${sourceBatch.id}
+      ORDER BY company_id, document_id
+    `);
+    if (corpusRows.rows.length === 0) {
+      return res.status(409).json({ error: "Source batch has no corpus snapshot (batch_corpus is empty)" });
+    }
+    const { createHash } = await import("crypto");
+    const sourceCorpusFingerprint = createHash("sha256")
+      .update(corpusRows.rows.map((r: any) => `${r.company_id}:${r.document_id}`).join(","))
+      .digest("hex");
+
+    // Validate same workspace/framework/list/ordered company IDs
+    const sourceJobs = await storage.getJobsForBatch(sourceBatch.id);
+    const sourceCompanyIds = sourceJobs.map((j: any) => j.companyId);
+    if (sourceBatch.listId) {
+      const listCompanies = await storage.getListCompanies(sourceBatch.listId);
+      const listCompanyIds = listCompanies.map((c: any) => c.company.id);
+      const sourceIdStr = sourceCompanyIds.join(",");
+      const listIdStr = listCompanyIds.join(",");
+      if (sourceIdStr !== listIdStr) {
+        return res.status(409).json({ error: "Source batch company set/order does not match current list membership" });
+      }
+    }
+
+    // Create reliability run
+    const reliability = await storage.createOrAdoptReliabilityRun({
+      workspaceId,
+      testCycleId,
+      commitSha,
+      frameworkId: sourceBatch.frameworkId,
+      listId: sourceBatch.listId ?? null,
+      batteryLabel,
+      deploymentFingerprint: requestedFingerprint ?? liveFingerprint,
+      diagnosticRun: diagnosticRun === true,
+    });
+
+    // Create batch with replay provenance
+    const batch = await storage.createBatchRun(
+      workspaceId,
+      sourceBatch.frameworkId,
+      sourceCompanyIds.length,
+      sourceBatch.listId ?? undefined,
+      false, // offPeakOnly
+      true,  // scoreOnly (replay is always score-only)
+      { runId: reliability.run.id, runKey: reliability.run.runKey, testCycleId, batteryLabel, deploymentFingerprint: requestedFingerprint ?? liveFingerprint },
+      { sourceBatchId: sourceBatch.id, sourceRunKey: sourceRun?.runKey ?? `batch-${sourceBatch.id}`, sourceCorpusFingerprint },
+    );
+
+    await storage.updateReliabilityRunLifecycle(reliability.run.id, "running", { lastHeartbeatAt: new Date(), lastProgressAt: new Date() });
+    await storage.recordReliabilityAuditEvent({ workspaceId, runId: reliability.run.id, batchId: batch.id, eventType: "corpus_replay", reason: `corpus replay from source batch ${sourceBatch.id}`, metadata: { sourceBatchId: sourceBatch.id, sourceCorpusFingerprint } });
+
+    // Create jobs and enqueue
+    const companies: any[] = [];
+    for (const cid of sourceCompanyIds) {
+      const c = await storage.getCompanyById(cid, workspaceId);
+      if (c) companies.push(c);
+    }
+    const jobsData = companies.map((c) => ({ workspaceId, batchId: batch.id, companyId: c.id, companyName: c.name, frameworkId: sourceBatch.frameworkId }));
+    await storage.createAnalysisJobs(jobsData);
+    const allJobs = await storage.getJobsForBatch(batch.id);
+    const { addBatchJobs: addJobs } = await import("../queue.js");
+    const queueJobs = allJobs.filter((j: any) => j.status === "pending").map((j: any) => ({
+      jobId: j.id,
+      companyId: j.companyId,
+      frameworkId: j.frameworkId,
+      batchId: batch.id,
+      workspaceId,
+      skipFetch: true,
+      sourceBatchId: sourceBatch.id,
+    }));
+    await addJobs(queueJobs, workspaceId, batch.id);
+
+    res.json({
+      success: true,
+      replay: true,
+      runKey: reliability.run.runKey,
+      batchId: batch.id,
+      sourceBatchId: sourceBatch.id,
+      sourceCorpusFingerprint,
+      totalJobs: companies.length,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Batch Completion Review Gate ─────────────────────────────────────────────
 // When a batch finishes with terminal failures it enters `pending_review` and
 // nothing is saved to the Results page until the user resolves it here.

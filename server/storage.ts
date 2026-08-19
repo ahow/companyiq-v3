@@ -253,7 +253,8 @@ export async function getListCompanies(listId: number) {
     .select({ company: schema.companies })
     .from(schema.companyListMembers)
     .innerJoin(schema.companies, eq(schema.companyListMembers.companyId, schema.companies.id))
-    .where(eq(schema.companyListMembers.listId, listId));
+    .where(eq(schema.companyListMembers.listId, listId))
+    .orderBy(asc(schema.companies.id));
 }
 
 export async function addCompanyToList(listId: number, companyId: number) {
@@ -1073,7 +1074,7 @@ export async function classifyBatchStall(batchId: number, thresholdMs: number) {
 
 // ─── Batch Run Operations (Workspace-Scoped) ────────────────────────────────
 
-export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number, offPeakOnly: boolean = false, scoreOnly: boolean = false, reliability?: { runId: number; runKey: string; testCycleId: string; batteryLabel: string; deploymentFingerprint: DeploymentFingerprint }) {
+export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number, offPeakOnly: boolean = false, scoreOnly: boolean = false, reliability?: { runId: number; runKey: string; testCycleId: string; batteryLabel: string; deploymentFingerprint: DeploymentFingerprint }, corpusReplay?: { sourceBatchId: number; sourceRunKey: string; sourceCorpusFingerprint: string }) {
   // Legacy interactive runs retain the existing single-active behaviour. Reliability
   // runs are protected by their immutable run_key and never cancel a concurrent run.
   if (!reliability) {
@@ -1095,6 +1096,8 @@ export async function createBatchRun(workspaceId: number, frameworkId: number, t
       totalJobs,
       offPeakOnly,
       scoreOnly,
+      sourceBatchId: corpusReplay?.sourceBatchId ?? null,
+      corpusReplayProvenance: corpusReplay ? { sourceRunKey: corpusReplay.sourceRunKey, sourceBatchId: corpusReplay.sourceBatchId, sourceCorpusFingerprint: corpusReplay.sourceCorpusFingerprint } : null,
       status: "running",
       lastHeartbeatAt: new Date(),
       lastProgressAt: new Date(),

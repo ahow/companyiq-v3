@@ -329,6 +329,13 @@ export const batchRuns = pgTable("batch_runs", {
   failedJobs: integer("failed_jobs").notNull().default(0),
   offPeakOnly: boolean("off_peak_only").notNull().default(false),
   scoreOnly: boolean("score_only").notNull().default(false),
+  // Corpus replay provenance: when set, this batch replays the corpus from sourceBatchId
+  sourceBatchId: integer("source_batch_id"),
+  corpusReplayProvenance: jsonb("corpus_replay_provenance").$type<{
+    sourceRunKey: string;
+    sourceBatchId: number;
+    sourceCorpusFingerprint: string;
+  }>(),
   startedAt: timestamp("started_at").defaultNow().notNull(),
   completedAt: timestamp("completed_at"),
   lastHeartbeatAt: timestamp("last_heartbeat_at"),
@@ -550,3 +557,10 @@ export type ExcludedSource = typeof excludedSources.$inferSelect;
 export type PlatformSource = typeof platformSources.$inferSelect;
 export type ScoreAnomaly = typeof scoreAnomalies.$inferSelect;
 export type InsertScoreAnomaly = typeof scoreAnomalies.$inferInsert;
+
+// Corpus replay provenance type
+export type CorpusReplayProvenance = {
+  sourceRunKey: string;
+  sourceBatchId: number;
+  sourceCorpusFingerprint: string;
+};

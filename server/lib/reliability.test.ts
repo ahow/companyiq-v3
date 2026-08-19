@@ -9,6 +9,7 @@ import {
   isHeartbeatStalled,
   isTerminalLifecycleState,
   selectValidEvidenceSnapshots,
+  validateCorpusReplayProvenance,
   type DeploymentFingerprint,
   type EvidenceSnapshot,
 } from "./reliability.js";
@@ -106,7 +107,105 @@ async function main() {
   assert.equal(first.gates.length, 7);
   assert.ok(first.gates.every((gate) => gate.passed));
 
-  console.log("reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer)");
+  // ─── Corpus Replay Validation Tests ──────────────────────────────────────────
+
+  // Valid same-run replay: matching fingerprint passes
+  const validResult = validateCorpusReplayProvenance({
+    sourceRunKey: "run_abc123",
+    sourceBatchId: 100,
+    sourceCorpusFingerprint: "deadbeef",
+    sourceAcceptanceState: "accepted",
+    sourceWorkspaceId: 1,
+    replayWorkspaceId: 1,
+    sourceCompanyIds: [1, 2, 3],
+    replayCompanyIds: [1, 2, 3],
+    sourceDeploymentFingerprint: fingerprint,
+    replayDeploymentFingerprint: fingerprint,
+  });
+  assert.equal(validResult.valid, true, "valid replay must pass");
+  assert.equal(validResult.reason, null);
+
+  // Missing source snapshot: source not accepted
+  const notAccepted = validateCorpusReplayProvenance({
+    sourceRunKey: "run_abc123",
+    sourceBatchId: 100,
+    sourceCorpusFingerprint: "deadbeef",
+    sourceAcceptanceState: "pending",
+    sourceWorkspaceId: 1,
+    replayWorkspaceId: 1,
+    sourceCompanyIds: [1, 2, 3],
+    replayCompanyIds: [1, 2, 3],
+    sourceDeploymentFingerprint: fingerprint,
+    replayDeploymentFingerprint: fingerprint,
+  });
+  assert.equal(notAccepted.valid, false, "non-accepted source must be rejected");
+  assert.ok(notAccepted.reason!.toLowerCase().includes("not accepted"));
+
+  // Cross-workspace source: different workspace
+  const crossWorkspace = validateCorpusReplayProvenance({
+    sourceRunKey: "run_abc123",
+    sourceBatchId: 100,
+    sourceCorpusFingerprint: "deadbeef",
+    sourceAcceptanceState: "accepted",
+    sourceWorkspaceId: 1,
+    replayWorkspaceId: 2,
+    sourceCompanyIds: [1, 2, 3],
+    replayCompanyIds: [1, 2, 3],
+    sourceDeploymentFingerprint: fingerprint,
+    replayDeploymentFingerprint: fingerprint,
+  });
+  assert.equal(crossWorkspace.valid, false, "cross-workspace replay must be rejected");
+  assert.ok(crossWorkspace.reason!.toLowerCase().includes("workspace"));
+
+  // Changed company set/order
+  const changedCompanies = validateCorpusReplayProvenance({
+    sourceRunKey: "run_abc123",
+    sourceBatchId: 100,
+    sourceCorpusFingerprint: "deadbeef",
+    sourceAcceptanceState: "accepted",
+    sourceWorkspaceId: 1,
+    replayWorkspaceId: 1,
+    sourceCompanyIds: [1, 2, 3],
+    replayCompanyIds: [1, 3, 2],
+    sourceDeploymentFingerprint: fingerprint,
+    replayDeploymentFingerprint: fingerprint,
+  });
+  assert.equal(changedCompanies.valid, false, "changed company order must be rejected");
+  assert.ok(changedCompanies.reason!.toLowerCase().includes("company"));
+
+  // Fingerprint mismatch between source and replay
+  const fpMismatch = validateCorpusReplayProvenance({
+    sourceRunKey: "run_abc123",
+    sourceBatchId: 100,
+    sourceCorpusFingerprint: "deadbeef",
+    sourceAcceptanceState: "accepted",
+    sourceWorkspaceId: 1,
+    replayWorkspaceId: 1,
+    sourceCompanyIds: [1, 2, 3],
+    replayCompanyIds: [1, 2, 3],
+    sourceDeploymentFingerprint: fingerprint,
+    replayDeploymentFingerprint: { ...fingerprint, liveWorkerSha: "different" },
+  });
+  assert.equal(fpMismatch.valid, false, "deployment fingerprint mismatch must be rejected");
+  assert.ok(fpMismatch.reason!.toLowerCase().includes("fingerprint"));
+
+  // Fallback prevention: sourceBatchId present but empty corpus fingerprint
+  const emptyFingerprint = validateCorpusReplayProvenance({
+    sourceRunKey: "run_abc123",
+    sourceBatchId: 100,
+    sourceCorpusFingerprint: "",
+    sourceAcceptanceState: "accepted",
+    sourceWorkspaceId: 1,
+    replayWorkspaceId: 1,
+    sourceCompanyIds: [1, 2, 3],
+    replayCompanyIds: [1, 2, 3],
+    sourceDeploymentFingerprint: fingerprint,
+    replayDeploymentFingerprint: fingerprint,
+  });
+  assert.equal(emptyFingerprint.valid, false, "empty corpus fingerprint must be rejected");
+  assert.ok(emptyFingerprint.reason!.toLowerCase().includes("fingerprint"));
+
+  console.log("reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer, corpus-replay)");
 }
 
 void main().catch((error) => {

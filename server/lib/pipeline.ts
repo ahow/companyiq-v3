@@ -65,6 +65,7 @@ export interface PipelineOptions {
   batchId?: number; // For corpus snapshot (batch_corpus table)
   cancelCheck?: () => boolean;
   skipFetch?: boolean; // If true, skip fetch phase (reuse existing documents)
+  sourceBatchId?: number; // Corpus replay: read corpus from this source batch instead of current
   batchFetchState?: BatchFetchState; // 42-F: batch-scoped circuit-breaker
 }
 
@@ -1017,9 +1018,10 @@ async function runAnalyzePhase(opts: {
   measures: FrameworkMeasure[];
   workspaceId: number;
   batchId?: number;
+  sourceBatchId?: number; // Corpus replay: read from source batch corpus
   cancelCheck?: () => boolean;
 }): Promise<AnalysisResult | null> {
-  const { company, framework, measures, workspaceId, batchId, cancelCheck } = opts;
+  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
@@ -1034,6 +1036,8 @@ async function runAnalyzePhase(opts: {
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "analyzing" });
 
   // Load documents: prefer batch_corpus snapshot (deterministic) over live documents table.
+  // CORPUS REPLAY: When sourceBatchId is present, read ONLY from the source batch's
+  // corpus snapshot. Never fall back to live documents — fail deterministically.
   // DOCUMENT POOL (P3a): At analyze time, retrieve from the UNION of:
   //   (i) all fetch_status='ok' documents ever collected for the company, AND
   //   (ii) this run's targeted discovery.
@@ -1045,7 +1049,28 @@ async function runAnalyzePhase(opts: {
   // When a batch_corpus snapshot exists for this batch+company, use it with stable ORDER BY d.id
   // so the evidence pack is identical every time. Falls back to the full pool if no snapshot.
   let fetchedDocs: Awaited<ReturnType<typeof storage.getFetchedDocuments>>;
-  if (batchId) {
+  const replayBatchId = sourceBatchId ?? null;
+  if (replayBatchId) {
+    // CORPUS REPLAY MODE: read exactly from the source batch's corpus snapshot.
+    // Never fall back to live documents — deterministic failure on missing snapshot.
+    const { db: dbImport } = await import("../db.js");
+    const { sql: sqlImport } = await import("drizzle-orm");
+    const snapshotRows = await dbImport.execute(sqlImport`
+      SELECT d.id, d.company_id, d.url, d.title, d.type, d.gate_verdict,
+             d.gate_reason, d.fetch_status, d.fetch_failures, d.fetched_at, d.created_at,
+             COALESCE(dc.content, d.content) AS content
+      FROM batch_corpus bc
+      JOIN documents d ON d.id = bc.document_id
+      LEFT JOIN document_content dc ON dc.id = d.content_id
+      WHERE bc.batch_id = ${replayBatchId} AND bc.company_id = ${companyId}
+      ORDER BY d.id
+    `);
+    if (snapshotRows.rows.length === 0) {
+      throw new Error(`Corpus replay failed: no batch_corpus snapshot for source batch ${replayBatchId}, company ${companyId}. Refusing to fall back to live documents.`);
+    }
+    fetchedDocs = snapshotRows.rows as any;
+    console.log(`[${companyName}] CORPUS REPLAY from source batch ${replayBatchId} (${fetchedDocs.length} docs)`);
+  } else if (batchId) {
     try {
       const { db: dbImport } = await import("../db.js");
       const { sql: sqlImport } = await import("drizzle-orm");
@@ -1493,10 +1518,16 @@ async function maybeAutoReexamine(opts: {
 // ─── Combined Pipeline (both phases in sequence) ────────────────────────────
 
 export async function runAnalysisPipeline(opts: PipelineOptions): Promise<PipelineResult> {
-  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch } = opts;
+  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch, sourceBatchId } = opts;
   const companyName = company.name;
   const companyId = company.id;
   const pipelineStart = Date.now();
+
+  // CORPUS REPLAY GUARD: when sourceBatchId is set, fetch/discovery/upsert is forbidden.
+  // The pipeline MUST operate in score-only mode reading from the source corpus.
+  if (sourceBatchId && !skipFetch) {
+    throw new Error(`Corpus replay requires skipFetch=true (sourceBatchId=${sourceBatchId}). Refusing to run discovery/fetch during replay.`);
+  }
 
   // Wrap the entire pipeline in a hard timeout to prevent any single company
   // from blocking the worker indefinitely. This ensures batch counters always
@@ -1548,7 +1579,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       }
 
       // Phase 2: Analyze
-      const analysis = await runAnalyzePhase({ company, framework, measures, workspaceId, batchId, cancelCheck });
+      const analysis = await runAnalyzePhase({ company, framework, measures, workspaceId, batchId, sourceBatchId: opts.sourceBatchId, cancelCheck });
 
       if (!analysis) {
         return {

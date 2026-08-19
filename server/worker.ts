@@ -38,6 +38,7 @@ export interface AnalysisJobData {
   batchId: number;
   workspaceId: number;
   skipFetch?: boolean;
+  sourceBatchId?: number; // Corpus replay: read corpus from this source batch
 }
 
 export interface ReliabilityFinalizerData {
@@ -166,7 +167,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   if (job.data.kind === "reliability_finalizer") {
     return finalizeReliabilityCycle(job.data);
   }
-  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch } = job.data;
+  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, sourceBatchId } = job.data;
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
 
@@ -294,6 +295,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
           batchId,
           cancelCheck,
           skipFetch,
+          sourceBatchId,
           // 42-F: Share circuit-breaker state across all companies in the batch
           batchFetchState: (() => {
             if (!batchFetchStates.has(batchId)) batchFetchStates.set(batchId, newBatchFetchState());

@@ -275,6 +275,54 @@ export type GateReportData = {
   developerInstructionSpec: Record<string, unknown>;
 };
 
+// ─── Corpus Replay Validation ─────────────────────────────────────────────────
+// Validates that a corpus replay request is legitimate before enqueue.
+// Returns { valid: true, reason: null } or { valid: false, reason: string }.
+
+export type CorpusReplayValidationInput = {
+  sourceRunKey: string;
+  sourceBatchId: number;
+  sourceCorpusFingerprint: string;
+  sourceAcceptanceState: string;
+  sourceWorkspaceId: number;
+  replayWorkspaceId: number;
+  sourceCompanyIds: number[];
+  replayCompanyIds: number[];
+  sourceDeploymentFingerprint: DeploymentFingerprint | null;
+  replayDeploymentFingerprint: DeploymentFingerprint;
+};
+
+export function validateCorpusReplayProvenance(input: CorpusReplayValidationInput): { valid: boolean; reason: string | null } {
+  // Source must be accepted
+  if (input.sourceAcceptanceState !== "accepted") {
+    return { valid: false, reason: `Source batch ${input.sourceBatchId} is not accepted (state: ${input.sourceAcceptanceState})` };
+  }
+
+  // Cross-workspace replay is forbidden
+  if (input.sourceWorkspaceId !== input.replayWorkspaceId) {
+    return { valid: false, reason: `Cross-workspace replay forbidden: source workspace ${input.sourceWorkspaceId} != replay workspace ${input.replayWorkspaceId}` };
+  }
+
+  // Corpus fingerprint must be non-empty
+  if (!input.sourceCorpusFingerprint || input.sourceCorpusFingerprint.trim().length === 0) {
+    return { valid: false, reason: `Source corpus fingerprint is empty for batch ${input.sourceBatchId}` };
+  }
+
+  // Company set and order must match exactly
+  const sourceStr = input.sourceCompanyIds.join(",");
+  const replayStr = input.replayCompanyIds.join(",");
+  if (sourceStr !== replayStr) {
+    return { valid: false, reason: `Company set/order mismatch: source=[${input.sourceCompanyIds.slice(0, 5).join(",")}...] vs replay=[${input.replayCompanyIds.slice(0, 5).join(",")}...]` };
+  }
+
+  // Deployment fingerprint must match
+  if (input.sourceDeploymentFingerprint && !fingerprintsEqual(input.sourceDeploymentFingerprint, input.replayDeploymentFingerprint)) {
+    return { valid: false, reason: `Deployment fingerprint mismatch between source and replay` };
+  }
+
+  return { valid: true, reason: null };
+}
+
 export function buildGateReport(
   testCycleId: string,
   snapshots: EvidenceSnapshot[],
