@@ -1118,8 +1118,12 @@ export async function analyzeCompanyMeasures(opts: {
   // contains (topic-agnostic). Measures that declare requiredSourceTypes none of
   // which are present will be ABSTAINED ("Insufficient evidence") rather than
   // scored a hard "No", and excluded from the answered-measures denominator.
+  const declaredSourceTypes = Array.from(new Set(
+    measures.flatMap((measure) => ((measure as any).requiredSourceTypes || []) as string[])
+  ));
   const availableSourceTypes = corpusSourceTypes(
-    (documentUrls || []).map((url, idx) => ({ url, title: documentTitles?.[idx] || "" }))
+    (documentUrls || []).map((url, idx) => ({ url, title: documentTitles?.[idx] || "" })),
+    declaredSourceTypes,
   );
   console.log(`[${companyName}] Corpus source types: [${Array.from(availableSourceTypes).join(", ") || "none"}]`);
 

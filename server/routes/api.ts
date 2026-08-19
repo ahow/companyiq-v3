@@ -1589,8 +1589,14 @@ apiRouter.post("/score-anomalies/:id/reexamine", async (req: Request, res: Respo
     // Get the anomaly to find the company
     const anomaly = await storage.getAnomalyById(id, workspaceId);
     if (!anomaly) return res.status(404).json({ error: "Anomaly not found" });
-    // Enqueue re-examination
-    const result = await storage.enqueueReexamination(anomaly.companyId, anomaly.frameworkId, workspaceId);
+    // Enqueue re-examination using the typed storage contract.
+    const result = await storage.enqueueReexamination({
+      companyId: anomaly.companyId,
+      companyName: anomaly.companyName,
+      frameworkId: anomaly.frameworkId,
+      workspaceId,
+    });
+    if (!result) return res.status(503).json({ error: "Could not enqueue re-examination" });
     // Mark anomaly as re_examined
     await storage.markAnomalyReexamined(id, workspaceId);
     res.json({ success: true, batchId: result.batchId, jobId: result.jobId });
@@ -1618,11 +1624,22 @@ apiRouter.post("/score-anomalies/bulk-reexamine", async (req: Request, res: Resp
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids required" });
     const anomalies = await storage.getAnomaliesByIds(ids, workspaceId);
     const results: Array<{ companyId: number; batchId: number; jobId: number }> = [];
+    const reexaminedIds: number[] = [];
     for (const a of anomalies) {
-      const r = await storage.enqueueReexamination(a.companyId, a.frameworkId, a.workspaceId);
-      results.push({ companyId: a.companyId, batchId: r.batchId, jobId: r.jobId });
+      const r = await storage.enqueueReexamination({
+        companyId: a.companyId,
+        companyName: a.companyName,
+        frameworkId: a.frameworkId,
+        workspaceId,
+      });
+      if (r) {
+        results.push({ companyId: a.companyId, batchId: r.batchId, jobId: r.jobId });
+        reexaminedIds.push(a.id);
+      }
     }
-    await storage.bulkMarkAnomaliesReexamined(ids, workspaceId);
+    if (reexaminedIds.length > 0) {
+      await storage.bulkMarkAnomaliesReexamined(reexaminedIds, workspaceId);
+    }
     res.json({ success: true, reexamined: results.length, results });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

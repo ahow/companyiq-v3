@@ -332,10 +332,10 @@ async function runFetchPhase(opts: {
   }
 
   // ─── Corpus Validity Check (framework-aware) ─────────────────────────────
-  // Detect when the corpus is composed entirely of the WRONG document types for
-  // the framework's topic. E.g., for a Financed Emissions framework, a corpus of
-  // 69 EDGAR filings with zero climate/TCFD/sustainability reports is invalid even
-  // though the fetch ratio is 99%. This catches the SMFG-type failure.
+  // Detect when the corpus is composed entirely of the wrong document types for
+  // the framework. A high fetch ratio alone is insufficient when the framework's
+  // declared document/data requirements are absent. This keeps corpus validity
+  // framework-driven and recall-first.
   let corpusValidityWarning: string | null = null;
   {
     // TOPIC-AGNOSTIC CORPUS VALIDITY CHECK
@@ -552,7 +552,7 @@ async function runFetchPhase(opts: {
       `${FILINGS_BASE}|${UNIVERSAL_DISCLOSURE}${metaTopic ? "|" + metaTopic : ""}`,
       "i"
     );
-    const LOW_VALUE_RE = /10-?q|transcript|glossary|generative-ai-vs|gen-ai-glossary|express\/web/i;
+    const LOW_VALUE_RE = /10-?q|transcript|glossary|job.?listing|careers?/i;
     const rank = (u: string): number => {
       const s = u.toLowerCase();
       if (LOW_VALUE_RE.test(s)) return -1;
@@ -1373,7 +1373,7 @@ async function runAnalyzePhase(opts: {
 //       fetches failed (timeouts, Chromium fork exhaustion during a degraded
 //       window, transient CDN blocks). The score understates true disclosure.
 //   (2) LEGITIMATE NO-DISCLOSURE — a substantial corpus was fetched and read,
-//       but it genuinely contains no qualifying AI-governance content.
+//       but it genuinely contains no qualifying framework evidence.
 // Only (1) warrants a re-examination. The gate below fires ONLY when the
 // persisted fetch-coverage diagnostics flag thin/degraded retrieval AND the
 // usable corpus is small, and it is strictly bounded so it can never loop.

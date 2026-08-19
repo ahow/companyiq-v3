@@ -149,7 +149,7 @@ function periodicFilingType(url: string, title: string): string | null {
 // These are document *categories*, never topic keywords, so the gate works for
 // any framework. A document may match several types (e.g. a 10-K is both
 // "regulatory-filing" and "10-K" and "annual-report").
-export function detectSourceTypes(url: string, title: string): Set<string> {
+export function detectSourceTypes(url: string, title: string, declaredSourceTypes: string[] = []): Set<string> {
   const types = new Set<string>();
   const s = (url + " " + (title || "")).toLowerCase();
   let host = "";
@@ -195,9 +195,15 @@ export function detectSourceTypes(url: string, title: string): Set<string> {
     }
   }
 
-  // Sustainability / ESG / non-financial reports.
-  if (/sustainability|esg|csr|responsibility|impact.?report|tcfd|gri|climate.?report/.test(s)) {
-    types.add("sustainability-report");
+  // Framework-declared source categories are matched from their persisted labels.
+  // This keeps topic-specific document classes in framework data, not executable
+  // discovery logic.
+  for (const sourceType of declaredSourceTypes) {
+    const tokens = sourceType.toLowerCase().split(/[\s_\-/]+/).filter((token) => token.length >= 3);
+    const matched = tokens.filter((token) => s.includes(token)).length;
+    if (tokens.length > 0 && matched >= Math.min(2, tokens.length)) {
+      types.add(sourceType);
+    }
   }
 
   // Press releases / news.
@@ -213,10 +219,13 @@ export function detectSourceTypes(url: string, title: string): Set<string> {
 }
 
 // Aggregate the set of source types present across a company's fetched corpus.
-export function corpusSourceTypes(docs: Array<{ url: string; title?: string | null }>): Set<string> {
+export function corpusSourceTypes(
+  docs: Array<{ url: string; title?: string | null }>,
+  declaredSourceTypes: string[] = [],
+): Set<string> {
   const all = new Set<string>();
   for (const d of docs) {
-    for (const t of detectSourceTypes(d.url, d.title || "")) all.add(t);
+    for (const t of detectSourceTypes(d.url, d.title || "", declaredSourceTypes)) all.add(t);
   }
   return all;
 }
@@ -871,119 +880,49 @@ async function webSearchInner(
   return [];
 }
 
-// ─── Registry Adapter Lane (36-A.2) ─────────────────────────────────────────
-// Direct lookup on framework's authoritativeRegistries. Bypasses generic web
-// search for structured registries (UK MSS, AU MSS, CDP, etc.), giving 100%
-// recall on registered filers with zero API noise.
-//
-// Adding a new registry: register its domain in REGISTRY_ADAPTERS and provide
-// the URL-construction logic. No topic branches — this is a domain-to-URL map.
-
-interface RegistryAdapter {
-  domain: string;
-  buildCandidateUrls: (ctx: {
-    companyName: string;
-    aliases: string[];
-    isin?: string | null;
-  }) => Promise<string[]>;
-}
-
-const REGISTRY_ADAPTERS: RegistryAdapter[] = [
-  {
-    // UK Modern Slavery register — search endpoint is public and stable
-    domain: "modern-slavery-statement-registry.service.gov.uk",
-    buildCandidateUrls: async ({ companyName, aliases }) => {
-      const queries = [companyName, ...aliases].slice(0, 4);
-      const results: string[] = [];
-      for (const q of queries) {
-        try {
-          const encoded = encodeURIComponent(q);
-          const searchUrl = `https://modern-slavery-statement-registry.service.gov.uk/search?search=${encoded}`;
-          const resp = await axios.get(searchUrl, { timeout: 8000 });
-          const matches = String(resp.data).match(
-            /\/statement-summary\/[a-z0-9-]+/gi
-          ) || [];
-          for (const path of matches.slice(0, 3)) {
-            results.push(`https://modern-slavery-statement-registry.service.gov.uk${path}`);
-          }
-        } catch (e) {
-          // Registry unreachable — skip; the site: fallback below will run
-        }
-      }
-      return Array.from(new Set(results));
-    },
-  },
-  {
-    // Australian Modern Slavery register
-    domain: "modernslaveryregister.gov.au",
-    buildCandidateUrls: async ({ companyName, aliases }) => {
-      const queries = [companyName, ...aliases].slice(0, 4);
-      const results: string[] = [];
-      for (const q of queries) {
-        try {
-          const encoded = encodeURIComponent(q);
-          const searchUrl = `https://modernslaveryregister.gov.au/search?query=${encoded}`;
-          const resp = await axios.get(searchUrl, { timeout: 8000 });
-          const matches = String(resp.data).match(/\/statements\/[a-zA-Z0-9]+\//g) || [];
-          for (const path of matches.slice(0, 3)) {
-            results.push(`https://modernslaveryregister.gov.au${path}pdf/`);
-          }
-        } catch (e) {}
-      }
-      return Array.from(new Set(results));
-    },
-  },
-  {
-    // CDP disclosure database — company-search endpoint
-    domain: "cdp.net",
-    buildCandidateUrls: async ({ companyName }) => {
-      try {
-        const encoded = encodeURIComponent(companyName);
-        const searchUrl = `https://www.cdp.net/en/responses?queries%5Bname%5D=${encoded}`;
-        const resp = await axios.get(searchUrl, { timeout: 8000 });
-        const matches = String(resp.data).match(/\/en\/formatted_responses\/responses\/[0-9]+/g) || [];
-        return Array.from(new Set(matches.slice(0, 5).map(p => `https://www.cdp.net${p}`)));
-      } catch (e) {
-        return [];
-      }
-    },
-  },
-  // Additional adapters can be added here as new frameworks are onboarded.
-  // Each adapter is a domain-to-URL map; adding one does not require topic-specific
-  // logic in any general code path.
-];
-
+// ─── Authoritative Registry Search Lane (framework-driven) ────────────────────
+// Frameworks declare authoritative registry domains as data. Discovery uses the
+// same broad site-search strategy for every declared domain; no registry-specific
+// URL construction or topic branch is embedded in the pipeline.
 async function discoverRegistryLane(
   companyName: string,
   aliases: string[],
   isin: string | null | undefined,
   frameworkRegistries: string[],
 ): Promise<{ url: string; title: string; source: string }[]> {
+  const terms = Array.from(new Set([
+    companyName,
+    ...aliases,
+    ...(isin ? [isin] : []),
+  ].map((value) => value.trim()).filter(Boolean))).slice(0, 5);
   const results: { url: string; title: string; source: string }[] = [];
-  for (const registryDomain of frameworkRegistries) {
-    const adapter = REGISTRY_ADAPTERS.find(a =>
-      registryDomain.includes(a.domain) || a.domain.includes(registryDomain)
-    );
-    if (adapter) {
-      // Structured-registry direct lookup
-      const urls = await adapter.buildCandidateUrls({ companyName, aliases, isin });
-      for (const url of urls) {
-        results.push({ url, title: `${companyName} — ${adapter.domain}`, source: "registry-direct" });
-      }
-    } else {
-      // Site: fallback — deterministic within the domain, more reliable than global search
+  const seen = new Set<string>();
+
+  for (const registry of frameworkRegistries) {
+    const domain = registry
+      .trim()
+      .replace(/^https?:\/\//i, "")
+      .split(/[/?#]/, 1)[0]
+      .toLowerCase();
+    if (!domain) continue;
+
+    for (const term of terms) {
       try {
-        const siteResults = await webSearch(
-          `site:${registryDomain} "${companyName}"`,
-          { num: 15 }
-        );
-        for (const r of siteResults) {
-          results.push({ url: r.link, title: r.title, source: "registry-site" });
+        const siteResults = await webSearch(`site:${domain} "${term}"`, { num: 15 });
+        for (const result of siteResults) {
+          if (!result.link || seen.has(result.link)) continue;
+          seen.add(result.link);
+          results.push({ url: result.link, title: result.title, source: "registry-search" });
         }
-      } catch (e) {}
+      } catch {
+        // An unavailable registry is non-fatal; other declared sources still run.
+      }
     }
   }
-  return results;
+
+  return results.sort((a, b) =>
+    a.url.localeCompare(b.url) || a.title.localeCompare(b.title)
+  );
 }
 
 // ─── Query Variant Generation ───────────────────────────────────────────────
@@ -2615,7 +2554,7 @@ async function searchCompanyDocumentsInner(opts: {
     }
   }
 
-  // Registry lane — direct lookup on framework's authoritativeRegistries (36-A.2)
+  // Authoritative registry lane — domains and search terms come from framework data.
   const frameworkRegistries = ((framework as any).authoritativeRegistries as string[] | null) || [];
   if (frameworkRegistries.length > 0) {
     const registryHits = await discoverRegistryLane(
@@ -2632,14 +2571,14 @@ async function searchCompanyDocumentsInner(opts: {
           url: normUrl,
           title: hit.title,
           snippet: "",
-          lane: "registry-direct",
+          lane: "registry-search",
           priority: -100,
         });
-        laneCounts["registry-direct"] = (laneCounts["registry-direct"] || 0) + 1;
+        laneCounts["registry-search"] = (laneCounts["registry-search"] || 0) + 1;
       }
     }
     if (registryHits.length > 0) {
-      console.log(`[${companyName}] Registry lane found ${registryHits.length} candidates from ${frameworkRegistries.join(", ")}`);
+      console.log(`[${companyName}] Authoritative registry lane found ${registryHits.length} candidates from ${frameworkRegistries.join(", ")}`);
     }
   }
 
@@ -3285,10 +3224,10 @@ async function searchCompanyDocumentsInner(opts: {
   }
 
   // Cap before gate to bound LLM cost.
-  // 36-A.4: Protected lanes (registry-direct, pinned, edgar-submissions) bypass
+  // Protected lanes (authoritative registry search, pinned, and filing submissions) bypass
   // the cap — these are structured-source high-confidence documents that should
   // never be pre-gate-rejected on a candidate-count budget.
-  const PROTECTED_LANES = ["registry-direct", "pinned", "edgar-submissions"];
+  const PROTECTED_LANES = ["registry-search", "pinned", "edgar-submissions"];
   const protectedDocs = preCapCandidates.filter(c => PROTECTED_LANES.includes((c as any).lane || ""));
   const unprotectedDocs = preCapCandidates.filter(c => !PROTECTED_LANES.includes((c as any).lane || ""));
   const cappedUnprotected = unprotectedDocs

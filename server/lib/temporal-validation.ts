@@ -2,10 +2,9 @@
  * Temporal Validation Module
  * 
  * Detects policy withdrawals, target rollbacks, and material temporal changes
- * that affect the currency of evidence used in scoring. This addresses the
- * systematic discrepancy pattern where companies withdraw commitments (e.g.,
- * Wells Fargo withdrawing net-zero targets, BMO removing coal policy) but
- * the analysis still scores based on stale evidence.
+ * that affect the currency of evidence used in scoring. This prevents a
+ * completed assessment from relying on evidence after a company has explicitly
+ * withdrawn, removed, or superseded the commitment being assessed.
  * 
  * Two-stage approach:
  * 1. DOCUMENT SCAN: Scan fetched documents for withdrawal language
@@ -21,7 +20,7 @@ import type { Framework } from "../../shared/schema.js";
 export interface PolicyWithdrawal {
   type: "withdrawal" | "rollback" | "removal" | "superseded";
   description: string;
-  affectedTopics: string[]; // e.g., ["net-zero", "coal policy", "2030 targets"]
+  affectedTopics: string[]; // Framework topics or measure labels implicated by evidence
   detectedDate: string | null; // ISO date string if available
   source: string; // URL or "document scan"
   confidence: "high" | "medium" | "low";
@@ -39,7 +38,7 @@ export interface TemporalContext {
 // Universal queries apply to any framework. Topic-specific queries come
 // EXCLUSIVELY from framework.withdrawalPatterns.queries (declared per-framework).
 function buildWithdrawalQueries(companyName: string, framework: Framework): string[] {
-  // Universal — apply to any framework. Contains NO topic-specific terms.
+  // Universal queries apply to any framework and contain no topic-specific terms.
   const universal = [
     `"${companyName}" discontinues target OR abandons commitment OR withdraws pledge`,
     `"${companyName}" removes policy OR drops framework OR retires goal`,
@@ -52,10 +51,10 @@ function buildWithdrawalQueries(companyName: string, framework: Framework): stri
 
 // ─── Document Scan for Withdrawal Language ────────────────────────────────────
 
-// 41-C: UNIVERSAL patterns only — no climate/slavery/AI terms in this constant.
-// Topic-specific document patterns come from framework.withdrawalPatterns.documentRegex.
+// Universal patterns only. Topic-specific document patterns come from
+// framework.withdrawalPatterns.documentRegex.
 const UNIVERSAL_WITHDRAWAL_PATTERNS: RegExp[] = [
-  /(?:we have|the (?:bank|company|group) has?) (?:discontinued|withdrawn|removed|dropped|scrapped|abandoned|exited)/i,
+  /(?:we have|the (?:company|group|issuer|organisation|organization) has?) (?:discontinued|withdrawn|removed|dropped|scrapped|abandoned|exited)/i,
   /no longer (?:commit|target|pursue|maintain)/i,
   /(?:target|commitment|goal|pledge) (?:has been|was) (?:discontinued|withdrawn|removed|superseded)/i,
   /(?:effective|as of) .{0,30}(?:discontinued|no longer|withdrawn)/i,
@@ -161,12 +160,12 @@ async function classifyWithdrawals(
 
   try {
     const { text } = await completeWithFallback("deepseek", {
-      system: `You are an analyst detecting policy withdrawals and target rollbacks for corporate ESG assessments. Given evidence snippets about a company, determine if any represent genuine policy withdrawals, target removals, or commitment rollbacks that would affect the company's current ESG scoring.
+      system: `You are an analyst detecting explicit withdrawals, removals, supersessions, or rollbacks of commitments in a structured company assessment. Given evidence snippets about a company, determine whether any represent a genuine change that affects the current assessment.
 
 Return a JSON array of confirmed withdrawals. Each object must have:
 - "type": "withdrawal" | "rollback" | "removal" | "superseded"
 - "description": brief description of what was withdrawn/changed
-- "affectedTopics": array of affected topic keywords (e.g., ["net-zero", "2030 targets", "coal policy", "financed emissions"])
+- "affectedTopics": array of framework topics or measure labels implicated by the evidence
 - "detectedDate": ISO date string if mentioned, or null
 - "source": the source URL or "document scan"
 - "confidence": "high" | "medium" | "low"
@@ -176,13 +175,13 @@ IMPORTANT:
 - Do NOT flag routine target updates, methodology changes, or restatements as withdrawals.
 - If no genuine withdrawals are found, return an empty array [].`,
       prompt: `Company: ${companyName}
-Topic: ${framework.topicDescription || framework.name}
+Framework: ${framework.name}
 
-Evidence snippets that may indicate policy withdrawals or target rollbacks:
+Evidence snippets that may indicate explicit commitment changes:
 
 ${snippetList}
 
-Classify each snippet. Return a JSON array of confirmed withdrawals (or [] if none are genuine):`,
+Classify each snippet. Return a JSON array of confirmed changes (or [] if none are genuine):`,
       json: true,
       maxTokens: 2000,
     });

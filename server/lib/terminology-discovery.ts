@@ -72,9 +72,9 @@ ${topicDescription}
 
 Your task is to identify the specific internal vocabulary this company uses when discussing this topic. Look for:
 - Committee names (e.g., "Innovation and Technology Committee", "Digital Risk Committee")
-- Named roles or titles (e.g., "Chief Digital Officer", "Head of Responsible AI")
-- Programme or initiative names (e.g., "Responsible AI Program", "Digital Trust Initiative")
-- Products and policies (e.g., "AI Ethics Policy", "Model Risk Management Framework")
+- Named roles or titles (e.g., "Chief Operating Officer", "Head of Compliance")
+- Programme or initiative names (e.g., "Enterprise Responsibility Program", "Digital Trust Initiative")
+- Products and policies (e.g., "Supplier Policy", "Model Risk Management Framework")
 - Any other recurring terms specific to this company for this topic
 
 Return ONLY a JSON object in this exact format:
