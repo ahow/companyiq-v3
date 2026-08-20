@@ -16,6 +16,20 @@ import {
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 import { deriveAliases, resolveCompanyFIGI } from "./issuer-resolver.js";
 import { PIPELINE_VERSION } from "./pipeline-version.js";
+import { resolveIssuerProfile, scoreEntityMatch, type IssuerProfile } from "./issuer-profile.js";
+import { expandQueries, type QueryExpansionResult } from "./query-expansion.js";
+import {
+  buildRegistrySearchTerms,
+  processRegistryResults,
+  aggregateRegistryResults,
+  emptyRegistrySummary,
+  type RegistrySearchSummary,
+} from "./registry-adapter.js";
+import {
+  RetrievalDiagnosticsBuilder,
+  mergeRetrievalDiagnostics,
+  type RetrievalDiagnostics,
+} from "./retrieval-diagnostics.js";
 
 const MAX_DOCS_RETURNED = 90;
 const PRE_GATE_CAP = 180;
@@ -2423,6 +2437,11 @@ export interface DiscoveryDiagnostics {
   capUsed?: number;
   // Generalised recency check: per-requiredDocType status
   recencyStatus?: Record<string, { status: string; bestYear: number | null; researchAttempted: boolean }>;
+  // Instruction 46: Issuer profile and retrieval diagnostics
+  issuerProfile?: IssuerProfile;
+  retrievalDiagnostics?: RetrievalDiagnostics;
+  registrySearchSummary?: RegistrySearchSummary;
+  queryExpansionResult?: QueryExpansionResult;
 }
 
 export interface DiscoveryResult {
@@ -2434,6 +2453,8 @@ export interface DiscoveryResult {
   /** True when effectiveDomain was auto-detected (i.e. company had no stored domain).
    *  Used by the pipeline to decide whether to persist the detected domain. */
   domainAutoDetected?: boolean;
+  /** Instruction 46: Resolved issuer profile for downstream entity verification */
+  issuerProfile?: IssuerProfile;
 }
 
 // P0 fix: Per-company discovery timeout (10 minutes). If discovery takes longer
@@ -2455,6 +2476,7 @@ export async function searchCompanyDocuments(opts: {
   queryVariants?: number; // Number of LLM-generated query variants (default: 3)
   peerCompanyNames?: string[]; // Fix C: workspace-derived peer list for anti-contamination
   companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
+  evidenceKeywords?: string[]; // Instruction 46: aggregated from measures
 }): Promise<DiscoveryResult> {
   // Wrap the entire discovery in a hard timeout
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -2478,6 +2500,7 @@ async function searchCompanyDocumentsInner(opts: {
   queryVariants?: number;
   peerCompanyNames?: string[];
   companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
+  evidenceKeywords?: string[]; // Instruction 46: aggregated from measures
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
   const localeProfile = resolveLocaleProfile(opts.country);
@@ -2501,6 +2524,46 @@ async function searchCompanyDocumentsInner(opts: {
     topicPhrases = lex.terms;
   } catch (lexErr: any) {
     console.warn(`[${companyName}] Discovery topic lexicon failed: ${lexErr?.message}`);
+  }
+
+  // ── Instruction 46: Resolve canonical issuer profile ─────────────────────
+  const diagBuilder = new RetrievalDiagnosticsBuilder();
+  let issuerProfile: IssuerProfile | undefined;
+  let queryExpansionResult: QueryExpansionResult | undefined;
+  let registrySummary: RegistrySearchSummary = emptyRegistrySummary();
+  try {
+    const profileResult = await resolveIssuerProfile({
+      companyId,
+      companyName,
+      isin: opts.isin || null,
+      ticker: opts.ticker || null,
+      domain: companyDomain || null,
+      sector: opts.sector || null,
+      country: opts.country || null,
+      companyRow: opts.companyRow,
+    });
+    issuerProfile = profileResult.profile;
+    diagBuilder.setIssuerProfile(issuerProfile, profileResult.diagnostics);
+    console.log(`[${companyName}] Issuer profile resolved: aliases=${profileResult.diagnostics.aliasCount}, domains=${profileResult.diagnostics.verifiedDomainCount}, path=[${profileResult.diagnostics.resolutionPath.join(",")}]`);
+  } catch (profileErr: any) {
+    console.warn(`[${companyName}] Issuer profile resolution failed (non-fatal): ${profileErr?.message}`);
+  }
+
+  // ── Instruction 46: Framework-driven query expansion ────────────────────
+  if (issuerProfile && (opts.evidenceKeywords?.length || topicPhrases.length > 0)) {
+    try {
+      queryExpansionResult = expandQueries({
+        profile: issuerProfile,
+        evidenceKeywords: opts.evidenceKeywords || [],
+        requiredDocTypes: ((framework as any).requiredDocTypes as string[] | null) || [],
+        topicPhrases,
+        maxTotal: 20,
+      });
+      diagBuilder.setQueryExpansion(queryExpansionResult);
+      console.log(`[${companyName}] Query expansion: ${queryExpansionResult.diagnostics.totalGenerated} queries generated (evKw=${queryExpansionResult.diagnostics.evidenceKeywordQueries}, reportType=${queryExpansionResult.diagnostics.reportTypeQueries})`);
+    } catch (qeErr: any) {
+      console.warn(`[${companyName}] Query expansion failed (non-fatal): ${qeErr?.message}`);
+    }
   }
 
   // Instruction 11a: Auto-upgrade http:// to https:// for first-party URLs
@@ -2555,30 +2618,74 @@ async function searchCompanyDocumentsInner(opts: {
   }
 
   // Authoritative registry lane — domains and search terms come from framework data.
+  // Instruction 46: Enhanced with issuer-profile-driven search terms and entity verification.
   const frameworkRegistries = ((framework as any).authoritativeRegistries as string[] | null) || [];
   if (frameworkRegistries.length > 0) {
+    // Use issuer profile search terms when available (more comprehensive than just name+aliases)
+    const registrySearchTerms = issuerProfile
+      ? buildRegistrySearchTerms(issuerProfile)
+      : [companyName, ...(opts.isin ? [opts.isin] : [])];
+
     const registryHits = await discoverRegistryLane(
       companyName,
-      (opts as any).aliases || [],
-      (opts as any).isin || null,
+      registrySearchTerms,
+      opts.isin || null,
       frameworkRegistries
     );
+
+    // Instruction 46: Score registry results against issuer profile for entity verification
+    const allRegistryResults = [];
+    let registryTotalQueries = frameworkRegistries.length * registrySearchTerms.length;
     for (const hit of registryHits) {
       const normUrl = normaliseUrl(hit.url);
-      if (!seenUrls.has(normUrl)) {
-        seenUrls.add(normUrl);
-        allCandidates.push({
-          url: normUrl,
-          title: hit.title,
-          snippet: "",
-          lane: "registry-search",
-          priority: -100,
+      if (seenUrls.has(normUrl)) continue;
+
+      // Entity verification: score how well this result matches our issuer
+      if (issuerProfile) {
+        const entityScore = scoreEntityMatch(
+          { url: normUrl, title: hit.title },
+          issuerProfile,
+          [],
+        );
+        allRegistryResults.push({
+          registryDomain: hit.source,
+          queryVariant: companyName,
+          resultUrl: normUrl,
+          resultTitle: hit.title,
+          entityMatchScore: entityScore.score,
+          entityMatchSignals: entityScore.signals,
+          status: entityScore.score >= 50 ? "matched" as const
+            : entityScore.score >= 25 ? "ambiguous" as const
+            : "no-match" as const,
         });
-        laneCounts["registry-search"] = (laneCounts["registry-search"] || 0) + 1;
+
+        // Only add high-confidence matches; downgrade ambiguous acronym-only matches
+        if (entityScore.isAmbiguous && entityScore.score < 40) {
+          laneCounts["registry-ambiguous"] = (laneCounts["registry-ambiguous"] || 0) + 1;
+          continue; // Skip ambiguous acronym-only matches
+        }
       }
+
+      seenUrls.add(normUrl);
+      allCandidates.push({
+        url: normUrl,
+        title: hit.title,
+        snippet: "",
+        lane: "registry-search",
+        priority: -100,
+      });
+      laneCounts["registry-search"] = (laneCounts["registry-search"] || 0) + 1;
     }
+
+    registrySummary = aggregateRegistryResults(
+      frameworkRegistries,
+      registryTotalQueries,
+      allRegistryResults,
+    );
+    diagBuilder.setRegistrySearch(registrySummary);
+
     if (registryHits.length > 0) {
-      console.log(`[${companyName}] Authoritative registry lane found ${registryHits.length} candidates from ${frameworkRegistries.join(", ")}`);
+      console.log(`[${companyName}] Registry lane: ${registryHits.length} raw hits, ${laneCounts["registry-search"] || 0} accepted, ${laneCounts["registry-ambiguous"] || 0} ambiguous-rejected`);
     }
   }
 
@@ -3102,6 +3209,17 @@ async function searchCompanyDocumentsInner(opts: {
     laneCounts["subsidiary-cdn"] = (laneCounts["subsidiary-cdn"] || 0);
   }
 
+  // Lane 12 (Instruction 46): Evidence-keyword expanded queries from issuer profile
+  if (queryExpansionResult && queryExpansionResult.queries.length > 0) {
+    console.log(`[${companyName}] Running evidence-keyword expansion lane (${queryExpansionResult.queries.length} queries)`);
+    for (const eq of queryExpansionResult.queries) {
+      try {
+        const results = await webSearch(eq.query, { num: Math.min(searchDepth, 10) });
+        for (const r of results) addCandidate(r, "evidence-expansion");
+      } catch { /* best-effort */ }
+    }
+  }
+
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);
 
   // PRE-GATE HEURISTIC: Remove candidates whose title prominently mentions
@@ -3438,9 +3556,30 @@ async function searchCompanyDocumentsInner(opts: {
     nearDupCollapsedGroups: collapse.collapsedGroups,
     capUsed: MAX_DOCS_RETURNED,
     recencyStatus: Object.keys(recencyStatus).length > 0 ? recencyStatus : undefined,
+    // Instruction 46: Enhanced diagnostics
+    issuerProfile: issuerProfile || undefined,
+    retrievalDiagnostics: diagBuilder
+      .setFilteringPipeline({
+        totalCandidates: allCandidates.length,
+        preGateFiltered: preGateCandidates.length,
+        gateAccepted: accepted.length,
+        recencyDropped: recencyDropped.length,
+        finalCorpusSize: finalDocs.length,
+      })
+      .setDomainSearch({
+        domainsSearched: allDomains,
+        domainQueryCount: lane2QueryCount,
+        domainResultCount: laneCounts["domain"] || 0,
+        rejectedDomains: issuerProfile?.domainCandidates
+          .filter(d => d.status === "rejected")
+          .map(d => ({ domain: d.domain, reason: d.reason })) || [],
+      })
+      .build(),
+    registrySearchSummary: registrySummary.registriesSearched.length > 0 ? registrySummary : undefined,
+    queryExpansionResult: queryExpansionResult || undefined,
   };
 
-  return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected };
+  return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected, issuerProfile };
 }
 
 // ─── Ensemble Discovery (multiple passes with varied phrasing) ───────────────

@@ -165,6 +165,21 @@ async function runFetchPhase(opts: {
     .map((c: any) => (c.name || "").toLowerCase())
     .filter((n: string) => n && n.length >= 4);
 
+  // Instruction 46: Aggregate evidenceKeywords from framework measures for query expansion
+  let aggregatedEvidenceKeywords: string[] = [];
+  try {
+    const fwMeasures = await storage.getFrameworkMeasures(framework.id);
+    const kwSet = new Set<string>();
+    for (const m of fwMeasures) {
+      for (const kw of ((m as any).evidenceKeywords || [])) {
+        if (typeof kw === "string" && kw.trim().length >= 3) kwSet.add(kw.trim().toLowerCase());
+      }
+    }
+    aggregatedEvidenceKeywords = Array.from(kwSet).slice(0, 40);
+  } catch (ekErr: any) {
+    console.warn(`[${companyName}] Failed to aggregate evidenceKeywords: ${ekErr?.message}`);
+  }
+
   const discoveryResult: DiscoveryResult = await searchCompanyDocuments({
     companyName,
     companyId,
@@ -180,6 +195,7 @@ async function runFetchPhase(opts: {
     queryVariants,
     peerCompanyNames,
     companyRow: company, // 40-G: pass full row for cached domain family + FIGI fields
+    evidenceKeywords: aggregatedEvidenceKeywords, // Instruction 46
   });
 
   console.log(`[${companyName}] Discovery found ${discoveryResult.documents.length} accepted documents`);
