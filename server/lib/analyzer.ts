@@ -85,6 +85,20 @@ export interface AnalysisResult {
     checked: number;
     violations: Array<{ measureId: string; reason: string }>;
   };
+  // I45: Scoring diagnostics for fleet-score regression investigation.
+  // Exposes per-run counts of evidence passages, model responses, timeouts,
+  // fallback/default-score usage, and scoring failures by framework and measure.
+  scoringDiagnostics?: {
+    totalMeasures: number;
+    scoredMeasures: number;
+    scoringFailures: number;
+    timeouts: number;
+    fallbackUsed: number;
+    defaultScoreUsed: number;
+    evidencePackCounts: { total: number; empty: number; lowTopic: number };
+    modelResponseValidity: { valid: number; repaired: number; failed: number };
+    selfConsistencyPasses: number;
+  };
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -590,11 +604,13 @@ async function detectAndResolvContradiction(opts: {
   console.log(`[TieBreak] Contradiction detected for ${measure.measureId}, consulting ${tieBreaker.name}`);
 
   try {
+    // I45: Deterministic tie-breaker call — temperature=0, no random inputs
     const { text } = await completeWithFallback(tieBreaker.name, {
       system: "You are an independent reviewer. Given a measure and evidence, determine if the evidence supports a YES or NO verdict. Return JSON: {\"verdict\": \"Yes\"|\"No\", \"reason\": \"brief explanation\"}",
       prompt: `Measure: ${measure.title}\nDefinition: ${measure.definition}\n\nEvidence:\n${evidenceText.slice(0, 8000)}\n\nDoes this evidence support a YES verdict for this measure?`,
       json: true,
       maxTokens: 500,
+      temperature: 0,
     });
 
     const tieResult = extractAndParseJSON(text);
@@ -1648,6 +1664,41 @@ export async function analyzeCompanyMeasures(opts: {
     measures: allResults.filter((r) => r.category === category),
   }));
 
+  // I45: Compute scoring diagnostics for fleet-score regression investigation.
+  // These are persisted alongside the analysis result so Gate Report diagnostics
+  // can expose score-stage input counts, evidence passage counts, model response
+  // validity, timeout counts, and fallback/default-score usage.
+  const allMeasureResultsFlat = allResults;
+  const scoringFailures = allMeasureResultsFlat.filter((r) => (r as any)._scoringFailure).length;
+  const timeoutFailures = allMeasureResultsFlat.filter((r) => (r as any)._scoringFailure === "timeout").length;
+  const fallbackUsed = allMeasureResultsFlat.filter((r) => {
+    const gradedBy = (r as any)._gradedBy || "";
+    return gradedBy && gradedBy !== scoringProvider && !gradedBy.includes("+");
+  }).length;
+  const defaultScoreUsed = allMeasureResultsFlat.filter((r) => r.score === 0 && r.confidence === "Low" && !r.abstained).length;
+  const selfConsistencyPasses = Math.max(1, parseInt(process.env.SCORING_SELF_CONSISTENCY || "3", 10));
+
+  const scoringDiagnostics = {
+    totalMeasures: measuresTotal,
+    scoredMeasures: answeredCount,
+    scoringFailures,
+    timeouts: timeoutFailures,
+    fallbackUsed,
+    defaultScoreUsed,
+    evidencePackCounts: {
+      total: allMeasureResultsFlat.length,
+      empty: allMeasureResultsFlat.filter((r) => r.coverage === "none").length,
+      lowTopic: allMeasureResultsFlat.filter((r) => r.coverage === "low").length,
+    },
+    modelResponseValidity: {
+      valid: allMeasureResultsFlat.filter((r) => !(r as any)._scoringFailure && r.confidence !== "Low").length,
+      repaired: allMeasureResultsFlat.filter((r) => r.verdictNuance?.includes("[Note: Some quotes could not be verified")).length,
+      failed: scoringFailures,
+    },
+    selfConsistencyPasses,
+  };
+
+  console.log(`[${companyName}] Scoring diagnostics: failures=${scoringFailures}, timeouts=${timeoutFailures}, fallback=${fallbackUsed}, defaultScore=${defaultScoreUsed}, emptyEvidence=${scoringDiagnostics.evidencePackCounts.empty}`);
   console.log(`[${companyName}] Analysis complete: ${scorePercentage}% (${totalScore}/${answeredCount} answered; ${abstainedCount} abstained of ${measuresTotal} total)`);
 
   return {
@@ -1659,6 +1710,7 @@ export async function analyzeCompanyMeasures(opts: {
     measuresTotal,
     categories: categoryResults.sort((a, b) => a.categoryNumber - b.categoryNumber),
     forceIncludeInvariant,
+    scoringDiagnostics,
   };
 }
 
@@ -1669,11 +1721,14 @@ export async function analyzeCompanyMeasures(opts: {
 const VERDICT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const verdictCache = new Map<string, { result: MeasureResult; ts: number }>();
 
-function verdictCacheKey(measureId: string, evidenceText: string, provider: string, scoringMode: string, promptText?: string): string {
+// I45: Include companyId in verdict cache key to prevent cross-company cache
+// contamination when the same measureId+evidence hash collides across companies.
+function verdictCacheKey(measureId: string, evidenceText: string, provider: string, scoringMode: string, promptText?: string, companyId?: number): string {
   const evidenceHash = createHash("sha256").update(evidenceText).digest("hex").slice(0, 16);
   // 36-B.2: Include prompt hash so cache auto-invalidates on prompt template changes
   const promptHash = promptText ? createHash("sha256").update(promptText).digest("hex").slice(0, 8) : "noprompt";
-  return `${measureId}:${provider}:${scoringMode}:${evidenceHash}:${promptHash}`;
+  const companyKey = companyId != null ? String(companyId) : "nocompany";
+  return `${companyKey}:${measureId}:${provider}:${scoringMode}:${evidenceHash}:${promptHash}`;
 }
 
 // 36-B.1: Deterministic seed per (measureId, companyId, providerIndex).
@@ -1702,7 +1757,8 @@ async function scoreSingleMeasure(opts: {
 
   // I36-B: Check verdict cache — identical evidence + measure + provider = identical result
   // The cache salt (bumped on prompt changes) is included as the promptText proxy
-  const vKey = verdictCacheKey(measure.measureId, opts.evidenceText, opts.provider, scoringMode || "binary", "v3n-no-govterms");
+  // I45: companyId included to prevent cross-company cache contamination
+  const vKey = verdictCacheKey(measure.measureId, opts.evidenceText, opts.provider, scoringMode || "binary", "v3n-no-govterms", opts.companyId);
   const cachedVerdict = verdictCache.get(vKey);
   if (cachedVerdict && (Date.now() - cachedVerdict.ts) < VERDICT_CACHE_TTL_MS) {
     return { ...cachedVerdict.result };
@@ -1811,11 +1867,18 @@ async function scoreSingleMeasurePass(opts: {
 
     const parsed = extractAndParseJSON(text);
 
+    // I45: Structured output validation — enforce expected schema fields and types.
+    // If the LLM returns unexpected types, coerce to safe defaults rather than
+    // propagating garbage that could cause non-deterministic downstream behaviour.
+    const validConfidence = ["High", "Medium", "Low"];
+    const validVerdict = ["Yes", "No", "Partial"];
+
     // Parse score: in partial mode allow 0, 0.5, 1; in binary mode coerce to 0 or 1
     let score: number;
     if (usePartial) {
-      const rawScore = parseFloat(parsed.score);
-      if (rawScore >= 0.75) score = 1;
+      const rawScore = typeof parsed.score === "number" ? parsed.score : parseFloat(parsed.score);
+      if (isNaN(rawScore)) score = 0;
+      else if (rawScore >= 0.75) score = 1;
       else if (rawScore >= 0.25) score = 0.5;
       else score = 0;
     } else {
@@ -1824,11 +1887,27 @@ async function scoreSingleMeasurePass(opts: {
 
     // Determine verdict from score
     let verdict: "Yes" | "No" | "Partial";
-    if (parsed.verdict && ["Yes", "No", "Partial"].includes(parsed.verdict)) {
-      verdict = parsed.verdict;
+    if (parsed.verdict && validVerdict.includes(parsed.verdict)) {
+      verdict = parsed.verdict as "Yes" | "No" | "Partial";
     } else {
       verdict = score === 1 ? "Yes" : score === 0.5 ? "Partial" : "No";
     }
+
+    // I45: Validate and deterministically sort quotes by (source ASC, text ASC)
+    // to eliminate ordering-dependent non-determinism from LLM responses.
+    const rawQuotes = Array.isArray(parsed.quotes) ? parsed.quotes : [];
+    const validatedQuotes = rawQuotes
+      .filter((q: any) => q && typeof q.text === "string" && q.text.length > 0)
+      .map((q: any) => ({
+        text: String(q.text),
+        source: String(q.source || ""),
+        sourceUrl: q.sourceUrl ? String(q.sourceUrl) : undefined,
+        page: typeof q.page === "number" ? q.page : undefined,
+      }))
+      .sort((a: any, b: any) => {
+        const sc = a.source.localeCompare(b.source);
+        return sc !== 0 ? sc : a.text.localeCompare(b.text);
+      });
 
     return {
       measureId: measure.measureId,
@@ -1838,16 +1917,21 @@ async function scoreSingleMeasurePass(opts: {
       categoryNumber: measure.categoryNumber,
       score,
       coverage: null,
-      confidence: parsed.confidence || "Medium",
-      evidenceSummary: parsed.evidenceSummary || "No evidence found",
-      quotes: Array.isArray(parsed.quotes) ? parsed.quotes : [],
+      confidence: validConfidence.includes(parsed.confidence) ? parsed.confidence : "Medium",
+      evidenceSummary: typeof parsed.evidenceSummary === "string" ? parsed.evidenceSummary : "No evidence found",
+      quotes: validatedQuotes,
       verdict,
-      verdictNuance: parsed.verdictNuance || null,
+      verdictNuance: typeof parsed.verdictNuance === "string" ? parsed.verdictNuance : null,
       displayOrder: measure.displayOrder,
       _gradedBy: gradedBy,
     } as MeasureResult & { _gradedBy?: string };
   } catch (error: any) {
-    console.warn(`[${companyName}] Scoring failed for ${measure.measureId}: ${error.message}`);
+    // I45: Distinguish scoring failure from legitimate "No" verdict. The error
+    // is logged with explicit failure provenance so downstream diagnostics can
+    // separate timeout/model-failure zeros from genuine no-evidence zeros.
+    const isTimeout = /timed? ?out|ETIMEDOUT|ECONNABORTED|timeout/i.test(error.message);
+    const failureType = isTimeout ? "timeout" : "scoring_error";
+    console.warn(`[${companyName}] Scoring FAILED [${failureType}] for ${measure.measureId}: ${error.message}`);
     return {
       measureId: measure.measureId,
       title: measure.title,
@@ -1857,12 +1941,13 @@ async function scoreSingleMeasurePass(opts: {
       score: 0,
       coverage: null,
       confidence: "Low",
-      evidenceSummary: `Scoring error: ${error.message}`,
+      evidenceSummary: `Scoring ${failureType}: ${error.message}`,
       quotes: [],
       verdict: "No",
-      verdictNuance: "Scoring failed - this may not reflect actual company disclosure",
+      verdictNuance: `[SCORING_FAILURE:${failureType}] This zero reflects a model/network failure, not a substantive assessment. Retry recommended.`,
       displayOrder: measure.displayOrder,
-    };
+      _scoringFailure: failureType,
+    } as MeasureResult & { _scoringFailure?: string };
   }
 }
 
@@ -1953,10 +2038,12 @@ async function generateSummaryNarrative(
   const partialCount = results.filter((r) => r.verdict === "Partial").length;
 
   try {
+    // I45: Deterministic summary generation — temperature=0
     const { text } = await completeWithFallback("deepseek", {
       system: "Generate a concise 2-3 sentence executive summary of a company's assessment results.",
       prompt: `Company: ${companyName}\nFramework: ${framework.name}\nScore: ${scorePercentage}%\nYes: ${yesCount}, No: ${noCount}, Partial: ${partialCount} out of ${results.length} measures.\n\nKey findings:\n${results.filter(r => r.verdict === "Yes").slice(0, 5).map(r => `- ${r.title}`).join("\n")}\n\nWrite a 2-3 sentence summary.`,
       maxTokens: 300,
+      temperature: 0,
     });
     return text.trim();
   } catch {

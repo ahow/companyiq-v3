@@ -76,6 +76,8 @@ export interface PipelineResult {
   documentsProcessed: number;
   documentsFresh: number;
   documentsCached: number;
+  // I45: Structured failure classification for Gate Report diagnostics
+  failureType?: "timeout" | "scoring_error" | "no_documents" | "cancelled" | "error";
 }
 
 // ─── Timeout Helper ─────────────────────────────────────────────────────────
@@ -1342,6 +1344,23 @@ async function runAnalyzePhase(opts: {
 
   console.log(`[${companyName}] Analysis complete: ${analysis.scorePercentage}% (${measuresMet} met / ${answeredCount} answered; ${abstainedCount} abstained of ${measures.length} total)`);
 
+  // ─── I45: PERSIST SCORING DIAGNOSTICS ─────────────────────────────────────────
+  // Record scoring diagnostics (timeouts, fallbacks, failures) to processing_errors
+  // so Gate Report diagnostics can expose them per company.
+  const scoringDiag = (analysis as any).scoringDiagnostics;
+  if (scoringDiag && (scoringDiag.scoringFailures > 0 || scoringDiag.fallbackUsed > 0 || scoringDiag.timeouts > 0)) {
+    try {
+      await storage.logProcessingError({
+        companyId,
+        companyName,
+        stage: "scoring_diagnostics",
+        error: JSON.stringify(scoringDiag),
+      });
+    } catch (diagErr: any) {
+      console.warn(`[${companyName}] Failed to persist scoring diagnostics: ${diagErr?.message}`);
+    }
+  }
+
   // ─── v3j (Bug 2): RECORD FORCE-INCLUDE INVARIANT VIOLATIONS ─────────────────
   // The analyzer asserts that every filing-bound measure whose required document
   // was present in the corpus received at least one genuine forced body chunk.
@@ -1552,7 +1571,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck, batchFetchState: opts.batchFetchState });
         
         if (cancelCheck?.()) {
-          return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+          return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0, failureType: "cancelled" as const };
         }
 
         if (fetchResult.fetchedCount === 0) {
@@ -1582,6 +1601,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
             documentsProcessed: 0,
             documentsFresh: fetchResult.totalAccepted,
             documentsCached: 0,
+            failureType: "no_documents" as const,
           };
         }
       } else {
@@ -1600,6 +1620,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
           documentsProcessed: fetchResult.fetchedCount,
           documentsFresh: fetchResult.totalAccepted,
           documentsCached: 0,
+          failureType: "scoring_error" as const,
         };
       }
 
@@ -1625,11 +1646,17 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
     } catch (error: any) {
       console.error(`[${companyName}] Pipeline error: ${error.message}`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
+      // I45: Persist structured pipeline failure with type classification
+      const isTimeout = error instanceof TimeoutError || /timed? ?out|ETIMEDOUT/i.test(error.message);
       await storage.logProcessingError({
         companyId,
         companyName,
-        stage: "pipeline",
-        error: `${error.message} | ${error.stack?.slice(0, 500) || ""}`,
+        stage: isTimeout ? "pipeline_timeout" : "pipeline_error",
+        error: JSON.stringify({
+          type: isTimeout ? "timeout" : "error",
+          message: error.message,
+          stack: error.stack?.slice(0, 500) || "",
+        }),
       });
       return {
         success: false,
@@ -1637,6 +1664,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         documentsProcessed: 0,
         documentsFresh: 0,
         documentsCached: 0,
+        failureType: (isTimeout ? "timeout" : "error") as "timeout" | "error",
       };
     }
   })();
@@ -1649,11 +1677,18 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       const elapsed = Math.round((Date.now() - pipelineStart) / 1000);
       console.error(`[${companyName}] PIPELINE TIMEOUT after ${elapsed}s — marking as failed`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
+      // I45: Persist explicit timeout status with structured provenance so Gate
+      // Report diagnostics can distinguish timeout zeros from no-evidence zeros.
       await storage.logProcessingError({
         companyId,
         companyName,
-        stage: "pipeline",
-        error: `Pipeline timed out after ${elapsed}s (limit: ${PIPELINE_TIMEOUT_MS / 1000}s)`,
+        stage: "pipeline_timeout",
+        error: JSON.stringify({
+          type: "timeout",
+          elapsedSeconds: elapsed,
+          limitSeconds: Math.round(PIPELINE_TIMEOUT_MS / 1000),
+          message: `Pipeline timed out after ${elapsed}s (limit: ${PIPELINE_TIMEOUT_MS / 1000}s)`,
+        }),
       });
       return {
         success: false,
@@ -1661,6 +1696,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         documentsProcessed: 0,
         documentsFresh: 0,
         documentsCached: 0,
+        failureType: "timeout" as const,
       };
     }
     throw timeoutError;

@@ -338,6 +338,14 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       try {
         const companyScores = await storage.getMeasureScores(companyId, frameworkId);
         const totalScore = companyScores.reduce((sum: number, s: any) => sum + (s.score || 0), 0);
+
+        // I45: Log scoring diagnostics for every completed company so Gate Report
+        // can aggregate fleet-level timeout/fallback/failure counts.
+        if (result.analysis?.scoringDiagnostics) {
+          const sd = result.analysis.scoringDiagnostics;
+          console.log(`[Worker][I45-diag] company=${companyId} fw=${frameworkId} score=${totalScore} failures=${sd.scoringFailures} timeouts=${sd.timeouts} fallback=${sd.fallbackUsed} defaultScore=${sd.defaultScoreUsed} emptyEvidence=${sd.evidencePackCounts.empty}`);
+        }
+
         // Instruction 21: No hardcoded company names. Use the company's own
         // historical best score as the threshold for below-prior-best diagnostics.
         const priorBestScore = (company as any).priorBestScore || 0;

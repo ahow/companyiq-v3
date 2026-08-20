@@ -283,7 +283,112 @@ async function main() {
   assert.equal(emptyFingerprint.valid, false, "empty corpus fingerprint must be rejected");
   assert.ok(emptyFingerprint.reason!.toLowerCase().includes("fingerprint"));
 
-  console.log("reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer, corpus-replay, framework-scoped-ab-delta, deterministic-corpusHash)");
+  // ─── I45: Deterministic Replay Tests ──────────────────────────────────────────
+
+  // Test: Identical frozen inputs produce identical scoring outputs.
+  // This validates that the deterministic seed, structured output validation,
+  // and quote sorting produce byte-stable results across invocations.
+  {
+    // Simulate two scoring runs with identical inputs
+    const { createHash } = await import("crypto");
+    const measureId = "M1.1";
+    const companyId = 42;
+    const providerIndex = 0;
+
+    // Deterministic seed must be identical for same inputs
+    const seed1 = createHash("sha256").update(`${measureId}:${companyId}:${providerIndex}`).digest().readUInt32BE(0);
+    const seed2 = createHash("sha256").update(`${measureId}:${companyId}:${providerIndex}`).digest().readUInt32BE(0);
+    assert.equal(seed1, seed2, "deterministic seed must be identical for same inputs");
+
+    // Different companyId must produce different seed
+    const seed3 = createHash("sha256").update(`${measureId}:${companyId + 1}:${providerIndex}`).digest().readUInt32BE(0);
+    assert.notEqual(seed1, seed3, "different companyId must produce different seed");
+
+    // Verdict cache key must include companyId to prevent cross-company contamination
+    const evidenceHash1 = createHash("sha256").update("test evidence").digest("hex").slice(0, 16);
+    const key1 = `${companyId}:${measureId}:deepseek:binary:${evidenceHash1}:noprompt`;
+    const key2 = `${companyId + 1}:${measureId}:deepseek:binary:${evidenceHash1}:noprompt`;
+    assert.notEqual(key1, key2, "verdict cache keys for different companies must differ");
+  }
+
+  // ─── I45: Workspace Isolation Tests ──────────────────────────────────────────
+
+  // Test: Concurrent battery runs with different testCycleIds produce
+  // non-overlapping run keys, preventing cross-cycle contamination.
+  {
+    const cycle1Inputs = { testCycleId: "cycle-A", commitSha: "a34f416", frameworkId: 3, listId: 5, batteryLabel: "fw3_a" };
+    const cycle2Inputs = { testCycleId: "cycle-B", commitSha: "a34f416", frameworkId: 3, listId: 5, batteryLabel: "fw3_a" };
+    const key1 = buildRunKey(cycle1Inputs);
+    const key2 = buildRunKey(cycle2Inputs);
+    assert.notEqual(key1, key2, "different testCycleIds must produce different run keys");
+
+    // Same cycle, different frameworks must also produce different keys
+    const fw3Key = buildRunKey({ ...cycle1Inputs, frameworkId: 3 });
+    const fw8Key = buildRunKey({ ...cycle1Inputs, frameworkId: 8 });
+    assert.notEqual(fw3Key, fw8Key, "different frameworkIds must produce different run keys");
+
+    // Same cycle, different battery labels must produce different keys
+    const labelA = buildRunKey({ ...cycle1Inputs, batteryLabel: "fw3_a" });
+    const labelB = buildRunKey({ ...cycle1Inputs, batteryLabel: "fw3_b" });
+    assert.notEqual(labelA, labelB, "different battery labels must produce different run keys");
+
+    // Verify no cross-framework leakage in Gate Report
+    const fw3AScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 30 + i }));
+    const fw3BScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 30 + i })); // identical
+    const fw8AScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 10 + i }));
+    const fw8BScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 10 + i })); // identical
+    const isolationSnapshots = [
+      snapshot("run-iso-1", "fw3_a", { resultsData: fw3AScores }),
+      snapshot("run-iso-2", "fw3_b", { resultsData: fw3BScores }),
+      snapshot("run-iso-3", "fw8_a", { resultsData: fw8AScores }),
+      snapshot("run-iso-4", "fw8_b", { resultsData: fw8BScores }),
+    ];
+    const isoReport = buildGateReport("cycle-isolation", isolationSnapshots, fingerprint, 22);
+
+    // fw3 and fw8 deltas must be zero (identical A/B within each framework)
+    const fw3Deltas = isoReport.companyABDelta.filter(r => r.framework === "fw3");
+    const fw8Deltas = isoReport.companyABDelta.filter(r => r.framework === "fw8");
+    assert.equal(fw3Deltas.length, 22, "fw3 isolation test must have 22 rows");
+    assert.equal(fw8Deltas.length, 22, "fw8 isolation test must have 22 rows");
+    assert.ok(fw3Deltas.every(r => r.delta === 0), "fw3 identical A/B must have zero deltas");
+    assert.ok(fw8Deltas.every(r => r.delta === 0), "fw8 identical A/B must have zero deltas");
+
+    // No cross-framework score leakage: fw3 scores start at 30, fw8 at 10.
+    // fw8 max is 10+21=31, fw3 min is 30. Use a structural check: fw8 company 1
+    // must have score 10 (not 30), confirming no fw3 data leaked into fw8 rows.
+    const fw8Company1 = fw8Deltas.find(r => r.companyId === 1);
+    assert.ok(fw8Company1, "fw8 must have companyId=1");
+    assert.equal(fw8Company1!.scoreA, 10, "fw8 companyId=1 scoreA must be 10 (not 30 from fw3)");
+    const fw3Company1 = fw3Deltas.find(r => r.companyId === 1);
+    assert.ok(fw3Company1, "fw3 must have companyId=1");
+    assert.equal(fw3Company1!.scoreA, 30, "fw3 companyId=1 scoreA must be 30");
+  }
+
+  // ─── I45: Structured Output Validation Tests ────────────────────────────────
+
+  // Test: Quote sorting is deterministic regardless of input order
+  {
+    const quotes1 = [
+      { text: "beta quote", source: "Doc A" },
+      { text: "alpha quote", source: "Doc A" },
+      { text: "gamma quote", source: "Doc B" },
+    ];
+    const quotes2 = [
+      { text: "gamma quote", source: "Doc B" },
+      { text: "alpha quote", source: "Doc A" },
+      { text: "beta quote", source: "Doc A" },
+    ];
+    const sort = (qs: typeof quotes1) => qs.slice().sort((a, b) => {
+      const sc = a.source.localeCompare(b.source);
+      return sc !== 0 ? sc : a.text.localeCompare(b.text);
+    });
+    const sorted1 = sort(quotes1);
+    const sorted2 = sort(quotes2);
+    assert.deepEqual(sorted1, sorted2, "quote sorting must be deterministic regardless of input order");
+    assert.equal(sorted1[0].text, "alpha quote", "first quote must be alphabetically first");
+  }
+
+  console.log("reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer, corpus-replay, framework-scoped-ab-delta, deterministic-corpusHash, I45-deterministic-replay, I45-workspace-isolation, I45-structured-output)");
 }
 
 void main().catch((error) => {

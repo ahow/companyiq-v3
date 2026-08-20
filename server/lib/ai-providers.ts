@@ -230,7 +230,12 @@ class OpenAICompatibleProvider implements AIProvider {
       top_p: 1, // 36-B.1: deterministic sampling
     };
 
-    if (this.seed !== undefined && this.supportsSeed) body.seed = opts.seed ?? this.seed;
+    // I45: Always pass seed when provider supports it — caller-provided seed takes
+    // precedence, then instance default, ensuring every scoring call is seeded.
+    if (this.supportsSeed) {
+      const effectiveSeed = opts.seed ?? this.seed ?? 42;
+      body.seed = effectiveSeed;
+    }
     if (opts.json && this.supportsJsonMode) body.response_format = { type: "json_object" };
 
     // Try each available key once; rotate on rate-limit (429) or auth (401) errors
@@ -300,6 +305,7 @@ class GeminiProvider implements AIProvider {
       generationConfig: {
         temperature: opts.temperature ?? 0,
         topK: 1, // 36-B.1: deterministic sampling
+        topP: 1, // I45: deterministic sampling parity with other providers
         maxOutputTokens: opts.maxTokens ?? 4096,
       },
     };
@@ -613,7 +619,8 @@ export async function completeScoring(
               break; // do not keep retrying a 402
             }
             // Non-credit transient error: exponential backoff before retry.
-            const backoff = Math.min(8000, 500 * Math.pow(2, attempt)) + Math.floor(Math.random() * 250);
+            // I45: Remove random jitter from scoring backoff — deterministic retry timing
+            const backoff = Math.min(8000, 500 * Math.pow(2, attempt));
             await new Promise((r) => setTimeout(r, backoff));
           }
         }

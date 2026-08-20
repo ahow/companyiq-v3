@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v42-cache-invalidation";
+export const PIPELINE_VERSION = "v45-scoring-determinism";
