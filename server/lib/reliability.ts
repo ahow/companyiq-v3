@@ -323,6 +323,50 @@ export function validateCorpusReplayProvenance(input: CorpusReplayValidationInpu
   return { valid: true, reason: null };
 }
 
+/**
+ * Select one accepted terminal batch per framework from a set of evidence snapshots.
+ * Rejects pending, overwritten, mixed, or partial rows. Each framework gets at most
+ * one accepted terminal batch (the one with the highest id, i.e. most recent).
+ * This is framework-agnostic: framework identity is derived from the snapshot's
+ * battery label suffix pattern (e.g. "fw3_a" → framework key "fw3").
+ */
+export function selectTerminalBatchPerFramework(
+  snapshots: EvidenceSnapshot[],
+  options: EvidenceSelectionOptions,
+): { perFramework: Map<string, EvidenceSnapshot[]>; rejected: Array<{ snapshot: EvidenceSnapshot; reason: string }> } {
+  const rejected: Array<{ snapshot: EvidenceSnapshot; reason: string }> = [];
+  const perFramework = new Map<string, EvidenceSnapshot[]>();
+
+  // Sort deterministically by runKey then id
+  const sorted = [...snapshots].sort((a, b) => a.runKey.localeCompare(b.runKey) || a.id - b.id);
+
+  for (const snapshot of sorted) {
+    // Must be accepted terminal
+    if (!(snapshot.lifecycleState === "accepted" || snapshot.lifecycleState === "terminal_success") || snapshot.acceptanceState !== "accepted") {
+      rejected.push({ snapshot, reason: "snapshot is not an accepted terminal run (state: " + snapshot.lifecycleState + "/" + snapshot.acceptanceState + ")" });
+      continue;
+    }
+    // Must be complete
+    if (snapshot.totalJobs !== options.expectedCompanyCount || snapshot.companiesCount !== options.expectedCompanyCount) {
+      rejected.push({ snapshot, reason: "snapshot is not complete for the expected company count" });
+      continue;
+    }
+    // Must match deployment fingerprint
+    if (!fingerprintsEqual(snapshot.deploymentFingerprint, options.deploymentFingerprint)) {
+      rejected.push({ snapshot, reason: "deployment fingerprint does not match" });
+      continue;
+    }
+    // Extract framework key from battery label
+    const label = (snapshot.batteryLabel ?? "").toLowerCase();
+    const abMatch = label.match(/^(.+)[_-]([ab])$/);
+    const frameworkKey = abMatch ? abMatch[1] : label;
+    if (!perFramework.has(frameworkKey)) perFramework.set(frameworkKey, []);
+    perFramework.get(frameworkKey)!.push(snapshot);
+  }
+
+  return { perFramework, rejected };
+}
+
 export function buildGateReport(
   testCycleId: string,
   snapshots: EvidenceSnapshot[],

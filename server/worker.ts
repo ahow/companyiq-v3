@@ -735,6 +735,8 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       if (!company) continue;
       if (company.analysisStatus !== "completed") continue;
 
+      // Framework-scoped score read: only retrieve scores for this framework
+      // to prevent cross-framework contamination in the snapshot.
       const scores = await storage.getMeasureScores(company.id, frameworkId);
       // Get source documents used in analysis
       const docs = await storage.getFetchedDocuments(company.id);
@@ -959,20 +961,29 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
 
     const persistedSnapshotIsComplete = snapshotIsComplete && !quarantineReason && !!saved && Number((saved as any).companiesCount || 0) === expectedCompanyCount;
     if (reliabilityRun) {
-      if (persistedSnapshotIsComplete) {
-        await storage.markReliabilityRunAccepted(reliabilityRun.id, batchId, artifactId!, "complete immutable snapshot accepted");
-        const acceptedSnapshots = await storage.getAcceptedEvidenceSnapshots(reliabilityRun.testCycleId, workspaceId);
-        if (reliabilityRun.testCycleId !== "recovery" && acceptedSnapshots.length >= 4) {
-          await enqueueReliabilityFinalizer({
-            kind: "reliability_finalizer",
-            testCycleId: reliabilityRun.testCycleId,
-            workspaceId,
-            expectedCompanyCount,
-            deploymentFingerprint: reliabilityRun.deploymentFingerprint as any,
-          });
+      if (persistedSnapshotIsComplete && artifactId) {
+        // Durable acceptance: verify the snapshot was actually persisted with a
+        // non-null artifactId before flipping acceptance state. markReliabilityRunAccepted
+        // also independently verifies the snapshot row exists.
+        const accepted = await storage.markReliabilityRunAccepted(reliabilityRun.id, batchId, artifactId, "complete immutable snapshot accepted");
+        if (accepted) {
+          const acceptedSnapshots = await storage.getAcceptedEvidenceSnapshots(reliabilityRun.testCycleId, workspaceId);
+          if (reliabilityRun.testCycleId !== "recovery" && acceptedSnapshots.length >= 4) {
+            await enqueueReliabilityFinalizer({
+              kind: "reliability_finalizer",
+              testCycleId: reliabilityRun.testCycleId,
+              workspaceId,
+              expectedCompanyCount,
+              deploymentFingerprint: reliabilityRun.deploymentFingerprint as any,
+            });
+          }
+        } else {
+          // Acceptance gate failed (snapshot row missing or artifactId invalid)
+          console.error(`[Worker] Durable acceptance gate failed for batch ${batchId}: markReliabilityRunAccepted returned null`);
+          await storage.markReliabilityRunRejected(reliabilityRun.id, batchId, "durable acceptance gate failed: snapshot row missing or artifactId invalid", artifactId);
         }
       } else {
-        await storage.markReliabilityRunRejected(reliabilityRun.id, batchId, rejectionReason || "snapshot failed acceptance validation", artifactId);
+        await storage.markReliabilityRunRejected(reliabilityRun.id, batchId, rejectionReason || (!artifactId ? "artifactId is null" : "snapshot failed acceptance validation"), artifactId);
       }
     }
 

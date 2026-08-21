@@ -1164,7 +1164,9 @@ async function runAnalyzePhase(opts: {
       totalScore: 0,
       summary: "No documents could be fetched for analysis.",
     });
-    await storage.clearMeasureScores(companyId);
+    // Framework-scoped clearing: only remove scores for this framework,
+    // preserving scores from other frameworks.
+    await storage.clearMeasureScoresForFramework(companyId, framework.id);
     return null;
   }
 
@@ -1316,8 +1318,9 @@ async function runAnalyzePhase(opts: {
     }
   }
   // ─── Persist Results ──────────────────────────────────────────────────────
-
-  await storage.clearMeasureScores(companyId);
+  // Framework-scoped clearing: only remove scores for this framework,
+  // preserving scores from other frameworks.
+  await storage.clearMeasureScoresForFramework(companyId, framework.id);
 
   // v3j (Obs 3.2): the deterministic force-include path is otherwise invisible to
   // downstream validators. We surface it WITHOUT a schema migration by tagging the

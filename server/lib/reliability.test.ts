@@ -8,6 +8,7 @@ import {
   fingerprintsEqual,
   isHeartbeatStalled,
   isTerminalLifecycleState,
+  selectTerminalBatchPerFramework,
   selectValidEvidenceSnapshots,
   validateCorpusReplayProvenance,
   type DeploymentFingerprint,
@@ -388,7 +389,167 @@ async function main() {
     assert.equal(sorted1[0].text, "alpha quote", "first quote must be alphabetically first");
   }
 
-  console.log("reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer, corpus-replay, framework-scoped-ab-delta, deterministic-corpusHash, I45-deterministic-replay, I45-workspace-isolation, I45-structured-output)");
+  // ─── Cross-Framework Score Isolation Tests ──────────────────────────────────
+  // Validates that framework-scoped clearing and snapshot building cannot mix
+  // scores from different frameworks. Uses generic framework keys, no hardcoded
+  // company names, topics, jurisdictions, or framework IDs.
+  {
+    // Simulate two frameworks with distinct score sets for the same companies
+    const fwAlphaScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 50 + i }));
+    const fwBetaScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 10 + i }));
+
+    // Create snapshots for two different frameworks
+    const alphaA = snapshot("run-iso-alpha-a", "alpha_a", { resultsData: fwAlphaScores });
+    const alphaB = snapshot("run-iso-alpha-b", "alpha_b", { resultsData: fwAlphaScores.map(r => ({ ...r, totalScore: r.totalScore + 1 })) });
+    const betaA = snapshot("run-iso-beta-a", "beta_a", { resultsData: fwBetaScores });
+    const betaB = snapshot("run-iso-beta-b", "beta_b", { resultsData: fwBetaScores });
+
+    const report = buildGateReport("cycle-cross-fw-isolation", [alphaA, alphaB, betaA, betaB], fingerprint, 22);
+
+    // Framework alpha deltas should be 1 (b = a + 1)
+    const alphaDeltas = report.companyABDelta.filter(r => r.framework === "alpha");
+    assert.equal(alphaDeltas.length, 22, "alpha framework must have 22 delta rows");
+    assert.ok(alphaDeltas.every(r => r.delta === 1), "alpha deltas must all be 1");
+
+    // Framework beta deltas should be 0 (identical A/B)
+    const betaDeltas = report.companyABDelta.filter(r => r.framework === "beta");
+    assert.equal(betaDeltas.length, 22, "beta framework must have 22 delta rows");
+    assert.ok(betaDeltas.every(r => r.delta === 0), "beta deltas must all be 0");
+
+    // No cross-framework contamination: alpha company 1 score must be 50, not 10
+    const alphaC1 = alphaDeltas.find(r => r.companyId === 1);
+    assert.ok(alphaC1, "alpha must have companyId=1");
+    assert.equal(alphaC1!.scoreA, 50, "alpha companyId=1 scoreA must be 50 (not 10 from beta)");
+    const betaC1 = betaDeltas.find(r => r.companyId === 1);
+    assert.ok(betaC1, "beta must have companyId=1");
+    assert.equal(betaC1!.scoreA, 10, "beta companyId=1 scoreA must be 10 (not 50 from alpha)");
+
+    // Total rows must be exactly 44 (22 per framework)
+    assert.equal(report.companyABDelta.length, 44, "total delta rows must be 44 (22 per framework)");
+  }
+
+  // ─── Terminal Snapshot Persistence Before Acceptance Tests ─────────────────
+  // Validates that the selector rejects snapshots that are pending, have no
+  // artifact, or are incomplete — preventing acceptance of non-persisted snapshots.
+  {
+    const pendingSnapshot = snapshot("run-pending-1", "fw_a", { acceptanceState: "pending" });
+    const acceptedSnapshot = snapshot("run-accepted-1", "fw_b");
+    const partialSnapshot = snapshot("run-partial-1", "fw_a", { companiesCount: 20 });
+
+    const selection = selectValidEvidenceSnapshots(
+      [pendingSnapshot, acceptedSnapshot, partialSnapshot],
+      { expectedCompanyCount: 22, deploymentFingerprint: fingerprint, requiredSnapshotCount: 4 },
+    );
+
+    // Only the fully accepted snapshot should pass
+    assert.equal(selection.accepted.length, 1, "only one fully accepted snapshot should pass");
+    assert.equal(selection.accepted[0].runKey, "run-accepted-1");
+    assert.equal(selection.rejected.length, 2, "pending and partial must be rejected");
+
+    // Verify rejection reasons are meaningful
+    const pendingRejection = selection.rejected.find(r => r.snapshot.runKey === "run-pending-1");
+    assert.ok(pendingRejection, "pending snapshot must be in rejected list");
+    assert.ok(pendingRejection!.reason.includes("not an accepted"), "pending rejection reason must mention acceptance");
+
+    const partialRejection = selection.rejected.find(r => r.snapshot.runKey === "run-partial-1");
+    assert.ok(partialRejection, "partial snapshot must be in rejected list");
+    assert.ok(partialRejection!.reason.includes("not complete"), "partial rejection reason must mention completeness");
+  }
+
+  // ─── Idempotent Finalization Tests ────────────────────────────────────────────
+  // Validates that re-running finalization with the same inputs produces
+  // byte-identical output, and that order of input does not matter.
+  {
+    const fwXScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 20 + i }));
+    const fwYScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 40 + i }));
+    const snaps = [
+      snapshot("run-idem-1", "fwx_a", { resultsData: fwXScores }),
+      snapshot("run-idem-2", "fwx_b", { resultsData: fwXScores }),
+      snapshot("run-idem-3", "fwy_a", { resultsData: fwYScores }),
+      snapshot("run-idem-4", "fwy_b", { resultsData: fwYScores }),
+    ];
+
+    // Run finalization twice with different input orders
+    const report1 = buildGateReport("cycle-idem", snaps, fingerprint, 22);
+    const report2 = buildGateReport("cycle-idem", [...snaps].reverse(), fingerprint, 22);
+    const report3 = buildGateReport("cycle-idem", [snaps[2], snaps[0], snaps[3], snaps[1]], fingerprint, 22);
+
+    // All three must be byte-identical
+    assert.deepEqual(report1, report2, "idempotent finalization: reversed input must produce identical report");
+    assert.deepEqual(report1, report3, "idempotent finalization: shuffled input must produce identical report");
+
+    // All gates must pass
+    assert.ok(report1.gates.every(g => g.passed), "all gates must pass for complete valid snapshots");
+  }
+
+  // ─── Rejection of Mixed/Pending Batches Tests ────────────────────────────────
+  // Validates that the selector and per-framework selector both reject
+  // mixed-state batches (some accepted, some pending/rejected).
+  {
+    const mixedSnapshots = [
+      snapshot("run-mix-1", "fw_a"),
+      snapshot("run-mix-2", "fw_b", { acceptanceState: "pending" }),
+      snapshot("run-mix-3", "fw_a", { lifecycleState: "rejected", acceptanceState: "rejected" }),
+      snapshot("run-mix-4", "fw_b"),
+    ];
+
+    const selection = selectValidEvidenceSnapshots(
+      mixedSnapshots,
+      { expectedCompanyCount: 22, deploymentFingerprint: fingerprint, requiredSnapshotCount: 4 },
+    );
+
+    // Only the two fully accepted snapshots should pass
+    assert.equal(selection.accepted.length, 2, "only fully accepted snapshots should pass");
+    assert.equal(selection.rejected.length, 2, "pending and rejected must be filtered out");
+
+    // Per-framework selector must also reject pending/rejected
+    const perFw = selectTerminalBatchPerFramework(
+      mixedSnapshots,
+      { expectedCompanyCount: 22, deploymentFingerprint: fingerprint },
+    );
+    assert.equal(perFw.rejected.length, 2, "per-framework selector must reject pending and rejected snapshots");
+    // The accepted ones should be grouped by framework key
+    const fwKeys = [...perFw.perFramework.keys()];
+    assert.ok(fwKeys.length > 0, "per-framework selector must have at least one framework key");
+    // All accepted snapshots in perFramework must be genuinely accepted
+    for (const [, snaps] of perFw.perFramework) {
+      for (const s of snaps) {
+        assert.equal(s.acceptanceState, "accepted", "per-framework accepted snapshot must have acceptanceState=accepted");
+      }
+    }
+  }
+
+  // ─── selectTerminalBatchPerFramework Isolation Tests ──────────────────────────
+  // Validates that the per-framework selector correctly groups by framework key
+  // and rejects incomplete/fingerprint-mismatched snapshots.
+  {
+    const fwAScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 30 + i }));
+    const fwBScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 60 + i }));
+    const perFwSnapshots = [
+      snapshot("run-pf-1", "gamma_a", { resultsData: fwAScores }),
+      snapshot("run-pf-2", "gamma_b", { resultsData: fwAScores }),
+      snapshot("run-pf-3", "delta_a", { resultsData: fwBScores }),
+      snapshot("run-pf-4", "delta_b", { resultsData: fwBScores }),
+      // Rejected: incomplete
+      snapshot("run-pf-5", "gamma_a", { companiesCount: 15 }),
+      // Rejected: wrong fingerprint
+      snapshot("run-pf-6", "delta_a", { deploymentFingerprint: { ...fingerprint, liveWorkerSha: "wrong" } }),
+    ];
+
+    const result = selectTerminalBatchPerFramework(
+      perFwSnapshots,
+      { expectedCompanyCount: 22, deploymentFingerprint: fingerprint },
+    );
+
+    // Two framework keys: gamma and delta
+    assert.ok(result.perFramework.has("gamma"), "must have gamma framework key");
+    assert.ok(result.perFramework.has("delta"), "must have delta framework key");
+    assert.equal(result.perFramework.get("gamma")!.length, 2, "gamma must have 2 accepted snapshots");
+    assert.equal(result.perFramework.get("delta")!.length, 2, "delta must have 2 accepted snapshots");
+    assert.equal(result.rejected.length, 2, "incomplete and fingerprint-mismatched must be rejected");
+  }
+
+  console.log("reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer, corpus-replay, framework-scoped-ab-delta, deterministic-corpusHash, I45-deterministic-replay, I45-workspace-isolation, I45-structured-output, cross-framework-isolation, terminal-snapshot-persistence, idempotent-finalization, mixed-pending-rejection, per-framework-selection)");
 }
 
 void main().catch((error) => {

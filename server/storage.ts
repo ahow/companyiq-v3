@@ -785,6 +785,17 @@ export async function clearMeasureScores(companyId: number) {
   await db.delete(schema.measureScores).where(eq(schema.measureScores.companyId, companyId));
 }
 
+/**
+ * Framework-scoped score clearing: deletes only the scores for a specific
+ * framework, preserving scores from other frameworks. This prevents one
+ * framework's analysis run from overwriting another framework's results.
+ */
+export async function clearMeasureScoresForFramework(companyId: number, frameworkId: number) {
+  await db.delete(schema.measureScores).where(
+    and(eq(schema.measureScores.companyId, companyId), eq(schema.measureScores.frameworkId, frameworkId))
+  );
+}
+
 // Bulk reset all companies in a workspace (efficient single SQL statements)
 export async function resetAllCompanies(workspaceId: number): Promise<number> {
   // Delete all measure scores for companies in this workspace
@@ -947,6 +958,23 @@ export async function updateReliabilityRunLifecycle(runId: number, state: RunLif
 export async function markReliabilityRunAccepted(runId: number, batchId: number, artifactId: string, reason = "complete evidence snapshot accepted") {
   const [run] = await db.select().from(schema.reliabilityRuns).where(eq(schema.reliabilityRuns.id, runId)).limit(1);
   if (!run) return null;
+  // Durable acceptance gate: artifactId must be non-null and the analysis_results
+  // snapshot row must already exist before we flip acceptance state. This prevents
+  // acceptanceState=accepted with artifactId=None.
+  if (!artifactId) {
+    console.error(`[markReliabilityRunAccepted] Refusing to accept run ${runId}: artifactId is null/empty`);
+    return null;
+  }
+  // Verify the snapshot row exists in analysis_results before accepting
+  const snapshotCheck = await db.execute(sql`
+    SELECT id FROM analysis_results
+    WHERE batch_id = ${batchId} AND run_key = ${run.runKey} AND immutable_snapshot = TRUE
+    LIMIT 1
+  `);
+  if (snapshotCheck.rows.length === 0) {
+    console.error(`[markReliabilityRunAccepted] Refusing to accept run ${runId}: no analysis_results snapshot found for batch ${batchId}, run_key ${run.runKey}`);
+    return null;
+  }
   const updated = await updateReliabilityRunLifecycle(runId, "accepted", { acceptanceState: "accepted", artifactId, rejectionReason: null });
   await db.execute(sql`UPDATE batch_runs SET acceptance_state = 'accepted', artifact_id = ${artifactId}, rejection_reason = NULL WHERE id = ${batchId}`);
   await db.execute(sql`UPDATE analysis_results SET acceptance_state = 'accepted', accepted_at = NOW(), rejection_reason = NULL WHERE batch_id = ${batchId} AND run_key = ${run.runKey} AND immutable_snapshot = TRUE`);
@@ -1537,7 +1565,9 @@ export async function enqueueReexamination(opts: {
   // fetch phase re-discovers and re-attempts the previously-dead URLs. Successful
   // (`ok`) docs are preserved by clearDiscoveredDocuments.
   await clearDiscoveredDocuments(companyId);
-  await clearMeasureScores(companyId);
+  // Framework-scoped clearing: only remove scores for the framework being re-examined,
+  // preserving scores from other frameworks.
+  await clearMeasureScoresForFramework(companyId, frameworkId);
   await updateCompany(companyId, workspaceId, { analysisStatus: "idle" });
 
   // Push onto the BullMQ queue with skipFetch=false. Dynamic import avoids a
