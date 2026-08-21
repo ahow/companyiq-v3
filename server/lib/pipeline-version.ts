@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v51-passage-diag-and-mass-failure";
+export const PIPELINE_VERSION = "v52-token-boundary-domain-match";
