@@ -781,6 +781,11 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         // diagnose the retrieval→scoring bridge (e.g. Barclays fw8 = 0 despite
         // MSS PDFs in corpus).
         passageRetrievalSummary: diagnostics?.passageRetrievalSummary ?? undefined,
+        // I51-A — mass scoring-failure detection. Present when >50% of measures
+        // returned _scoringFailure; downstream fleet metrics should exclude
+        // these companies rather than treat the mass-zero as substantive.
+        scoringFailureSummary: diagnostics?.scoringFailureSummary ?? undefined,
+        analysisStatus: (company as any).analysisStatus ?? undefined,
       };
 
       // Compute coverage-adjusted score: exclude backfilled (not_assessed) measures
