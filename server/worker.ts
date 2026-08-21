@@ -836,9 +836,8 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         totalScore: adjustedScore,
         // Instruction 46 FU: Persist corpus hash for replay verification
         corpusHashSha: (() => {
-          const { createHash: ch } = require("crypto");
           const ids = corpusHash.split(",").filter(Boolean).map(Number).sort((a: number, b: number) => a - b);
-          return ids.length > 0 ? ch("sha256").update(ids.join(",")).digest("hex") : "empty";
+          return ids.length > 0 ? crypto.createHash("sha256").update(ids.join(",")).digest("hex") : "empty";
         })(),
         measuresMetCount: metCount,
         measuresTotalCount: assessedCount,

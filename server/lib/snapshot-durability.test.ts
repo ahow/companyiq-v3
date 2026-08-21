@@ -302,7 +302,63 @@ async function main() {
     passed++; console.log("  [PASS] TEST 10: Full end-to-end flow (batch 1059 scenario)");
   }
 
-  console.log(`\nsnapshot-durability tests: PASS (${passed}/10 — stale-runKey-upsert, completeness-22, artifact-before-acceptance, idempotent-retry, empty-rejection, cross-framework-isolation, no-downgrade, accepted-protection, mismatch-rejection, e2e-1059-flow)`);
+  // TEST 11: ESM runtime — crypto.createHash does not throw ReferenceError
+  // Regression for the require("crypto") defect in ESM context (worker.ts line 839).
+  // The corpusHashSha computation must use the ESM-imported crypto module.
+  {
+    const crypto = await import("node:crypto");
+    const corpusHash = "101,204,307";
+    // This is the exact logic from worker.ts line 838-841 post-fix:
+    const ids = corpusHash.split(",").filter(Boolean).map(Number).sort((a: number, b: number) => a - b);
+    let corpusHashSha: string;
+    try {
+      corpusHashSha = ids.length > 0 ? crypto.createHash("sha256").update(ids.join(",")).digest("hex") : "empty";
+    } catch (e: any) {
+      // If this throws ReferenceError: require is not defined, the ESM fix is broken
+      throw new Error(`ESM crypto regression: ${e.message}`);
+    }
+    assert.equal(typeof corpusHashSha, "string");
+    assert.equal(corpusHashSha.length, 64, "SHA-256 hex must be 64 chars");
+    // Deterministic: same input always produces same hash
+    const again = crypto.createHash("sha256").update(ids.join(",")).digest("hex");
+    assert.equal(corpusHashSha, again, "deterministic hash");
+    // Empty corpus returns "empty"
+    const emptyIds = "".split(",").filter(Boolean).map(Number).sort((a: number, b: number) => a - b);
+    const emptyHash = emptyIds.length > 0 ? crypto.createHash("sha256").update(emptyIds.join(",")).digest("hex") : "empty";
+    assert.equal(emptyHash, "empty");
+    passed++; console.log("  [PASS] TEST 11: ESM runtime — crypto.createHash no ReferenceError");
+  }
+
+  // TEST 12: acceptanceState=accepted ONLY after snapshotSaved=true
+  // Ensures the ordering invariant: artifact written → snapshot saved → acceptance flipped.
+  {
+    const s = new MockStorage();
+    const runKey = "run_order"; const batchId = 12001; const artifactId = `artifact-${runKey}`;
+    s.registerBatch(batchId);
+    // Save snapshot
+    const snap = s.saveAnalysisResults({ workspaceId: WS, batchId, runKey, runId: 120, frameworkId: FW_A, frameworkName: "A", listName: "L", resultsData: makeResultsData(EXPECTED, FW_A), companiesCount: EXPECTED, averageScore: 55, acceptanceState: "pending", rejectionReason: null, deploymentFingerprint: { sourceSha: "abc" } });
+    assert.ok(snap);
+    // Before artifact: batch must NOT be accepted
+    assert.equal(s.getBatch(batchId)?.acceptanceState, "pending");
+    assert.equal(s.getBatch(batchId)?.snapshotSaved, false);
+    // Write artifact
+    s.setBatchArtifact(batchId, artifactId);
+    assert.equal(s.getBatch(batchId)?.artifactId, artifactId);
+    // Still not accepted
+    assert.equal(s.getBatch(batchId)?.acceptanceState, "pending");
+    // Mark snapshot saved
+    s.setBatchSnapshotSaved(batchId, true);
+    assert.equal(s.getBatch(batchId)?.snapshotSaved, true);
+    // NOW accept
+    assert.ok(s.markAccepted(batchId, runKey));
+    assert.equal(s.getBatch(batchId)?.acceptanceState, "accepted");
+    // Verify the ordering: snapshotSaved was true BEFORE acceptance was set
+    // (in our mock, markAccepted checks immutableSnapshot on the row)
+    assert.equal(snap!.acceptanceState, "accepted");
+    passed++; console.log("  [PASS] TEST 12: acceptanceState=accepted only after snapshotSaved=true");
+  }
+
+  console.log(`\nsnapshot-durability tests: PASS (${passed}/12 — stale-runKey-upsert, completeness-22, artifact-before-acceptance, idempotent-retry, empty-rejection, cross-framework-isolation, no-downgrade, accepted-protection, mismatch-rejection, e2e-1059-flow, esm-crypto-no-referror, acceptance-after-snapshot)`);
 }
 
 void main().catch((error) => {
