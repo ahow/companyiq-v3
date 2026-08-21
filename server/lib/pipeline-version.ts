@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v50-evidence-keywords-backfill";
+export const PIPELINE_VERSION = "v51b-passage-retrieval-diagnostics";

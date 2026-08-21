@@ -523,6 +523,22 @@ export interface EvidencePack {
   // True when the corpus contained a document matching this measure's required
   // source type (so a missing force-include is a real failure, not "nothing to do").
   requiredDocPresent: boolean;
+  // I51-B: Per-measure passage-retrieval telemetry (diagnostic-only, no scoring impact).
+  // Records which chunks BM25 selected into the pack: docUrl, docTitle, chunk preview,
+  // BM25 score, forced-include flag, and per-doc chunk count. Used for offline analysis
+  // of the retrieval→scoring bridge. Empty when no chunks selected.
+  passageDiagnostics?: {
+    topChunks: Array<{
+      docUrl: string | null;
+      docTitle: string | null;
+      seqInDoc: number | null;
+      score: number;
+      textPreview: string;
+      forced: boolean;
+    }>;
+    docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>;
+    queryTermCount: number;
+  };
 }
 
 // ─── Per-Measure SEC Section Relevance ───────────────────────────────────────
@@ -1427,6 +1443,30 @@ export function buildEvidencePackForMeasure(opts: {
     .update(`${ident}||${chunkIds.join("|")}`)
     .digest("hex");
 
+  // I51-B: Per-measure passage-retrieval telemetry. Captures which chunks were
+  // selected into the pack for later offline analysis. Diagnostic-only.
+  const docBreakdownMap = new Map<string | null, number>();
+  for (const s of selected) {
+    const key = chunks[s.idx]?.docUrl || null;
+    docBreakdownMap.set(key, (docBreakdownMap.get(key) || 0) + 1);
+  }
+  const passageDiagnostics = {
+    topChunks: selected.slice(0, 5).map((s) => {
+      const ch = chunks[s.idx];
+      const preview = (s.text || "").slice(0, 200).replace(/\s+/g, " ").trim();
+      return {
+        docUrl: ch?.docUrl || null,
+        docTitle: ch?.docTitle || null,
+        seqInDoc: ch?.seqInDoc ?? null,
+        score: Math.round(s.score * 1000) / 1000,
+        textPreview: preview,
+        forced: Boolean((s as any).forced),
+      };
+    }),
+    docBreakdown: Array.from(docBreakdownMap.entries()).map(([docUrl, chunkCount]) => ({ docUrl, chunkCount })),
+    queryTermCount: uniqueTerms.length,
+  };
+
   return {
     measureId: measure.measureId,
     text: evidenceText.trim(),
@@ -1438,6 +1478,7 @@ export function buildEvidencePackForMeasure(opts: {
     forceIncludedCount,
     forceIncludedDocUrl,
     requiredDocPresent,
+    passageDiagnostics,
   };
 }
 

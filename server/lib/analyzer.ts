@@ -62,6 +62,13 @@ export interface MeasureResult {
   forceIncludedCount?: number;
   requiredDocPresent?: boolean;
   forceIncludedDocUrl?: string;
+  // I51-B: passage-retrieval telemetry, propagated from EvidencePack for offline analysis
+  // of the retrieval→scoring bridge. Diagnostic-only; not consumed by scoring.
+  passageDiagnostics?: {
+    topChunks: Array<{ docUrl: string | null; docTitle: string | null; seqInDoc: number | null; score: number; textPreview: string; forced: boolean }>;
+    docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>;
+    queryTermCount: number;
+  };
 }
 
 export interface AnalysisResult {
@@ -1269,7 +1276,7 @@ export async function analyzeCompanyMeasures(opts: {
     console.log(`[${companyName}] Scoring category: ${category} (${categoryMeasures.length} measures)`);
 
     // Build evidence packs via BM25
-    let evidencePacks: Array<{ measureId: string; text: string; topicHits?: number; fingerprint?: string; fingerprintEligible?: boolean; forceIncludedCount?: number; requiredDocPresent?: boolean; forceIncludedDocUrl?: string }>;
+    let evidencePacks: Array<{ measureId: string; text: string; topicHits?: number; fingerprint?: string; fingerprintEligible?: boolean; forceIncludedCount?: number; requiredDocPresent?: boolean; forceIncludedDocUrl?: string; passageDiagnostics?: { topChunks: Array<{ docUrl: string | null; docTitle: string | null; seqInDoc: number | null; score: number; textPreview: string; forced: boolean }>; docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>; queryTermCount: number } }>;
     if (settings.useBm25Retrieval) {
       evidencePacks = buildEvidencePacksForCategory({
         measures: categoryMeasures,
@@ -1589,6 +1596,12 @@ export async function analyzeCompanyMeasures(opts: {
         } else if (prior && fp && prior.evidenceFingerprint && prior.evidenceFingerprint !== fp) {
           console.log(`[${companyName}] EVIDENCE-DRIFT ${measure.measureId}: fingerprint changed ${prior.evidenceFingerprint.slice(0, 8)} -> ${fp.slice(0, 8)} (re-scored)`);
         }
+      }
+
+      // I51-B: attach passage-retrieval telemetry (diagnostic-only) so we can see
+      // per-measure, per-run which chunks BM25 selected. Not consumed by scoring.
+      if (evidencePack?.passageDiagnostics) {
+        (measureResult as MeasureResult).passageDiagnostics = evidencePack.passageDiagnostics;
       }
 
       return measureResult;
