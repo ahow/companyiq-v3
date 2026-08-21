@@ -1,5 +1,7 @@
 import * as storage from "../storage.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
+import { ProviderScoringError } from "./credit-breaker.js";
+import { classifyProviderError, type ProviderFailureClass } from "./provider-resilience.js";
 import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
@@ -1926,12 +1928,22 @@ async function scoreSingleMeasurePass(opts: {
       _gradedBy: gradedBy,
     } as MeasureResult & { _gradedBy?: string };
   } catch (error: any) {
+    // PROVIDER QUOTA/AUTH FAILURE: if the error is a ProviderScoringError with
+    // quota_exhausted or authentication class, DO NOT convert to a zero score.
+    // Re-throw so the pipeline pauses cleanly without emitting fake results.
+    if (error instanceof ProviderScoringError) {
+      const cls = error.failureClass as ProviderFailureClass;
+      if (cls === "quota_exhausted" || cls === "authentication") {
+        console.error(`[${companyName}] PROVIDER FAILURE [${cls}] for ${measure.measureId} — NOT converting to zero score, propagating for pause/retry`);
+        throw error;
+      }
+    }
     // I45: Distinguish scoring failure from legitimate "No" verdict. The error
     // is logged with explicit failure provenance so downstream diagnostics can
     // separate timeout/model-failure zeros from genuine no-evidence zeros.
-    const isTimeout = /timed? ?out|ETIMEDOUT|ECONNABORTED|timeout/i.test(error.message);
-    const failureType = isTimeout ? "timeout" : "scoring_error";
-    console.warn(`[${companyName}] Scoring FAILED [${failureType}] for ${measure.measureId}: ${error.message}`);
+    const failureClass = classifyProviderError(error);
+    const failureType = failureClass === "timeout" ? "timeout" : "scoring_error";
+    console.warn(`[${companyName}] Scoring FAILED [${failureType}/${failureClass}] for ${measure.measureId}: ${error.message}`);
     return {
       measureId: measure.measureId,
       title: measure.title,
@@ -1944,10 +1956,11 @@ async function scoreSingleMeasurePass(opts: {
       evidenceSummary: `Scoring ${failureType}: ${error.message}`,
       quotes: [],
       verdict: "No",
-      verdictNuance: `[SCORING_FAILURE:${failureType}] This zero reflects a model/network failure, not a substantive assessment. Retry recommended.`,
+      verdictNuance: `[SCORING_FAILURE:${failureType}:${failureClass}] This zero reflects a model/network failure, not a substantive assessment. Retry recommended.`,
       displayOrder: measure.displayOrder,
       _scoringFailure: failureType,
-    } as MeasureResult & { _scoringFailure?: string };
+      _failureClass: failureClass,
+    } as MeasureResult & { _scoringFailure?: string; _failureClass?: string };
   }
 }
 

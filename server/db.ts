@@ -712,6 +712,32 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS source_batch_id INTEGER REFERENCES batch_runs(id)`);
     await db.execute(sql`ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS corpus_replay_provenance JSONB`);
 
+    // ─── Provider Failure Events (quota-resilience layer) ──────────────
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS provider_failure_events (
+        id SERIAL PRIMARY KEY,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        failure_class TEXT NOT NULL,
+        http_status INTEGER,
+        error_message TEXT,
+        job_id INTEGER REFERENCES analysis_jobs(id),
+        batch_id INTEGER REFERENCES batch_runs(id),
+        measure_id TEXT,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_provider_failure_events_class
+      ON provider_failure_events(failure_class, created_at DESC)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_provider_failure_events_batch
+      ON provider_failure_events(batch_id, provider)
+    `);
+    // Add metadata column to system_alerts for structured pause state
+    await db.execute(sql`ALTER TABLE system_alerts ADD COLUMN IF NOT EXISTS metadata JSONB`);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 

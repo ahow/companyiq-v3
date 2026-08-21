@@ -4,6 +4,14 @@ import * as storage from "../storage.js";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { addBatchJobs, removeBatchJobs, getQueueStats } from "../queue.js";
 import { cancelBatch, enqueueReliabilityFinalizer, finalizeBatchAndSave, saveBatchSnapshot } from "../worker.js";
+import {
+  getAllPausedProviders,
+  buildOperationalStatus,
+  resumeProvider,
+  getConfiguredFallbackOrder,
+} from "../lib/provider-resilience.js";
+import { getAvailableProviders, getProviderStatus } from "../lib/ai-providers.js";
+import { resetProvider as resetCreditBreaker, isProviderTripped, clearCreditAlert } from "../lib/credit-breaker.js";
 import { detectScoreAnomalies } from "../lib/anomaly-detection.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -800,6 +808,99 @@ apiRouter.post("/system/alerts/resume", async (req: Request, res: Response) => {
     const { kind } = req.body || {};
     await storage.clearSystemAlert(kind || "credit_exhaustion");
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Provider Operational Status Endpoint ───────────────────────────────────
+// Safe read-only endpoint exposing provider health, failure class, pause state,
+// retry_after, affected jobs/batches, and resumable batch IDs.
+apiRouter.get("/providers/status", async (_req: Request, res: Response) => {
+  try {
+    const providerNames = getAvailableProviders().map(p => p.name);
+    const trippedSet = new Set<string>();
+    for (const name of providerNames) {
+      if (isProviderTripped(name)) trippedSet.add(name);
+    }
+    const status = buildOperationalStatus(providerNames, trippedSet);
+    const fallbackOrder = getConfiguredFallbackOrder();
+    const pausedProviders = getAllPausedProviders();
+
+    // Find resumable batches: running batches with jobs in pending/claimed state
+    let resumableBatchIds: number[] = [];
+    try {
+      const r = await db.execute(sql`
+        SELECT DISTINCT b.id FROM batch_runs b
+        JOIN analysis_jobs j ON j.batch_id = b.id
+        WHERE b.status = 'running'
+          AND j.status IN ('pending', 'claimed')
+        ORDER BY b.id DESC
+        LIMIT 20
+      `);
+      resumableBatchIds = (r.rows as any[]).map(row => Number(row.id));
+    } catch { /* non-fatal */ }
+
+    res.json({
+      providers: status,
+      fallbackOrder,
+      pausedProviders: pausedProviders.map(p => ({
+        provider: p.provider,
+        failureClass: p.failureClass,
+        pausedAt: new Date(p.pausedAt).toISOString(),
+        retryAfter: new Date(p.retryAfter).toISOString(),
+        backoffMs: p.backoffMs,
+        affectedJobIds: p.affectedJobIds,
+        affectedBatchIds: p.affectedBatchIds,
+        resumeCount: p.resumeCount,
+        lastResumedAt: p.lastResumedAt ? new Date(p.lastResumedAt).toISOString() : null,
+        lastResumedBy: p.lastResumedBy,
+      })),
+      resumableBatchIds,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Provider Resume Endpoint ───────────────────────────────────────────────
+// Idempotent and auditable: resumes a paused provider, clears the credit
+// breaker and system alert, and returns the affected batch IDs for the caller
+// to verify. Safe to call multiple times.
+apiRouter.post("/providers/resume", async (req: Request, res: Response) => {
+  try {
+    const { provider } = req.body || {};
+    if (!provider || typeof provider !== "string") {
+      return res.status(400).json({ error: "provider name is required" });
+    }
+    // Idempotent resume: clear process-local pause state
+    const wasResumed = resumeProvider(provider, "manual");
+    // Clear the credit breaker (process-local rolling window)
+    resetCreditBreaker(provider);
+    // Clear the persisted system alert so worker picks up the change
+    await clearCreditAlert(provider);
+    // Also clear the generic credit_exhaustion alert if it matches
+    await storage.clearSystemAlert("credit_exhaustion", provider);
+
+    // Record an audit event
+    try {
+      const { workspaceId } = getSessionContext(req);
+      await storage.recordReliabilityAuditEvent({
+        workspaceId,
+        eventType: "provider_resume",
+        reason: `Manual provider resume: ${provider} (wasActuallyPaused=${wasResumed})`,
+        metadata: { provider, wasResumed, resumedAt: new Date().toISOString(), by: "manual" },
+      });
+    } catch { /* non-fatal audit */ }
+
+    res.json({
+      success: true,
+      provider,
+      wasActuallyPaused: wasResumed,
+      message: wasResumed
+        ? `Provider ${provider} resumed. Paused jobs will auto-retry on next worker tick.`
+        : `Provider ${provider} was not paused (idempotent, no-op).`,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

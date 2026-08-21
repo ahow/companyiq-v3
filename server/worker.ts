@@ -16,7 +16,16 @@ import * as storage from "./storage.js";
 import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
 import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
-import { isCreditAlertActive } from "./lib/credit-breaker.js";
+import { isCreditAlertActive, ProviderScoringError } from "./lib/credit-breaker.js";
+import {
+  classifyProviderError,
+  pauseProvider,
+  resumeProvider,
+  isProviderPaused,
+  getAllPausedProviders,
+  buildOperationalStatus,
+  type ProviderPauseState,
+} from "./lib/provider-resilience.js";
 import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
 
 const QUEUE_NAME = "analysis";
@@ -140,6 +149,21 @@ function isRetriableError(error: string): boolean {
     "Job watchdog timeout",
   ];
   return !nonRetriable.some(msg => error.includes(msg));
+}
+
+/**
+ * Detect if an error is a provider quota/auth failure that should trigger a
+ * system-wide pause rather than a per-job retry. Returns the failure class
+ * or null if it's a normal retriable/non-retriable error.
+ */
+function isProviderQuotaError(error: any): boolean {
+  if (error instanceof ProviderScoringError) {
+    return error.failureClass === "quota_exhausted" || error.failureClass === "authentication";
+  }
+  if (typeof error === "string") {
+    return error.includes("quota_exhausted") || error.includes("ProviderScoringError");
+  }
+  return false;
 }
 
 async function reEnqueueForRetry(jobData: AnalysisJobData, attemptNumber: number): Promise<void> {
@@ -435,6 +459,38 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     return result;
   } catch (error: any) {
     console.error("[Worker] Job " + jobId + " threw error (attempt " + currentAttempt + "): " + error.message);
+
+    // PROVIDER QUOTA PAUSE: if the error is a provider quota/auth failure,
+    // do NOT count this as a permanent failure or burn retries. Instead,
+    // persist the failure class, re-enqueue with credit-pause delay, and
+    // let the system-wide pause handle recovery. The job stays in the SAME
+    // batch and will resume when the provider recovers.
+    if (isProviderQuotaError(error)) {
+      const failureClass = (error instanceof ProviderScoringError) ? error.failureClass : "quota_exhausted";
+      console.warn(`[Worker] PROVIDER QUOTA PAUSE for job ${jobId} [${failureClass}] — re-enqueuing for resume (not counting as failure)`);
+      // Record the failure class in job progress_detail for audit
+      await storage.updateJobProgress(jobId, {
+        stage: "provider_paused",
+        failureClass,
+        provider: (error instanceof ProviderScoringError) ? error.provider : "unknown",
+        pausedAt: new Date().toISOString(),
+        message: error.message?.slice(0, 500),
+      });
+      // Reset job back to pending (not failed) so it can be resumed
+      await storage.failJob(jobId, `provider_paused:${failureClass}:${error.message?.slice(0, 200)}`);
+      // Re-enqueue with credit-pause delay for auto-resume
+      const delayMs = parseInt(process.env.CREDIT_PAUSE_REQUEUE_MS || "60000", 10);
+      try {
+        const { getQueue } = await import("./queue.js");
+        const q = getQueue();
+        const jobIdStr = `batch-${batchId}-company-${companyId}-quotapause-${Date.now()}`;
+        await q.add(`analysis-quotapause-${batchId}-${companyId}`, job.data, { delay: delayMs, priority: 1, jobId: jobIdStr });
+      } catch (reqErr: any) {
+        console.error(`[Worker] Quota-pause re-enqueue failed for job ${jobId}: ${reqErr.message}`);
+      }
+      return { success: false, error: `provider_paused:${failureClass}`, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+    }
+
     await storage.failJob(jobId, error.message);
 
     if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(error.message)) {

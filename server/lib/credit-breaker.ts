@@ -237,3 +237,20 @@ export class CreditExhaustedError extends Error {
     this.provider = provider;
   }
 }
+
+/**
+ * Provider-failure-aware scoring error. Thrown when all providers in the
+ * configured fallback chain have failed for a measure. The analyzer MUST NOT
+ * convert this into a zero score — it should propagate so the job can be
+ * paused/retried without emitting a fake result.
+ */
+export class ProviderScoringError extends Error {
+  provider: string;
+  failureClass: string;
+  constructor(provider: string, failureClass: string, message?: string) {
+    super(message || `Provider scoring failed: ${provider} (${failureClass})`);
+    this.name = "ProviderScoringError";
+    this.provider = provider;
+    this.failureClass = failureClass;
+  }
+}

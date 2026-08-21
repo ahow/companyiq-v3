@@ -9,7 +9,18 @@ import {
   raiseCreditAlert,
   clearCreditAlert,
   CreditExhaustedError,
+  ProviderScoringError,
 } from "./credit-breaker.js";
+import {
+  classifyProviderError,
+  shouldPauseScoring,
+  pauseProvider,
+  isProviderPaused,
+  isRetryDue,
+  resumeProvider,
+  getConfiguredFallbackOrder,
+  type ProviderFailureClass,
+} from "./provider-resilience.js";
 
 // ─── Key Collection Helper ───────────────────────────────────────────────────
 
@@ -570,16 +581,19 @@ export async function completeWithFallback(
 export async function completeScoring(
   providerName: string,
   opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
-): Promise<{ text: string; provider: string }> {
+): Promise<{ text: string; provider: string; model: string }> {
   await acquireLlmSlot();
   try {
     const strict = (process.env.SCORING_STRICT_PROVIDER || "true").toLowerCase() !== "false";
     if (!strict) {
-      return await completeWithFallbackInner(providerName, opts);
+      const result = await completeWithFallbackInner(providerName, opts);
+      const p = getProvider(result.provider);
+      return { ...result, model: p?.model || result.provider };
     }
     const primary = getProvider(providerName);
     const retries = parseInt(process.env.SCORING_PROVIDER_RETRIES || "4", 10);
     const errors: string[] = [];
+    let lastFailureClass: ProviderFailureClass = "application_error";
     if (primary?.isAvailable()) {
       // CREDIT BREAKER: if the primary is already tripped for credit exhaustion,
       // do not hammer it with full retries. Allow a single throttled probe per
@@ -596,12 +610,15 @@ export async function completeScoring(
             if (isProviderTripped(primary.name)) {
               resetProvider(primary.name);
               void clearCreditAlert(primary.name);
+              resumeProvider(primary.name, "auto");
               console.warn(`[AI:scoring] Credit breaker CLEARED for ${primary.name} — primary call succeeded`);
             }
-            return { text, provider: primary.name };
+            return { text, provider: primary.name, model: primary.model };
           } catch (error: any) {
-            const isCredit = isCreditExhaustionError(error);
-            const msg = `${primary.name}(try ${attempt + 1}/${effectiveRetries})${isCredit ? " [CREDIT]" : ""}: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
+            const failureClass = classifyProviderError(error);
+            lastFailureClass = failureClass;
+            const isCredit = failureClass === "quota_exhausted";
+            const msg = `${primary.name}(try ${attempt + 1}/${effectiveRetries})[${failureClass}]: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
             errors.push(msg);
             console.warn(`[AI:scoring] ${msg}`);
             if (isCredit) {
@@ -610,6 +627,7 @@ export async function completeScoring(
               // primary immediately.
               const newlyTripped = recordCreditExhaustion(primary.name);
               if (newlyTripped) {
+                pauseProvider(primary.name, "quota_exhausted");
                 void raiseCreditAlert(
                   primary.name,
                   `${primary.name} API credit/quota exhausted (HTTP 402). Scoring paused to avoid wasted calls. Top up the ${primary.name} account to resume.`
@@ -626,24 +644,58 @@ export async function completeScoring(
         }
       } else {
         errors.push(`${primary.name}: credit breaker tripped (probe throttled)`);
+        lastFailureClass = "quota_exhausted";
       }
     } else {
       errors.push(`${providerName}: not available`);
     }
-    // Primary exhausted. Allow ONE controlled cross-family fallback so the run
-    // completes rather than zeroing the measure — but this is logged loudly and
-    // surfaced via the returned provider name for audit.
-    const fallbacks = getFallbackProviders(providerName);
-    for (const fallback of fallbacks) {
+
+    // Configuration-driven fallback: use PROVIDER_FALLBACK_ORDER to determine
+    // which providers to try, in deterministic order.
+    const configuredOrder = getConfiguredFallbackOrder();
+    const trippedSet = new Set<string>();
+    for (const [name] of providers) {
+      if (isProviderTripped(name) || isProviderPaused(name)) trippedSet.add(name);
+    }
+    // Build fallback chain: configured order, excluding primary and tripped
+    const fallbackChain: AIProvider[] = [];
+    for (const name of configuredOrder) {
+      if (name === providerName) continue;
+      if (trippedSet.has(name)) continue;
+      const p = getProvider(name);
+      if (p?.isAvailable()) fallbackChain.push(p);
+    }
+    // Also include any available providers not in configured order (safety net)
+    const fallbacksLegacy = getFallbackProviders(providerName);
+    for (const fb of fallbacksLegacy) {
+      if (!fallbackChain.some(p => p.name === fb.name) && !trippedSet.has(fb.name)) {
+        fallbackChain.push(fb);
+      }
+    }
+
+    for (const fallback of fallbackChain) {
       try {
         const text = await fallback.complete(opts);
         console.warn(`[AI:scoring] PRIMARY ${providerName} EXHAUSTED — graded by fallback ${fallback.name} (auditable variance source)`);
-        return { text, provider: fallback.name };
+        return { text, provider: fallback.name, model: fallback.model };
       } catch (error: any) {
-        errors.push(`${fallback.name}: ${error.message || 'unknown error'}`);
+        const fbClass = classifyProviderError(error);
+        errors.push(`${fallback.name}[${fbClass}]: ${error.message || 'unknown error'}`);
+        lastFailureClass = fbClass;
+        if (fbClass === "quota_exhausted") {
+          recordCreditExhaustion(fallback.name);
+          pauseProvider(fallback.name, "quota_exhausted");
+        }
       }
     }
-    throw new Error(`All scoring providers failed: ${errors.join(' | ')}`);
+
+    // ALL providers failed. If the dominant failure is quota, throw a typed error
+    // so the caller can distinguish provider failure from application error and
+    // NEVER convert it to a zero score.
+    if (lastFailureClass === "quota_exhausted") {
+      throw new ProviderScoringError(providerName, "quota_exhausted", `All scoring providers quota-exhausted: ${errors.join(' | ')}`);
+    }
+    throw new ProviderScoringError(providerName, lastFailureClass, `All scoring providers failed: ${errors.join(' | ')}`);
   } finally {
     releaseLlmSlot();
   }
