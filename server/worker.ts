@@ -770,6 +770,12 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         rankerDiagnostics: diagnostics?.rankerDiagnostics ?? undefined,
         nearDupCollapsedGroups: diagnostics?.nearDupCollapsedGroups ?? undefined,
         capUsed: diagnostics?.capUsed ?? undefined,
+        // Instruction 50 — surface persisted retrieval diagnostics into the
+        // snapshot manifest so gate reports can diagnose zero-scoring
+        // companies without a re-run. Sourced from company.discoveryDiagnostics
+        // (populated by pipeline.ts fetch-phase merge).
+        retrievalDiagnostics: diagnostics?.retrievalDiagnostics ?? undefined,
+        issuerProfileSummary: diagnostics?.issuerProfileSummary ?? undefined,
       };
 
       // Compute coverage-adjusted score: exclude backfilled (not_assessed) measures

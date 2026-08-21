@@ -290,7 +290,57 @@ export async function getFrameworkById(frameworkId: number, workspaceId: number)
     .select()
     .from(schema.frameworks)
     .where(sql`${schema.frameworks.id} = ${frameworkId} AND (${schema.frameworks.workspaceId} = ${workspaceId} OR ${schema.frameworks.isShared} = true)`);
-  return framework || null;
+  if (!framework) return null;
+
+  // Instruction 50 — Root-cause fix (framework-agnostic, data-driven):
+  //
+  // Some frameworks have framework.evidenceKeywords stored as NULL because
+  // topic-specific keywords are held per-measure in framework_measures rather
+  // than at the framework row. Downstream code (HIGH_VALUE_RE fetch
+  // prioritisation in pipeline.ts runFetchPhase; query-expansion; discovery)
+  // reads (framework as any).evidenceKeywords and expects a populated array.
+  // When it is NULL, the fetch-priority regex loses all topic-specific
+  // patterns (only universal filings + document containers remain), causing
+  // systematic under-retrieval on framework-relevant primary sources.
+  //
+  // The single source of truth is framework_measures.evidenceKeywords. This
+  // block back-fills the framework-level view from the measure rows on every
+  // read. No topic, company, or jurisdiction literal is introduced. New
+  // frameworks inherit the same behaviour automatically. Behaviour is
+  // deterministic (measure order + string sort).
+  try {
+    const existingKws = (framework as any).evidenceKeywords as string[] | null | undefined;
+    if (!existingKws || existingKws.length === 0) {
+      const measures = await getFrameworkMeasures(frameworkId);
+      const kwSet = new Set<string>();
+      for (const m of measures) {
+        const mk = (m as any).evidenceKeywords as string[] | null | undefined;
+        if (Array.isArray(mk)) {
+          for (const kw of mk) {
+            if (typeof kw === "string") {
+              const norm = kw.trim().toLowerCase();
+              if (norm.length >= 3) kwSet.add(norm);
+            }
+          }
+        }
+      }
+      if (kwSet.size > 0) {
+        // Sort by discriminativeness: longer multi-word phrases first (they are
+        // more specific and better fetch-priority signals than short numeric or
+        // year tokens like "2030"). Break length ties alphabetically for
+        // determinism. Downstream code (pipeline.ts HIGH_VALUE_RE) truncates to
+        // ~20 patterns via .slice(0, N); this ordering ensures the surviving
+        // 20 are the most informative rather than the alphabetically-earliest.
+        (framework as any).evidenceKeywords = Array.from(kwSet)
+          .sort((a, b) => (b.length - a.length) || a.localeCompare(b));
+      }
+    }
+  } catch (kwErr: any) {
+    // Non-fatal: leave framework.evidenceKeywords as-is if measure lookup fails.
+    console.warn(`[getFrameworkById] evidenceKeywords back-fill failed for framework ${frameworkId}: ${kwErr?.message ?? kwErr}`);
+  }
+
+  return framework;
 }
 
 export async function createFramework(data: schema.InsertFramework) {
