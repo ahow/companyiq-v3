@@ -747,6 +747,12 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         sector: company.sector || undefined,
         country: company.country || undefined,
         totalScore: adjustedScore,
+        // Instruction 46 FU: Persist corpus hash for replay verification
+        corpusHashSha: (() => {
+          const { createHash: ch } = require("crypto");
+          const ids = corpusHash.split(",").filter(Boolean).map(Number).sort((a: number, b: number) => a - b);
+          return ids.length > 0 ? ch("sha256").update(ids.join(",")).digest("hex") : "empty";
+        })(),
         measuresMetCount: metCount,
         measuresTotalCount: assessedCount,
         measuresCoverage: coveragePct,
@@ -770,7 +776,57 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
 
     const expectedCompanyCount = Number((await storage.getBatchRunById(batchId, workspaceId))?.totalJobs || jobsResult.rows.length);
     const snapshotIsComplete = resultsData.length === expectedCompanyCount && jobsResult.rows.length === expectedCompanyCount;
-    const rejectionReason = snapshotIsComplete ? null : `snapshot company coverage ${resultsData.length}/${expectedCompanyCount}`;
+
+    // ── Instruction 46 FU: Strict replay corpus pinning — quarantine on hash divergence ──
+    // When this batch is a corpus replay (sourceBatchId set), verify that every
+    // company's corpus hash matches the source batch BEFORE KPI aggregation.
+    let replayCorpusDivergence: { mismatchCount: number; mismatches: Array<{ companyId: number }> } | null = null;
+    const batchRow = await storage.getBatchRunById(batchId, workspaceId);
+    const isReplayBatch = !!(batchRow as any)?.sourceBatchId;
+    if (isReplayBatch && snapshotIsComplete) {
+      try {
+        const sourceBId = (batchRow as any).sourceBatchId as number;
+        // Load source batch corpus hashes
+        const sourceCorpusRows = await db.execute(sql`
+          SELECT company_id, array_agg(document_id ORDER BY document_id) as doc_ids
+          FROM batch_corpus WHERE batch_id = ${sourceBId}
+          GROUP BY company_id ORDER BY company_id
+        `);
+        const replayCorpusRows = await db.execute(sql`
+          SELECT company_id, array_agg(document_id ORDER BY document_id) as doc_ids
+          FROM batch_corpus WHERE batch_id = ${batchId}
+          GROUP BY company_id ORDER BY company_id
+        `);
+        const sourceMap = new Map<number, string>();
+        for (const r of sourceCorpusRows.rows as any[]) {
+          sourceMap.set(Number(r.company_id), (r.doc_ids || []).join(","));
+        }
+        const mismatches: Array<{ companyId: number }> = [];
+        for (const r of replayCorpusRows.rows as any[]) {
+          const cid = Number(r.company_id);
+          const replayIds = (r.doc_ids || []).join(",");
+          const sourceIds = sourceMap.get(cid) || "";
+          if (replayIds !== sourceIds) {
+            mismatches.push({ companyId: cid });
+          }
+        }
+        if (mismatches.length > 0) {
+          replayCorpusDivergence = { mismatchCount: mismatches.length, mismatches };
+          console.warn(`[Worker] REPLAY CORPUS DIVERGENCE: ${mismatches.length}/${expectedCompanyCount} companies have mismatched corpus hashes (batch ${batchId} vs source ${sourceBId})`);
+        } else {
+          console.log(`[Worker] Replay corpus verification PASSED: ${expectedCompanyCount}/${expectedCompanyCount} corpus hashes match (batch ${batchId} vs source ${sourceBId})`);
+        }
+      } catch (rcErr: any) {
+        console.warn(`[Worker] Replay corpus verification failed (non-fatal): ${rcErr.message}`);
+      }
+    }
+
+    // Quarantine: if replay divergence detected, reject the snapshot
+    const quarantineReason = replayCorpusDivergence
+      ? `corpus-hash-divergence: ${replayCorpusDivergence.mismatchCount}/${expectedCompanyCount} companies diverged`
+      : null;
+    const rejectionReason = quarantineReason
+      || (snapshotIsComplete ? null : `snapshot company coverage ${resultsData.length}/${expectedCompanyCount}`);
     if (resultsData.length === 0 && !reliabilityRun) return;
     // Get list name
     let listName: string | undefined;
@@ -825,11 +881,11 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       companiesCount: resultsData.length,
       averageScore: avgScore,
       shareToken,
-      acceptanceState: reliabilityRun && !snapshotIsComplete ? "rejected" : "pending",
-      rejectionReason,
+      acceptanceState: reliabilityRun && (!snapshotIsComplete || quarantineReason) ? "rejected" : "pending",
+      rejectionReason: rejectionReason || undefined,
     });
 
-    const persistedSnapshotIsComplete = snapshotIsComplete && !!saved && Number((saved as any).companiesCount || 0) === expectedCompanyCount;
+    const persistedSnapshotIsComplete = snapshotIsComplete && !quarantineReason && !!saved && Number((saved as any).companiesCount || 0) === expectedCompanyCount;
     if (reliabilityRun) {
       if (persistedSnapshotIsComplete) {
         await storage.markReliabilityRunAccepted(reliabilityRun.id, batchId, artifactId!, "complete immutable snapshot accepted");
@@ -848,6 +904,9 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       }
     }
 
+    if (quarantineReason) {
+      console.warn(`[Worker] QUARANTINED batch ${batchId}: ${quarantineReason}`);
+    }
     console.log("[Worker] Saved analysis results for batch " + batchId + " (" + resultsData.length + " companies, avg " + avgScore + "%, acceptance=" + (persistedSnapshotIsComplete ? "accepted" : "rejected") + ")");
 
     // ── Reconciliation guarantee ──────────────────────────────────────────

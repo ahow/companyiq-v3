@@ -193,6 +193,53 @@ function expandYearVariants(
     }
   }
 
+  // Disclosure-year variants: FY/CY format for annual filings
+  for (const year of [currentYear, currentYear - 1]) {
+    queries.push({
+      query: `"${primaryName}" annual report FY${year}`,
+      source: "year-variant",
+      priority: -4,
+    });
+  }
+
+  return queries;
+}
+
+// ─── Transliteration Expansion ──────────────────────────────────────────────
+
+/**
+ * Generate transliterated query variants for issuers with local-language names.
+ * Uses the profile's local-language names and supported languages to build
+ * queries that combine transliterated names with framework topic terms.
+ * Framework-agnostic: works for any topic.
+ */
+function expandTransliterations(
+  profile: IssuerProfile,
+  topicPhrases: string[],
+  evidenceKeywords: string[],
+): ExpandedQuery[] {
+  if (profile.localLanguageNames.length === 0 && profile.supportedLanguages.length <= 1) return [];
+  const queries: ExpandedQuery[] = [];
+
+  // Use local-language names with evidence keywords
+  for (const localName of profile.localLanguageNames.slice(0, 2)) {
+    for (const kw of evidenceKeywords.slice(0, 3)) {
+      queries.push({
+        query: `"${localName}" ${kw}`,
+        source: "local-language",
+        priority: -12,
+      });
+    }
+    // Also pair with top topic phrases
+    for (const phrase of topicPhrases.slice(0, 2)) {
+      queries.push({
+        query: `"${localName}" ${phrase}`,
+        source: "local-language",
+        priority: -10,
+      });
+    }
+  }
+
   return queries;
 }
 
@@ -216,6 +263,7 @@ export function expandQueries(opts: {
   const reportTypeQueries = expandFromReportTypes(opts.profile, opts.requiredDocTypes);
   const localLangQueries = expandLocalLanguage(opts.profile, opts.topicPhrases);
   const yearVariantQueries = expandYearVariants(opts.profile, opts.topicPhrases);
+  const translitQueries = expandTransliterations(opts.profile, opts.topicPhrases, opts.evidenceKeywords);
 
   // Combine all, sort by priority, deduplicate, and cap
   const allQueries = [
@@ -223,6 +271,7 @@ export function expandQueries(opts: {
     ...reportTypeQueries,
     ...localLangQueries,
     ...yearVariantQueries,
+    ...translitQueries,
   ];
 
   // Deduplicate by normalized query string

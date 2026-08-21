@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v46-issuer-profile-retrieval";
+export const PIPELINE_VERSION = "v47-replay-pin-fw8-calibrate";
