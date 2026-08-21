@@ -776,6 +776,11 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         // (populated by pipeline.ts fetch-phase merge).
         retrievalDiagnostics: diagnostics?.retrievalDiagnostics ?? undefined,
         issuerProfileSummary: diagnostics?.issuerProfileSummary ?? undefined,
+        // I51-B — per-measure passage-retrieval telemetry (diagnostic-only).
+        // Compact top-3 chunks per measure showing what BM25 selected. Used to
+        // diagnose the retrieval→scoring bridge (e.g. Barclays fw8 = 0 despite
+        // MSS PDFs in corpus).
+        passageRetrievalSummary: diagnostics?.passageRetrievalSummary ?? undefined,
       };
 
       // Compute coverage-adjusted score: exclude backfilled (not_assessed) measures

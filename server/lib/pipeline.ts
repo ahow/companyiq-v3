@@ -1461,6 +1461,35 @@ async function runAnalyzePhase(opts: {
 
   console.log(`[${companyName}] Analysis complete: ${analysis.scorePercentage}% (${measuresMet} met / ${answeredCount} answered; ${abstainedCount} abstained of ${measures.length} total)`);
 
+  // ─── I51-B: PERSIST PASSAGE-RETRIEVAL SUMMARY (diagnostic-only) ─────────────
+  // Compact per-measure telemetry showing what BM25 selected. Written to the
+  // company's discoveryDiagnostics jsonb so it flows into result snapshots via
+  // the existing worker manifest path. No scoring impact.
+  try {
+    const passageSummary = allMeasureResults
+      .filter((m: any) => m.passageDiagnostics)
+      .map((m: any) => ({
+        measureId: m.measureId,
+        verdict: m.verdict,
+        score: m.score,
+        docBreakdown: m.passageDiagnostics.docBreakdown,
+        queryTermCount: m.passageDiagnostics.queryTermCount,
+        topChunks: m.passageDiagnostics.topChunks.slice(0, 3), // top 3 to keep size down
+      }));
+    if (passageSummary.length > 0) {
+      const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+      await storage.updateCompany(companyId, workspaceId, {
+        discoveryDiagnostics: {
+          ...priorDiag,
+          passageRetrievalSummary: passageSummary,
+        } as any,
+      });
+      console.log(`[${companyName}] Persisted passage-retrieval summary for ${passageSummary.length} measures`);
+    }
+  } catch (passageErr: any) {
+    console.warn(`[${companyName}] Failed to persist passage-retrieval summary (non-fatal): ${passageErr.message}`);
+  }
+
   // ─── I45: PERSIST SCORING DIAGNOSTICS ─────────────────────────────────────────
   // Record scoring diagnostics (timeouts, fallbacks, failures) to processing_errors
   // so Gate Report diagnostics can expose them per company.
