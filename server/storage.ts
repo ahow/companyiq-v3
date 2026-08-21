@@ -2431,3 +2431,87 @@ export async function getLatestCompletedBatch(workspaceId: number, frameworkId: 
     .limit(1);
   return batch || null;
 }
+
+
+// ─── Provider Failure Event Persistence ─────────────────────────────────────
+// Durable record of provider failures for auditability and status reporting.
+// Writes to the provider_failure_events table created in db.ts.
+
+export interface ProviderFailureEventInput {
+  provider: string;
+  model: string;
+  failureClass: string;
+  httpStatus: number | null;
+  errorMessage: string;
+  jobId: number | null;
+  batchId: number | null;
+  measureId: string | null;
+}
+
+/**
+ * Persist a provider failure event to the database. Non-fatal: callers should
+ * catch and log errors rather than letting persistence failures block the
+ * worker hot path.
+ */
+export async function recordProviderFailureEvent(event: ProviderFailureEventInput): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO provider_failure_events (provider, model, failure_class, http_status, error_message, job_id, batch_id, measure_id)
+    VALUES (${event.provider}, ${event.model}, ${event.failureClass}, ${event.httpStatus}, ${event.errorMessage}, ${event.jobId}, ${event.batchId}, ${event.measureId})
+  `);
+}
+
+/**
+ * Retrieve recent provider failure events, optionally filtered by provider
+ * and/or batch. Returns newest-first, capped at `limit`.
+ */
+export async function getRecentProviderFailures(opts?: {
+  provider?: string;
+  batchId?: number;
+  limit?: number;
+}): Promise<Array<{
+  id: number;
+  provider: string;
+  model: string;
+  failureClass: string;
+  httpStatus: number | null;
+  errorMessage: string;
+  jobId: number | null;
+  batchId: number | null;
+  measureId: string | null;
+  createdAt: string;
+}>> {
+  const limit = opts?.limit ?? 50;
+  if (opts?.provider && opts?.batchId) {
+    const r = await db.execute(sql`
+      SELECT id, provider, model, failure_class, http_status, error_message, job_id, batch_id, measure_id, created_at
+      FROM provider_failure_events
+      WHERE provider = ${opts.provider} AND batch_id = ${opts.batchId}
+      ORDER BY id DESC LIMIT ${limit}
+    `);
+    return r.rows as any[];
+  }
+  if (opts?.provider) {
+    const r = await db.execute(sql`
+      SELECT id, provider, model, failure_class, http_status, error_message, job_id, batch_id, measure_id, created_at
+      FROM provider_failure_events
+      WHERE provider = ${opts.provider}
+      ORDER BY id DESC LIMIT ${limit}
+    `);
+    return r.rows as any[];
+  }
+  if (opts?.batchId) {
+    const r = await db.execute(sql`
+      SELECT id, provider, model, failure_class, http_status, error_message, job_id, batch_id, measure_id, created_at
+      FROM provider_failure_events
+      WHERE batch_id = ${opts.batchId}
+      ORDER BY id DESC LIMIT ${limit}
+    `);
+    return r.rows as any[];
+  }
+  const r = await db.execute(sql`
+    SELECT id, provider, model, failure_class, http_status, error_message, job_id, batch_id, measure_id, created_at
+    FROM provider_failure_events
+    ORDER BY id DESC LIMIT ${limit}
+  `);
+  return r.rows as any[];
+}

@@ -24,6 +24,7 @@ import {
   isProviderPaused,
   getAllPausedProviders,
   buildOperationalStatus,
+  buildFailureRecord,
   type ProviderPauseState,
 } from "./lib/provider-resilience.js";
 import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
@@ -467,15 +468,30 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     // batch and will resume when the provider recovers.
     if (isProviderQuotaError(error)) {
       const failureClass = (error instanceof ProviderScoringError) ? error.failureClass : "quota_exhausted";
+      const failedProvider = (error instanceof ProviderScoringError) ? error.provider : "unknown";
       console.warn(`[Worker] PROVIDER QUOTA PAUSE for job ${jobId} [${failureClass}] — re-enqueuing for resume (not counting as failure)`);
       // Record the failure class in job progress_detail for audit
       await storage.updateJobProgress(jobId, {
         stage: "provider_paused",
         failureClass,
-        provider: (error instanceof ProviderScoringError) ? error.provider : "unknown",
+        provider: failedProvider,
         pausedAt: new Date().toISOString(),
         message: error.message?.slice(0, 500),
       });
+      // Persist durable failure event for auditability and status reporting
+      try {
+        const record = buildFailureRecord({
+          provider: failedProvider,
+          model: "unknown",
+          error,
+          jobId,
+          batchId,
+          measureId: undefined,
+        });
+        await storage.recordProviderFailureEvent(record);
+      } catch (persistErr: any) {
+        console.warn(`[Worker] Non-fatal: failed to persist provider failure event: ${persistErr.message}`);
+      }
       // Reset job back to pending (not failed) so it can be resumed
       await storage.failJob(jobId, `provider_paused:${failureClass}:${error.message?.slice(0, 200)}`);
       // Re-enqueue with credit-pause delay for auto-resume

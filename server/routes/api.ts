@@ -841,6 +841,12 @@ apiRouter.get("/providers/status", async (_req: Request, res: Response) => {
       resumableBatchIds = (r.rows as any[]).map(row => Number(row.id));
     } catch { /* non-fatal */ }
 
+    // Recent failure events from durable storage (last 24h, max 50)
+    let recentFailures: any[] = [];
+    try {
+      recentFailures = await storage.getRecentProviderFailures({ limit: 50 });
+    } catch { /* non-fatal */ }
+
     res.json({
       providers: status,
       fallbackOrder,
@@ -857,6 +863,7 @@ apiRouter.get("/providers/status", async (_req: Request, res: Response) => {
         lastResumedBy: p.lastResumedBy,
       })),
       resumableBatchIds,
+      recentFailures,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

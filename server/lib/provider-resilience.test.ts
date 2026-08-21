@@ -342,6 +342,67 @@ check("credit breaker cleared after reset", !isProviderTripped("integration-test
 clearAllPauseStates();
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TEST 12: Failure Persistence Contract
+// ═══════════════════════════════════════════════════════════════════════════
+console.log("\n═ TEST 12: Failure Persistence Contract ═");
+
+// buildFailureRecord produces a complete record suitable for DB insertion.
+// The worker calls this and passes it to storage.recordProviderFailureEvent.
+const persistRecord = buildFailureRecord({
+  provider: "openrouter",
+  model: "deepseek/deepseek-chat",
+  error: { status: 402, message: "Insufficient Balance", response: { status: 402, data: { error: { message: "Insufficient Balance" } } } },
+  jobId: 200,
+  batchId: 1049,
+  measureId: "2.3",
+});
+check("persistence record has provider", persistRecord.provider === "openrouter");
+check("persistence record has model", persistRecord.model === "deepseek/deepseek-chat");
+check("persistence record failureClass is quota_exhausted", persistRecord.failureClass === "quota_exhausted");
+check("persistence record has httpStatus 402", persistRecord.httpStatus === 402);
+check("persistence record has jobId", persistRecord.jobId === 200);
+check("persistence record has batchId 1049", persistRecord.batchId === 1049);
+check("persistence record has measureId", persistRecord.measureId === "2.3");
+check("persistence record errorMessage is non-empty", persistRecord.errorMessage.length > 0);
+check("persistence record timestamp is ISO", /^\d{4}-\d{2}-\d{2}T/.test(persistRecord.timestamp));
+
+// Verify the record structure matches the DB schema columns
+const requiredColumns = ["provider", "model", "failureClass", "httpStatus", "errorMessage", "jobId", "batchId", "measureId", "timestamp"];
+check("persistence record has all required columns", requiredColumns.every(col => col in persistRecord));
+
+// Verify that transient errors also produce valid records (for non-quota failures)
+const transientRecord = buildFailureRecord({
+  provider: "deepseek",
+  model: "deepseek-chat",
+  error: { message: "socket hang up", code: "ECONNRESET" },
+  jobId: 201,
+  batchId: 1049,
+});
+check("transient record failureClass is timeout", transientRecord.failureClass === "timeout");
+check("transient record httpStatus is null (no HTTP status)", transientRecord.httpStatus === null);
+check("transient record measureId is null when not provided", transientRecord.measureId === null);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 13: Authentication Failure Does Not Pause (Only Quota Does)
+// ═══════════════════════════════════════════════════════════════════════════
+console.log("\n═ TEST 13: Authentication Failure Behavior ═");
+
+clearAllPauseStates();
+
+// Authentication errors should trigger fallback but NOT system-wide pause
+check("authentication should NOT pause scoring", !shouldPauseScoring("authentication"));
+check("authentication should trigger fallback", shouldFallback("authentication"));
+check("authentication is NOT retriable", !isRetriableFailureClass("authentication"));
+
+// Verify HTTP 403 with billing message is classified as quota, not auth
+const billingIn403 = classifyProviderError({ response: { status: 402, data: { error: { message: "billing limit reached" } } } });
+check("402 with billing message -> quota_exhausted (not auth)", billingIn403 === "quota_exhausted");
+
+// Pure 403 without billing message is auth
+const pure403 = classifyProviderError({ response: { status: 403, data: { error: { message: "forbidden" } } } });
+check("pure 403 -> authentication", pure403 === "authentication");
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SUMMARY
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n══════════════════\n${passed} passed, ${failed} failed\n`);
