@@ -1224,18 +1224,17 @@ async function runAnalyzePhase(opts: {
     temporalContext,
   });
 
-  // ─── 0%-GUARD: Only persist if analysis produced meaningful results ──────
-
-  if (analysis.totalScore === 0 && analysis.categories.every(c => c.measures.every(m => m.confidence === "Low"))) {
-    console.warn(`[${companyName}] 0%-guard triggered: all measures are Low-confidence zeros`);
-    await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
-    await storage.logProcessingError({
-      companyId,
-      companyName,
-      stage: "score",
-      error: "Analysis returned 0% with all Low-confidence verdicts — likely a retrieval failure",
-    });
-    return null;
+  // ─── I49: PRESERVE PRE-ADJUSTMENT CONFIDENCE ────────────────────────────────
+  // Snapshot each measure's original confidence as returned by the LLM scorer,
+  // BEFORE any fetch-outcome or coverage-based diagnostic adjustments. This
+  // allows the redesigned no-results guard to distinguish a valid evidence-backed
+  // zero (measures were evaluated and scored by the LLM) from a genuinely empty
+  // or unscored analysis (all measures defaulted to Low due to scoring failures).
+  const preAdjustmentConfidence = new Map<string, string>();
+  for (const cat of analysis.categories) {
+    for (const m of cat.measures) {
+      preAdjustmentConfidence.set(m.measureId, m.confidence);
+    }
   }
 
   // ─── FETCH-OUTCOME CONFIDENCE ADJUSTMENT ────────────────────────────────
@@ -1271,9 +1270,10 @@ async function runAnalyzePhase(opts: {
           for (const m of cat.measures) {
             // Only downgrade "No" verdicts with High/Medium confidence
             if (m.verdict === "No" && (m.confidence === "High" || m.confidence === "Medium")) {
+              const originalConf = m.confidence;
               m.confidence = "Low";
               m.verdictNuance = (m.verdictNuance || "") +
-                ` [Confidence downgraded: ${deadCount} gate-accepted document(s) failed to fetch (${deadFirstParty.length} first-party). Missing: ${deadTitles.join("; ")}]`;
+                ` [Confidence downgraded from ${originalConf}: ${deadCount} gate-accepted document(s) failed to fetch (${deadFirstParty.length} first-party). Missing: ${deadTitles.join("; ")}]`;
               downgraded++;
             }
           }
@@ -1305,9 +1305,10 @@ async function runAnalyzePhase(opts: {
       for (const cat of analysis.categories) {
         for (const m of cat.measures) {
           if (m.verdict === "No" && (m.confidence === "High" || m.confidence === "Medium")) {
+            const originalConf = m.confidence;
             m.confidence = "Low";
             m.verdictNuance = (m.verdictNuance || "") +
-              ` [Confidence clamped: ${reason}]`;
+              ` [Confidence clamped from ${originalConf}: ${reason}]`;
             cvClamped++;
           }
         }
@@ -1317,6 +1318,54 @@ async function runAnalyzePhase(opts: {
       }
     }
   }
+  // ─── I49: REDESIGNED NO-RESULTS GUARD ──────────────────────────────────────
+  // Distinguishes a genuinely empty/unscored analysis from a valid zero-score
+  // analysis whose measures were evaluated and supported by available evidence.
+  // A fetch diagnostic adjustment must not erase proof that measures were actually
+  // evaluated. The guard rejects ONLY when the analysis is genuinely empty:
+  //   (a) All measures have Low confidence AND
+  //   (b) All measures ALSO had Low confidence BEFORE any fetch/coverage adjustment
+  //       (i.e., the LLM scorer itself never produced a High/Medium verdict)
+  //   (c) No measure has meaningful evidence (coverage !== "none" implies evidence was found)
+  // If any measure had High/Medium confidence pre-adjustment, the analysis was
+  // genuinely evaluated and a zero score is a valid evidence-backed outcome.
+  {
+    const allMeasuresPostLow = analysis.categories.every(c =>
+      c.measures.every(m => m.confidence === "Low")
+    );
+    const allMeasuresPreLow = analysis.categories.every(c =>
+      c.measures.every(m => preAdjustmentConfidence.get(m.measureId) === "Low")
+    );
+    // Evidence-backed: at least one measure had non-"none" coverage or non-empty quotes
+    const hasAnyEvidence = analysis.categories.some(c =>
+      c.measures.some(m => (m.coverage && m.coverage !== "none") || (m.quotes && m.quotes.length > 0))
+    );
+    // Scoring failure detection: check if ALL zero-score measures are scoring failures
+    const allScoringFailures = analysis.categories.every(c =>
+      c.measures.every(m => m.score === 0 && (m as any)._scoringFailure)
+    );
+
+    if (analysis.totalScore === 0 && allMeasuresPostLow && allMeasuresPreLow && !hasAnyEvidence && !allScoringFailures) {
+      // Genuinely empty: LLM never produced a confident verdict and no evidence was found
+      console.warn(`[${companyName}] 0%-guard triggered: genuinely empty analysis (all measures Low pre- and post-adjustment, no evidence)`);
+      await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
+      await storage.logProcessingError({
+        companyId,
+        companyName,
+        stage: "score",
+        error: "Analysis produced no results: all measures Low-confidence with no evidence (genuinely empty, not a valid zero)",
+      });
+      return null;
+    }
+
+    // Log valid-zero detection for observability
+    if (analysis.totalScore === 0 && allMeasuresPostLow && !allMeasuresPreLow) {
+      console.log(`[${companyName}] I49: Valid evidence-backed zero detected — pre-adjustment confidence was non-Low for at least one measure; preserving result`);
+    } else if (analysis.totalScore === 0 && allMeasuresPostLow && hasAnyEvidence) {
+      console.log(`[${companyName}] I49: Valid evidence-backed zero detected — measures have evidence coverage; preserving result`);
+    }
+  }
+
   // ─── Persist Results ──────────────────────────────────────────────────────
   // Framework-scoped clearing: only remove scores for this framework,
   // preserving scores from other frameworks.
@@ -1356,6 +1405,7 @@ async function runAnalyzePhase(opts: {
         // denominator and cross-run drift detection / verdict caching.
         abstained: (m as any).abstained === true,
         evidenceFingerprint: (m as any).evidenceFingerprint ?? null,
+
         // Review fix: methodology stamping — enables cross-batch comparability
         modelId: (m as any)._gradedBy || null,
         promptHash: getPromptHash(settings.scoring_mode || "binary"),
