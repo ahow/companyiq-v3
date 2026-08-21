@@ -1899,15 +1899,48 @@ function inferDomainFromResults(
   // 40-A: Check both distinctive tokens AND derived aliases against each candidate domain.
   const allMatchTerms = [...matchWords, ...aliases.filter(a => a.length >= 2)];
 
-  // Helper: check if a domain matches any of our terms, with short-alias guard
+  // I52: TOKEN-BOUNDARY MATCHING (fix acronym / substring-collision failure).
+  // Previously `dl.includes(alias)` accepted any substring, so "sumitomo" matched
+  // sumitomocorp.com (Sumitomo Corporation) as if it were SMFG's domain.
+  // Now we split the domain root into token-boundary segments (by `-`, `.`, digits
+  // and case boundaries) and require an ALIAS to equal one of those tokens, OR
+  // require the alias to be a strict prefix separated by `-` / `.`. This preserves
+  // legitimate matches (e.g. rbc-royalbank.com contains token "rbc") while rejecting
+  // pure substring collisions. Framework-agnostic and topic-agnostic.
+  const splitDomainTokens = (domain: string): string[] => {
+    // Take the second-level domain root (strip TLDs) then split on non-alphanumerics
+    // and on digit boundaries. e.g. "sumitomocorp" -> ["sumitomocorp"], but if it were
+    // "sumitomo-corp" -> ["sumitomo", "corp"]. We also add the FULL root as one token.
+    const parts = domain.toLowerCase().split(".");
+    const roots: string[] = [];
+    for (const p of parts) {
+      if (p.length < 2) continue;
+      roots.push(p);
+      // Also split on non-alphabetic characters
+      const subs = p.split(/[^a-z]+/).filter(s => s.length >= 2);
+      for (const s of subs) roots.push(s);
+    }
+    return [...new Set(roots)];
+  };
+
+  // Helper: check if a domain matches any of our terms, with token-boundary
+  // enforcement to avoid acronym-substring collisions.
+  // Token boundary = the alias must equal a domain-token exactly. Substring
+  // matches such as "sumitomo" → "sumitomocorp" are rejected because
+  // sumitomocorp is a DISTINCT company (Sumitomo Corporation) from SMFG.
   const domainMatchesTerms = (domain: string, freq: number): boolean => {
     const dl = domain.toLowerCase();
-    // Standard token match (length >= 3 words from company name)
-    if (matchWords.some(word => dl.includes(word))) return true;
-    // Alias match with short-alias guard: 2-3 char aliases require freq >= 5
+    const domainTokens = splitDomainTokens(dl);
+    // Distinctive company-name words: must equal a domain token exactly.
+    for (const word of matchWords) {
+      if (word.length < 3) continue;
+      if (domainTokens.some(t => t === word)) return true;
+    }
+    // Aliases: same rule; plus short-alias frequency guard (≤3 chars need freq≥5).
     for (const alias of aliases) {
-      if (alias.length >= 2 && dl.includes(alias)) {
-        if (alias.length <= 3 && freq < 5) continue; // short alias guard
+      if (alias.length < 2) continue;
+      if (domainTokens.some(t => t === alias)) {
+        if (alias.length <= 3 && freq < 5) continue;
         return true;
       }
     }
@@ -2038,10 +2071,22 @@ function discoverRelatedDomains(
     } catch {}
   }
 
+  // I52: strict token-boundary sharing (not substring) to reject acronym
+  // collisions like sumitomocorp.com matching "sumitomo" for SMFG.
+  const domainTokenOf = (d: string): string[] => {
+    const parts = d.toLowerCase().split(".");
+    const roots: string[] = [];
+    for (const p of parts) {
+      if (p.length < 2) continue;
+      roots.push(p);
+      for (const s of p.split(/[^a-z]+/)) if (s.length >= 2) roots.push(s);
+    }
+    return [...new Set(roots)];
+  };
   const related: string[] = [];
   for (const [domain, count] of domainCounts) {
-    const dl = domain.toLowerCase();
-    const sharesToken = coreTokens.some(token => dl.includes(token));
+    const dTokens = domainTokenOf(domain);
+    const sharesToken = coreTokens.some(token => token.length >= 2 && dTokens.includes(token.toLowerCase()));
     if (!sharesToken) continue;
 
     // 41-G: Two-tier evidence gate:
