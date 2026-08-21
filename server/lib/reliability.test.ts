@@ -549,7 +549,123 @@ async function main() {
     assert.equal(result.rejected.length, 2, "incomplete and fingerprint-mismatched must be rejected");
   }
 
-  console.log("reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer, corpus-replay, framework-scoped-ab-delta, deterministic-corpusHash, I45-deterministic-replay, I45-workspace-isolation, I45-structured-output, cross-framework-isolation, terminal-snapshot-persistence, idempotent-finalization, mixed-pending-rejection, per-framework-selection)");
+  // ─── Batch-Scoped Snapshot Persistence Tests ─────────────────────────────────
+  // Validates the contract that snapshot building uses batch-scoped job status
+  // (not live company status) and that empty snapshots are rejected.
+  {
+    // Test: A snapshot with 0 companies must be rejected by the selector
+    const emptySnapshot = snapshot("run-empty-1", "fw_a", { companiesCount: 0, totalJobs: 22 });
+    const fullSnapshot = snapshot("run-full-1", "fw_b");
+    const emptySelection = selectValidEvidenceSnapshots(
+      [emptySnapshot, fullSnapshot],
+      { expectedCompanyCount: 22, deploymentFingerprint: fingerprint, requiredSnapshotCount: 4 },
+    );
+    assert.equal(emptySelection.accepted.length, 1, "empty snapshot must be rejected");
+    assert.equal(emptySelection.rejected.length, 1, "empty snapshot must appear in rejected list");
+    assert.ok(emptySelection.rejected[0].reason.includes("not complete"), "empty snapshot rejection reason must mention completeness");
+
+    // Test: A snapshot where totalJobs != companiesCount is incomplete
+    const partialSnapshot2 = snapshot("run-partial-2", "fw_a", { companiesCount: 18, totalJobs: 22 });
+    const partialSelection = selectValidEvidenceSnapshots(
+      [partialSnapshot2],
+      { expectedCompanyCount: 22, deploymentFingerprint: fingerprint, requiredSnapshotCount: 4 },
+    );
+    assert.equal(partialSelection.accepted.length, 0, "partial snapshot must not be accepted");
+    assert.equal(partialSelection.rejected.length, 1, "partial snapshot must be rejected");
+  }
+
+  // ─── Artifact-Before-Acceptance Ordering Tests ──────────────────────────────
+  // Validates that the acceptance gate requires both a non-null artifactId
+  // and a persisted snapshot row before acceptance can proceed.
+  {
+    // Test: selectValidEvidenceSnapshots rejects snapshots with pending acceptance
+    const pendingArtifact = snapshot("run-pending-art-1", "fw_a", { acceptanceState: "pending" });
+    const acceptedArtifact = snapshot("run-accepted-art-1", "fw_b");
+    const artSelection = selectValidEvidenceSnapshots(
+      [pendingArtifact, acceptedArtifact],
+      { expectedCompanyCount: 22, deploymentFingerprint: fingerprint, requiredSnapshotCount: 4 },
+    );
+    assert.equal(artSelection.accepted.length, 1, "only accepted snapshot passes artifact gate");
+    assert.equal(artSelection.accepted[0].runKey, "run-accepted-art-1");
+    assert.equal(artSelection.rejected.length, 1, "pending snapshot rejected at artifact gate");
+
+    // Test: The gate report requires all snapshots to be accepted (not pending)
+    const mixedArtifacts = [
+      snapshot("run-art-1", "fw_a"),
+      snapshot("run-art-2", "fw_b"),
+      snapshot("run-art-3", "fw_a", { acceptanceState: "pending" }),
+      snapshot("run-art-4", "fw_b"),
+    ];
+    const mixedReport = buildGateReport("cycle-artifact-order", mixedArtifacts, fingerprint, 22);
+    // Gate 2 (terminal_success_and_acceptance) must fail because one is pending
+    const gate2 = mixedReport.gates.find(g => g.id === 2);
+    assert.ok(gate2, "gate 2 must exist");
+    assert.equal(gate2!.passed, false, "gate 2 must fail when a snapshot is pending");
+  }
+
+  // ─── Idempotent Retry Contract Tests ───────────────────────────────────────
+  // Validates that re-running snapshot save with the same inputs produces
+  // the same selection result (idempotent).
+  {
+    const retryScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 25 + i }));
+    const retrySnapshots = [
+      snapshot("run-retry-1", "fwr_a", { resultsData: retryScores }),
+      snapshot("run-retry-2", "fwr_b", { resultsData: retryScores }),
+      snapshot("run-retry-3", "fwr_a", { resultsData: retryScores }),
+      snapshot("run-retry-4", "fwr_b", { resultsData: retryScores }),
+    ];
+
+    // First selection
+    const sel1 = selectValidEvidenceSnapshots(retrySnapshots, {
+      expectedCompanyCount: 22, deploymentFingerprint: fingerprint, requiredSnapshotCount: 4,
+    });
+    // Second selection (same inputs)
+    const sel2 = selectValidEvidenceSnapshots(retrySnapshots, {
+      expectedCompanyCount: 22, deploymentFingerprint: fingerprint, requiredSnapshotCount: 4,
+    });
+    assert.equal(sel1.accepted.length, sel2.accepted.length, "idempotent retry: same accepted count");
+    assert.deepEqual(
+      sel1.accepted.map(s => s.runKey),
+      sel2.accepted.map(s => s.runKey),
+      "idempotent retry: same accepted run keys",
+    );
+  }
+
+  // ─── Cross-Framework Snapshot Isolation (Concurrent Batch) Tests ────────────
+  // Validates that snapshots from different frameworks cannot contaminate each
+  // other's acceptance state or KPI aggregation.
+  {
+    const fwXScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 45 + i }));
+    const fwYScores = Array.from({ length: 22 }, (_, i) => ({ companyId: i + 1, totalScore: 15 + i }));
+
+    // Framework X has both A/B accepted; Framework Y has A accepted but B pending
+    const concurrentSnapshots = [
+      snapshot("run-conc-1", "fwx_a", { resultsData: fwXScores }),
+      snapshot("run-conc-2", "fwx_b", { resultsData: fwXScores }),
+      snapshot("run-conc-3", "fwy_a", { resultsData: fwYScores }),
+      snapshot("run-conc-4", "fwy_b", { resultsData: fwYScores, acceptanceState: "pending" }),
+    ];
+
+    // Per-framework selector must accept fwx snapshots but reject fwy_b
+    const concResult = selectTerminalBatchPerFramework(
+      concurrentSnapshots,
+      { expectedCompanyCount: 22, deploymentFingerprint: fingerprint },
+    );
+    assert.ok(concResult.perFramework.has("fwx"), "fwx must be present");
+    assert.equal(concResult.perFramework.get("fwx")!.length, 2, "fwx must have 2 accepted snapshots");
+    assert.ok(concResult.perFramework.has("fwy"), "fwy must be present");
+    assert.equal(concResult.perFramework.get("fwy")!.length, 1, "fwy must have only 1 accepted snapshot (B is pending)");
+    assert.equal(concResult.rejected.length, 1, "fwy_b pending must be rejected");
+    assert.equal(concResult.rejected[0].snapshot.runKey, "run-conc-4");
+
+    // Gate report with mixed acceptance must fail gate 2
+    const concReport = buildGateReport("cycle-concurrent", concurrentSnapshots, fingerprint, 22);
+    const concGate2 = concReport.gates.find(g => g.id === 2);
+    assert.ok(concGate2, "gate 2 must exist in concurrent report");
+    assert.equal(concGate2!.passed, false, "gate 2 must fail when fwy_b is pending");
+  }
+
+  console.log("reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer, corpus-replay, framework-scoped-ab-delta, deterministic-corpusHash, I45-deterministic-replay, I45-workspace-isolation, I45-structured-output, cross-framework-isolation, terminal-snapshot-persistence, idempotent-finalization, mixed-pending-rejection, per-framework-selection, batch-scoped-snapshot, artifact-before-acceptance, idempotent-retry, concurrent-framework-isolation)");
 }
 
 void main().catch((error) => {

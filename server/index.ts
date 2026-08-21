@@ -349,9 +349,17 @@ initializeDatabase().then(async () => {
           await storage.markBatchSnapshotSaved(b.id);
           console.log("[Recovery] Snapshot recovered for batch " + b.id);
         } else {
-          console.warn("[Recovery] saveBatchSnapshot returned false for batch " + b.id + " (may already exist or no data)");
-          // Still mark as saved if the snapshot already exists (idempotent)
-          await storage.markBatchSnapshotSaved(b.id);
+          // Check if the snapshot actually exists in analysis_results before marking saved.
+          // Do NOT blindly mark snapshot_saved=TRUE when no row was persisted — that
+          // permanently hides the batch from future recovery attempts.
+          const existingResults = await storage.getAnalysisResults(b.workspace_id);
+          const hasRow = existingResults.some((r: any) => r.batchId === b.id);
+          if (hasRow) {
+            await storage.markBatchSnapshotSaved(b.id);
+            console.log("[Recovery] Batch " + b.id + " already has a snapshot row — marking saved");
+          } else {
+            console.warn("[Recovery] Batch " + b.id + " has NO snapshot row — leaving snapshot_saved=FALSE for future retry");
+          }
         }
       } catch (e: any) {
         console.error("[Recovery] Failed to recover snapshot for batch " + b.id + ": " + e.message);

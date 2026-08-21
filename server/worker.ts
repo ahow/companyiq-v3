@@ -683,10 +683,17 @@ export async function saveBatchSnapshot(
 ): Promise<boolean> {
   try {
     const existing = await storage.getAnalysisResultsMeta(workspaceId);
-    if (existing.some((r: any) => r.batchId === batchId)) return false;
+    if (existing.some((r: any) => r.batchId === batchId)) {
+      // Snapshot already exists — idempotent success
+      return true;
+    }
     await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
     const after = await storage.getAnalysisResultsMeta(workspaceId);
-    return after.some((r: any) => r.batchId === batchId);
+    const saved = after.some((r: any) => r.batchId === batchId);
+    if (!saved) {
+      console.error("[Worker] saveBatchSnapshot: saveAnalysisResultsForBatch completed but no row found for batch " + batchId);
+    }
+    return saved;
   } catch (err: any) {
     console.error("[Worker] saveBatchSnapshot failed for batch " + batchId + ": " + err.message);
     return false;
@@ -717,11 +724,15 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
     const allMeasures = await storage.getFrameworkMeasures(frameworkId);
     const measureCount = allMeasures.length;
 
-    // Get companies from this specific batch's jobs
+    // Get companies from this specific batch's jobs.
+    // CRITICAL: Use the batch's own analysis_jobs status as the source of truth
+    // for which companies completed successfully, NOT the live company.analysisStatus.
+    // The live status can be overwritten by a concurrent batch (e.g. fw3-A resets
+    // companies to 'idle' while fw8-A's snapshot is being built).
     const { db } = await import("./db.js");
     const { sql } = await import("drizzle-orm");
     const jobsResult = await db.execute(sql`
-      SELECT id, company_id, company_name FROM analysis_jobs
+      SELECT id, company_id, company_name, status FROM analysis_jobs
       WHERE batch_id = ${batchId}
       ORDER BY id ASC
     `);
@@ -731,9 +742,11 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
     // Gather results for each company that was successfully analyzed
     const resultsData: any[] = [];
     for (const row of jobsResult.rows as any[]) {
+      // Use batch-scoped job status: only include companies whose job completed
+      // in THIS batch. This is immune to concurrent batch resets.
+      if (String(row.status) !== "completed") continue;
       const company = await storage.getCompanyById(row.company_id, workspaceId);
       if (!company) continue;
-      if (company.analysisStatus !== "completed") continue;
 
       // Framework-scoped score read: only retrieve scores for this framework
       // to prevent cross-framework contamination in the snapshot.
@@ -901,7 +914,15 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       : null;
     const rejectionReason = quarantineReason
       || (snapshotIsComplete ? null : `snapshot company coverage ${resultsData.length}/${expectedCompanyCount}`);
-    if (resultsData.length === 0 && !reliabilityRun) return;
+    if (resultsData.length === 0 && !reliabilityRun) {
+      console.warn(`[Worker] saveAnalysisResultsForBatch: no completed companies found for batch ${batchId} (${jobsResult.rows.length} jobs, 0 with completed status in this batch). Possible cause: concurrent batch reset company status.`);
+      return;
+    }
+    if (resultsData.length === 0 && reliabilityRun) {
+      // For reliability runs, an empty snapshot is a hard failure — do NOT silently skip.
+      // This surfaces the root cause rather than leaving acceptanceState=pending forever.
+      throw new Error(`Snapshot build failed: 0/${expectedCompanyCount} companies have scores for batch ${batchId}. Likely cause: concurrent batch overwrote company analysisStatus or measure_scores were cleared.`);
+    }
     // Get list name
     let listName: string | undefined;
     if (listId) {
@@ -1003,6 +1024,9 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
     }
   } catch (error: any) {
     console.error("[Worker] Failed to save analysis results for batch " + batchId + ": " + error.message);
+    // Rethrow so callers (finalizeBatchAndSave, saveBatchSnapshot, recover-results)
+    // can detect the failure and surface it rather than silently returning saved=false.
+    throw error;
   } finally {
     // Always release the guard so a failed save doesn't permanently block re-saving.
     savingBatches.delete(batchId);
