@@ -1507,6 +1507,45 @@ async function runAnalyzePhase(opts: {
     }
   }
 
+  // ─── I51-A: MASS SCORING-FAILURE DETECTION ────────────────────────────────
+  // Non-negotiable rule from handoff: "Provider failures, timeouts, or fetch
+  // failures must not silently become zero scores." When >THRESHOLD of a
+  // company's answered measures come back with _scoringFailure set, the whole
+  // scoring pass was invalid — mark the company analysisStatus as
+  // "scoring_failure" so downstream metrics can exclude it rather than treat
+  // the mass-zero as substantive. Framework-agnostic and generic.
+  try {
+    const MASS_FAILURE_THRESHOLD = parseFloat(process.env.MASS_SCORING_FAILURE_THRESHOLD || "0.5");
+    const failuresInAnswered = allMeasureResults.filter((r: any) => r._scoringFailure && !r.abstained).length;
+    const answeredForRatio = allMeasureResults.filter((r: any) => !r.abstained).length;
+    const failureRatio = answeredForRatio > 0 ? failuresInAnswered / answeredForRatio : 0;
+    if (failureRatio > MASS_FAILURE_THRESHOLD) {
+      console.error(`[${companyName}] MASS SCORING FAILURE: ${failuresInAnswered}/${answeredForRatio} measures failed (ratio ${(failureRatio*100).toFixed(0)}%) — marking analysisStatus=scoring_failure`);
+      const priorDiagForFail = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+      await storage.updateCompany(companyId, workspaceId, {
+        analysisStatus: "scoring_failure",
+        discoveryDiagnostics: {
+          ...priorDiagForFail,
+          scoringFailureSummary: {
+            failedMeasures: failuresInAnswered,
+            answeredMeasures: answeredForRatio,
+            failureRatio: Math.round(failureRatio * 100) / 100,
+            threshold: MASS_FAILURE_THRESHOLD,
+            detectedAt: new Date().toISOString(),
+          },
+        } as any,
+      });
+      try {
+        await storage.logProcessingError({
+          companyId, companyName, stage: "mass_scoring_failure",
+          error: `${failuresInAnswered}/${answeredForRatio} measures failed (>${(MASS_FAILURE_THRESHOLD*100).toFixed(0)}% threshold). Score is not substantive.`,
+        });
+      } catch { /* non-fatal */ }
+    }
+  } catch (msfErr: any) {
+    console.warn(`[${companyName}] Mass scoring-failure detection error (non-fatal): ${msfErr?.message}`);
+  }
+
   // ─── v3j (Bug 2): RECORD FORCE-INCLUDE INVARIANT VIOLATIONS ─────────────────
   // The analyzer asserts that every filing-bound measure whose required document
   // was present in the corpus received at least one genuine forced body chunk.
