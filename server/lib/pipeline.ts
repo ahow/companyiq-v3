@@ -336,6 +336,28 @@ async function runFetchPhase(opts: {
     const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
     const merged: any = { ...discoveryResult.diagnostics };
     if (priorDiag.autoReexam) merged.autoReexam = priorDiag.autoReexam;
+    // Instruction 50 — Persist retrieval diagnostics into the same jsonb
+    // column so the gate report / snapshot can inspect per-company retrieval
+    // decisions (query counts, domains searched, registry hits, entity
+    // verification, filtering pipeline) without a new schema column. The
+    // RetrievalDiagnostics module has existed since Instruction 46 but its
+    // output was never persisted, so gate-time diagnosis of zero-scoring
+    // companies (Barclays fw8, Mizuho fw3, MUFG fw3) had no data to work
+    // from. This makes future gate reports self-describing.
+    if ((discoveryResult as any).retrievalDiagnostics) {
+      merged.retrievalDiagnostics = (discoveryResult as any).retrievalDiagnostics;
+    }
+    if ((discoveryResult as any).issuerProfile) {
+      // Only summary fields — do not persist the full profile (large).
+      const p: any = (discoveryResult as any).issuerProfile;
+      merged.issuerProfileSummary = {
+        legalName: p.legalName,
+        figiName: p.figiName || null,
+        aliasCount: (p.aliases || []).length,
+        verifiedDomainCount: (p.domainCandidates || []).filter((d: any) => d.status === "verified").length,
+        resolutionPath: (p.resolutionPath || []).slice(-6),
+      };
+    }
     await storage.updateCompany(companyId, workspaceId, {
       discoveryDiagnostics: merged,
     });
