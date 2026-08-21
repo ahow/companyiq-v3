@@ -1182,9 +1182,21 @@ apiRouter.post("/batch/:batchId/recover-results", async (req: Request, res: Resp
     const batch = await storage.getBatchRunById(batchId, workspaceId);
     if (!batch) return res.status(404).json({ error: "Batch not found in this workspace." });
     await finalizeBatchAndSave(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
+    // Look up the snapshot by batchId (the durable upsert ensures batchId is current)
     const saved = await storage.getAnalysisResults(workspaceId);
     const row = saved.find((r: any) => r.batchId === batchId);
-    res.json({ success: true, batchId, saved: !!row, companiesCount: row?.companiesCount ?? null, averageScore: row?.averageScore ?? null });
+    // Also check batch_runs for artifact and acceptance state
+    const batchAfter = await storage.getBatchRunById(batchId, workspaceId);
+    res.json({
+      success: true,
+      batchId,
+      saved: !!row,
+      companiesCount: row?.companiesCount ?? null,
+      averageScore: row?.averageScore ?? null,
+      acceptanceState: batchAfter?.acceptanceState ?? null,
+      artifactId: batchAfter?.artifactId ?? null,
+      snapshotSaved: !!(batchAfter as any)?.snapshotSaved,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -1957,10 +1957,61 @@ export async function saveAnalysisResults(data: {
   acceptanceState?: string;
   acceptedAt?: Date | null;
   rejectionReason?: string | null;
-}) {
+}): Promise<{ id: number; batchId: number; companiesCount: number; acceptanceState: string; [key: string]: any } | null> {
+  // Validate: reject empty/missing snapshot data
+  if (!data.resultsData || (Array.isArray(data.resultsData) && data.resultsData.length === 0)) {
+    console.error(`[saveAnalysisResults] Rejecting empty snapshot for batch ${data.batchId}, runKey ${data.runKey}`);
+    return null;
+  }
+  if (data.companiesCount <= 0) {
+    console.error(`[saveAnalysisResults] Rejecting zero-company snapshot for batch ${data.batchId}, runKey ${data.runKey}`);
+    return null;
+  }
+
   if (data.runKey) {
     const existing = await getAnalysisResultByRunKey(data.runKey, data.workspaceId);
-    if (existing) return existing;
+    if (existing) {
+      // Durable upsert: if the existing row points to a DIFFERENT batch or has
+      // fewer companies (stale/partial from a prior attempt), UPDATE it with the
+      // new complete data. The runKey uniquely identifies the logical run — a newer
+      // batch with the same runKey is a retry of the same logical analysis.
+      // Never downgrade: only update if new data is at least as complete.
+      // Never overwrite an accepted snapshot.
+      const existingBatchMatches = existing.batchId === data.batchId;
+      const existingIsAccepted = existing.acceptanceState === "accepted";
+      const existingIsIncomplete = (existing.companiesCount || 0) < data.companiesCount;
+
+      if (existingIsAccepted && existingBatchMatches) {
+        // True idempotent: same batch, already accepted — return as-is
+        return existing;
+      }
+      if (!existingBatchMatches || existingIsIncomplete) {
+        // Stale or incomplete row from prior batch attempt — update with new data
+        if (existingIsAccepted) {
+          // Edge case: accepted row from a different batch — do not overwrite
+          console.warn(`[saveAnalysisResults] Existing accepted row (batch ${existing.batchId}) differs from new batch ${data.batchId} — skipping update`);
+          return existing;
+        }
+        console.log(`[saveAnalysisResults] Updating stale snapshot: existing batch=${existing.batchId} companies=${existing.companiesCount} -> new batch=${data.batchId} companies=${data.companiesCount}`);
+        const [updated] = await db.update(schema.analysisResults).set({
+          batchId: data.batchId,
+          runId: data.runId ?? null,
+          frameworkId: data.frameworkId,
+          frameworkName: data.frameworkName,
+          listName: data.listName ?? null,
+          resultsData: data.resultsData,
+          companiesCount: data.companiesCount,
+          averageScore: data.averageScore ?? null,
+          deploymentFingerprint: data.deploymentFingerprint ?? null,
+          acceptanceState: data.acceptanceState ?? "pending",
+          acceptedAt: data.acceptedAt ?? null,
+          rejectionReason: data.rejectionReason ?? null,
+        }).where(eq(schema.analysisResults.id, existing.id)).returning();
+        return updated || null;
+      }
+      // Same batch, same or more companies, not accepted — true idempotent
+      return existing;
+    }
   }
   try {
     const [result] = await db.insert(schema.analysisResults).values({
@@ -1976,7 +2027,26 @@ export async function saveAnalysisResults(data: {
     return result;
   } catch (error: any) {
     if (error?.code !== "23505" || !data.runKey) throw error;
-    return getAnalysisResultByRunKey(data.runKey, data.workspaceId);
+    // Race condition: another process inserted first — retry the upsert logic
+    const raced = await getAnalysisResultByRunKey(data.runKey, data.workspaceId);
+    if (raced && raced.batchId !== data.batchId && raced.acceptanceState !== "accepted") {
+      const [updated] = await db.update(schema.analysisResults).set({
+        batchId: data.batchId,
+        runId: data.runId ?? null,
+        frameworkId: data.frameworkId,
+        frameworkName: data.frameworkName,
+        listName: data.listName ?? null,
+        resultsData: data.resultsData,
+        companiesCount: data.companiesCount,
+        averageScore: data.averageScore ?? null,
+        deploymentFingerprint: data.deploymentFingerprint ?? null,
+        acceptanceState: data.acceptanceState ?? "pending",
+        acceptedAt: data.acceptedAt ?? null,
+        rejectionReason: data.rejectionReason ?? null,
+      }).where(eq(schema.analysisResults.id, raced.id)).returning();
+      return updated || null;
+    }
+    return raced;
   }
 }
 

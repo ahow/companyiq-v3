@@ -980,9 +980,43 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       rejectionReason: rejectionReason || undefined,
     });
 
-    const persistedSnapshotIsComplete = snapshotIsComplete && !quarantineReason && !!saved && Number((saved as any).companiesCount || 0) === expectedCompanyCount;
+    // Explicit failure reporting: if saveAnalysisResults returned null, the
+    // snapshot was rejected at the storage layer (empty data or zero companies).
+    if (!saved) {
+      const msg = `saveAnalysisResults returned null for batch ${batchId} (empty/invalid data rejected at storage layer)`;
+      console.error(`[Worker] ${msg}`);
+      if (reliabilityRun && artifactId) {
+        await storage.markReliabilityRunRejected(reliabilityRun.id, batchId, msg, artifactId);
+      }
+      throw new Error(msg);
+    }
+
+    // Verify the persisted snapshot matches expectations: batchId must match
+    // (durable upsert ensures this) and companiesCount must equal expected.
+    const persistedBatchMatches = Number(saved.batchId) === batchId;
+    const persistedCountMatches = Number(saved.companiesCount || 0) === expectedCompanyCount;
+    const persistedSnapshotIsComplete = snapshotIsComplete && !quarantineReason && persistedBatchMatches && persistedCountMatches;
+
+    if (!persistedBatchMatches) {
+      console.error(`[Worker] Snapshot batchId mismatch for batch ${batchId}: persisted batchId=${saved.batchId}`);
+    }
+    if (!persistedCountMatches) {
+      console.error(`[Worker] Snapshot companiesCount mismatch for batch ${batchId}: persisted=${saved.companiesCount} expected=${expectedCompanyCount}`);
+    }
+
     if (reliabilityRun) {
       if (persistedSnapshotIsComplete && artifactId) {
+        // Artifact-before-acceptance ordering: write artifactId to batch_runs
+        // BEFORE attempting acceptance, so the batch_runs row always reflects
+        // the artifact even if acceptance fails partway through.
+        try {
+          const { db: dbLocal } = await import("./db.js");
+          const { sql: sqlLocal } = await import("drizzle-orm");
+          await dbLocal.execute(sqlLocal`UPDATE batch_runs SET artifact_id = ${artifactId} WHERE id = ${batchId}`);
+        } catch (artErr: any) {
+          console.error(`[Worker] Failed to write artifactId to batch_runs for batch ${batchId}: ${artErr.message}`);
+        }
+
         // Durable acceptance: verify the snapshot was actually persisted with a
         // non-null artifactId before flipping acceptance state. markReliabilityRunAccepted
         // also independently verifies the snapshot row exists.
@@ -1004,7 +1038,14 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
           await storage.markReliabilityRunRejected(reliabilityRun.id, batchId, "durable acceptance gate failed: snapshot row missing or artifactId invalid", artifactId);
         }
       } else {
-        await storage.markReliabilityRunRejected(reliabilityRun.id, batchId, rejectionReason || (!artifactId ? "artifactId is null" : "snapshot failed acceptance validation"), artifactId);
+        const failReason = !artifactId
+          ? "artifactId is null"
+          : !persistedBatchMatches
+            ? `snapshot batchId mismatch: persisted=${saved.batchId} expected=${batchId}`
+            : !persistedCountMatches
+              ? `snapshot companiesCount mismatch: persisted=${saved.companiesCount} expected=${expectedCompanyCount}`
+              : rejectionReason || "snapshot failed acceptance validation";
+        await storage.markReliabilityRunRejected(reliabilityRun.id, batchId, failReason, artifactId);
       }
     }
 
