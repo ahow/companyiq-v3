@@ -832,7 +832,7 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
     let listName: string | undefined;
     if (listId) {
       const list = await storage.getListById(listId, workspaceId);
-      listName = list?.name;
+      listName = (list as any)?.name as string | undefined;
     }
     // Fallback: if no listId stored, try to infer from company membership
     if (!listName) {
@@ -1034,12 +1034,10 @@ export function startWorker(workerId?: string): Worker {
     QUEUE_NAME,
     processAnalysisJob,
     {
-      connection,
+      connection: connection as any,
       concurrency: MAX_CONCURRENT,
       lockDuration: JOB_TIMEOUT, // Must match queue lockDuration (10 min)
-      settings: {
-        stalledInterval: JOB_TIMEOUT,
-      },
+      stalledInterval: JOB_TIMEOUT,
     }
   );
 

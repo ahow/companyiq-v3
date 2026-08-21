@@ -68,7 +68,7 @@ function makeProfile(overrides: Partial<IssuerProfile> = {}): IssuerProfile {
     country: "Japan",
     supportedLanguages: ["en", "ja"],
     resolvedAt: "2026-08-21T00:00:00.000Z",
-    pipelineVersion: "v47-replay-pin-fw8-calibrate",
+    pipelineVersion: "v48-replay-corpus-pin-fix",
     ...overrides,
   };
 }

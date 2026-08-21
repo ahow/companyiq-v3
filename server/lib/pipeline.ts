@@ -1100,6 +1100,32 @@ async function runAnalyzePhase(opts: {
     }
     fetchedDocs = snapshotRows.rows as any;
     console.log(`[${companyName}] CORPUS REPLAY from source batch ${replayBatchId} (${fetchedDocs.length} docs)`);
+
+    // REPLAY CORPUS PINNING: Copy the source batch's corpus entries to the replay
+    // batch so the worker's post-batch verification can compare source vs replay
+    // batch_corpus hashes. Without this, the replay batch has no batch_corpus rows
+    // and verification always reports divergence.
+    if (batchId && batchId !== replayBatchId) {
+      try {
+        const existingReplay = await dbImport.execute(sqlImport`
+          SELECT 1 FROM batch_corpus
+          WHERE batch_id = ${batchId} AND company_id = ${companyId}
+          LIMIT 1
+        `);
+        if (existingReplay.rows.length === 0) {
+          await dbImport.execute(sqlImport`
+            INSERT INTO batch_corpus (batch_id, company_id, document_id)
+            SELECT ${batchId}, company_id, document_id
+            FROM batch_corpus
+            WHERE batch_id = ${replayBatchId} AND company_id = ${companyId}
+            ON CONFLICT DO NOTHING
+          `);
+          console.log(`[${companyName}] REPLAY CORPUS PIN: copied ${fetchedDocs.length} doc IDs from source batch ${replayBatchId} to replay batch ${batchId}`);
+        }
+      } catch (copyErr: any) {
+        console.warn(`[${companyName}] Replay corpus copy failed (non-fatal): ${copyErr.message}`);
+      }
+    }
   } else if (batchId) {
     try {
       const { db: dbImport } = await import("../db.js");

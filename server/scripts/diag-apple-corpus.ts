@@ -35,7 +35,7 @@ const strongProxyRe = /stockholder proposal|say-on-pay|notice of (the )?annual m
   docChunks.forEach((c: any, i: number) => {
     if (!isItem1aBody(c)) return;
     if (!isAnnualFiling(c.docUrl || "", c.docTitle || "")) return;
-    const e = byDoc.get(c.docIndex) || { idxs: [], url: c.docUrl || "", title: c.docTitle || "" };
+    const e = byDoc.get(c.docIndex) || { idxs: [] as number[], url: c.docUrl || "", title: c.docTitle || "" };
     e.idxs.push(i); byDoc.set(c.docIndex, e);
   });
   const cands = [...byDoc.entries()].map(([di, e]) => {
