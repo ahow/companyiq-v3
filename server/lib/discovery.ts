@@ -2779,11 +2779,50 @@ async function searchCompanyDocumentsInner(opts: {
   // 42-A + 41-B: Use cached family if available, fresh, AND same pipeline version.
   // Distinguish null (never resolved) from [] (resolved, legitimately empty).
   // NOTE: Drizzle returns camelCase properties (figiName, relatedDomains, etc.)
-  const cachedDomain = companyDomain ? normaliseToRegistrableDomain(companyDomain) : null;
+  // I53: cachedDomain is `let` (not `const`) so a boundary-verification failure
+  // can clear it and force re-resolution downstream.
+  let cachedDomain = companyDomain ? normaliseToRegistrableDomain(companyDomain) : null;
   const cachedRelated = companyRow.relatedDomains as string[] | null; // null = not yet resolved
   const cachedRdVersion = companyRow.relatedDomainsPipelineVersion as string | null;
   const figiResolvedAt = companyRow.figiResolvedAt ? new Date(companyRow.figiResolvedAt) : null;
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  // I53: Verify cachedDomain against the token-boundary rule using aliases derived
+  // from figiName. This fixes the case where a pre-I52 pipeline persisted a
+  // substring-collision domain (e.g. sumitomocorp.com for SMFG, moomoo.com for CCB,
+  // ssga.com for CBA) into companies.domain: today's stricter boundary check would
+  // reject that domain on write, so we also reject it on read to force fresh
+  // inference. When rejected, we clear both companies.domain and the related-
+  // domains cache so the pipeline can start clean.
+  if (cachedDomain) {
+    const nameForVerify = (companyRow.figiName as string | null) || companyName;
+    const aliasesForVerify = deriveAliases(nameForVerify, (companyRow.figiTicker as string | null | undefined) ?? null);
+    const cachedDomainTokens = (() => {
+      const parts = cachedDomain.toLowerCase().split(".");
+      const roots: string[] = [];
+      for (const p of parts) {
+        if (p.length < 2) continue;
+        roots.push(p);
+        for (const s of p.split(/[^a-z]+/)) if (s.length >= 2) roots.push(s);
+      }
+      return [...new Set(roots)];
+    })();
+    const distinctiveNameTokens = nameForVerify.toLowerCase().split(/[\s&,.']+/).filter((w) => w.length >= 3);
+    const cachedPassesBoundary =
+      aliasesForVerify.some((a) => a.length >= 4 && cachedDomainTokens.includes(a.toLowerCase())) ||
+      distinctiveNameTokens.some((w) => w.length >= 4 && cachedDomainTokens.includes(w));
+    if (!cachedPassesBoundary) {
+      console.warn(`[${companyName}] I53: cached domain '${cachedDomain}' fails boundary check against aliases [${aliasesForVerify.join(",")}] and name '${nameForVerify}' — clearing and re-inferring`);
+      if (companyRow.id) {
+        try {
+          await db.execute(sql`UPDATE companies SET domain = NULL, related_domains = NULL, related_domains_pipeline_version = NULL WHERE id = ${companyRow.id}`);
+        } catch (clrErr: any) {
+          console.warn(`[${companyName}] I53: failed to clear stale domain cache: ${clrErr?.message}`);
+        }
+      }
+      cachedDomain = null;
+    }
+  }
 
   // 42-A: Cache HIT requires: domain set AND relatedDomains not null AND version match AND wall-clock fresh.
   if (
@@ -2822,7 +2861,9 @@ async function searchCompanyDocumentsInner(opts: {
     const nameForAliases = figiName || companyName;
     const aliases = deriveAliases(nameForAliases, figiTicker);
 
-    // 39-A + 40-A: normalise stored domain, then try inference with aliases
+    // 39-A + 40-A: normalise stored domain, then try inference with aliases.
+    // I53: cachedDomain was verified against boundary rule at the outer block; if
+    // it survived, use it here. Otherwise re-infer from candidates.
     effectiveDomain = cachedDomain || null;
     if (!effectiveDomain) {
       effectiveDomain = inferDomainFromResults(allCandidates, companyName, aliases);
