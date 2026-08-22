@@ -16,8 +16,9 @@
 
 import axios from "axios";
 
-const FMP_BASE_STABLE = "https://financialmodelingprep.com/api/v3";
-const FMP_BASE_LATEST = "https://financialmodelingprep.com/stable"; // profile-symbol lives on /stable
+// /stable/ is the current-tier endpoint set. /api/v3 is legacy and returns
+// 'Legacy Endpoint' errors for accounts subscribed after August 31, 2025.
+const FMP_BASE = "https://financialmodelingprep.com/stable";
 
 /** Retrieved corporate profile fields. Any field may be null when FMP has no data. */
 export interface FmpProfile {
@@ -99,13 +100,13 @@ export async function resolveViaFmp(isin: string): Promise<FmpProfile | null> {
   if (!isin || !isin.trim()) return null;
 
   // Step 1: search-ISIN — map ISIN to one or more listing symbols
-  const searchResp = await fmpGet(`${FMP_BASE_STABLE}/search-isin`, { isin: isin.trim().toUpperCase() });
+  const searchResp = await fmpGet(`${FMP_BASE}/search-isin`, { isin: isin.trim().toUpperCase() });
   const matches = Array.isArray(searchResp) ? searchResp : [];
   const primarySymbol = pickPrimaryFmpMatch(matches);
   if (!primarySymbol) return null;
 
-  // Step 2: profile-symbol — full company profile including website
-  const profileResp = await fmpGet(`${FMP_BASE_STABLE}/profile/${encodeURIComponent(primarySymbol)}`, {});
+  // Step 2: profile — full company profile including website (accepts ?symbol=)
+  const profileResp = await fmpGet(`${FMP_BASE}/profile`, { symbol: primarySymbol });
   const arr = Array.isArray(profileResp) ? profileResp : [];
   if (arr.length === 0) return null;
   const p = arr[0] || {};
