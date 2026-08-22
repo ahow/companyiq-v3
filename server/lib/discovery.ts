@@ -1989,7 +1989,8 @@ function inferDomainFromResults(
  */
 async function discoverPrimaryDomainViaExplicitQuery(
   issuerName: string,
-  companyName: string
+  companyName: string,
+  aliases: string[] = [],
 ): Promise<string | null> {
   const query = `"${issuerName}" official website OR investor relations OR sustainability`;
   try {
@@ -2000,6 +2001,12 @@ async function discoverPrimaryDomainViaExplicitQuery(
       "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
       "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
       "google.com", "amazon.com", "reddit.com", "medium.com",
+      // I53-B: also exclude common SERP-noise domains for explicit-query lane.
+      "nasdaq.com", "marketwatch.com", "finance.yahoo.com", "yahoo.com",
+      "moomoo.com", "seekingalpha.com", "stockanalysis.com", "tipranks.com",
+      "ssga.com", "ishares.com", "blackrock.com", "vanguard.com",
+      "morningstar.com", "fool.com", "investing.com", "stocktwits.com",
+      "finbox.com", "simplywall.st", "gurufocus.com", "zacks.com",
     ]);
 
     const rootCounts = new Map<string, number>();
@@ -2014,10 +2021,36 @@ async function discoverPrimaryDomainViaExplicitQuery(
 
     if (rootCounts.size === 0) return null;
 
+    // I53-B: BOUNDARY CHECK. Require the winning domain to contain a domain-
+    // token equal to a distinctive issuer-name word or alias. Rejects
+    // substring-collision SERP wins like ssga.com for CBA or nasdaq.com for SMFG.
+    const nameTokens = issuerName.toLowerCase().split(/[\s&,.']+/).filter((w) => w.length >= 4);
+    const domainTokensOf = (d: string): string[] => {
+      const parts = d.toLowerCase().split(".");
+      const out: string[] = [];
+      for (const p of parts) {
+        if (p.length < 2) continue;
+        out.push(p);
+        for (const s of p.split(/[^a-z]+/)) if (s.length >= 2) out.push(s);
+      }
+      return [...new Set(out)];
+    };
+    const passesBoundary = (candidate: string): boolean => {
+      const dt = domainTokensOf(candidate);
+      if (nameTokens.some((w) => dt.includes(w))) return true;
+      if (aliases.some((a) => a.length >= 4 && dt.includes(a.toLowerCase()))) return true;
+      return false;
+    };
+
     const sorted = [...rootCounts.entries()].sort((a, b) => b[1] - a[1]);
-    const winner = sorted[0][0];
-    console.log(`[${companyName}] 40-C explicit query resolved domain: ${winner}`);
-    return winner;
+    for (const [candidate, hits] of sorted) {
+      if (passesBoundary(candidate)) {
+        console.log(`[${companyName}] 40-C explicit query resolved domain: ${candidate} (boundary-verified, ${hits} hits)`);
+        return candidate;
+      }
+    }
+    console.warn(`[${companyName}] 40-C explicit query returned only non-issuer-domain candidates: [${sorted.map(([d,c]) => d+':'+c).join(', ')}] — rejecting all`);
+    return null;
   } catch (err: any) {
     console.warn(`[${companyName}] 40-C explicit query failed: ${err.message}`);
     return null;
@@ -2876,7 +2909,7 @@ async function searchCompanyDocumentsInner(opts: {
     // 40-C: If still unresolved, try explicit corporate-domain query
     if (!effectiveDomain) {
       const issuerName = figiName || companyName;
-      effectiveDomain = await discoverPrimaryDomainViaExplicitQuery(issuerName, companyName);
+      effectiveDomain = await discoverPrimaryDomainViaExplicitQuery(issuerName, companyName, aliases);
     }
 
     // 40-D: Discover related domains (evidence-gated)
