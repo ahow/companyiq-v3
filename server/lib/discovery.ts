@@ -1981,6 +1981,100 @@ function inferDomainFromResults(
  * When 40-A and 40-B both fail, issue one Serper query to find the company's
  * official website via real-index anchoring.
  */
+/**
+ * I56: Annual-report Serper lane.
+ *
+ * Runs one Serper query: `"<companyName>" annual report`
+ * The top organic results almost always come from the company's own corporate
+ * site (or a well-known IR platform). We compute a frequency map of root
+ * domains across the top 10 hits and pick the most-frequent one — tie-broken
+ * by rank if freq is tied. This resolves acronym/brand cases without needing
+ * an authoritative external mapping.
+ *
+ * TOPIC-agnostic: 'annual report' is a generic disclosure term used by every
+ * public issuer. No framework/company/jurisdiction literals.
+ *
+ * Returns null when no candidate passes a discriminative-token OR
+ * frequency-dominance gate.
+ */
+async function discoverPrimaryDomainViaAnnualReportSearch(
+  issuerName: string,
+  companyName: string,
+  aliases: string[] = [],
+): Promise<string | null> {
+  const query = `"${issuerName}" annual report`;
+  let results;
+  try {
+    results = await webSearch(query, { num: 10 });
+  } catch (err: any) {
+    console.warn(`[${companyName}] 40-Y annual-report search failed: ${err.message}`);
+    return null;
+  }
+  if (!results || results.length === 0) return null;
+
+  // Same shared/aggregator/exchange deny-list as elsewhere.
+  const excluded = new Set([
+    "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
+    "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
+    "bbc.com", "theguardian.com", "nytimes.com", "wsj.com", "medium.com",
+    "google.com", "amazon.com", "github.com", "reddit.com", "quora.com",
+    "sustainabilityreports.com", "annualreports.com", "relayto.com",
+    "nasdaq.com", "marketwatch.com", "finance.yahoo.com", "yahoo.com",
+    "moomoo.com", "seekingalpha.com", "stockanalysis.com", "tipranks.com",
+    "ssga.com", "ishares.com", "blackrock.com", "vanguard.com",
+    "morningstar.com", "fool.com", "investing.com", "stocktwits.com",
+    "sec.gov", "companieshouse.gov.uk", "canada.ca", "gov.uk", "gov.au",
+  ]);
+
+  // Score each host: freq*10 - firstRank (earlier rank wins ties).
+  const scores = new Map<string, { freq: number; firstRank: number }>();
+  results.forEach((r, idx) => {
+    try {
+      const u = new URL(r.link);
+      const root = normaliseToRegistrableDomain(u.hostname);
+      if (excluded.has(root)) return;
+      if (isSharedHost(root)) return;
+      if (root.endsWith(".gov") || root.endsWith(".edu")) return;
+      const s = scores.get(root) || { freq: 0, firstRank: idx };
+      s.freq += 1;
+      if (idx < s.firstRank) s.firstRank = idx;
+      scores.set(root, s);
+    } catch { /* skip malformed URL */ }
+  });
+
+  if (scores.size === 0) return null;
+
+  // Sort: highest freq, then earliest rank.
+  const sorted = [...scores.entries()].sort((a, b) => {
+    if (b[1].freq !== a[1].freq) return b[1].freq - a[1].freq;
+    return a[1].firstRank - b[1].firstRank;
+  });
+
+  // Same combined-signal gate as the FMP lane: accept when EITHER (a) the
+  // domain contains an alias/name-token boundary (discriminative rule) OR
+  // (b) the top candidate has ≥3 hits (strong search-frequency evidence).
+  const nameTokens = issuerName.toLowerCase().split(/[\s&,.']+/).filter((w: string) => w.length >= 3);
+  for (const [candidate, s] of sorted) {
+    const check = domainMatchesIssuerDistinctively(candidate, aliases, nameTokens);
+    if (check.ok) {
+      console.log(`[${companyName}] 40-Y annual-report resolved domain: ${candidate} (matched-on ${check.matchedOn}, freq=${s.freq}, firstRank=${s.firstRank})`);
+      return candidate;
+    }
+  }
+  // Frequency-dominance fallback: if the top candidate has ≥3 hits AND is
+  // >=2x the runner-up, accept even without token match (catches brand-name
+  // domains like commbank.com.au for CBA).
+  if (sorted.length > 0 && sorted[0][1].freq >= 3) {
+    const runnerUp = sorted.length > 1 ? sorted[1][1].freq : 0;
+    if (sorted[0][1].freq >= 2 * Math.max(runnerUp, 1)) {
+      console.log(`[${companyName}] 40-Y annual-report resolved by frequency dominance: ${sorted[0][0]} (freq=${sorted[0][1].freq}, runner-up=${runnerUp})`);
+      return sorted[0][0];
+    }
+  }
+  console.warn(`[${companyName}] 40-Y annual-report: no candidate passed gate. Top: [${sorted.slice(0,5).map(([d,s])=>`${d}(${s.freq})`).join(', ')}]`);
+  return null;
+}
+
 // I54: DOMAIN-TOKEN DENY LIST for boundary matching.
 // A domain-token equality that matches ONLY these generic words is NOT
 // discriminative enough to prove the domain belongs to the issuer. For
@@ -2916,6 +3010,24 @@ async function searchCompanyDocumentsInner(opts: {
     const nameForAliases = figiName || companyName;
     const aliases = deriveAliases(nameForAliases, figiTicker);
 
+    // I56 / 40-Y: Annual-report Serper lane. Runs a single query
+    // `"<companyName>" annual report` and picks the top-frequency root
+    // domain across the top 10 organic hits. This is our HIGHEST-priority
+    // domain signal because Serper indexes the real corporate web,
+    // catching cases where FMP's website field is wrong or where the
+    // brand-name domain isn't derivable from the legal name.
+    // Framework-agnostic and topic-agnostic.
+    let annualReportDomain: string | null = null;
+    try {
+      annualReportDomain = await discoverPrimaryDomainViaAnnualReportSearch(
+        figiName || companyName,
+        companyName,
+        aliases,
+      );
+    } catch (arErr: any) {
+      console.warn(`[${companyName}] 40-Y annual-report lane failed (non-fatal): ${arErr?.message}`);
+    }
+
     // I55 / 40-Z: Authoritative FMP lookup by ISIN. When FMP returns a
     // corporate website, treat it as the primary domain and skip 40-A/B/C.
     // FMP publishes the canonical corporate website per regulatory ISIN
@@ -3008,11 +3120,16 @@ async function searchCompanyDocumentsInner(opts: {
     }
 
     // 39-A + 40-A: normalise stored domain, then try inference with aliases.
-    // I53: cachedDomain was verified against boundary rule at the outer block; if
-    // it survived, use it here. Otherwise re-infer from candidates.
-    // I55: FMP-resolved domain takes precedence over both cachedDomain and
-    // downstream inference — it's the strongest authoritative signal.
-    effectiveDomain = fmpResolvedDomain || cachedDomain || null;
+    // I56 / I55 domain-priority order:
+    //   1) 40-Y annualReportDomain (Serper search real-index evidence)
+    //   2) 40-Z fmpResolvedDomain (FMP authoritative ISIN→website)
+    //   3) cachedDomain (already verified via I53 boundary check)
+    //   4) 40-A/B inferDomainFromResults (Lane 1 candidate scan)
+    //   5) 40-C discoverPrimaryDomainViaExplicitQuery (secondary Serper query)
+    // Real-index Serper evidence trumps FMP because Serper catches FMP's
+    // occasional wrong-website mappings (e.g. HDFC->hdfc.bank.in when the
+    // corporate site is actually hdfcbank.com).
+    effectiveDomain = annualReportDomain || fmpResolvedDomain || cachedDomain || null;
     if (!effectiveDomain) {
       effectiveDomain = inferDomainFromResults(allCandidates, companyName, aliases);
       if (effectiveDomain) {
