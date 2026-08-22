@@ -15,6 +15,7 @@ import {
 } from "./ranking.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 import { deriveAliases, resolveCompanyFIGI } from "./issuer-resolver.js";
+import { resolveViaFmp, fmpWebsiteToDomain } from "./fmp-resolver.js";
 import { PIPELINE_VERSION } from "./pipeline-version.js";
 import { resolveIssuerProfile, scoreEntityMatch, type IssuerProfile } from "./issuer-profile.js";
 import { expandQueries, type QueryExpansionResult } from "./query-expansion.js";
@@ -2915,10 +2916,83 @@ async function searchCompanyDocumentsInner(opts: {
     const nameForAliases = figiName || companyName;
     const aliases = deriveAliases(nameForAliases, figiTicker);
 
+    // I55 / 40-Z: Authoritative FMP lookup by ISIN. When FMP returns a
+    // corporate website that passes the discriminative-token boundary
+    // check, treat it as the primary domain and skip 40-A/B/C. This fixes
+    // acronym-collision cases (SMFG->smfg.co.jp, MUFG->mufg.jp,
+    // CCB->ccb.com, HDFC->hdfcbank.com) that boundary-check alone
+    // cannot resolve because unrelated corporates share distinctive tokens.
+    // Framework-agnostic and topic-agnostic: same call flow for every issuer.
+    let fmpResolvedDomain: string | null = null;
+    if (companyRow.isin && (companyRow.fmpPipelineVersion !== PIPELINE_VERSION || !companyRow.fmpResolvedAt)) {
+      try {
+        const fmpProfile = await resolveViaFmp(companyRow.isin);
+        if (fmpProfile) {
+          const fmpDomainCandidate = fmpWebsiteToDomain(fmpProfile.website);
+          const normalisedFmpDomain = fmpDomainCandidate ? normaliseToRegistrableDomain(fmpDomainCandidate) : null;
+          // Sanity gate: even FMP data must pass the discriminative-token
+          // boundary check against the derived aliases to avoid an obviously
+          // wrong website field from contaminating discovery.
+          const nameTokens = nameForAliases.toLowerCase().split(/[\s&,.']+/).filter((w: string) => w.length >= 3);
+          const gate = normalisedFmpDomain
+            ? domainMatchesIssuerDistinctively(normalisedFmpDomain, aliases, nameTokens)
+            : { ok: false, matchedOn: null };
+          if (normalisedFmpDomain && gate.ok) {
+            fmpResolvedDomain = normalisedFmpDomain;
+            console.log(`[${companyName}] 40-Z: FMP resolved website=${fmpProfile.website} → domain=${normalisedFmpDomain} (matched-on ${gate.matchedOn}, symbol=${fmpProfile.symbol})`);
+          } else if (normalisedFmpDomain) {
+            console.warn(`[${companyName}] 40-Z: FMP website ${normalisedFmpDomain} did not pass boundary check (aliases=[${aliases.slice(0,5).join(",")}]) — ignoring`);
+          }
+          // Persist ALL FMP fields regardless of website-gate outcome so
+          // downstream registry / disambiguation code can use them.
+          if (companyRow.id) {
+            try {
+              await db.execute(sql`
+                UPDATE companies SET
+                  fmp_symbol = ${fmpProfile.symbol},
+                  fmp_company_name = ${fmpProfile.companyName},
+                  fmp_website = ${fmpProfile.website},
+                  fmp_description = ${fmpProfile.description},
+                  fmp_country = ${fmpProfile.country},
+                  fmp_industry = ${fmpProfile.industry},
+                  fmp_sector = ${fmpProfile.sector},
+                  fmp_resolved_at = NOW(),
+                  fmp_pipeline_version = ${PIPELINE_VERSION}
+                WHERE id = ${companyRow.id}
+              `);
+            } catch (persistErr: any) {
+              console.warn(`[${companyName}] 40-Z: failed to persist FMP fields: ${persistErr?.message}`);
+            }
+          }
+        } else {
+          console.log(`[${companyName}] 40-Z: FMP returned no match for ISIN ${companyRow.isin}`);
+        }
+      } catch (fmpErr: any) {
+        // Never fatal: fall through to existing 40-A/B/C ladder.
+        console.warn(`[${companyName}] 40-Z: FMP lookup failed (non-fatal): ${fmpErr?.message}`);
+      }
+    } else if (companyRow.isin) {
+      // Cache-hit path: reuse persisted FMP website if it still passes today's
+      // boundary check.
+      const cachedFmpWebsite = (companyRow as any).fmpWebsite as string | null | undefined;
+      const cachedFmpDomain = cachedFmpWebsite ? fmpWebsiteToDomain(cachedFmpWebsite) : null;
+      if (cachedFmpDomain) {
+        const normalisedFmpDomain = normaliseToRegistrableDomain(cachedFmpDomain);
+        const nameTokens = nameForAliases.toLowerCase().split(/[\s&,.']+/).filter((w: string) => w.length >= 3);
+        const gate = domainMatchesIssuerDistinctively(normalisedFmpDomain, aliases, nameTokens);
+        if (gate.ok) {
+          fmpResolvedDomain = normalisedFmpDomain;
+          console.log(`[${companyName}] 40-Z (cache-hit): reusing FMP domain ${normalisedFmpDomain}`);
+        }
+      }
+    }
+
     // 39-A + 40-A: normalise stored domain, then try inference with aliases.
     // I53: cachedDomain was verified against boundary rule at the outer block; if
     // it survived, use it here. Otherwise re-infer from candidates.
-    effectiveDomain = cachedDomain || null;
+    // I55: FMP-resolved domain takes precedence over both cachedDomain and
+    // downstream inference — it's the strongest authoritative signal.
+    effectiveDomain = fmpResolvedDomain || cachedDomain || null;
     if (!effectiveDomain) {
       effectiveDomain = inferDomainFromResults(allCandidates, companyName, aliases);
       if (effectiveDomain) {

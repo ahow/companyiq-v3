@@ -646,6 +646,18 @@ export async function initializeDatabase(): Promise<void> {
     // 42-A: Pipeline version for related domains cache
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains_pipeline_version TEXT`);
 
+    // I55: FMP-based authoritative issuer profile (website + rich metadata).
+    // Nullable — present only when FMP has a match for the company's ISIN.
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_symbol TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_company_name TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_website TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_description TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_country TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_industry TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_sector TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_resolved_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS fmp_pipeline_version TEXT`);
+
     // 42-G: Explicitly null out pipeline version on existing rows so the new
     // cache-check treats them as needing re-derivation. Idempotent.
     await db.execute(sql`

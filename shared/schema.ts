@@ -49,6 +49,16 @@ export const companies = pgTable("companies", {
   relatedDomains: jsonb("related_domains").$type<string[]>(),
   relatedDomainsManual: jsonb("related_domains_manual").$type<string[]>(),
   relatedDomainsPipelineVersion: text("related_domains_pipeline_version"), // 42-A
+  // I55: FMP authoritative issuer cache (website + rich metadata)
+  fmpSymbol: text("fmp_symbol"),
+  fmpCompanyName: text("fmp_company_name"),
+  fmpWebsite: text("fmp_website"),
+  fmpDescription: text("fmp_description"),
+  fmpCountry: text("fmp_country"),
+  fmpIndustry: text("fmp_industry"),
+  fmpSector: text("fmp_sector"),
+  fmpResolvedAt: timestamp("fmp_resolved_at"),
+  fmpPipelineVersion: text("fmp_pipeline_version"),
   analysisStatus: text("analysis_status").notNull().default("idle"), // idle | fetching | fetched | analyzing | completed | failed
   totalScore: real("total_score"),
   measuresMetCount: integer("measures_met_count"),
