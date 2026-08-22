@@ -2917,12 +2917,20 @@ async function searchCompanyDocumentsInner(opts: {
     const aliases = deriveAliases(nameForAliases, figiTicker);
 
     // I55 / 40-Z: Authoritative FMP lookup by ISIN. When FMP returns a
-    // corporate website that passes the discriminative-token boundary
-    // check, treat it as the primary domain and skip 40-A/B/C. This fixes
-    // acronym-collision cases (SMFG->smfg.co.jp, MUFG->mufg.jp,
-    // CCB->ccb.com, HDFC->hdfcbank.com) that boundary-check alone
-    // cannot resolve because unrelated corporates share distinctive tokens.
+    // corporate website, treat it as the primary domain and skip 40-A/B/C.
+    // FMP publishes the canonical corporate website per regulatory ISIN
+    // mapping (SMFG->smfg.co.jp, MUFG->mufg.jp, CCB->ccb.com,
+    // CBA->commbank.com.au, BNS->scotiabank.com, HDFC->hdfc.bank.in).
     // Framework-agnostic and topic-agnostic: same call flow for every issuer.
+    //
+    // I55c: Relaxed sanity gate for FMP-sourced domains. The strict
+    // discriminative-token rule (I52-I54) works when the corporate site
+    // uses the LEGAL-name tokens (e.g. barclays.com contains 'barclays'
+    // matching 'BARCLAYS PLC'), but corporates often brand under a distinct
+    // short name (commbank vs Commonwealth Bank, scotiabank vs Bank of Nova
+    // Scotia, hdfcbank vs HDFC Bank Limited, mufg vs Mitsubishi UFJ FG).
+    // For FMP-sourced domains we ALSO consider tokens derived from FMP's
+    // canonical companyName which more often matches the brand.
     let fmpResolvedDomain: string | null = null;
     if (companyRow.isin && (companyRow.fmpPipelineVersion !== PIPELINE_VERSION || !companyRow.fmpResolvedAt)) {
       try {
@@ -2930,18 +2938,30 @@ async function searchCompanyDocumentsInner(opts: {
         if (fmpProfile) {
           const fmpDomainCandidate = fmpWebsiteToDomain(fmpProfile.website);
           const normalisedFmpDomain = fmpDomainCandidate ? normaliseToRegistrableDomain(fmpDomainCandidate) : null;
-          // Sanity gate: even FMP data must pass the discriminative-token
-          // boundary check against the derived aliases to avoid an obviously
-          // wrong website field from contaminating discovery.
-          const nameTokens = nameForAliases.toLowerCase().split(/[\s&,.']+/).filter((w: string) => w.length >= 3);
-          const gate = normalisedFmpDomain
-            ? domainMatchesIssuerDistinctively(normalisedFmpDomain, aliases, nameTokens)
-            : { ok: false, matchedOn: null };
-          if (normalisedFmpDomain && gate.ok) {
+          // Sanity check strategy: FMP is authoritative-per-ISIN, but we
+          // still guard against obviously wrong `website` fields. A domain
+          // is REJECTED only when its apex root appears in a closed deny-
+          // list of shared/aggregator/exchange hosts. Otherwise ACCEPT —
+          // corporate websites often use a brand name (commbank, scotiabank,
+          // mufg) that is not derivable from the legal name, so requiring
+          // token equality is too strict for FMP data.
+          const FMP_NEVER_ISSUER_DOMAINS = new Set([
+            "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
+            "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
+            "google.com", "amazon.com", "reddit.com", "medium.com",
+            "nasdaq.com", "marketwatch.com", "finance.yahoo.com", "yahoo.com",
+            "moomoo.com", "seekingalpha.com", "stockanalysis.com", "tipranks.com",
+            "ssga.com", "ishares.com", "blackrock.com", "vanguard.com",
+            "morningstar.com", "fool.com", "investing.com", "stocktwits.com",
+            "finbox.com", "simplywall.st", "gurufocus.com", "zacks.com",
+            "canada.ca", "gov.uk", "gov.au", "europa.eu",
+          ]);
+          const denied = normalisedFmpDomain && FMP_NEVER_ISSUER_DOMAINS.has(normalisedFmpDomain);
+          if (normalisedFmpDomain && !denied) {
             fmpResolvedDomain = normalisedFmpDomain;
-            console.log(`[${companyName}] 40-Z: FMP resolved website=${fmpProfile.website} → domain=${normalisedFmpDomain} (matched-on ${gate.matchedOn}, symbol=${fmpProfile.symbol})`);
-          } else if (normalisedFmpDomain) {
-            console.warn(`[${companyName}] 40-Z: FMP website ${normalisedFmpDomain} did not pass boundary check (aliases=[${aliases.slice(0,5).join(",")}]) — ignoring`);
+            console.log(`[${companyName}] 40-Z: FMP resolved website=${fmpProfile.website} → domain=${normalisedFmpDomain} (symbol=${fmpProfile.symbol}, fmpName=${fmpProfile.companyName})`);
+          } else if (denied) {
+            console.warn(`[${companyName}] 40-Z: FMP website ${normalisedFmpDomain} is on the never-issuer deny-list — ignoring`);
           }
           // Persist ALL FMP fields regardless of website-gate outcome so
           // downstream registry / disambiguation code can use them.

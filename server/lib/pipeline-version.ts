@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v55-fmp-authoritative-website";
+export const PIPELINE_VERSION = "v55c-fmp-denylist-only";
