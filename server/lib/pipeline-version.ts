@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v53b-explicit-query-boundary";
+export const PIPELINE_VERSION = "v54-discriminative-domain-tokens";

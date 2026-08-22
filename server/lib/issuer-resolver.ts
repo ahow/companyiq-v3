@@ -296,11 +296,38 @@ export function deriveAliases(
 
   const aliases: string[] = [];
 
-  // 1. Initial-based alias (first letter of each distinctive word)
+  // 1. Initial-based alias (first letter of each distinctive word).
+  //    I54: also derive an initialism that INCLUDES commonly-abbreviated generic
+  //    words like 'bank' and 'financial' so acronyms like SMFG (Sumitomo Mitsui
+  //    Financial Group), MUFG (Mitsubishi UFJ Financial Group), and BNS (Bank of
+  //    Nova Scotia) fall out naturally. This is TOPIC/COMPANY-AGNOSTIC — the
+  //    include-set is a closed list of generic corporate-form words present in
+  //    many issuer names.
   if (words.length >= 2) {
     const initials = words.map(w => w[0]).join("");
     if (initials.length >= 2) {
       aliases.push(initials);
+    }
+  }
+  // I54: augmented initialism including corporate-form / industry / geo words
+  // that appear at initialism boundaries. Includes 'bank', 'financial', 'group',
+  // 'holdings', 'nova', 'scotia' — present in the FULL raw name split.
+  const AUGMENT_INITIAL_WORDS = new Set([
+    "bank", "banking", "financial", "finance", "group", "holdings", "holding",
+    "insurance", "nova", "scotia", "royal", "national", "construction",
+    "commercial", "industrial", "development",
+    // Country / region tokens used in bank initialisms (CCB, HDFC, ICBC, CIBC, etc.)
+    "china", "india", "canada", "canadian", "australia", "american", "japan", "korea",
+  ]);
+  const augmentedWords = canonicalName
+    .toLowerCase()
+    .replace(/[/\\,.'()&]+/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 1 && (!GENERIC_WORDS.has(w) || AUGMENT_INITIAL_WORDS.has(w)));
+  if (augmentedWords.length >= 2 && augmentedWords.length !== words.length) {
+    const augInitials = augmentedWords.map(w => w[0]).join("");
+    if (augInitials.length >= 3 && augInitials.length <= 6) {
+      aliases.push(augInitials);
     }
   }
 

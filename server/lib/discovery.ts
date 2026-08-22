@@ -1923,28 +1923,21 @@ function inferDomainFromResults(
     return [...new Set(roots)];
   };
 
-  // Helper: check if a domain matches any of our terms, with token-boundary
-  // enforcement to avoid acronym-substring collisions.
-  // Token boundary = the alias must equal a domain-token exactly. Substring
-  // matches such as "sumitomo" → "sumitomocorp" are rejected because
-  // sumitomocorp is a DISTINCT company (Sumitomo Corporation) from SMFG.
+  // I54: use the shared discriminative-token boundary helper.
+  // Rejects both substring collisions (sumitomo -> sumitomocorp.com) AND
+  // generic-token boundary matches (canada -> canada.ca for RBC, nova/scotia
+  // -> novascotia.ca for BNS, bank -> bank.in for HDFC).
+  // Short-alias freq guard preserved (<=3 char alias needs freq>=5).
   const domainMatchesTerms = (domain: string, freq: number): boolean => {
-    const dl = domain.toLowerCase();
-    const domainTokens = splitDomainTokens(dl);
-    // Distinctive company-name words: must equal a domain token exactly.
-    for (const word of matchWords) {
-      if (word.length < 3) continue;
-      if (domainTokens.some(t => t === word)) return true;
+    const check = domainMatchesIssuerDistinctively(domain, aliases, matchWords);
+    if (!check.ok) return false;
+    // Short-alias frequency guard: if the ONLY match is a 2-3 char alias,
+    // require freq >= 5 to prevent tiny-alias noise from dominating.
+    if (check.matchedOn && check.matchedOn.startsWith("alias:")) {
+      const matched = check.matchedOn.slice("alias:".length);
+      if (matched.length <= 3 && freq < 5) return false;
     }
-    // Aliases: same rule; plus short-alias frequency guard (≤3 chars need freq≥5).
-    for (const alias of aliases) {
-      if (alias.length < 2) continue;
-      if (domainTokens.some(t => t === alias)) {
-        if (alias.length <= 3 && freq < 5) continue;
-        return true;
-      }
-    }
-    return false;
+    return true;
   };
 
   if (domainMatchesTerms(topDomain, sorted[0][1])) {
@@ -1987,6 +1980,67 @@ function inferDomainFromResults(
  * When 40-A and 40-B both fail, issue one Serper query to find the company's
  * official website via real-index anchoring.
  */
+// I54: DOMAIN-TOKEN DENY LIST for boundary matching.
+// A domain-token equality that matches ONLY these generic words is NOT
+// discriminative enough to prove the domain belongs to the issuer. For
+// example, canada.ca matches ROYAL BANK OF CANADA on token "canada" — but
+// canada.ca is not RBC. Same for novascotia.ca vs BANK OF NOVA SCOTIA,
+// bank.in vs HDFC BANK, ssga.com's token "com" vs any bank.
+// This list is CLOSED and generic (country names, jurisdiction tokens,
+// generic-industry words). No company/topic/framework literals.
+const GENERIC_DOMAIN_TOKENS = new Set([
+  "the", "and", "for", "of", "group", "holding", "holdings", "company", "companies",
+  "corp", "corporation", "incorporated", "inc", "ltd", "limited", "llc", "plc",
+  "co", "sa", "se", "ag", "nv", "spa", "international", "global", "worldwide",
+  "industries", "industrial", "enterprise", "enterprises", "technologies",
+  "technology", "systems", "solutions", "services", "products",
+  "bank", "banking", "capital", "partners", "resources", "materials", "energy",
+  "power", "motors", "financial", "insurance", "asset", "management", "trust",
+  "real", "estate", "realty", "food", "foods", "beverage", "retail", "media",
+  "telecom", "communications", "pharmaceutical", "pharmaceuticals", "chemical",
+  "chemicals", "aerospace", "automotive", "manufacturing",
+  // Country / jurisdiction tokens — present in many issuer names AND in
+  // government / country-domain roots; NOT discriminative on their own.
+  "australia", "america", "american", "national", "japan", "china", "korea",
+  "hong", "kong", "india", "indian", "canada", "canadian", "uk", "british",
+  "nova", "scotia", "montreal", "toronto", "vancouver", "sydney", "melbourne",
+  "london", "paris", "tokyo", "mumbai", "delhi", "beijing", "shanghai",
+]);
+
+/**
+ * I54: Return TRUE only when the domain contains an issuer-token boundary
+ * that is DISCRIMINATIVE — i.e. equal to an alias/name-token that is NOT
+ * on the generic-word deny-list. Used by all three domain-resolution lanes.
+ */
+function domainMatchesIssuerDistinctively(
+  domain: string,
+  aliases: string[],
+  nameTokens: string[],
+): { ok: boolean; matchedOn: string | null } {
+  const parts = domain.toLowerCase().split(".");
+  const domainTokens: string[] = [];
+  for (const p of parts) {
+    if (p.length < 2) continue;
+    domainTokens.push(p);
+    for (const s of p.split(/[^a-z]+/)) if (s.length >= 2) domainTokens.push(s);
+  }
+  const dt = new Set(domainTokens);
+  // Prefer an ALIAS match (aliases include tickers + concatenations and are
+  // strong identity signals). Then fall back to a distinctive name token.
+  for (const a of aliases) {
+    if (a.length < 3) continue; // never accept 2-char alias match here
+    const al = a.toLowerCase();
+    if (GENERIC_DOMAIN_TOKENS.has(al)) continue;
+    if (dt.has(al)) return { ok: true, matchedOn: `alias:${al}` };
+  }
+  for (const w of nameTokens) {
+    if (w.length < 4) continue;
+    if (GENERIC_DOMAIN_TOKENS.has(w)) continue;
+    if (dt.has(w)) return { ok: true, matchedOn: `nameToken:${w}` };
+  }
+  return { ok: false, matchedOn: null };
+}
+
 async function discoverPrimaryDomainViaExplicitQuery(
   issuerName: string,
   companyName: string,
@@ -2021,35 +2075,19 @@ async function discoverPrimaryDomainViaExplicitQuery(
 
     if (rootCounts.size === 0) return null;
 
-    // I53-B: BOUNDARY CHECK. Require the winning domain to contain a domain-
-    // token equal to a distinctive issuer-name word or alias. Rejects
-    // substring-collision SERP wins like ssga.com for CBA or nasdaq.com for SMFG.
-    const nameTokens = issuerName.toLowerCase().split(/[\s&,.']+/).filter((w) => w.length >= 4);
-    const domainTokensOf = (d: string): string[] => {
-      const parts = d.toLowerCase().split(".");
-      const out: string[] = [];
-      for (const p of parts) {
-        if (p.length < 2) continue;
-        out.push(p);
-        for (const s of p.split(/[^a-z]+/)) if (s.length >= 2) out.push(s);
-      }
-      return [...new Set(out)];
-    };
-    const passesBoundary = (candidate: string): boolean => {
-      const dt = domainTokensOf(candidate);
-      if (nameTokens.some((w) => dt.includes(w))) return true;
-      if (aliases.some((a) => a.length >= 4 && dt.includes(a.toLowerCase()))) return true;
-      return false;
-    };
-
+    // I53-B / I54: BOUNDARY CHECK via shared discriminative helper.
+    // Rejects substring-collision SERP wins like ssga.com for CBA, canada.ca
+    // for RBC, novascotia.ca for BNS, or bank.in for HDFC.
+    const nameTokens = issuerName.toLowerCase().split(/[\s&,.']+/).filter((w) => w.length >= 3);
     const sorted = [...rootCounts.entries()].sort((a, b) => b[1] - a[1]);
     for (const [candidate, hits] of sorted) {
-      if (passesBoundary(candidate)) {
-        console.log(`[${companyName}] 40-C explicit query resolved domain: ${candidate} (boundary-verified, ${hits} hits)`);
+      const check = domainMatchesIssuerDistinctively(candidate, aliases, nameTokens);
+      if (check.ok) {
+        console.log(`[${companyName}] 40-C explicit query resolved domain: ${candidate} (matched-on ${check.matchedOn}, ${hits} hits)`);
         return candidate;
       }
     }
-    console.warn(`[${companyName}] 40-C explicit query returned only non-issuer-domain candidates: [${sorted.map(([d,c]) => d+':'+c).join(', ')}] — rejecting all`);
+    console.warn(`[${companyName}] 40-C explicit query rejected all candidates (no discriminative token match): [${sorted.map(([d,c]) => d+':'+c).join(', ')}]`);
     return null;
   } catch (err: any) {
     console.warn(`[${companyName}] 40-C explicit query failed: ${err.message}`);
@@ -2820,32 +2858,15 @@ async function searchCompanyDocumentsInner(opts: {
   const figiResolvedAt = companyRow.figiResolvedAt ? new Date(companyRow.figiResolvedAt) : null;
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  // I53: Verify cachedDomain against the token-boundary rule using aliases derived
-  // from figiName. This fixes the case where a pre-I52 pipeline persisted a
-  // substring-collision domain (e.g. sumitomocorp.com for SMFG, moomoo.com for CCB,
-  // ssga.com for CBA) into companies.domain: today's stricter boundary check would
-  // reject that domain on write, so we also reject it on read to force fresh
-  // inference. When rejected, we clear both companies.domain and the related-
-  // domains cache so the pipeline can start clean.
+  // I53 / I54: Verify cachedDomain against the discriminative token-boundary
+  // rule. When it fails, clear the stale value and force re-resolution.
   if (cachedDomain) {
     const nameForVerify = (companyRow.figiName as string | null) || companyName;
     const aliasesForVerify = deriveAliases(nameForVerify, (companyRow.figiTicker as string | null | undefined) ?? null);
-    const cachedDomainTokens = (() => {
-      const parts = cachedDomain.toLowerCase().split(".");
-      const roots: string[] = [];
-      for (const p of parts) {
-        if (p.length < 2) continue;
-        roots.push(p);
-        for (const s of p.split(/[^a-z]+/)) if (s.length >= 2) roots.push(s);
-      }
-      return [...new Set(roots)];
-    })();
-    const distinctiveNameTokens = nameForVerify.toLowerCase().split(/[\s&,.']+/).filter((w) => w.length >= 3);
-    const cachedPassesBoundary =
-      aliasesForVerify.some((a) => a.length >= 4 && cachedDomainTokens.includes(a.toLowerCase())) ||
-      distinctiveNameTokens.some((w) => w.length >= 4 && cachedDomainTokens.includes(w));
-    if (!cachedPassesBoundary) {
-      console.warn(`[${companyName}] I53: cached domain '${cachedDomain}' fails boundary check against aliases [${aliasesForVerify.join(",")}] and name '${nameForVerify}' — clearing and re-inferring`);
+    const nameTokens = nameForVerify.toLowerCase().split(/[\s&,.']+/).filter((w) => w.length >= 3);
+    const check = domainMatchesIssuerDistinctively(cachedDomain, aliasesForVerify, nameTokens);
+    if (!check.ok) {
+      console.warn(`[${companyName}] I53/I54: cached domain '${cachedDomain}' fails discriminative check (aliases=[${aliasesForVerify.join(",")}], name='${nameForVerify}') — clearing`);
       if (companyRow.id) {
         try {
           await db.execute(sql`UPDATE companies SET domain = NULL, related_domains = NULL, related_domains_pipeline_version = NULL WHERE id = ${companyRow.id}`);
@@ -2916,9 +2937,11 @@ async function searchCompanyDocumentsInner(opts: {
     if (effectiveDomain) {
       // Core tokens = distinctive words from the primary domain
       const domainParts = effectiveDomain.split(".")[0].toLowerCase();
-      const coreTokens = aliases.filter(a => a.length >= 3 && domainParts.includes(a));
-      // Also add the domain root itself as a core token
-      if (domainParts.length >= 3) coreTokens.push(domainParts);
+      // I54: exclude generic tokens from coreTokens so a related-domain match
+      // like banktrack.org (contains 'bank') is not accepted as a family member.
+      const coreTokens = aliases.filter(a => a.length >= 3 && domainParts.includes(a) && !GENERIC_DOMAIN_TOKENS.has(a.toLowerCase()));
+      // Also add the domain root itself as a core token (never generic)
+      if (domainParts.length >= 3 && !GENERIC_DOMAIN_TOKENS.has(domainParts)) coreTokens.push(domainParts);
       relatedDomains = discoverRelatedDomains(effectiveDomain, allCandidates, [...new Set(coreTokens)]);
 
       // 41-F: Cross-brand sibling discovery (e.g. chase.com for JPMorgan Chase)
