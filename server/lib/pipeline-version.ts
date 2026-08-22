@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v56-annual-report-serper-lane";
+export const PIPELINE_VERSION = "v56b-cctld-bank-in";

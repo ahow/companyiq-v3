@@ -1801,12 +1801,23 @@ function normaliseToRegistrableDomain(hostname: string): string {
   const clean = hostname.toLowerCase().replace(/^www\./, "");
   const parts = clean.split(".");
 
-  // Handle common two-part ccTLDs (co.uk, com.au, co.jp, etc.).
+  // Handle common two-part ccTLDs (co.uk, com.au, co.jp, etc.) plus
+  // sector-specific ccTLD zones (bank.in for HDFC etc.).
+  // I56b: Added .bank.in / .bank.cn / bank.br for regulated banking
+  // domains, .co.in / .org.in for Indian corporate, .com.tr / .co.kr
+  // for other regions that host bank IR sites.
   const twoPartCcTlds = new Set([
     "co.uk", "org.uk", "gov.uk", "ac.uk",
     "com.au", "org.au", "gov.au",
     "co.jp", "or.jp", "ne.jp",
     "co.nz", "com.sg", "com.hk", "com.mx", "com.br",
+    // I56b extensions:
+    "bank.in", "co.in", "org.in", "net.in",           // India
+    "bank.cn", "com.cn", "net.cn", "gov.cn", "edu.cn", // China
+    "co.kr", "or.kr", "go.kr",                          // South Korea
+    "com.tr", "gov.tr", "org.tr",                       // Turkey
+    "co.za", "org.za",                                  // South Africa
+    "com.ph", "com.my", "com.tw",                       // SE Asia
   ]);
 
   if (parts.length >= 3) {
