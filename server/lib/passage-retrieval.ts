@@ -1329,29 +1329,11 @@ export function buildEvidencePackForMeasure(opts: {
     }
   }
 
-  // Step 1 — Topic floor: guarantee a few of the most topic-dense chunks are in
-  // the pack whenever the corpus contains ANY topic-relevant passages. This is
-  // the direct fix for "0% with full coverage": the model will always see the
-  // available AI evidence instead of being starved by generic boilerplate.
-  const topicChunks = scored
-    .filter((s) => s.topicHits > 0)
-    .sort((a, b) => (b.topicHits - a.topicHits) || (b.score - a.score));
-  let topicAdded = 0;
-  for (const item of topicChunks) {
-    if (topicAdded >= GUARANTEED_TOPIC_CHUNKS) break;
-    // Relax the per-doc cap slightly for the guaranteed topic floor so a single
-    // AI-rich filing can still seed the pack, but never beyond maxChunksPerDoc+1.
-    const used = perDocCount.get(item.docIndex) || 0;
-    if (used >= maxChunksPerDoc + 1) continue;
-    if (selected.length >= topK) break;
-    if (evidenceLen + item.text.length > maxChars) continue;
-    selected.push(item);
-    perDocCount.set(item.docIndex, used + 1);
-    evidenceLen += item.text.length + 2;
-    topicAdded++;
-  }
-
-  // Step 1.5 (I60) — TOPIC-PRIMARY FORCE-INCLUDE. When the upstream summarizer
+  // Step 0.5 (I60) — TOPIC-PRIMARY FORCE-INCLUDE. (Was Step 1.5; moved BEFORE
+  // topic floor because Step 1 fills the ~20K evidence budget with topic-hit
+  // chunks first — leaving no budget for topic-primary chunks. Running this
+  // first guarantees framework-authoritative content wins the budget over
+  // generic topic-hit chunks from bulk filings.) When the upstream summarizer
   // has classified one or more corpus documents as topic-primary (framework's
   // requiredDocTypes URL/title match OR dataPatterns content promotion),
   // guarantee up to 2 chunks per topic-primary doc into every measure's pack,
@@ -1428,6 +1410,28 @@ export function buildEvidencePackForMeasure(opts: {
     if (reservedCount > 0 || topicPrimaryDocIndexes.size > 0) {
       console.log(`[I60-per-measure] measure=${measure.measureId} tpDocsAvail=${topicPrimaryDocIndexes.size} reservePoolSize=${reservePool.length} reserved=${reservedCount}`);
     }
+  }
+
+  // Step 1 — Topic floor: guarantee a few of the most topic-dense chunks are in
+  // the pack whenever the corpus contains ANY topic-relevant passages. This is
+  // the direct fix for "0% with full coverage": the model will always see the
+  // available AI evidence instead of being starved by generic boilerplate.
+  const topicChunks = scored
+    .filter((s) => s.topicHits > 0)
+    .sort((a, b) => (b.topicHits - a.topicHits) || (b.score - a.score));
+  let topicAdded = 0;
+  for (const item of topicChunks) {
+    if (topicAdded >= GUARANTEED_TOPIC_CHUNKS) break;
+    // Relax the per-doc cap slightly for the guaranteed topic floor so a single
+    // AI-rich filing can still seed the pack, but never beyond maxChunksPerDoc+1.
+    const used = perDocCount.get(item.docIndex) || 0;
+    if (used >= maxChunksPerDoc + 1) continue;
+    if (selected.length >= topK) break;
+    if (evidenceLen + item.text.length > maxChars) continue;
+    selected.push(item);
+    perDocCount.set(item.docIndex, used + 1);
+    evidenceLen += item.text.length + 2;
+    topicAdded++;
   }
 
   // Step 2 — Fill remaining slots by blended score, respecting per-doc budget.
