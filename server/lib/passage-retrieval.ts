@@ -1414,6 +1414,9 @@ export function buildEvidencePackForMeasure(opts: {
       evidenceLen += r.text.length + 2;
       reservedCount++;
     }
+    if (reservedCount > 0 || topicPrimaryDocIndexes.size > 0) {
+      console.log(`[I60-per-measure] measure=${measure.measureId} tpDocsAvail=${topicPrimaryDocIndexes.size} reservePoolSize=${reservePool.length} reserved=${reservedCount}`);
+    }
   }
 
   // Step 2 — Fill remaining slots by blended score, respecting per-doc budget.
@@ -1626,6 +1629,16 @@ export function buildEvidencePacksForCategory(opts: {
       if (topicPrimaryDocIndexes.has(c.docIndex)) continue;
       if (tpNormSet.has(normUrl(c.docUrl))) topicPrimaryDocIndexes.add(c.docIndex);
     }
+  }
+  // I60 diag: expose how many topic-primary URLs were provided vs how many were
+  // resolved to actual chunk docIndexes. If a URL is provided but never resolves
+  // (e.g. because its content did not survive the summarizer's 560K pool), the
+  // per-measure reserve cannot help — that indicates an upstream pool problem.
+  if ((topicPrimaryDocUrls || []).length > 0) {
+    // Sample first 3 URLs on both sides for a quick eyeball diagnostic
+    const chunkUrlSample = Array.from(new Set(chunks.map((c) => normUrl(c.docUrl)))).slice(0, 3);
+    const tpUrlSample = Array.from(tpNormSet).slice(0, 3);
+    console.log(`[I60-diag] provided=${(topicPrimaryDocUrls || []).length} resolvedDocIndexes=${topicPrimaryDocIndexes.size} tpUrlSample=${JSON.stringify(tpUrlSample)} chunkUrlSample=${JSON.stringify(chunkUrlSample)}`);
   }
 
   return measures.map((measure) =>
