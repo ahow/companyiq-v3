@@ -658,8 +658,13 @@ async function summarizeDocuments(opts: {
   // Check summary cache. v3g: salt the cache key so the OLD header-lossy LLM
   // summaries (which dropped document URLs) are never reused; only the new
   // header-preserving retrieval corpus is served from cache going forward.
+  // I59c: derive the salt from PIPELINE_VERSION (git commit SHA on Railway) so
+  // every commit that changes summarizer or retrieval logic automatically
+  // invalidates the summary cache without a manual salt rotation. This closes
+  // the class of bugs where a code change to the summarizer ships to prod but
+  // scored batches silently use stale cached summaries.
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + ":corpus-v59-topic-primary-reserve")
+    .update(generateDocumentHash(documentUrls) + `:corpus-${PIPELINE_VERSION}`)
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -761,7 +766,28 @@ async function summarizeDocuments(opts: {
     }
     const url = documentUrls[idx] || "";
     const title = documentTitles?.[idx] || "";
-    const cls = classifyDoc(url, title);
+    let cls = classifyDoc(url, title);
+    // I59c: CONTENT-BASED topic-primary promotion. A document whose text fires
+    // the framework's dataPatterns (regexes authored by the framework itself)
+    // at high density is materially about the framework topic — regardless of
+    // whether its URL or title happens to contain the requiredDocTypes tokens.
+    // Example: JPM's Modern Slavery Statement PDFs live at
+    // modernslaveryregister.gov.au/statements/<id>/pdf (URL has no spaces, title
+    // is generic '2024 JPM statement'), so the URL/title classifier never sees
+    // 'modern' + 'slavery' + 'statement' as separate tokens and defaults to
+    // 'other'. But the doc's TEXT hits 'modern.?slavery.?(?:act|statement)'
+    // dozens of times — authoritative content evidence. Promote such docs to
+    // 'topic-primary' so they get the topic-primary class cap AND the I59
+    // topic-primary chunk reserve downstream. Threshold is intentionally high
+    // to avoid promoting a passing mention in a bulk filing.
+    //
+    // Framework-agnostic: dataPatterns are declared by the framework author.
+    // Only fires when the framework provides them; falls through cleanly for
+    // frameworks without patterns.
+    const CONTENT_PROMOTION_THRESHOLD = 10;
+    if (cls === "other" && precision >= CONTENT_PROMOTION_THRESHOLD) {
+      cls = "topic-primary";
+    }
     // Keyword density is CAPPED so it only breaks ties WITHIN a class, never
     // overrides the structural class priority above.
     const requiredDocSlugs = ((framework as any).requiredDocTypes as string[] | null) || [];
@@ -1092,11 +1118,37 @@ async function summarizeDocuments(opts: {
   try {
     if (TOPIC_PRIMARY_RESERVE_CHARS > 0) {
       // A chunk qualifies for the topic-primary reserve iff its source document
-      // was classified as `topic-primary` by the shared classifier (framework's
-      // requiredDocTypes match on URL+title, ≥ min(2, N) token hits). We reuse
-      // classifyDoc so the reserve inherits any future framework-driven refinements
-      // to that classifier.
-      const chunkIsTopicPrimary = (c: Chunk) => classifyDoc(c.docUrl || "", c.docTitle || "") === "topic-primary";
+      // is classified as `topic-primary` by EITHER the URL/title classifier
+      // (framework.requiredDocTypes token match) OR the content-based promotion
+      // (framework.dataPatterns hit density on the doc's aggregated chunk text).
+      // The content-based signal catches docs like JPM's Modern Slavery Statement
+      // PDFs whose URL+title don't tokenise cleanly against 'Modern Slavery
+      // Statement' but whose text fires the framework's dataPatterns dozens of times.
+      //
+      // Framework-agnostic: dataPatterns are declared by the framework author.
+      // Falls through cleanly for frameworks without dataPatterns.
+      const CHUNK_LEVEL_CONTENT_PROMOTION_THRESHOLD = 10;
+      const perDocText = new Map<number, string>();
+      for (const c of docChunks) {
+        const prior = perDocText.get(c.docIndex) || "";
+        // Cap per-doc aggregated text to keep this cheap; 60k is plenty for pattern hits.
+        if (prior.length < 60000) perDocText.set(c.docIndex, prior + " " + c.text);
+      }
+      const promotedDocIndexes = new Set<number>();
+      for (const [dIdx, txt] of perDocText) {
+        let hits = 0;
+        for (const rx of dataPatternRegexes) {
+          rx.lastIndex = 0;
+          const m = txt.toLowerCase().match(rx);
+          hits += m?.length || 0;
+          if (hits >= CHUNK_LEVEL_CONTENT_PROMOTION_THRESHOLD) break;
+        }
+        if (hits >= CHUNK_LEVEL_CONTENT_PROMOTION_THRESHOLD) promotedDocIndexes.add(dIdx);
+      }
+      const chunkIsTopicPrimary = (c: Chunk) => {
+        if (promotedDocIndexes.has(c.docIndex)) return true;
+        return classifyDoc(c.docUrl || "", c.docTitle || "") === "topic-primary";
+      };
       // Build a per-doc list of eligible chunk indices with their BM25 scores.
       // Cap the number of chunks per doc so the reserve keeps diversity across
       // multiple topic-primary docs (e.g. 6 MSS PDFs across FY19-FY24 rather than

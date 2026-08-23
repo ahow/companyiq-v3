@@ -1234,6 +1234,11 @@ async function runAnalyzePhase(opts: {
   }
 
   // Run the LLM analysis (framework-specific scoring)
+  // I59c: force fresh scoring (bypass verdict cache) on corpus-replay runs.
+  // Replays are used to A/B test algorithm changes against a pinned corpus,
+  // and the verdict cache silently masks retrieval-side changes when chunks
+  // happen to hash identically. Env var CIQ_FORCE_FRESH_SCORING also opts in.
+  const freshScoring = !!sourceBatchId || process.env.CIQ_FORCE_FRESH_SCORING === "1";
   const analysis = await analyzeCompanyMeasures({
     workspaceId,
     companyName,
@@ -1244,6 +1249,7 @@ async function runAnalyzePhase(opts: {
     framework,
     measures,
     temporalContext,
+    freshScoring,
   });
 
   // ─── I49: PRESERVE PRE-ADJUSTMENT CONFIDENCE ────────────────────────────────
