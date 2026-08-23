@@ -812,25 +812,6 @@ export function buildEvidencePackForMeasure(opts: {
   // of the measure's relevant sections (e.g. risk measures → Item 1A). The section
   // bonus only applies when (a) the chunk is section-tagged and (b) it is relevant,
   // so non-SEC documents and off-section chunks are unaffected.
-
-  // I57: DOC-TITLE / DOC-URL EVIDENCE-KEYWORD BONUS.
-  // When a chunk's parent document has a title or URL that contains one of the
-  // measure's evidenceKeywords as a substring, boost that chunk's score. This
-  // solves the fw8 retrieval-to-scoring gap: JPM's corpus contains 6 Modern
-  // Slavery Statement PDFs (titles like "JPMorgan Chase FY24 Modern Slavery
-  // Group Statement"), but they were previously crowded out by SEC 10-K
-  // filings whose absolute volume of shallow keyword mentions dominated BM25.
-  // Now a chunk from a doc titled "Modern Slavery Group Statement" gets a
-  // multiplier that ensures MSS-specific content surfaces to the LLM.
-  //
-  // Framework-agnostic: works for every framework because the boost is driven
-  // by the measure's declared evidenceKeywords (framework data), not by any
-  // topic-specific literal in code.
-  const DOC_TITLE_MATCH_BONUS = 8.0;  // per-keyword bonus; large enough to lift MSS chunks over deep SEC hits
-  const DOC_TITLE_MATCH_CAP = 24.0;   // ceiling to prevent hit-stacking abuse
-  const evidenceKeywordsLower = (measure.evidenceKeywords || [])
-    .map((k) => (k || "").toLowerCase().trim())
-    .filter((k) => k.length >= 4);
   const scored = chunks.map((chunk, idx) => {
     const bm25 = bm25Score(uniqueTerms, idx, bm25Index);
     const hits = countTopicHits(chunk.text, topicTerms);
@@ -838,26 +819,12 @@ export function buildEvidencePackForMeasure(opts: {
     const topicBonus = hits > 0 ? TOPIC_RELEVANCE_WEIGHT * (1 + Math.log(hits)) : 0;
     const onSection = !!(chunk.section && measureSections.has(chunk.section));
     const sectionBonus = onSection ? SEC_SECTION_BOOST : 0;
-    // I57 doc-title/url evidence-keyword bonus.
-    let docTitleBonus = 0;
-    if (evidenceKeywordsLower.length > 0) {
-      const titleLower = (chunk.docTitle || "").toLowerCase();
-      const urlLower = (chunk.docUrl || "").toLowerCase();
-      const hay = `${titleLower} ${urlLower}`;
-      let matches = 0;
-      for (const kw of evidenceKeywordsLower) {
-        if (hay.includes(kw)) matches++;
-      }
-      if (matches > 0) {
-        docTitleBonus = Math.min(DOC_TITLE_MATCH_BONUS * matches, DOC_TITLE_MATCH_CAP);
-      }
-    }
     return {
       idx,
       docIndex: chunk.docIndex,
       bm25,
       topicHits: hits,
-      score: bm25 + topicBonus + sectionBonus + docTitleBonus,
+      score: bm25 + topicBonus + sectionBonus,
       text: chunk.text,
     };
   });
