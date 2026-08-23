@@ -1070,6 +1070,87 @@ async function summarizeDocuments(opts: {
     console.warn(`[${companyName}] [item1a-reserve] skipped: ${(e as Error).message}`);
   }
 
+  // ─── I59 UPSTREAM GUARANTEE: reserve framework topic-primary chunks ──────────
+  // Root cause diagnosed on batch 1098 (JPM fw8 pinned replay): JPM's 6 Modern
+  // Slavery Statement PDFs are correctly classified as `topic-primary` (they
+  // match framework.requiredDocTypes 'Modern Slavery Statement' etc.) but their
+  // chunks lose the 560K-char BM25 pool competition against SEC 10-K chunks and
+  // never reach the per-measure BM25 stage. The Item 1A reserve above guarantees
+  // SEC filings survive; this reserve does the analogous job for whatever the
+  // FRAMEWORK declares as required doc types.
+  //
+  // Framework-agnostic: driven entirely by framework.requiredDocTypes (data);
+  // no topic/company/framework literals in code. Selection is BM25-scored within
+  // topic-primary chunks so the most relevant chunks in the highest-precision
+  // docs win the sub-budget deterministically.
+  //
+  // Env-tunable so this can be adjusted per deployment without a code change.
+  const TOPIC_PRIMARY_RESERVE_CHARS = parseInt(
+    process.env.RETRIEVAL_TOPIC_PRIMARY_RESERVE_CHARS || "120000",
+    10,
+  );
+  try {
+    if (TOPIC_PRIMARY_RESERVE_CHARS > 0) {
+      // A chunk qualifies for the topic-primary reserve iff its source document
+      // was classified as `topic-primary` by the shared classifier (framework's
+      // requiredDocTypes match on URL+title, ≥ min(2, N) token hits). We reuse
+      // classifyDoc so the reserve inherits any future framework-driven refinements
+      // to that classifier.
+      const chunkIsTopicPrimary = (c: Chunk) => classifyDoc(c.docUrl || "", c.docTitle || "") === "topic-primary";
+      // Build a per-doc list of eligible chunk indices with their BM25 scores.
+      // Cap the number of chunks per doc so the reserve keeps diversity across
+      // multiple topic-primary docs (e.g. 6 MSS PDFs across FY19-FY24 rather than
+      // 6 chunks all from the same doc).
+      const MAX_CHUNKS_PER_TP_DOC = 4;
+      type TpEntry = { idx: number; score: number; len: number; docIndex: number };
+      const tpByDoc = new Map<number, TpEntry[]>();
+      for (let i = 0; i < docChunks.length; i++) {
+        const c = docChunks[i];
+        if (!chunkIsTopicPrimary(c)) continue;
+        const s = scoredChunks.find((sc) => sc.idx === i);
+        const score = s ? s.score : 0;
+        const arr = tpByDoc.get(c.docIndex) || [];
+        arr.push({ idx: i, score, len: c.text.length, docIndex: c.docIndex });
+        tpByDoc.set(c.docIndex, arr);
+      }
+      // Within each doc, sort by BM25 DESC (deterministic tiebreak by document
+      // position) and keep only the top-MAX_CHUNKS_PER_TP_DOC.
+      const tpPool: TpEntry[] = [];
+      for (const [, list] of tpByDoc) {
+        list.sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return (docChunks[a.idx].seqInDoc ?? a.idx) - (docChunks[b.idx].seqInDoc ?? b.idx);
+        });
+        for (const e of list.slice(0, MAX_CHUNKS_PER_TP_DOC)) tpPool.push(e);
+      }
+      // Global fill order: BM25 DESC, deterministic tiebreak by (docIndex, seqInDoc).
+      tpPool.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (a.docIndex !== b.docIndex) return a.docIndex - b.docIndex;
+        return (docChunks[a.idx].seqInDoc ?? a.idx) - (docChunks[b.idx].seqInDoc ?? b.idx);
+      });
+      let tpReserved = 0;
+      const tpDocsUsed = new Set<number>();
+      for (const e of tpPool) {
+        if (tpReserved + e.len > TOPIC_PRIMARY_RESERVE_CHARS) continue;
+        if (selectedSet.has(e.idx)) continue;
+        selectedSet.add(e.idx);
+        budget += e.len;
+        tpReserved += e.len;
+        tpDocsUsed.add(e.docIndex);
+      }
+      if (tpReserved > 0) {
+        console.log(`[${companyName}] [topic-primary-reserve] reserved ${tpReserved} chars across ${tpDocsUsed.size} doc(s) (of ${tpPool.length} candidate chunks in ${tpByDoc.size} topic-primary docs)`);
+      } else if (tpByDoc.size > 0) {
+        console.log(`[${companyName}] [topic-primary-reserve] ${tpByDoc.size} topic-primary docs available but reserve budget=0 (RETRIEVAL_TOPIC_PRIMARY_RESERVE_CHARS=${TOPIC_PRIMARY_RESERVE_CHARS})`);
+      } else {
+        console.log(`[${companyName}] [topic-primary-reserve] no topic-primary docs available (framework.requiredDocTypes did not match any doc URL/title)`);
+      }
+    }
+  } catch (e) {
+    console.warn(`[${companyName}] [topic-primary-reserve] skipped: ${(e as Error).message}`);
+  }
+
   for (const sc of scoredChunks) {
     if (sc.score <= 0) continue;
     if (budget + sc.chunk.text.length > MAX_RETRIEVAL_INPUT) break;
