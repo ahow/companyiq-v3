@@ -1407,6 +1407,31 @@ async function runAnalyzePhase(opts: {
         const fromForced = fiCount > 0 && !!fiUrl && normUrl((q as any).sourceUrl) === fiUrl;
         return fromForced ? { ...q, forceInclude: true } : q;
       });
+
+      // I58: Persist a per-measure retrieval-diagnostic sidecar as an extra quote
+      // entry so we can trace, offline, which documents' chunks reached the LLM
+      // for each measure. Marked with sourceUrl 'diag://retrieval-v1' so the UI
+      // ignores it (its quote-rendering filters by http(s) sourceUrl). This is a
+      // non-scoring diagnostic and never influences the grade.
+      const pd = (m as any).passageDiagnostics as any | undefined;
+      const diagQuote = pd ? {
+        text: JSON.stringify({
+          v: 1,
+          chunks: pd.chunkCount,
+          chars: pd.totalChars,
+          topicHits: pd.topicHits,
+          forceIncludedCount: pd.forceIncludedCount,
+          requiredDocPresent: pd.requiredDocPresent,
+          topChunks: (pd.topChunks || []).slice(0, 5).map((c: any) => ({
+            u: c.docUrl, t: (c.docTitle || "").slice(0, 80), s: c.score, f: c.forced,
+          })),
+          docBreakdown: (pd.docBreakdown || []).slice(0, 12),
+          queryTerms: pd.queryTermCount,
+        }),
+        source: "retrieval-diagnostic",
+        sourceUrl: "diag://retrieval-v1",
+      } : null;
+      const finalQuotes = diagQuote ? [...quotes, diagQuote] : quotes;
       return {
         companyId,
         frameworkId: framework.id,
@@ -1419,7 +1444,7 @@ async function runAnalyzePhase(opts: {
         coverage: m.coverage,
         confidence: m.confidence,
         evidenceSummary: m.evidenceSummary,
-        quotes,
+        quotes: finalQuotes,
         verdict: m.verdict,
         verdictNuance: m.verdictNuance,
         displayOrder: m.displayOrder,

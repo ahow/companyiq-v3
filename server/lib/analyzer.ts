@@ -1598,10 +1598,20 @@ export async function analyzeCompanyMeasures(opts: {
         }
       }
 
-      // I51-B: attach passage-retrieval telemetry (diagnostic-only) so we can see
-      // per-measure, per-run which chunks BM25 selected. Not consumed by scoring.
+      // I51-B/I58: attach passage-retrieval telemetry (diagnostic-only). Enriched
+      // with pack-level metrics (chunkCount/totalChars/topicHits/forceIncludedCount/
+      // requiredDocPresent) so downstream persistence layer can emit a single
+      // per-measure diagnostic sidecar to the results JSON.
       if (evidencePack?.passageDiagnostics) {
-        (measureResult as MeasureResult).passageDiagnostics = evidencePack.passageDiagnostics;
+        const epAny = evidencePack as any;
+        (measureResult as MeasureResult).passageDiagnostics = {
+          ...evidencePack.passageDiagnostics,
+          chunkCount: epAny.chunkCount,
+          totalChars: epAny.totalChars,
+          topicHits: epAny.topicHits,
+          forceIncludedCount: epAny.forceIncludedCount,
+          requiredDocPresent: epAny.requiredDocPresent,
+        } as any;
       }
 
       return measureResult;
