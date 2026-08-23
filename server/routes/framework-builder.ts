@@ -6,6 +6,135 @@ import * as storage from "../storage.js";
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
+// ─── Evidence Keywords Validator + Repair ──────────────────────────────────
+// Enforces the framework-builder contract: every measure must have 10-15 evidenceKeywords.
+// LLM output often lands at 9; this validator issues a targeted repair call to fill gaps.
+const EVIDENCE_KEYWORDS_MIN = 10;
+const EVIDENCE_KEYWORDS_MAX = 15;
+
+function collectMeasures(draft: any): Array<{ categoryName: string; measure: any }> {
+  const out: Array<{ categoryName: string; measure: any }> = [];
+  if (!draft || !Array.isArray(draft.categories)) return out;
+  for (const cat of draft.categories) {
+    if (!cat || !Array.isArray(cat.measures)) continue;
+    for (const m of cat.measures) out.push({ categoryName: cat.name || "", measure: m });
+  }
+  return out;
+}
+
+function normalizeAndCountKeywords(draft: any): { deficient: Array<{ categoryName: string; measureId: string; title: string; definition: string; existing: string[]; needed: number }>; oversized: number } {
+  const deficient: Array<{ categoryName: string; measureId: string; title: string; definition: string; existing: string[]; needed: number }> = [];
+  let oversized = 0;
+  for (const { categoryName, measure } of collectMeasures(draft)) {
+    // Normalize: ensure it's an array of trimmed non-empty unique strings
+    const raw: unknown = measure?.evidenceKeywords;
+    let arr: string[] = Array.isArray(raw) ? raw.map((x) => String(x || "").trim()).filter((x) => x.length > 0) : [];
+    // Deduplicate case-insensitively while preserving first occurrence casing
+    const seen = new Set<string>();
+    arr = arr.filter((k) => { const lk = k.toLowerCase(); if (seen.has(lk)) return false; seen.add(lk); return true; });
+    // Cap at EVIDENCE_KEYWORDS_MAX
+    if (arr.length > EVIDENCE_KEYWORDS_MAX) { oversized++; arr = arr.slice(0, EVIDENCE_KEYWORDS_MAX); }
+    measure.evidenceKeywords = arr;
+    if (arr.length < EVIDENCE_KEYWORDS_MIN) {
+      deficient.push({
+        categoryName,
+        measureId: String(measure?.measureId || ""),
+        title: String(measure?.title || ""),
+        definition: String(measure?.definition || ""),
+        existing: arr,
+        needed: EVIDENCE_KEYWORDS_MIN - arr.length,
+      });
+    }
+  }
+  return { deficient, oversized };
+}
+
+async function repairEvidenceKeywords(draft: any, frameworkName: string, topicDescription: string): Promise<{ passes: number; remainingDeficient: number; totalMeasures: number; totalDeficientBefore: number }> {
+  const { completeWithFallback } = await import("../lib/ai-providers.js");
+  const totalMeasures = collectMeasures(draft).length;
+  const initial = normalizeAndCountKeywords(draft);
+  const totalDeficientBefore = initial.deficient.length;
+  if (totalDeficientBefore === 0) return { passes: 0, remainingDeficient: 0, totalMeasures, totalDeficientBefore: 0 };
+
+  const MAX_PASSES = 2;
+  let passes = 0;
+  let deficient = initial.deficient;
+  while (deficient.length > 0 && passes < MAX_PASSES) {
+    passes++;
+    const listing = deficient.map((d, i) => {
+      return `${i + 1}. measureId="${d.measureId}" | category="${d.categoryName}"\n   title: ${d.title}\n   definition: ${d.definition.slice(0, 400)}\n   existing evidenceKeywords (${d.existing.length}): ${JSON.stringify(d.existing)}\n   needed: at least ${d.needed} MORE keywords to reach the ${EVIDENCE_KEYWORDS_MIN}-keyword minimum`;
+    }).join("\n\n");
+
+    const repairSystem = `You are a framework quality-assurance assistant. Your ONLY job is to add specific, retrieval-useful evidenceKeywords to measures that are below the mandatory 10-keyword minimum. Return valid JSON only. Do not add commentary. Do not change any other field.`;
+
+    const repairPrompt = `Framework: ${frameworkName}
+Topic description: ${topicDescription.slice(0, 800)}
+
+The following measures currently have fewer than ${EVIDENCE_KEYWORDS_MIN} evidenceKeywords and MUST be brought up to a total of ${EVIDENCE_KEYWORDS_MIN}-${EVIDENCE_KEYWORDS_MAX} keywords each. For every measure below, produce a FINAL list of evidenceKeywords (10-15 items) that:
+- Includes the existing keywords (do not drop them unless they are duplicates or generic)
+- Adds new highly specific terms: technical vocabulary, acronyms, standard names (e.g. TCFD, PCAF, SFDR, GRI, NIST AI RMF), metric names, quantitative phrasings, common phrasings used in corporate disclosures, and topically relevant synonyms
+- Reflects the measure's title and definition (i.e., the keywords should actually help retrieve passages of evidence for THIS specific measure, not generic topic words)
+- Avoids duplicates and near-duplicates
+- Contains between ${EVIDENCE_KEYWORDS_MIN} and ${EVIDENCE_KEYWORDS_MAX} items inclusive
+
+MEASURES TO REPAIR:
+
+${listing}
+
+Return JSON with this exact shape (no other keys, no prose, wrapped in a \`\`\`json code block):
+\`\`\`json
+{
+  "fixes": [
+    { "measureId": "...", "evidenceKeywords": ["...", "...", ...] }
+  ]
+}
+\`\`\`
+Every measureId listed above MUST appear exactly once in the fixes array with a compliant keyword list.`;
+
+    let repairText = "";
+    try {
+      const { text } = await completeWithFallback("gemini", { system: repairSystem, prompt: repairPrompt, maxTokens: 8192 });
+      repairText = text || "";
+    } catch (err) {
+      console.warn(`[FrameworkBuilder] evidenceKeywords repair pass ${passes} LLM call failed:`, err);
+      break;
+    }
+
+    let parsed: any = null;
+    const m = repairText.match(/```json\s*([\s\S]*?)```/);
+    const rawJson = m ? m[1].trim() : repairText.trim();
+    try { parsed = JSON.parse(rawJson); } catch { try { parsed = repairAndParseJSON(rawJson); } catch { parsed = null; } }
+    if (!parsed || !Array.isArray(parsed.fixes)) {
+      console.warn(`[FrameworkBuilder] evidenceKeywords repair pass ${passes} returned no parseable fixes`);
+      break;
+    }
+
+    // Index draft measures by measureId
+    const byId = new Map<string, any>();
+    for (const { measure } of collectMeasures(draft)) {
+      const id = String(measure?.measureId || "");
+      if (id) byId.set(id, measure);
+    }
+    for (const fix of parsed.fixes) {
+      const id = String(fix?.measureId || "");
+      const kws: unknown = fix?.evidenceKeywords;
+      if (!id || !byId.has(id) || !Array.isArray(kws)) continue;
+      const cleaned = (kws as unknown[]).map((x) => String(x || "").trim()).filter((x) => x.length > 0);
+      // Dedup case-insensitively
+      const seen = new Set<string>();
+      const finalKws: string[] = [];
+      for (const k of cleaned) { const lk = k.toLowerCase(); if (seen.has(lk)) continue; seen.add(lk); finalKws.push(k); if (finalKws.length >= EVIDENCE_KEYWORDS_MAX) break; }
+      byId.get(id).evidenceKeywords = finalKws;
+    }
+
+    // Re-count
+    const check = normalizeAndCountKeywords(draft);
+    deficient = check.deficient;
+  }
+
+  return { passes, remainingDeficient: deficient.length, totalMeasures, totalDeficientBefore };
+}
+
 // ─── JSON Repair Utility ─────────────────────────────────────────────────────
 // Handles truncated or malformed JSON from LLM output (e.g., when hitting token limits)
 function repairAndParseJSON(raw: string): any {
@@ -305,7 +434,7 @@ Only generate once approved. When generating:
 - Every measure MUST include explicit_exclusions in scoringGuidance where relevant
 - Every measure MUST include temporal_note if time-sensitivity is relevant
 - Every measure MUST include required_evidence_type if a specific evidence form is needed
-- Evidence keywords MUST be highly specific (10-15 per measure, including technical terms, acronyms, and common phrasings)
+- Evidence keywords MUST be highly specific: EXACTLY 10-15 per measure (minimum 10, maximum 15). Count them before emitting each measure. If you have fewer than 10, add more specific technical terms, acronyms, metric names, phrasings, sector-specific vocabulary, or common synonyms until you reach at least 10. Nine is NOT acceptable — you must reach 10.
 
 ADDITIONAL GUIDELINES:
 - Make PROACTIVE SUGGESTIONS on topics, categories, and specific measures
@@ -419,7 +548,7 @@ WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON bloc
             "required_evidence_type": "Must be an explicit, quantified target with base year, target year, and percentage reduction stated in company's own disclosure (not inferred from alliance membership)",
             "temporal_note": "Score based on most recent disclosure only. If target has been withdrawn or company has left the relevant alliance, score No regardless of historical commitment."
           },
-          "evidenceKeywords": ["10-15 highly specific keywords", "including technical terms", "acronyms like PCAF", "SBTi", "specific metric names", "common phrasings used in disclosures", "sector names", "target types"]
+          "evidenceKeywords": ["MINIMUM 10, MAXIMUM 15 highly specific keywords per measure", "include technical terms", "acronyms like PCAF", "SBTi", "specific metric names", "common phrasings used in disclosures", "sector names", "target types", "synonyms and abbreviations", "regulatory references"]
         }
       ]
     }
@@ -449,7 +578,7 @@ IMPORTANT RULES:
 - Each scoringGuidance.partial entry MUST be at least 40 words with specific examples
 - Include explicit_exclusions for EVERY measure where there is any risk of false positives
 - Include temporal_note for any measure involving targets, commitments, or policies that could change over time
-- Include evidenceKeywords for every measure (10-15 keywords each — more specific = better retrieval)
+- Include evidenceKeywords for every measure. STRICT COUNT: minimum 10, maximum 15 per measure. Verify the count before you emit each measure. Fewer than 10 is a validation failure.
 - Generate the number of measures the user requested (or that was agreed in the category structure proposal). There is NO fixed maximum — generate as many as needed.
 - MINIMUM RULE: Every category MUST have at least 3 measures. If a category would have fewer than 3, merge it into a related category or expand it with additional relevant measures.
 - Distribute measures across categories according to the approved structure. If no structure was explicitly approved, use your judgment based on topic complexity.
@@ -465,7 +594,7 @@ QUALITY CHECKLIST (mention this to the user when appropriate):
 - [ ] Required evidence types are specified where the FORM of evidence matters
 - [ ] Measures are mutually exclusive (no overlap)
 - [ ] Measures are collectively exhaustive (cover all aspects)
-- [ ] Evidence keywords are provided for each measure (10-15 specific terms including technical jargon)
+- [ ] Evidence keywords are provided for each measure — verified count between 10 and 15 inclusive (specific terms including technical jargon)
 - [ ] All measures are answerable from public corporate disclosures
 - [ ] Key definitional boundaries are resolved (e.g., financed vs. facilitated, absolute vs. intensity)
 - [ ] Disambiguation probes have been asked and answers embedded in scoring guidance
@@ -552,6 +681,22 @@ ${fileContext && fileContext.length > 0 ? `\nUPLOADED REFERENCE FILES:\nThe user
           frameworkDraft = repairAndParseJSON(truncatedMatch[1].trim());
           console.warn(`[FrameworkBuilder] Recovered truncated JSON (output likely hit token limit)`);
         } catch {}
+      }
+    }
+
+    // Post-generation validator + repair: enforce 10-15 evidenceKeywords per measure
+    if (frameworkDraft && Array.isArray(frameworkDraft.categories)) {
+      try {
+        const report = await repairEvidenceKeywords(
+          frameworkDraft,
+          String(frameworkDraft.name || ""),
+          String(frameworkDraft.topicDescription || ""),
+        );
+        if (report.totalDeficientBefore > 0) {
+          console.log(`[FrameworkBuilder] evidenceKeywords repair: ${report.totalDeficientBefore}/${report.totalMeasures} measures under-quota before repair; ${report.remainingDeficient} still under-quota after ${report.passes} pass(es)`);
+        }
+      } catch (err) {
+        console.warn(`[FrameworkBuilder] evidenceKeywords validator failed (draft still returned):`, err);
       }
     }
 
