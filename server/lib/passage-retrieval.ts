@@ -1352,7 +1352,21 @@ export function buildEvidencePackForMeasure(opts: {
   // topic-primary docs cannot crowd out SEC Item 1A force-include or BM25
   // diversity: at most 2 chunks per topic-primary doc, at most
   // TOPIC_PRIMARY_PER_MEASURE_CAP total chunks reserved across all TP docs.
-  const TOPIC_PRIMARY_PER_MEASURE_CAP = 4;
+  // I63 CHANGE: The cap was previously a hard 4 across ALL topic-primary docs. For
+  // frameworks whose corpus contains many small topic-narrative documents (e.g. an
+  // AI-governance framework where BCE has 5-6 AI-relevant PDFs), a hard cap of 4
+  // starves the 5th and 6th documents entirely, so the LLM never sees their
+  // content. The fix: scale the cap to guarantee AT LEAST 1 chunk per topic-
+  // primary doc up to a sane ceiling. Floor = 1 per doc; ceiling protects the
+  // budget for BM25 diversity. Bounds chosen to be safe:
+  //   - Floor per doc: 1 (round-robin already ensures fairness)
+  //   - Absolute ceiling: min(topK/2, 8) so at least half the pack remains BM25-
+  //     driven and no single mechanism can dominate.
+  // Framework-agnostic: driven by summarizer's classification. No topic literals.
+  const TOPIC_PRIMARY_PER_MEASURE_CAP = Math.min(
+    Math.max(4, topicPrimaryDocIndexes ? topicPrimaryDocIndexes.size : 0),
+    Math.max(4, Math.min(Math.floor(EVIDENCE_TOP_K / 2), 8)),
+  );
   const TOPIC_PRIMARY_CHUNKS_PER_DOC = 2;
   if (topicPrimaryDocIndexes && topicPrimaryDocIndexes.size > 0) {
     // Group topic-primary-doc chunks by docIndex; within each doc, sort by BM25
