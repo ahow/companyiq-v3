@@ -538,6 +538,15 @@ export interface EvidencePack {
     }>;
     docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>;
     queryTermCount: number;
+    // I57b: what candidate documents existed at chunk-selection time, and which
+    // ones' titles matched an evidenceKeyword substring. Helps diagnose the case
+    // where topical PDFs exist in the corpus but never surface into top-K.
+    candidateDocs?: Array<{
+      docUrl: string | null;
+      docTitle: string | null;
+      chunkCount: number;
+      titleKeywordMatches: number;
+    }>;
   };
 }
 
@@ -807,11 +816,36 @@ export function buildEvidencePackForMeasure(opts: {
   // SEC section relevance for this measure (empty for non-SEC corpora / measures).
   const measureSections = relevantSecSections(measure);
 
+  // I57b: Identify docs whose title/URL match ≥2 evidenceKeywords. These are
+  // strongly on-topic documents (e.g. "Modern Slavery Group Statement" matches
+  // 'modern slavery' + 'anti-slavery statement'). We use a small BM25 tie-
+  // breaker bonus so genuinely topical docs surface when their chunks have
+  // comparable BM25 scores to bulk-filing chunks. Kept small (≤3) to avoid
+  // the I57 regression where an aggressive multiplier crushed BM25.
+  //
+  // Also collect their docIndex set so the selection step can guarantee at
+  // least 2 chunks from strongly-matching docs (a mini force-include).
+  const evKwList = ((measure.evidenceKeywords || []) as string[])
+    .map((k) => (k || "").toLowerCase().trim())
+    .filter((k) => k.length >= 4);
+  const docTitleKeywordCount = new Map<number, number>();
+  for (const ch of chunks) {
+    if (docTitleKeywordCount.has(ch.docIndex)) continue;
+    const hay = `${(ch.docTitle || "").toLowerCase()} ${(ch.docUrl || "").toLowerCase()}`;
+    let m = 0;
+    for (const kw of evKwList) if (hay.includes(kw)) m++;
+    docTitleKeywordCount.set(ch.docIndex, m);
+  }
+  const strongTopicalDocs = new Set<number>();
+  for (const [docIdx, cnt] of docTitleKeywordCount) if (cnt >= 2) strongTopicalDocs.add(docIdx);
+
   // Score all chunks: BM25 relevance + an explicit topic-relevance bonus (Layer B)
   // + a SEC section bonus (Concern 2) when the chunk's tagged 10-K item matches one
   // of the measure's relevant sections (e.g. risk measures → Item 1A). The section
   // bonus only applies when (a) the chunk is section-tagged and (b) it is relevant,
   // so non-SEC documents and off-section chunks are unaffected.
+  // I57b: small doc-title bonus (max +3) for chunks whose parent doc matches ≥1 keyword.
+  const DOC_TITLE_TIEBREAK = 1.5;
   const scored = chunks.map((chunk, idx) => {
     const bm25 = bm25Score(uniqueTerms, idx, bm25Index);
     const hits = countTopicHits(chunk.text, topicTerms);
@@ -819,12 +853,15 @@ export function buildEvidencePackForMeasure(opts: {
     const topicBonus = hits > 0 ? TOPIC_RELEVANCE_WEIGHT * (1 + Math.log(hits)) : 0;
     const onSection = !!(chunk.section && measureSections.has(chunk.section));
     const sectionBonus = onSection ? SEC_SECTION_BOOST : 0;
+    // I57b: mild tie-breaker bonus — up to +3, kept small so BM25 still dominates.
+    const kwMatchCount = docTitleKeywordCount.get(chunk.docIndex) || 0;
+    const docTitleBonus = Math.min(kwMatchCount, 2) * DOC_TITLE_TIEBREAK;
     return {
       idx,
       docIndex: chunk.docIndex,
       bm25,
       topicHits: hits,
-      score: bm25 + topicBonus + sectionBonus,
+      score: bm25 + topicBonus + sectionBonus + docTitleBonus,
       text: chunk.text,
     };
   });
@@ -1345,6 +1382,36 @@ export function buildEvidencePackForMeasure(opts: {
     topicAdded++;
   }
 
+  // Step 1.5 (I57b) — Strong-topical-doc floor. When one or more documents have
+  // titles/URLs matching ≥2 of the measure's evidenceKeywords, guarantee up to 2
+  // chunks from each such document (subject to global topK/maxChars). Selected
+  // by highest per-doc score so the most substantive body chunks land in the
+  // pack. This closes the fw8 retrieval→scoring bridge: JPM's Modern Slavery
+  // Statement PDFs now reliably surface even when SEC 10-K text dominates BM25.
+  //
+  // Framework-agnostic: driven by the measure's declared evidenceKeywords (data),
+  // not by any topic-specific literal in code. Bounded per doc so no single
+  // topical doc can crowd out BM25 diversity.
+  if (strongTopicalDocs.size > 0) {
+    const STRONG_TOPICAL_CHUNKS_PER_DOC = 2;
+    // For each strong topical doc, pick its top-scoring chunks (already global-sorted).
+    const perStrongDoc = new Map<number, number>();
+    for (const item of scored) {
+      if (!strongTopicalDocs.has(item.docIndex)) continue;
+      const usedInDoc = perStrongDoc.get(item.docIndex) || 0;
+      if (usedInDoc >= STRONG_TOPICAL_CHUNKS_PER_DOC) continue;
+      if (selected.length >= topK) break;
+      if (evidenceLen + item.text.length > maxChars) continue;
+      if (selected.includes(item)) continue;
+      const perDocUsed = perDocCount.get(item.docIndex) || 0;
+      if (perDocUsed >= maxChunksPerDoc + 1) continue;
+      selected.push(item);
+      perDocCount.set(item.docIndex, perDocUsed + 1);
+      perStrongDoc.set(item.docIndex, usedInDoc + 1);
+      evidenceLen += item.text.length + 2;
+    }
+  }
+
   // Step 2 — Fill remaining slots by blended score, respecting per-doc budget.
   for (const item of scored) {
     if (item.score <= 0 && item.topicHits === 0) continue;
@@ -1450,6 +1517,37 @@ export function buildEvidencePackForMeasure(opts: {
     const key = chunks[s.idx]?.docUrl || null;
     docBreakdownMap.set(key, (docBreakdownMap.get(key) || 0) + 1);
   }
+  // I57b: enumerate ALL candidate documents at chunk-selection time, marking
+  // how many of the measure's evidenceKeywords match each doc's title/url.
+  // This surfaces the case where topical PDFs exist in the corpus but never
+  // reach top-K — the true root cause of JPM/Barclays/HDFC fw8 scoring at 0.
+  const evKwLower = ((measure.evidenceKeywords || []) as string[])
+    .map((k) => (k || "").toLowerCase().trim())
+    .filter((k) => k.length >= 4);
+  const candidateDocMap = new Map<number, { docUrl: string | null; docTitle: string | null; chunkCount: number; titleKeywordMatches: number }>();
+  for (const ch of chunks) {
+    const key = ch.docIndex;
+    if (!candidateDocMap.has(key)) {
+      const hay = `${(ch.docTitle || "").toLowerCase()} ${(ch.docUrl || "").toLowerCase()}`;
+      const matches = evKwLower.filter((k) => hay.includes(k)).length;
+      candidateDocMap.set(key, {
+        docUrl: ch.docUrl || null,
+        docTitle: ch.docTitle || null,
+        chunkCount: 0,
+        titleKeywordMatches: matches,
+      });
+    }
+    candidateDocMap.get(key)!.chunkCount += 1;
+  }
+  // Emit up to top-10 keyword-matched docs (or top-10 by chunkCount) for the
+  // diagnostic. Keeps payload size bounded.
+  const candidateDocs = Array.from(candidateDocMap.values())
+    .sort((a, b) => {
+      if (b.titleKeywordMatches !== a.titleKeywordMatches) return b.titleKeywordMatches - a.titleKeywordMatches;
+      return b.chunkCount - a.chunkCount;
+    })
+    .slice(0, 10);
+
   const passageDiagnostics = {
     topChunks: selected.slice(0, 5).map((s) => {
       const ch = chunks[s.idx];
@@ -1465,6 +1563,7 @@ export function buildEvidencePackForMeasure(opts: {
     }),
     docBreakdown: Array.from(docBreakdownMap.entries()).map(([docUrl, chunkCount]) => ({ docUrl, chunkCount })),
     queryTermCount: uniqueTerms.length,
+    candidateDocs,
   };
 
   return {
