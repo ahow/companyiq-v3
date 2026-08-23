@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v57b-strong-topical-floor";
+export const PIPELINE_VERSION = "v56b-cctld-bank-in";
