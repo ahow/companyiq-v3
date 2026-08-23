@@ -762,6 +762,11 @@ export function buildEvidencePackForMeasure(opts: {
   // winner from the compressed per-measure chunk view (where the cover page may not
   // survive and a third-party PDF mirror could win).
   preferredAnnualUrl?: string;
+  // I60: DocIndex set of documents the upstream summarizer classified as topic-
+  // primary (framework.requiredDocTypes URL/title match OR dataPatterns content
+  // promotion). Used to force-include per-doc top chunks into every measure's
+  // pack — analogous to Item 1A reserve for SEC filings but framework-driven.
+  topicPrimaryDocIndexes?: Set<number>;
 }): EvidencePack {
   const {
     measure,
@@ -775,6 +780,7 @@ export function buildEvidencePackForMeasure(opts: {
     companyId,
     frameworkId,
     preferredAnnualUrl,
+    topicPrimaryDocIndexes,
   } = opts;
 
   // Build query terms from measure title + definition + evidence keywords + terminology
@@ -1345,6 +1351,71 @@ export function buildEvidencePackForMeasure(opts: {
     topicAdded++;
   }
 
+  // Step 1.5 (I60) — TOPIC-PRIMARY FORCE-INCLUDE. When the upstream summarizer
+  // has classified one or more corpus documents as topic-primary (framework's
+  // requiredDocTypes URL/title match OR dataPatterns content promotion),
+  // guarantee up to 2 chunks per topic-primary doc into every measure's pack,
+  // subject to a per-measure global cap. Selects the highest-BM25 chunks within
+  // each topic-primary doc so the most relevant per-measure content lands in
+  // the pack.
+  //
+  // This closes the fw8 pool-vs-per-measure gap seen in batch 1101 (JPM): the
+  // pool-level topic-primary reserve (I59/I59c) got 9 MSS-classified docs into
+  // the 560K corpus pool, but per-measure BM25 selected only SEC filings for
+  // all 31 measures. Now MSS chunks are force-included per measure regardless
+  // of BM25 rank, so the LLM sees the framework-authoritative content.
+  //
+  // Framework-agnostic: driven entirely by the summarizer's classification
+  // (framework-authored data). No topic/company literals in code. Bounded so
+  // topic-primary docs cannot crowd out SEC Item 1A force-include or BM25
+  // diversity: at most 2 chunks per topic-primary doc, at most
+  // TOPIC_PRIMARY_PER_MEASURE_CAP total chunks reserved across all TP docs.
+  const TOPIC_PRIMARY_PER_MEASURE_CAP = 4;
+  const TOPIC_PRIMARY_CHUNKS_PER_DOC = 2;
+  if (topicPrimaryDocIndexes && topicPrimaryDocIndexes.size > 0) {
+    // Group topic-primary-doc chunks by docIndex; within each doc, sort by BM25
+    // score DESC (deterministic tiebreak by seqInDoc ASC).
+    type Reserved = { idx: number; docIndex: number; score: number; text: string };
+    const byDoc = new Map<number, Reserved[]>();
+    for (const item of scored) {
+      if (!topicPrimaryDocIndexes.has(item.docIndex)) continue;
+      const arr = byDoc.get(item.docIndex) || [];
+      arr.push({ idx: item.idx, docIndex: item.docIndex, score: item.score, text: item.text });
+      byDoc.set(item.docIndex, arr);
+    }
+    // For each doc, keep top-N by score. Then flatten and sort globally by score.
+    const reservePool: Reserved[] = [];
+    for (const [, list] of byDoc) {
+      list.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx);
+      });
+      for (const r of list.slice(0, TOPIC_PRIMARY_CHUNKS_PER_DOC)) reservePool.push(r);
+    }
+    reservePool.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (a.docIndex !== b.docIndex) return a.docIndex - b.docIndex;
+      return (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx);
+    });
+    // Add up to TOPIC_PRIMARY_PER_MEASURE_CAP reserved chunks. Uses the same
+    // budget/perDoc bookkeeping as tryAdd() but bypasses the score gate.
+    let reservedCount = 0;
+    for (const r of reservePool) {
+      if (reservedCount >= TOPIC_PRIMARY_PER_MEASURE_CAP) break;
+      if (selected.length >= topK) break;
+      if (evidenceLen + r.text.length > maxChars) continue;
+      const existing = scored.find((s) => s.idx === r.idx);
+      if (!existing) continue;
+      if (selected.includes(existing)) continue;
+      const used = perDocCount.get(r.docIndex) || 0;
+      if (used >= maxChunksPerDoc + 1) continue;
+      selected.push(existing);
+      perDocCount.set(r.docIndex, used + 1);
+      evidenceLen += r.text.length + 2;
+      reservedCount++;
+    }
+  }
+
   // Step 2 — Fill remaining slots by blended score, respecting per-doc budget.
   for (const item of scored) {
     if (item.score <= 0 && item.topicHits === 0) continue;
@@ -1505,8 +1576,14 @@ export function buildEvidencePacksForCategory(opts: {
   // single source of truth and overrides the compressed-view re-derivation, so a
   // DEF 14A proxy whose cover page did not survive compression cannot win.
   reservedAnnualUrl?: string;
+  // I60: URLs the upstream summarizer classified as topic-primary (framework
+  // requiredDocTypes URL/title match OR dataPatterns content promotion). Threaded
+  // into per-measure retrieval so chunks from these docs get force-included
+  // alongside SEC Item 1A / DEF 14A force-includes. Framework-agnostic — the
+  // classification is driven entirely by framework-authored data.
+  topicPrimaryDocUrls?: string[];
 }): EvidencePack[] {
-  const { measures, combinedText, terminology, topicTerms = DEFAULT_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl } = opts;
+  const { measures, combinedText, terminology, topicTerms = DEFAULT_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl, topicPrimaryDocUrls } = opts;
 
   const chunks = chunkDocuments(combinedText);
   if (chunks.length === 0) {
@@ -1536,6 +1613,21 @@ export function buildEvidencePacksForCategory(opts: {
   // compressed view where a third-party PDF mirror could win.
   const preferredAnnualUrl = reservedAnnualUrl || computePreferredAnnualUrl(chunks);
 
+  // I60: precompute the topic-primary docIndex set. `topicPrimaryDocUrls` come
+  // from the summarizer; we resolve them to the chunk-level docIndex set once so
+  // the per-measure builder can do fast membership checks. URL normalisation
+  // (lowercase, strip fragment/query, strip trailing slash) mirrors the existing
+  // `normUrl` helper used for force-include annotation.
+  const normUrl = (u?: string) => (u || "").trim().toLowerCase().replace(/[#?].*$/, "").replace(/\/$/, "");
+  const tpNormSet = new Set<string>((topicPrimaryDocUrls || []).map(normUrl).filter((u) => u.length > 0));
+  const topicPrimaryDocIndexes = new Set<number>();
+  if (tpNormSet.size > 0) {
+    for (const c of chunks) {
+      if (topicPrimaryDocIndexes.has(c.docIndex)) continue;
+      if (tpNormSet.has(normUrl(c.docUrl))) topicPrimaryDocIndexes.add(c.docIndex);
+    }
+  }
+
   return measures.map((measure) =>
     buildEvidencePackForMeasure({
       measure,
@@ -1548,6 +1640,7 @@ export function buildEvidencePacksForCategory(opts: {
       companyId,
       frameworkId,
       preferredAnnualUrl,
+      topicPrimaryDocIndexes,
     })
   );
 }

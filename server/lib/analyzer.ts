@@ -652,7 +652,7 @@ async function summarizeDocuments(opts: {
   documentTitles?: string[];
   topicDescription: string;
   framework: Framework;
-}): Promise<{ text: string; model: string; reservedAnnualUrl?: string; corpusTopicWarning?: string }> {
+}): Promise<{ text: string; model: string; reservedAnnualUrl?: string; corpusTopicWarning?: string; topicPrimaryDocUrls?: string[] }> {
   const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription, framework } = opts;
 
   // Check summary cache. v3g: salt the cache key so the OLD header-lossy LLM
@@ -872,9 +872,20 @@ async function summarizeDocuments(opts: {
     console.warn(`[${companyName}] 37-B.3: ${corpusTopicWarning}`);
   }
 
+  // I60: Expose the set of topic-primary doc URLs so downstream per-measure
+  // passage retrieval can force-include chunks from these docs (analogous to
+  // Item 1A reserve for SEC filings). Docs are topic-primary if they were
+  // classified by either the URL/title token match (framework.requiredDocTypes)
+  // OR the content-based promotion (framework.dataPatterns ≥ threshold). Both
+  // are framework-authored data — no topic/company literals in code.
+  const topicPrimaryDocUrls = docEntries
+    .filter((e) => e.cls === "topic-primary" && !!e.url)
+    .map((e) => e.url);
+  console.log(`[${companyName}] topic-primary docs: ${topicPrimaryDocUrls.length} URLs (fed to per-measure retrieval)`);
+
   // If total is small enough, skip summarization and use BM25 directly
   if (combined.length < 600000) {
-    return { text: combined, model: "raw-pass", corpusTopicWarning };
+    return { text: combined, model: "raw-pass", corpusTopicWarning, topicPrimaryDocUrls };
   }
 
   // ─── HEADER-PRESERVING BM25 PRE-FILTER (v3g quote sourceUrl fix) ─────────────
@@ -1247,7 +1258,7 @@ async function summarizeDocuments(opts: {
     summarizerModel: "bm25-headers-v3l-topicaware",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3l-topicaware", reservedAnnualUrl, corpusTopicWarning };
+  return { text: relevantText, model: "bm25-headers-v3l-topicaware", reservedAnnualUrl, corpusTopicWarning, topicPrimaryDocUrls };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
@@ -1341,6 +1352,11 @@ export async function analyzeCompanyMeasures(opts: {
   // so the per-measure force-include anchors on the SAME doc, not a compressed-view
   // re-derivation that a DEF 14A proxy could win.
   let reservedAnnualUrl: string | undefined;
+  // I60: URLs of docs classified as topic-primary by the summarizer (via
+  // framework.requiredDocTypes URL/title match or framework.dataPatterns content
+  // hits). Threaded to buildEvidencePacksForCategory so per-measure retrieval
+  // can force-include chunks from these docs (analogous to Item 1A reserve).
+  let topicPrimaryDocUrls: string[] | undefined;
 
   if (settings.useBm25Retrieval && totalChars <= settings.bm25SkipSummarizationBelowChars) {
     // BM25-skip path: use raw text directly with document title headers
@@ -1350,7 +1366,49 @@ export async function analyzeCompanyMeasures(opts: {
       return `\n\n--- DOCUMENT: ${title} [${url}] ---\n\n${text}`;
     }).join("");
     summarizerModel = "bm25-direct";
-    console.log(`[${companyName}] BM25-skip path (${totalChars} chars < ${settings.bm25SkipSummarizationBelowChars})`);
+    // BM25-skip path: no summarizer classifier ran. Compute a lightweight
+    // topic-primary URL set here so per-measure force-include still works for
+    // small corpora. Uses the SAME classifyDoc heuristic as the summarizer, plus
+    // content-based promotion via dataPatterns.
+    try {
+      const dataPatterns = ((framework as any).dataPatterns as string[] | null) || [];
+      const dataPatternRegexes = dataPatterns
+        .map((p: string) => { try { return new RegExp(p, "gi"); } catch { return null; } })
+        .filter((r): r is RegExp => r !== null);
+      const requiredDocTypes = ((framework as any).requiredDocTypes as string[] | null) || [];
+      const CONTENT_PROMOTION_THRESHOLD = 10;
+      const tpUrls: string[] = [];
+      for (let i = 0; i < documentUrls.length; i++) {
+        const url = documentUrls[i] || "";
+        const title = documentTitles?.[i] || "";
+        const text = workingTexts[i] || "";
+        const haystack = (url + " " + title).toLowerCase();
+        let isPrimary = false;
+        // URL/title token match against requiredDocTypes.
+        for (const docType of requiredDocTypes) {
+          const words = docType.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+          if (words.length === 0) continue;
+          const matched = words.filter((w) => haystack.includes(w)).length;
+          if (matched >= Math.min(2, words.length)) { isPrimary = true; break; }
+        }
+        // Content-based promotion via dataPatterns.
+        if (!isPrimary && dataPatternRegexes.length > 0) {
+          let hits = 0;
+          const lower = text.toLowerCase();
+          for (const rx of dataPatternRegexes) {
+            rx.lastIndex = 0;
+            const m = lower.match(rx);
+            hits += m?.length || 0;
+            if (hits >= CONTENT_PROMOTION_THRESHOLD) { isPrimary = true; break; }
+          }
+        }
+        if (isPrimary && url) tpUrls.push(url);
+      }
+      topicPrimaryDocUrls = tpUrls;
+    } catch (e) {
+      console.warn(`[${companyName}] topic-primary URL derivation (bm25-skip) failed: ${(e as Error).message}`);
+    }
+    console.log(`[${companyName}] BM25-skip path (${totalChars} chars < ${settings.bm25SkipSummarizationBelowChars}) topicPrimary=${topicPrimaryDocUrls?.length ?? 0}`);
   } else {
     const result = await summarizeDocuments({
       companyName,
@@ -1364,7 +1422,8 @@ export async function analyzeCompanyMeasures(opts: {
     combinedText = result.text;
     summarizerModel = result.model;
     reservedAnnualUrl = result.reservedAnnualUrl;
-    console.log(`[${companyName}] Summarized via ${summarizerModel} (${combinedText.length} chars)${reservedAnnualUrl ? ` reservedAnnual=${reservedAnnualUrl.slice(0,70)}` : ""}`);
+    topicPrimaryDocUrls = result.topicPrimaryDocUrls;
+    console.log(`[${companyName}] Summarized via ${summarizerModel} (${combinedText.length} chars)${reservedAnnualUrl ? ` reservedAnnual=${reservedAnnualUrl.slice(0,70)}` : ""} topicPrimary=${topicPrimaryDocUrls?.length ?? 0}`);
   }
 
   // Layer B/D — derive the framework's topic lexicon and measure how much
@@ -1422,6 +1481,11 @@ export async function analyzeCompanyMeasures(opts: {
         // the SAME document the upstream item1a-reserve chose, instead of re-deriving
         // it on the compressed corpus (where a DEF 14A proxy could win).
         reservedAnnualUrl,
+        // I60: URLs of docs the summarizer classified as topic-primary (framework
+        // requiredDocTypes URL/title match OR dataPatterns content promotion).
+        // Per-measure retrieval force-includes chunks from these docs so the LLM
+        // sees framework-authoritative content instead of only bulk filings.
+        topicPrimaryDocUrls,
       });
     } else {
       // No BM25: use full text for all measures

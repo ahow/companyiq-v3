@@ -9,4 +9,4 @@
  *
  * Convention: "vNN-<short-slug>". Increment NN on every logic change.
  */
-export const PIPELINE_VERSION = "v59c-content-promotion-and-cache-fixes";
+export const PIPELINE_VERSION = "v60-per-measure-topic-primary-reserve";
