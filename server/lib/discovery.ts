@@ -1046,13 +1046,35 @@ function buildGeneralQueries(companyName: string, framework: Framework, companyD
 
   // LAYER 3: ADDITIVE metadata-driven queries from requiredDocTypes.
   // These AUGMENT the above layers. Deduplication via the seen set.
+  //
+  // I61: Also emit queries against the top ALIASES derived from the canonical
+  // company name (e.g. SMFG for 'Sumitomo Mitsui Financial Group', MUFG for
+  // 'Mitsubishi UFJ Financial Group', BSCH for 'Banco Santander Central Hispano').
+  // Rationale: Layer 3 previously used only the full canonical name. For
+  // acronym-branded issuers whose PARENT-BRAND documents are indexed under the
+  // short form (e.g. 'SMFG Group Sustainability Report', 'MUFG Human Rights
+  // Report'), a full-name-only search finds subsidiary docs first (e.g. 'Sumitomo
+  // Mitsui Banking Corporation Slavery Statement') while missing the umbrella
+  // parent-group doc. Adding alias variants of each requiredDocType query keeps
+  // discovery framework-agnostic (all queries flow from framework.requiredDocTypes
+  // and framework-agnostic alias derivation) while surfacing parent-brand docs.
+  //
+  // Bounded: at most 2 aliases (top by deriveAliases order — typically the
+  // initialism first, then the concatenated form); at most 5 requiredDocTypes;
+  // dedupe by string via the shared `seen` set so no query is issued twice.
   const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
   if (requiredDocTypes && requiredDocTypes.length > 0) {
     const domain = companyDomain || "";
+    const aliases = deriveAliases(companyName, null)
+      .filter((a) => a && a.length >= 2 && a.toLowerCase() !== companyName.toLowerCase())
+      .slice(0, 2);
+    const nameVariants = [companyName, ...aliases];
     for (const docType of requiredDocTypes.slice(0, 5)) {
-      addQuery(`"${companyName}" "${docType}" ${currentYear} OR ${lastYear}`);
-      addQuery(`"${companyName}" ${docType} filetype:pdf`);
-      addQuery(`${companyName} ${docType} ${currentYear}`);
+      for (const variant of nameVariants) {
+        addQuery(`"${variant}" "${docType}" ${currentYear} OR ${lastYear}`);
+        addQuery(`"${variant}" ${docType} filetype:pdf`);
+        addQuery(`${variant} ${docType} ${currentYear}`);
+      }
       if (domain) {
         addQuery(`site:${domain} ${docType}`);
       }

@@ -1407,9 +1407,8 @@ export function buildEvidencePackForMeasure(opts: {
       evidenceLen += r.text.length + 2;
       reservedCount++;
     }
-    if (reservedCount > 0 || topicPrimaryDocIndexes.size > 0) {
-      console.log(`[I60-per-measure] measure=${measure.measureId} tpDocsAvail=${topicPrimaryDocIndexes.size} reservePoolSize=${reservePool.length} reserved=${reservedCount}`);
-    }
+    // Verbose per-measure diag removed after I60c validation — was too noisy in
+    // worker logs. Aggregate diag remains in the passageDiagnostics sidecar.
   }
 
   // Step 1 — Topic floor: guarantee a few of the most topic-dense chunks are in
@@ -1645,15 +1644,9 @@ export function buildEvidencePacksForCategory(opts: {
       if (tpNormSet.has(normUrl(c.docUrl))) topicPrimaryDocIndexes.add(c.docIndex);
     }
   }
-  // I60 diag: expose how many topic-primary URLs were provided vs how many were
-  // resolved to actual chunk docIndexes. If a URL is provided but never resolves
-  // (e.g. because its content did not survive the summarizer's 560K pool), the
-  // per-measure reserve cannot help — that indicates an upstream pool problem.
-  if ((topicPrimaryDocUrls || []).length > 0) {
-    // Sample first 3 URLs on both sides for a quick eyeball diagnostic
-    const chunkUrlSample = Array.from(new Set(chunks.map((c) => normUrl(c.docUrl)))).slice(0, 3);
-    const tpUrlSample = Array.from(tpNormSet).slice(0, 3);
-    console.log(`[I60-diag] provided=${(topicPrimaryDocUrls || []).length} resolvedDocIndexes=${topicPrimaryDocIndexes.size} tpUrlSample=${JSON.stringify(tpUrlSample)} chunkUrlSample=${JSON.stringify(chunkUrlSample)}`);
+  // I60 diag summary (kept compact after validation — one line per category call).
+  if ((topicPrimaryDocUrls || []).length > 0 && topicPrimaryDocIndexes.size !== (topicPrimaryDocUrls || []).length) {
+    console.log(`[I60] tp-url-resolution: provided=${(topicPrimaryDocUrls || []).length} resolved=${topicPrimaryDocIndexes.size} (some URLs did not survive the summarizer pool)`);
   }
 
   return measures.map((measure) =>
