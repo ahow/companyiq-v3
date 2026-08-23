@@ -1383,20 +1383,31 @@ export function buildEvidencePackForMeasure(opts: {
       arr.push({ idx: item.idx, docIndex: item.docIndex, score: item.score, text: item.text });
       byDoc.set(item.docIndex, arr);
     }
-    // For each doc, keep top-N by score. Then flatten and sort globally by score.
-    const reservePool: Reserved[] = [];
+    // For each doc, keep top-N by score in per-doc order.
+    // Then INTERLEAVE across docs (round-robin): each doc contributes its 1st
+    // chunk before any doc contributes its 2nd. This guarantees every topic-
+    // primary doc gets a fair shot at the pack, so one keyword-dense small doc
+    // (e.g. purchase-order-terms with dense 'supplier code of conduct' text)
+    // cannot monopolise the reserve and starve the diverse MSS PDFs.
+    const perDocSorted: Reserved[][] = [];
     for (const [, list] of byDoc) {
       list.sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx);
       });
-      for (const r of list.slice(0, TOPIC_PRIMARY_CHUNKS_PER_DOC)) reservePool.push(r);
+      perDocSorted.push(list.slice(0, TOPIC_PRIMARY_CHUNKS_PER_DOC));
     }
-    reservePool.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      if (a.docIndex !== b.docIndex) return a.docIndex - b.docIndex;
-      return (chunks[a.idx].seqInDoc ?? a.idx) - (chunks[b.idx].seqInDoc ?? b.idx);
-    });
+    // Deterministic doc order: docIndex ASC. Round-robin: fill column 0 across
+    // all docs, then column 1, etc. Within each row, keep docIndex ASC so runs
+    // are reproducible.
+    perDocSorted.sort((a, b) => (a[0]?.docIndex ?? 0) - (b[0]?.docIndex ?? 0));
+    const reservePool: Reserved[] = [];
+    const maxPerDocLen = Math.max(0, ...perDocSorted.map((l) => l.length));
+    for (let col = 0; col < maxPerDocLen; col++) {
+      for (const list of perDocSorted) {
+        if (col < list.length) reservePool.push(list[col]);
+      }
+    }
     // Add up to TOPIC_PRIMARY_PER_MEASURE_CAP reserved chunks. Uses the same
     // budget/perDoc bookkeeping as tryAdd() but bypasses the score gate.
     let reservedCount = 0;
