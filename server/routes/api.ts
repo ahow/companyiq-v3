@@ -16,6 +16,7 @@ import { detectScoreAnomalies } from "../lib/anomaly-detection.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
 import { assertProductionFingerprint, computeRecoveryLabels, deploymentFingerprintFromEnvironment, isTerminalLifecycleState, type DeploymentFingerprint } from "../lib/reliability.js";
+import { analyzeCompanyMeasures } from "../lib/analyzer.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -2065,5 +2066,106 @@ apiRouter.post("/lists/:id/reset-discovery-cache", async (req: Request, res: Res
     res.json({ success: true, resetCount });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── I59d DIAGNOSTIC: controlled single-corpus probe ─────────────────────────
+// Run `analyzeCompanyMeasures` for a company/framework with a hand-filtered
+// subset of that company's docs. Purpose: disambiguate retrieval vs scoring
+// as the ceiling on any measure. Read-only — never writes to measure_scores
+// or any other persistent store.
+//
+// POST /api/diagnostic/analyze-subset
+// Body: { companyId, frameworkId, docFilter: { includeSubstrings?: string[], excludeSubstrings?: string[] } }
+// Response: verdicts + evidenceSummary + first 3 quotes per measure.
+apiRouter.post("/diagnostic/analyze-subset", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const { companyId, frameworkId, docFilter } = req.body as any;
+    if (!companyId || !frameworkId) {
+      return res.status(400).json({ error: "companyId and frameworkId are required" });
+    }
+    const company = await storage.getCompanyById(companyId, workspaceId);
+    if (!company) return res.status(404).json({ error: "company not found" });
+    const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+    if (!framework) return res.status(404).json({ error: "framework not found" });
+    const measures = await storage.getFrameworkMeasures(frameworkId);
+
+    // Build a URL/title filter over this company's fetched-ok docs, reading
+    // content directly from documents + document_content (bypasses any content
+    // stripping that API summary paths apply).
+    const inc = ((docFilter?.includeSubstrings || []) as string[]).map((s) => s.toLowerCase()).filter(Boolean);
+    const exc = ((docFilter?.excludeSubstrings || []) as string[]).map((s) => s.toLowerCase()).filter(Boolean);
+    const rows = await db.execute(sql`
+      SELECT d.id, d.url, d.title,
+             COALESCE(dc.content, d.content) AS content
+      FROM documents d
+      LEFT JOIN document_content dc ON dc.id = d.content_id
+      WHERE d.company_id = ${companyId}
+        AND d.fetch_status = 'ok'
+        AND COALESCE(dc.content_length, length(d.content)) > 50
+      ORDER BY d.id
+    `);
+    const allDocs: any[] = (rows.rows as any[]).filter((r) => r.content && r.content.length > 50);
+    const filtered = allDocs.filter((d) => {
+      const hay = `${(d.title || "").toLowerCase()} ${(d.url || "").toLowerCase()}`;
+      if (inc.length > 0 && !inc.some((s) => hay.includes(s))) return false;
+      if (exc.length > 0 && exc.some((s) => hay.includes(s))) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      return res.json({
+        error: "no docs match filter",
+        totalDocs: allDocs.length,
+        sample: allDocs.slice(0, 5).map((d) => ({ id: d.id, title: d.title, url: d.url })),
+      });
+    }
+
+    const documentTexts = filtered.map((d) => d.content as string);
+    const documentUrls = filtered.map((d) => d.url as string);
+    const documentTitles = filtered.map((d) => d.title as string);
+    const totalChars = documentTexts.reduce((s, t) => s + t.length, 0);
+
+    const analysis = await analyzeCompanyMeasures({
+      workspaceId,
+      companyName: company.name,
+      companyId,
+      documentTexts,
+      documentUrls,
+      documentTitles,
+      framework: framework as any,
+      measures: measures as any,
+      freshScoring: true,
+    });
+
+    const allM = analysis.categories.flatMap((c: any) => c.measures);
+    const report = allM.map((m: any) => ({
+      measureId: m.measureId,
+      title: m.title,
+      verdict: m.verdict,
+      score: m.score,
+      confidence: m.confidence,
+      abstained: (m as any).abstained === true,
+      evidenceSummary: (m.evidenceSummary || "").slice(0, 600),
+      quotes: (m.quotes || [])
+        .filter((q: any) => q.sourceUrl !== "diag://retrieval-v1")
+        .slice(0, 3)
+        .map((q: any) => ({
+          text: (q.text || "").slice(0, 300),
+          source: q.source,
+          sourceUrl: q.sourceUrl,
+        })),
+    }));
+    res.json({
+      company: company.name,
+      framework: framework.name,
+      inputDocs: filtered.map((d) => ({ id: d.id, title: d.title, url: d.url, chars: d.content.length })),
+      totalChars,
+      totalScore: analysis.scorePercentage,
+      measures: report,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message, stack: (error.stack || "").split("\n").slice(0, 5) });
   }
 });
