@@ -1572,6 +1572,25 @@ export async function analyzeCompanyMeasures(opts: {
       // fingerprint must never satisfy a cache hit.
       const fingerprintEligible = (evidencePack as any)?.fingerprintEligible !== false;
 
+      // I51-B/I58: attach passage-retrieval telemetry (diagnostic-only). Enriched
+      // with pack-level metrics (chunkCount/totalChars/topicHits/forceIncludedCount/
+      // requiredDocPresent) so downstream persistence layer can emit a single
+      // per-measure diagnostic sidecar to the results JSON. Attached BEFORE the
+      // verdict-cache short-circuit so that even cache hits carry the retrieval
+      // diagnostic — otherwise cached fw8 measures returned to callers without
+      // the sidecar and offline debugging saw an empty diag stream.
+      if (evidencePack?.passageDiagnostics) {
+        const epAny = evidencePack as any;
+        (measureResult as MeasureResult).passageDiagnostics = {
+          ...evidencePack.passageDiagnostics,
+          chunkCount: epAny.chunkCount,
+          totalChars: epAny.totalChars,
+          topicHits: epAny.topicHits,
+          forceIncludedCount: epAny.forceIncludedCount,
+          requiredDocPresent: epAny.requiredDocPresent,
+        } as any;
+      }
+
       // v3e (Section 4) / v3g (Bug 1): VERDICT CACHE (now OPT-IN, default OFF — see
       // loadAnalysisSettings). When enabled and a prior verdict exists for this
       // company+measure with an IDENTICAL, cache-eligible evidence fingerprint,
@@ -1592,26 +1611,12 @@ export async function analyzeCompanyMeasures(opts: {
             confidence: prior.confidence || measureResult.confidence,
             evidenceSummary: prior.evidenceSummary || measureResult.evidenceSummary,
             verdictNuance: (prior.verdictNuance || measureResult.verdictNuance || "") + " [Reused: identical evidence fingerprint]",
+            // I58: preserve retrieval diagnostic even on cache hits.
+            passageDiagnostics: (measureResult as MeasureResult).passageDiagnostics,
           };
         } else if (prior && fp && prior.evidenceFingerprint && prior.evidenceFingerprint !== fp) {
           console.log(`[${companyName}] EVIDENCE-DRIFT ${measure.measureId}: fingerprint changed ${prior.evidenceFingerprint.slice(0, 8)} -> ${fp.slice(0, 8)} (re-scored)`);
         }
-      }
-
-      // I51-B/I58: attach passage-retrieval telemetry (diagnostic-only). Enriched
-      // with pack-level metrics (chunkCount/totalChars/topicHits/forceIncludedCount/
-      // requiredDocPresent) so downstream persistence layer can emit a single
-      // per-measure diagnostic sidecar to the results JSON.
-      if (evidencePack?.passageDiagnostics) {
-        const epAny = evidencePack as any;
-        (measureResult as MeasureResult).passageDiagnostics = {
-          ...evidencePack.passageDiagnostics,
-          chunkCount: epAny.chunkCount,
-          totalChars: epAny.totalChars,
-          topicHits: epAny.topicHits,
-          forceIncludedCount: epAny.forceIncludedCount,
-          requiredDocPresent: epAny.requiredDocPresent,
-        } as any;
       }
 
       return measureResult;
