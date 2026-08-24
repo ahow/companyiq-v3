@@ -60,10 +60,14 @@ interface MeasureFamilyRule {
 
 export const MEASURE_FAMILY_RULES: MeasureFamilyRule[] = [
   {
-    pattern: /(?:^|[\-\_\s])(policy|framework|principle|charter)[\-\_\s]?(?:published|adopted|documented)?\b|published[\-\_\s]?(?:policy|framework)/i,
+    // Only fire on measures whose ID explicitly says the policy must be PUBLISHED
+    // (not just referenced/internal). Otherwise fw9 4.1a-ai-policy-INTERNAL would
+    // get the same 'must be published' rule as 4.1-ai-policy-PUBLISHED, which
+    // defeats the purpose of separating the two measures.
+    pattern: /(?:^|[\-\_\s])(?:policy|framework|principle|charter)[\-\_\s]?(?:published|public|external|disclosed)\b|(?:^|[\-\_\s])published[\-\_\s]?(?:policy|framework|principles|charter|artefact)/i,
     description: "Published policy/framework/principles measures",
     rules: [
-      "To satisfy this measure the artefact must exist as a downloadable PDF, standalone webpage, or public document with a locatable URL. A named reference to the artefact in a proxy or annual report — without the artefact itself being findable via site search — is NOT sufficient.",
+      "To satisfy this 'published' measure the artefact must exist as a downloadable PDF, standalone webpage, or public document with a locatable URL. A named reference to the artefact in a proxy or annual report — without the artefact itself being findable via site search — is NOT sufficient. It would however satisfy an equivalent 'internal / referenced / adopted' variant of the measure.",
     ],
   },
   {
