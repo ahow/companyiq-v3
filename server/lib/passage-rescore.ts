@@ -221,12 +221,17 @@ function buildSmallTopicPrimaryFullDocs(chunks: Chunk[], topicPrimaryDocUrls: st
 // Public: re-rank the candidates of an evidence pack using LLM rescoring. Returns
 // a new EvidencePack whose text and chunkCount reflect the new ranking. If the
 // LLM call fails, returns the original pack unchanged.
+// I74: pack budgets are env-tunable so we can test wider packs without a code
+// change. Defaults match passage-retrieval.ts's EVIDENCE_MAX_CHARS/TOP_K.
+const RESCORE_DEFAULT_BUDGET_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "20000", 10);
+const RESCORE_DEFAULT_BUDGET_CHUNKS = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "20", 10);
+
 export async function rescorePackWithLLM(
   pack: EvidencePack,
   measure: FrameworkMeasure,
   combinedText: string,
-  budgetChars: number = 20000,
-  budgetChunks: number = 20,
+  budgetChars: number = RESCORE_DEFAULT_BUDGET_CHARS,
+  budgetChunks: number = RESCORE_DEFAULT_BUDGET_CHUNKS,
   topicPrimaryDocUrls?: string[],
 ): Promise<EvidencePack> {
   if (!RESCORE_ENABLED) return pack;
@@ -343,8 +348,8 @@ export async function rescorePacksForCategory(
   packs: EvidencePack[],
   measures: FrameworkMeasure[],
   combinedText: string,
-  budgetChars: number = 20000,
-  budgetChunks: number = 20,
+  budgetChars: number = RESCORE_DEFAULT_BUDGET_CHARS,
+  budgetChunks: number = RESCORE_DEFAULT_BUDGET_CHUNKS,
   topicPrimaryDocUrls?: string[],
 ): Promise<EvidencePack[]> {
   if (!RESCORE_ENABLED) return packs;

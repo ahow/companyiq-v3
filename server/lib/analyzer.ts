@@ -1489,7 +1489,12 @@ export async function analyzeCompanyMeasures(opts: {
       const { rescorePacksForCategory, isRescoreEnabled } = await import("./passage-rescore.js");
       if (isRescoreEnabled()) {
         console.log(`[${companyName}] LLM rescoring: ON for ${categoryMeasures.length} measures in category '${category}'`);
-        evidencePacks = await rescorePacksForCategory(evidencePacks as any, categoryMeasures, combinedText, 20000, 20, topicPrimaryDocUrls);
+        // I74: pass through env-driven budgets rather than hardcoding, so
+        // RETRIEVAL_EVIDENCE_MAX_CHARS / RETRIEVAL_EVIDENCE_TOP_K govern both
+        // the initial pack builder and the rescorer.
+        const _rescBudgetChars = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "20000", 10);
+        const _rescBudgetChunks = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "20", 10);
+        evidencePacks = await rescorePacksForCategory(evidencePacks as any, categoryMeasures, combinedText, _rescBudgetChars, _rescBudgetChunks, topicPrimaryDocUrls);
       }
     } else {
       // No BM25: use full text for all measures
