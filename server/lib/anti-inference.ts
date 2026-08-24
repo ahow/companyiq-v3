@@ -33,16 +33,18 @@
  */
 
 // ─── Layer 1: Universal Rules ────────────────────────────────────────────────
-// These apply to every measure of every framework.
+// These apply to every measure of every framework. Kept intentionally NARROW
+// after batch 1118 showed that a broader Layer 1 (8 rules) over-fired on
+// straightforward Yes cases (BCE 1.2, BCE 4.1a, S&P Global 1.1, 2.3, 5.1, 5.2)
+// by making every scoring decision strict-by-default. The lesson: universal
+// rules must be principles the LLM would apply if not present, not additional
+// strictness gates. Cross-cutting exclusions that block specific evidence
+// PATTERNS belong in Layer 2 (measure-family rules) instead.
 export const UNIVERSAL_ANTI_INFERENCE_RULES: string[] = [
-  "You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided.",
-  "DO NOT infer that a company has a specific target, policy or programme because they are a member of an alliance, initiative or signatory group. Alliance or initiative membership (Partnership on AI, OECD signatory, SBTi commitment, UN Global Compact, NZBA member, etc.) alone does not constitute company-specific evidence of the practice the measure asks about.",
-  "DO NOT infer that a policy, target or programme applies to all sectors, geographies, subsidiaries or activities if the text only names specific ones. Coverage-scope inference is not permitted.",
-  "DO NOT count a policy, programme or committee that is REFERENCED by name in a proxy, annual report or sustainability section but is NOT PUBLISHED as a downloadable artefact (PDF or standalone webpage) as evidence for a 'published X' measure. Named-but-unpublished satisfies only 'internal X adopted' or 'X referenced' measures.",
-  "DO NOT count programmes, policies or commitments belonging to a separately-listed subsidiary, affiliate or joint-venture group entity as evidence for the parent unless the parent explicitly adopts, funds or names the programme as its own in the parent's own disclosures.",
-  "DO NOT count evidence from documents older than the most recent reporting period (typically the latest annual filing plus interim filings and dated policy documents from the past 24 months). Pre-merger presentations, retired policies, lapsed programmes, or plans that have been superseded do NOT count as current disclosure.",
-  "DO NOT treat a mention of a topic in a sustainability or ESG section as evidence of board-level oversight, formal governance mandate or executive accountability when the proxy statement and annual filing are silent on the same point. Board-level measures require evidence in the proxy, annual filing, or a published board committee charter.",
-  "DO NOT satisfy topic-specific measures with generic language ('digital transformation', 'technology innovation', 'automation', 'analytics') unless the company explicitly names the practice as being of the topic being assessed. The measure's topic vocabulary must appear explicitly.",
+  "You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided. Do not infer beyond what is written.",
+  "DO NOT infer that a company has a specific target, policy or programme merely because they are a member of an alliance, initiative or signatory group (Partnership on AI, OECD signatory, SBTi commitment, UN Global Compact, NZBA member, etc.). Alliance membership alone is not company-specific evidence.",
+  "DO NOT count programmes, policies or commitments belonging to a separately-listed subsidiary or affiliate group entity as evidence for the parent unless the parent explicitly adopts or names the programme as its own.",
+  "DO NOT count evidence from lapsed, retired, superseded or pre-merger disclosures as current. Score based on the most recent reporting period.",
 ];
 
 // ─── Layer 2: Measure-Family Rules ───────────────────────────────────────────
