@@ -1352,16 +1352,18 @@ export function buildEvidencePackForMeasure(opts: {
   // topic-primary docs cannot crowd out SEC Item 1A force-include or BM25
   // diversity: at most 2 chunks per topic-primary doc, at most
   // TOPIC_PRIMARY_PER_MEASURE_CAP total chunks reserved across all TP docs.
-  // I65 (Change A): per-doc reserve depth 3 (was 2).
-  // I66 (Change B, additive): BM25 score floor on reserved chunks.
-  // I67 (Change C, additive): passage-length filter on reserved chunks. Skip
-  // chunks shorter than N chars, which are almost always table-of-contents
-  // fragments, section headers, or footer/copyright boilerplate that got a
-  // BM25 hit by keyword coincidence but carry no actual evidence.
+  // I68 (revert of I65/I66/I67 experiments to production defaults).
+  // Batches 1110/1111/1112 measured Changes A/A+B/A+B+C on top of I64 with the
+  // same corpus (scoreOnly). Results: A was a no-op; B regressed -0.84 pts; C
+  // partially recovered but still -0.48 vs baseline. None beat the I64 cap=4,
+  // depth=2, no-floor, no-minLen configuration.
+  //
+  // The env vars are retained (defaults 0.0 / 0) so any of the three refinements
+  // can be enabled per-deployment for future experiments without a code change.
   const TOPIC_PRIMARY_PER_MEASURE_CAP = 4;
-  const TOPIC_PRIMARY_CHUNKS_PER_DOC = 3;
-  const TOPIC_PRIMARY_MIN_BM25 = parseFloat(process.env.RETRIEVAL_TOPIC_PRIMARY_MIN_BM25 || "5.0");
-  const TOPIC_PRIMARY_MIN_CHARS = parseInt(process.env.RETRIEVAL_TOPIC_PRIMARY_MIN_CHARS || "200", 10);
+  const TOPIC_PRIMARY_CHUNKS_PER_DOC = 2;
+  const TOPIC_PRIMARY_MIN_BM25 = parseFloat(process.env.RETRIEVAL_TOPIC_PRIMARY_MIN_BM25 || "0.0");
+  const TOPIC_PRIMARY_MIN_CHARS = parseInt(process.env.RETRIEVAL_TOPIC_PRIMARY_MIN_CHARS || "0", 10);
   if (topicPrimaryDocIndexes && topicPrimaryDocIndexes.size > 0) {
     // Group topic-primary-doc chunks by docIndex; within each doc, sort by BM25
     // score DESC (deterministic tiebreak by seqInDoc ASC).
