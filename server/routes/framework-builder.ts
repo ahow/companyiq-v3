@@ -524,6 +524,11 @@ WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON bloc
   "name": "Framework Name",
   "topicDescription": "A comprehensive 200-400 word description of the assessment scope, evidence types, relevant standards, EXPLICIT EXCLUSIONS, definitional boundaries, and temporal scope. This description is used by the discovery engine and scorer, so it must be precise.",
   "searchTemplates": ["{company} sustainability report AI governance", "{company} artificial intelligence policy", "{company} environmental social risk framework", "{company} transition plan"],
+  "multiDocumentQueryTemplates": ["\"{company}\" AI governance OR risk framework", "\"{company}\" AI policy OR principles", "\"{company}\" AI board committee OR oversight", "\"{company}\" AI use cases production OR pilot"],
+  "authoritativeRegistries": ["oecd.ai", "partnershiponai.org", "artificialintelligenceact.eu", "nist.gov"],
+  "authoritativeFilingTypes": [{"weight": 8, "pattern": "responsible.?ai|ai.?principle|ai.?policy"}, {"weight": 7, "pattern": "10-?k|20-?f|proxy|def.?14a"}, {"weight": 6, "pattern": "integrated.?report|annual.?report|sustainab"}],
+  "antiInferenceRules": ["DO NOT count a policy named in a proxy but not published as a standalone document as evidence for a 'published policy' measure.", "DO NOT count chip vendor relationships, load-serving power contracts, or AI-tool vendors as strategic AI partnerships with foundation-model providers or hyperscalers.", "DO NOT count AI mentioned only in cyber-risk factors as evidence of AI business-model risk or AI competitive strategy.", "DO NOT count subsidiary or affiliate programmes as evidence for a separately-listed parent unless the parent explicitly adopts them.", "DO NOT count alliance or initiative memberships (Partnership on AI, OECD signatory) alone as evidence of specific company practice."],
+  "scoringExamples": [{"measurePattern": "published-policy", "example_yes": "Concrete example with a real company disclosure that clearly satisfies this measure type.", "example_no": "Concrete example that looks superficially like a Yes but fails on a specific exclusion."}, {"measurePattern": "strategic-partnership", "example_yes": "...", "example_no": "..."}],
   "requiredDocTypes": ["Climate/TCFD Report", "Sustainability Report", "CDP Response", "Annual Report"],
   "dataPatterns": ["scope\\s*[123]", "financed.?emission", "\\bMtCO2", "\\b20[23]\\d.*target", "PCAF"],
   "negativeKeywords": ["keywords that indicate irrelevant documents"],
@@ -556,9 +561,25 @@ WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON bloc
 }
 \`\`\`
 
-NOTE ON FRAMEWORK-LEVEL DISCOVERY FIELDS:
-- "requiredDocTypes" (array of strings): The specific published document types that, for THIS topic, contain the evidence. These are the same document types you identified with the user during the conversation (e.g., climate → ["Climate/TCFD Report", "Sustainability Report", "CDP Response"]; human rights → ["Modern Slavery Statement", "Human Rights Report"]; tax → ["Tax Transparency Report", "Country-by-Country Report"]). The discovery engine searches for these by name. Derive them by aggregating the document types that the measures' scoringGuidance/required_evidence_type name.
-- "dataPatterns" (array of strings): 5-10 regex fragments that prove the topic's actual DATA is present in a document's text (specific figures, standard names, target phrasings for THIS topic). These distinguish a topic-relevant report with real data from a landing page or generic mention. E.g., for climate: ["scope\\s*[123]", "financed.?emission", "\\bMtCO2", "PCAF"]; for slavery: ["modern.?slavery.?(?:act|statement)", "forced.?labo"]; for tax: ["country.?by.?country", "effective.?tax.?rate"].
+NOTE ON FRAMEWORK-LEVEL DISCOVERY FIELDS (ALL SEVEN FIELDS ARE MANDATORY FOR A HIGH-RIGOUR FRAMEWORK):
+
+1. "topicDescription" (200-400 word string) — MANDATORY. Names the assessment scope, evidence types, relevant standards, EXPLICIT EXCLUSIONS, definitional boundaries and temporal scope. Used by the discovery engine (as fallback query context) AND the scorer (as calibration anchor). NEVER emit an empty topicDescription — this is the single most common cause of downstream scoring failures.
+
+2. "searchTemplates" (10-14 templates) — MANDATORY. Framework-scoped web queries used by the discovery engine as Layer 1. Each MUST use {company} placeholder and OR-grouped synonyms. Target the 4-6 canonical document classes for the topic (e.g. for AI: "{company} responsible AI policy filetype:pdf", "{company} AI governance framework filetype:pdf", "{company} 10-K artificial intelligence risk factor", "{company} proxy statement artificial intelligence board oversight"). Templates that only use generic language ("sustainability report") without topic-specific artefact names are worthless — the discovery engine already has generic fallbacks.
+
+3. "multiDocumentQueryTemplates" (8-14 templates) — MANDATORY. Cross-document queries that catch evidence spread across multiple filings. Use quoted company name and OR groups; NO trailing filetype:pdf. These fire as a separate discovery layer targeting policy/report/charter/transcript variants. Example: for AI, "\"{company}\" \"responsible AI\" OR \"AI ethics\" policy OR framework".
+
+4. "authoritativeRegistries" (4-15 domain strings) — MANDATORY where topic-specific registries exist. Direct-lookup targets for statutory or thematic registries (for slavery: modernslaveryregister.gov.au; for climate: cdp.net, sciencebasedtargets.org; for AI: oecd.ai, partnershiponai.org, artificialintelligenceact.eu, nist.gov). If the topic has no statutory registry, provide the closest voluntary/thematic registries (research hubs, incident databases, policy observatories). Empty array is only acceptable if you have researched and confirmed no registries exist.
+
+5. "authoritativeFilingTypes" (5-10 objects with 'weight' and 'pattern') — MANDATORY. Doctype-scoring regexes with priority weights. Higher weight = higher priority in retrieval ranking. Pattern is a regex fragment matched against document title/URL/section headings. Cover: (a) topic-native artefact names (weight 7-8), (b) generic annual/proxy/10-K (weight 6-7), (c) sustainability/ESG (weight 5-6), (d) charters/transcripts if relevant (weight 4-5).
+
+6. "antiInferenceRules" (5-10 rule strings, each 40-200 chars) — MANDATORY. Substantive scoring exclusions the LLM MUST apply. Each rule starts with "DO NOT" and names the specific false-positive pattern being blocked. These are the framework's most powerful precision tool. Every scoring failure surfaced during framework testing should generate a new rule here. Do not leave this array empty.
+
+7. "scoringExamples" (3-6 objects with 'measurePattern', 'example_yes', 'example_no') — MANDATORY. Concrete worked examples of Yes/No calls on realistic company disclosures. Each example must show WHY it satisfies or fails a specific measure family, ideally citing a real company disclosure the model can compare against. These are the scorer's calibration anchors.
+
+8. "requiredDocTypes" (array of strings): The specific published document types that, for THIS topic, contain the evidence. These are the same document types you identified with the user during the conversation (e.g., climate → ["Climate/TCFD Report", "Sustainability Report", "CDP Response"]; human rights → ["Modern Slavery Statement", "Human Rights Report"]; tax → ["Tax Transparency Report", "Country-by-Country Report"]). The discovery engine searches for these by name. Derive them by aggregating the document types that the measures' scoringGuidance/required_evidence_type name.
+
+9. "dataPatterns" (array of strings): 5-10 regex fragments that prove the topic's actual DATA is present in a document's text (specific figures, standard names, target phrasings for THIS topic). These distinguish a topic-relevant report with real data from a landing page or generic mention. E.g., for climate: ["scope\\s*[123]", "financed.?emission", "\\bMtCO2", "PCAF"]; for slavery: ["modern.?slavery.?(?:act|statement)", "forced.?labo"]; for tax: ["country.?by.?country", "effective.?tax.?rate"].
 
 NOTE ON SCORING GUIDANCE FIELDS:
 - "explicit_exclusions" (array of strings): List specific types of evidence that should NOT be accepted as sufficient. This is the most powerful tool for preventing false positives.
@@ -579,6 +600,7 @@ IMPORTANT RULES:
 - Include explicit_exclusions for EVERY measure where there is any risk of false positives
 - Include temporal_note for any measure involving targets, commitments, or policies that could change over time
 - Include evidenceKeywords for every measure. STRICT COUNT: minimum 10, maximum 15 per measure. Verify the count before you emit each measure. Fewer than 10 is a validation failure.
+- MANDATORY framework-level fields (all seven MUST be populated non-empty): topicDescription (200-400 words), searchTemplates (10-14), multiDocumentQueryTemplates (8-14), authoritativeRegistries (4-15 or empty ONLY with research confirmation of no registries), authoritativeFilingTypes (5-10 weight-plus-pattern objects), antiInferenceRules (5-10 DO-NOT rules), scoringExamples (3-6 measurePattern-plus-example objects). Emitting an empty array or null for any of these fields is a validation failure — the discovery engine and scorer both rely on them, and a framework missing them typically achieves less than 30% recall vs a fully-populated equivalent.
 - Generate the number of measures the user requested (or that was agreed in the category structure proposal). There is NO fixed maximum — generate as many as needed.
 - MINIMUM RULE: Every category MUST have at least 3 measures. If a category would have fewer than 3, merge it into a related category or expand it with additional relevant measures.
 - Distribute measures across categories according to the approved structure. If no structure was explicitly approved, use your judgment based on topic complexity.
@@ -942,19 +964,40 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid framework data" });
     }
 
+    // Validate mandatory framework-level fields (post-I72). A framework without these
+    // fields typically achieves <30% recall in downstream scoring — see the fw9
+    // pre-refresh baseline. We warn rather than reject so legacy drafts still save,
+    // but the warning is loud in logs and the incomplete field list is echoed back.
+    const missingMandatory: string[] = [];
+    if (!framework.topicDescription || String(framework.topicDescription).trim().length < 200) missingMandatory.push("topicDescription (<200 chars)");
+    if (!framework.searchTemplates || framework.searchTemplates.length < 10) missingMandatory.push("searchTemplates (<10)");
+    if (!framework.multiDocumentQueryTemplates || framework.multiDocumentQueryTemplates.length < 8) missingMandatory.push("multiDocumentQueryTemplates (<8)");
+    if (!framework.authoritativeFilingTypes || framework.authoritativeFilingTypes.length < 5) missingMandatory.push("authoritativeFilingTypes (<5)");
+    if (!framework.antiInferenceRules || framework.antiInferenceRules.length < 5) missingMandatory.push("antiInferenceRules (<5)");
+    if (!framework.scoringExamples || framework.scoringExamples.length < 3) missingMandatory.push("scoringExamples (<3)");
+    // authoritativeRegistries may legitimately be empty for topics with no registries;
+    // still warn if empty so the user confirms this is intentional.
+    if (!framework.authoritativeRegistries || framework.authoritativeRegistries.length === 0) missingMandatory.push("authoritativeRegistries (empty — confirm no registries exist for this topic)");
+
+    if (missingMandatory.length > 0) {
+      console.warn(`[FrameworkBuilder] Framework '${framework.name}' saved with incomplete high-rigour fields:`, missingMandatory);
+    }
+
     // Create the framework with discovery configuration
+    // I72: include multiDocumentQueryTemplates so it's captured at initial save.
     const created = await storage.createFramework({
       workspaceId,
       name: framework.name,
       topicDescription: framework.description || framework.topicDescription || "",
       isActive: false,
       searchTemplates: framework.searchTemplates || null,
+      multiDocumentQueryTemplates: framework.multiDocumentQueryTemplates || null,
       negativeKeywords: framework.negativeKeywords || null,
       negativeDomains: framework.negativeDomains || null,
       knownDisclosureUrls: framework.knownDisclosureUrls || null,
       requiredDocTypes: framework.requiredDocTypes || null,
       dataPatterns: framework.dataPatterns || null,
-    });
+    } as any);
 
     // Create measures from categories
     let categoryNumber = 1;
@@ -1013,12 +1056,14 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       if (templates.size > 0) derivedUpdates.legacyQueryTemplates = Array.from(templates).slice(0, 12);
     }
 
-    // authoritativeRegistries, scoringExamples, antiInferenceRules stay user-declared
-    // (populated via the framework-builder AI output or PATCH endpoint)
+    // I72: All seven high-rigour fields captured from the framework payload.
+    // The chat prompt now requires them all; if any are missing we still save
+    // them as null (with a warning above) rather than rejecting.
     if (framework.authoritativeRegistries) derivedUpdates.authoritativeRegistries = framework.authoritativeRegistries;
     if (framework.authoritativeFilingTypes) derivedUpdates.authoritativeFilingTypes = framework.authoritativeFilingTypes;
     if (framework.scoringExamples) derivedUpdates.scoringExamples = framework.scoringExamples;
     if (framework.antiInferenceRules) derivedUpdates.antiInferenceRules = framework.antiInferenceRules;
+    if (framework.multiDocumentQueryTemplates) derivedUpdates.multiDocumentQueryTemplates = framework.multiDocumentQueryTemplates;
 
     if (Object.keys(derivedUpdates).length > 0) {
       await storage.updateFramework(created.id, derivedUpdates);
