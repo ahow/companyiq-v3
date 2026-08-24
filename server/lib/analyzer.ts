@@ -1487,6 +1487,19 @@ export async function analyzeCompanyMeasures(opts: {
         // sees framework-authoritative content instead of only bulk filings.
         topicPrimaryDocUrls,
       });
+
+      // I69: Optional LLM passage rescoring layered on top of BM25. Env-gated.
+      // Truth-baseline validation (2026-08-24) showed 100% precision / 26% recall
+      // on fw9 batch 1109 — the definitive-evidence passages are in the corpus
+      // but lose BM25 to keyword-dense-but-content-thin chunks. LLM rescoring
+      // re-ranks the top-30 BM25 candidates by evidentiary relevance to each
+      // measure's YES rule, blending back into a final pack. Framework-agnostic:
+      // uses only measure.title/definition/scoringGuidance. See passage-rescore.ts.
+      const { rescorePacksForCategory, isRescoreEnabled } = await import("./passage-rescore.js");
+      if (isRescoreEnabled()) {
+        console.log(`[${companyName}] LLM rescoring: ON for ${categoryMeasures.length} measures in category '${category}'`);
+        evidencePacks = await rescorePacksForCategory(evidencePacks as any, categoryMeasures, combinedText);
+      }
     } else {
       // No BM25: use full text for all measures
       const fullSlice = combinedText.slice(0, 10000);
