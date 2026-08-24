@@ -2269,6 +2269,25 @@ function discoverRelatedDomains(
       domainCounts.set(root, (domainCounts.get(root) || 0) + 1);
     } catch {}
   }
+  // I73 (Fix 2A): also harvest SUBDOMAINS of the primary that consistently appear
+  // in candidates. Companies commonly host material disclosures on subdomains like
+  // library.e.abb.com, investorfactbook.spglobal.com, investor.aflac.com,
+  // press.spglobal.com, etc. Because these collapse to the primary registrable
+  // root under normaliseToRegistrableDomain, the old code discarded them at line
+  // 2267 (root === primaryDomain → continue). We now retain any non-www subdomain
+  // of the primary that appears ≥2 times so it can be used as a distinct `site:`
+  // target later. Framework-agnostic; no company or topic literals.
+  const subdomainCounts = new Map<string, number>();
+  for (const c of candidates) {
+    try {
+      const url = new URL(c.url);
+      const host = url.hostname.toLowerCase().replace(/^www\./, "");
+      const root = normaliseToRegistrableDomain(url.hostname);
+      if (root !== primaryDomain) continue;      // not a subdomain of primary
+      if (host === primaryDomain) continue;      // primary itself (already handled)
+      subdomainCounts.set(host, (subdomainCounts.get(host) || 0) + 1);
+    } catch {}
+  }
 
   // I52: strict token-boundary sharing (not substring) to reject acronym
   // collisions like sumitomocorp.com matching "sumitomo" for SMFG.
@@ -2296,6 +2315,18 @@ function discoverRelatedDomains(
     if (count < threshold) continue;
 
     related.push(domain);
+  }
+
+  // I73 (Fix 2A): admit subdomains of the primary that appear ≥2 times.
+  // Threshold 2 (rather than 1) avoids adding random one-off subdomains from
+  // an unrelated news article that quoted the company. Filter to exclude generic
+  // marketing subdomains (careers.*, jobs.*) that don't host disclosure content.
+  const GENERIC_SUBDOMAIN_PREFIXES = new Set(["careers", "jobs", "support", "help", "blog", "community"]);
+  for (const [host, count] of subdomainCounts) {
+    if (count < 2) continue;
+    const firstLabel = host.split(".")[0];
+    if (GENERIC_SUBDOMAIN_PREFIXES.has(firstLabel)) continue;
+    related.push(host);
   }
 
   related.sort();
@@ -2967,6 +2998,38 @@ async function searchCompanyDocumentsInner(opts: {
     queryIndex++;
   }
 
+  // Lane 1b (I73 Fix 2B): Generic corporate-artefact discovery lane.
+  // Fires a fixed set of framework-agnostic queries targeting well-known
+  // corporate document classes (annual/integrated reports, universal registration
+  // documents, investor fact books, 20-F/10-K filings, proxy materials, investor
+  // relations hubs). These queries do NOT reference the framework's topic and
+  // therefore surface authoritative corporate artefacts even when the topic-scoped
+  // queries (Lane 1 templates) miss them. Truth-baseline analysis on fw9
+  // (2026-08-24) showed material disclosures on subdomains like library.e.abb.com,
+  // investorfactbook.spglobal.com, aflac.co.jp and www-axa-com.cdn.prismic.io
+  // that Lane 1 topic queries never surfaced but that generic-artefact queries
+  // return on page 1. This lane is capped at 10 queries per company and its
+  // output feeds subsequent lanes (domain-family resolution, pack composition).
+  const _laneB_currentYear = new Date().getFullYear();
+  const _laneB_lastYear = _laneB_currentYear - 1;
+  const GENERIC_ARTEFACT_QUERIES = [
+    `"${companyName}" annual report ${_laneB_currentYear} OR ${_laneB_lastYear}`,
+    `"${companyName}" integrated report ${_laneB_currentYear} OR ${_laneB_lastYear}`,
+    `"${companyName}" sustainability report ${_laneB_currentYear} OR ${_laneB_lastYear}`,
+    `"${companyName}" universal registration document`,
+    `"${companyName}" investor fact book`,
+    `"${companyName}" annual information form`,
+    `"${companyName}" 20-F OR 10-K filing`,
+    `"${companyName}" proxy statement OR management circular`,
+    `"${companyName}" investor relations documents`,
+    `"${companyName}" corporate governance charter`,
+  ];
+  console.log(`[${companyName}] Running generic-artefact discovery lane (${GENERIC_ARTEFACT_QUERIES.length} queries)`);
+  for (const query of GENERIC_ARTEFACT_QUERIES) {
+    const results = await webSearch(query, { num: searchDepth });
+    for (const r of results) addCandidate(r, "generic-artefact");
+  }
+
   // Lane 2: Domain-anchored search (with auto-detection if no domain set)
   // 40-G: Short-circuit if company already has cached domain family (< 30 days old)
   // P3: Static import moved to top of file (see import block)
@@ -3361,6 +3424,17 @@ async function searchCompanyDocumentsInner(opts: {
           const q = `site:${subdomain} ${docType}`;
           const results = await webSearch(q, { num: 15 });
           for (const r of results) addCandidate(r, "domain-variant");
+          lane2QueryCount++;
+        }
+        // I73 (Fix 2A): also probe topic phrases per subdomain. Truth-baseline
+        // analysis (fw9, 2026-08-24) showed material AI-governance content on
+        // subdomains like library.e.abb.com and investorfactbook.spglobal.com
+        // that are missed by doctype queries alone. Bounded by MAX_LANE2_QUERIES.
+        for (const phrase of topicPhrases.slice(0, 3)) {
+          if (lane2QueryCount >= MAX_LANE2_QUERIES) break;
+          const q = `site:${subdomain} ${phrase}`;
+          const results = await webSearch(q, { num: 10 });
+          for (const r of results) addCandidate(r, "domain-variant-topic");
           lane2QueryCount++;
         }
         if (lane2QueryCount >= MAX_LANE2_QUERIES) break;

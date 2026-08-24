@@ -8,6 +8,7 @@ import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash } from "./processor.js";
 import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
+import { composeAntiInferenceRules } from "./anti-inference.js";
 import { createHash } from "crypto";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
 
@@ -196,12 +197,7 @@ CONFIDENCE LEVELS:
 - Low: Document corpus may be incomplete or in a language not fully analyzed
 
 CRITICAL ANTI-INFERENCE RULES:
-1. You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided.
-2. DO NOT infer that a company has a specific target or policy because they are a member of an alliance or initiative. Alliance membership alone does not constitute evidence of a specific company-level commitment.
-3. DO NOT infer that a policy applies to all sectors or all activities if the text only names specific sectors.
-${((framework as any)?.antiInferenceRules as string[] | null || []).map((rule: string, i: number) => `${4 + i}. ${rule}`).join("\n")}
-${((framework as any)?.antiInferenceRules as string[] | null || []).length + 4}. If the evidence does not contain an explicit, direct statement satisfying the measure, you MUST score it 0 (No or Partial), even if you believe the company likely has such a policy based on other context.
-${((framework as any)?.antiInferenceRules as string[] | null || []).length + 5}. Pay careful attention to the TEMPORAL VALIDITY of evidence. If the evidence indicates a policy or target has been withdrawn, discontinued, or superseded, score based on the current state, not the historical commitment.
+${composeAntiInferenceRules(measure.measureId, measure.title || "", (framework as any)?.antiInferenceRules)}
 
 CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
 CRITICAL: For the "source" field in quotes, you MUST use the EXACT document title as it appears in the "--- DOCUMENT: <title> [<url>] ---" headers in the evidence text. Use the title portion (before the [url]), not an invented or paraphrased name.
@@ -306,12 +302,7 @@ CONFIDENCE LEVELS:
 - Low: Document corpus may be incomplete or in a language not fully analyzed
 
 CRITICAL ANTI-INFERENCE RULES:
-1. You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided.
-2. DO NOT infer that a company has a specific target or policy because they are a member of an alliance or initiative. Alliance membership alone does not constitute evidence of a specific company-level commitment.
-3. DO NOT infer that a policy applies to all sectors or all activities if the text only names specific sectors.
-${((framework as any)?.antiInferenceRules as string[] | null || []).map((rule: string, i: number) => `${4 + i}. ${rule}`).join("\n")}
-${((framework as any)?.antiInferenceRules as string[] | null || []).length + 4}. If the evidence does not contain an explicit, direct statement satisfying the measure, you MUST score it 0 or 0.5 (not 1).
-${((framework as any)?.antiInferenceRules as string[] | null || []).length + 5}. Pay careful attention to the TEMPORAL VALIDITY of evidence.
+${composeAntiInferenceRules(measure.measureId, measure.title || "", (framework as any)?.antiInferenceRules)}
 
 CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
 CRITICAL: For the "source" field in quotes, you MUST use the EXACT document title as it appears in the "--- DOCUMENT: <title> [<url>] ---" headers in the evidence text.

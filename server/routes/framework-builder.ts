@@ -573,7 +573,7 @@ NOTE ON FRAMEWORK-LEVEL DISCOVERY FIELDS (ALL SEVEN FIELDS ARE MANDATORY FOR A H
 
 5. "authoritativeFilingTypes" (5-10 objects with 'weight' and 'pattern') — MANDATORY. Doctype-scoring regexes with priority weights. Higher weight = higher priority in retrieval ranking. Pattern is a regex fragment matched against document title/URL/section headings. Cover: (a) topic-native artefact names (weight 7-8), (b) generic annual/proxy/10-K (weight 6-7), (c) sustainability/ESG (weight 5-6), (d) charters/transcripts if relevant (weight 4-5).
 
-6. "antiInferenceRules" (5-10 rule strings, each 40-200 chars) — MANDATORY. Substantive scoring exclusions the LLM MUST apply. Each rule starts with "DO NOT" and names the specific false-positive pattern being blocked. These are the framework's most powerful precision tool. Every scoring failure surfaced during framework testing should generate a new rule here. Do not leave this array empty.
+6. "antiInferenceRules" (3-6 rule strings, each 40-250 chars) — MANDATORY — topic-specific residue only. The CompanyIQ scorer applies three layers of anti-inference rules at scoring time: Layer 1 universal rules (in code: verbatim-evidence, alliance-membership, subsidiary-boundary, published-vs-referenced, recency, sustainability-vs-proxy hierarchy, coverage-scope, generic-vocabulary), Layer 2 measure-family rules (in code: published-policy, board-oversight, strategic-partnership, quantified-metric, risk-factor, workforce-training families), Layer 3 topic-specific rules (this array). Only include Layer 3 residue — rules that use topic-specific terminology or reference topic-specific counterparty taxonomies. Do NOT re-author universal or family rules; they will be applied automatically. Each rule starts with "DO NOT" and names the specific topic-specific false-positive pattern being blocked.
 
 7. "scoringExamples" (3-6 objects with 'measurePattern', 'example_yes', 'example_no') — MANDATORY. Concrete worked examples of Yes/No calls on realistic company disclosures. Each example must show WHY it satisfies or fails a specific measure family, ideally citing a real company disclosure the model can compare against. These are the scorer's calibration anchors.
 
@@ -973,7 +973,7 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
     if (!framework.searchTemplates || framework.searchTemplates.length < 10) missingMandatory.push("searchTemplates (<10)");
     if (!framework.multiDocumentQueryTemplates || framework.multiDocumentQueryTemplates.length < 8) missingMandatory.push("multiDocumentQueryTemplates (<8)");
     if (!framework.authoritativeFilingTypes || framework.authoritativeFilingTypes.length < 5) missingMandatory.push("authoritativeFilingTypes (<5)");
-    if (!framework.antiInferenceRules || framework.antiInferenceRules.length < 5) missingMandatory.push("antiInferenceRules (<5)");
+    if (!framework.antiInferenceRules || framework.antiInferenceRules.length < 3) missingMandatory.push("antiInferenceRules (<3 topic-specific rules — Layer 3 residue is required; universal/family rules are automatic)");
     if (!framework.scoringExamples || framework.scoringExamples.length < 3) missingMandatory.push("scoringExamples (<3)");
     // authoritativeRegistries may legitimately be empty for topics with no registries;
     // still warn if empty so the user confirms this is intentional.
