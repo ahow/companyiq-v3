@@ -1352,13 +1352,15 @@ export function buildEvidencePackForMeasure(opts: {
   // topic-primary docs cannot crowd out SEC Item 1A force-include or BM25
   // diversity: at most 2 chunks per topic-primary doc, at most
   // TOPIC_PRIMARY_PER_MEASURE_CAP total chunks reserved across all TP docs.
-  // I64 REVERT of I63. Batch 1108 (fw9 on I63) showed a net -0.72 pts fleet
-  // regression vs 1106 (fw9 on I62 cap=4). Root cause: scaling the reserve cap
-  // with # of topic-primary docs promotes LOW-BM25 chunks from every TP doc,
-  // which displaces high-BM25 supporting chunks that contained the definitive-
-  // evidence phrasing. Reverting to the pre-I63 hard cap = 4 as the default.
+  // I65 (Change A of the additive experiment): raise per-doc reserve depth
+  // from 2 to 3, keeping the total cap at 4. Rationale: I63 (breadth) regressed
+  // because low-BM25 chunks from many TP docs displaced high-BM25 supporting
+  // chunks. Depth instead lets a *single* strong topic-primary doc contribute
+  // its top 3 BM25 chunks (intro + policy statement + implementation detail),
+  // capturing the definitive-evidence phrasing that lives in mid-BM25 positions
+  // within a topic-primary PDF. Cap stays at 4 so BM25 diversity is preserved.
   const TOPIC_PRIMARY_PER_MEASURE_CAP = 4;
-  const TOPIC_PRIMARY_CHUNKS_PER_DOC = 2;
+  const TOPIC_PRIMARY_CHUNKS_PER_DOC = 3;
   if (topicPrimaryDocIndexes && topicPrimaryDocIndexes.size > 0) {
     // Group topic-primary-doc chunks by docIndex; within each doc, sort by BM25
     // score DESC (deterministic tiebreak by seqInDoc ASC).
