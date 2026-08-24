@@ -1352,15 +1352,15 @@ export function buildEvidencePackForMeasure(opts: {
   // topic-primary docs cannot crowd out SEC Item 1A force-include or BM25
   // diversity: at most 2 chunks per topic-primary doc, at most
   // TOPIC_PRIMARY_PER_MEASURE_CAP total chunks reserved across all TP docs.
-  // I65 (Change A of the additive experiment): raise per-doc reserve depth
-  // from 2 to 3, keeping the total cap at 4. Rationale: I63 (breadth) regressed
-  // because low-BM25 chunks from many TP docs displaced high-BM25 supporting
-  // chunks. Depth instead lets a *single* strong topic-primary doc contribute
-  // its top 3 BM25 chunks (intro + policy statement + implementation detail),
-  // capturing the definitive-evidence phrasing that lives in mid-BM25 positions
-  // within a topic-primary PDF. Cap stays at 4 so BM25 diversity is preserved.
+  // I65 (Change A): per-doc reserve depth 3 (was 2).
+  // I66 (Change B, additive): apply a BM25 score floor on reserved chunks so
+  // very-low-signal chunks (e.g. table-of-contents, boilerplate) don't get
+  // force-included at the expense of high-BM25 supporting chunks. Chunks below
+  // the floor can still enter the pack via the normal BM25 gate if their score
+  // wins fairly. The floor is env-tunable so it can be tightened per framework.
   const TOPIC_PRIMARY_PER_MEASURE_CAP = 4;
   const TOPIC_PRIMARY_CHUNKS_PER_DOC = 3;
+  const TOPIC_PRIMARY_MIN_BM25 = parseFloat(process.env.RETRIEVAL_TOPIC_PRIMARY_MIN_BM25 || "5.0");
   if (topicPrimaryDocIndexes && topicPrimaryDocIndexes.size > 0) {
     // Group topic-primary-doc chunks by docIndex; within each doc, sort by BM25
     // score DESC (deterministic tiebreak by seqInDoc ASC).
@@ -1399,10 +1399,13 @@ export function buildEvidencePackForMeasure(opts: {
     }
     // Add up to TOPIC_PRIMARY_PER_MEASURE_CAP reserved chunks. Uses the same
     // budget/perDoc bookkeeping as tryAdd() but bypasses the score gate.
+    // I66: BM25 floor — refuse to force-include chunks scoring below the floor.
     let reservedCount = 0;
+    let skippedBelowFloor = 0;
     for (const r of reservePool) {
       if (reservedCount >= TOPIC_PRIMARY_PER_MEASURE_CAP) break;
       if (selected.length >= topK) break;
+      if (r.score < TOPIC_PRIMARY_MIN_BM25) { skippedBelowFloor++; continue; }
       if (evidenceLen + r.text.length > maxChars) continue;
       const existing = scored.find((s) => s.idx === r.idx);
       if (!existing) continue;
@@ -1413,6 +1416,9 @@ export function buildEvidencePackForMeasure(opts: {
       perDocCount.set(r.docIndex, used + 1);
       evidenceLen += r.text.length + 2;
       reservedCount++;
+    }
+    if (skippedBelowFloor > 0) {
+      console.log(`[topic-primary-reserve] ${measure.measureId}: skipped ${skippedBelowFloor} reserved chunk(s) below BM25 floor ${TOPIC_PRIMARY_MIN_BM25}`);
     }
     // Verbose per-measure diag removed after I60c validation — was too noisy in
     // worker logs. Aggregate diag remains in the passageDiagnostics sidecar.
