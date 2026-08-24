@@ -1498,7 +1498,7 @@ export async function analyzeCompanyMeasures(opts: {
       const { rescorePacksForCategory, isRescoreEnabled } = await import("./passage-rescore.js");
       if (isRescoreEnabled()) {
         console.log(`[${companyName}] LLM rescoring: ON for ${categoryMeasures.length} measures in category '${category}'`);
-        evidencePacks = await rescorePacksForCategory(evidencePacks as any, categoryMeasures, combinedText);
+        evidencePacks = await rescorePacksForCategory(evidencePacks as any, categoryMeasures, combinedText, 20000, 20, topicPrimaryDocUrls);
       }
     } else {
       // No BM25: use full text for all measures
