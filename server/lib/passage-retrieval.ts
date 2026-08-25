@@ -287,25 +287,33 @@ const SEC_ITEM_TITLES: Array<{ item: string; re: RegExp }> = [
 //                              "Risk Management Report" → item1a
 // We keep matches conservative (require multi-word phrases) so we do not tag
 // stray in-prose mentions.
+// I75b (over-firing fix): B1124 showed BCE regressed -5 TP because the pattern
+// `principal\s+risks?\b(?!\s+of|\s+to)` matched mid-prose in enterprise-risk
+// commentary ("the principal risks that could materially affect...") and
+// tagged general enterprise risk chunks as `item1a`, displacing better AI-
+// content chunks in the pack. All non-SEC patterns now REQUIRE start-of-line
+// (or after \n) anchoring so they only fire on true heading text.
 const NONSEC_ITEM_TITLES: Array<{ item: string; re: RegExp }> = [
   // UK principal-risks section (dominant UK convention post-Companies Act 2006).
-  { item: "item1a", re: /principal\s+risks?\s+and\s+uncertainties/i },
-  { item: "item1a", re: /principal\s+risks?\b(?!\s+of|\s+to)/i },
-  // French URD (Universal Registration Document — AMF format).
-  { item: "item1a", re: /facteurs?\s+de\s+risques?/i },
+  // Requires start-of-fragment/line + the fully qualified phrase.
+  { item: "item1a", re: /(?:^|\n)\s*(?:\d+\.?\s*)?principal\s+risks?\s+and\s+uncertainties\b/i },
+  // French URD (Universal Registration Document — AMF format). Heading only.
+  { item: "item1a", re: /(?:^|\n)\s*(?:\d+\.?\s*)?facteurs?\s+de\s+risques?\b/i },
   // Generic chapter-heading "Risk Factors" (no "Item" prefix). Require the
   // words to be at heading-scale: preceded by a newline (or start) and NOT
   // preceded by "item" (which the SEC pattern already handles).
   { item: "item1a", re: /(?:^|\n)\s*(?:\d+\.?\s*)?risk\s+factors\s*(?:\n|$|\s{2,})/i },
-  // Risk Management Report / Risk Management section headings — common in
-  // European insurance URDs and APAC integrated reports.
-  { item: "item1a", re: /(?:^|\n)\s*(?:\d+\.?\s*)?risk\s+management\s+(?:report|section|framework|chapter)/i },
-  // UK strategic-report / business-review chapter (analogous to MD&A).
-  { item: "item7", re: /(?:^|\n)\s*(?:\d+\.?\s*)?strategic\s+report/i },
-  { item: "item7", re: /(?:^|\n)\s*(?:\d+\.?\s*)?business\s+review/i },
-  // Directors' report / corporate governance report (UK/EU governance disclosure).
-  { item: "item10", re: /(?:^|\n)\s*(?:\d+\.?\s*)?directors['’]?\s+report/i },
-  { item: "item10", re: /(?:^|\n)\s*(?:\d+\.?\s*)?corporate\s+governance\s+report/i },
+  // UK strategic-report chapter (analogous to MD&A). Heading only.
+  { item: "item7", re: /(?:^|\n)\s*(?:\d+\.?\s*)?strategic\s+report\b/i },
+  // Corporate governance report — UK/EU governance disclosure heading only.
+  { item: "item10", re: /(?:^|\n)\s*(?:\d+\.?\s*)?corporate\s+governance\s+report\b/i },
+  // Removed patterns (I75b): 'principal risks?' unqualified (over-fires on
+  // enterprise-risk prose), 'risk management report' (matches SFCR/ORSA/etc.
+  // that discuss risk management processes but aren't the risk-factor
+  // disclosure), 'business review' (matches BUSINESS REVIEW OF OPERATIONS
+  // and MD&A prose ambiguously), 'directors' report' (Canadian AIF and
+  // similar filings use this label for governance sections that don't
+  // contain the substantive risk-factor content).
 ];
 
 const ALL_ITEM_TITLES: Array<{ item: string; re: RegExp }> = [
@@ -703,6 +711,14 @@ function isRegulatoryAnnualFilingDoc(url: string | undefined, title: string | un
   // The URL patterns are conservative — they match filenames or path segments that
   // are unambiguously the primary annual filing / URD document. Marketing or
   // summary landing pages ARE excluded (they don't contain risk-factor prose).
+  // I75b (BCE regression fix): Canadian AIF and IFRS "sustainability statement"
+  // patterns were dropped from the recognition set because BCE's 2023 AIF hosted
+  // on Contentstack was selected as the "annual filing" and displaced better
+  // AI-content chunks in packs. These filings often lack a substantive risk-
+  // factor section and are not reliable substitutes for a 10-K/20-F/URD/annual
+  // report. If a company files a Canadian AIF, its full annual report + MD&A
+  // (already recognised by "annual report" / "annual-report") carries the same
+  // risk information more comprehensively.
   const looksAnnual =
     /10-?k|20-?f|40-?f|annual.?report|年度报告|年度報告|年报|年報/.test(s) ||
     // French URD: "universal-registration-document", "urd-", "documenturd"
@@ -710,12 +726,7 @@ function isRegulatoryAnnualFilingDoc(url: string | undefined, title: string | un
     // ASX / Australian annual filings ("asxpdf/YYYYMMDD/.../<accession>.pdf").
     /announcements\.asx\.com\.au\/asxpdf\//.test(s) ||
     // HK EX filings / HKEX news filings (annual-report-YYYY, ar-YYYY).
-    /\b(?:hkexnews|hkexnew)\b|\bannual[-_\s]?report[-_\s]?20\d{2}\b/.test(s) ||
-    // Canadian AIF (annual information form).
-    /\bannual[-_\s]?information[-_\s]?form\b|\baif[-_\s]?20\d{2}\b/.test(s) ||
-    // Integrated / non-financial statement filings that carry the risk-factor
-    // section under IFRS / EU regulations (e.g., ABB Sustainability Statement).
-    /integrated[-_\s]?annual|sustainability[-_\s]?statement/.test(s);
+    /\b(?:hkexnews|hkexnew)\b|\bannual[-_\s]?report[-_\s]?20\d{2}\b/.test(s);
   // Exclude marketing summary pages that share the "annual-report" token but do
   // not contain the substantive risk-factor prose (they are landing pages).
   const isSummaryLanding =
