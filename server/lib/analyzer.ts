@@ -228,6 +228,21 @@ ${terminologyBlock}`;
     if (sg.temporal_note) {
       scoringGuidance += `\n\nTEMPORAL NOTE: ${sg.temporal_note}`;
     }
+    // I76: positive_examples give the scorer concrete calibration anchors of
+    // what SHOULD score Yes / Partial. Empirical truth-baseline audit showed
+    // scorer over-conservatism on qualitative measures where the guidance's
+    // required_evidence_type was interpreted more strictly than the truth
+    // rubric intended (e.g. rejecting "AI-driven cost savings" for 5.1a
+    // because no number was disclosed, when the truth rubric accepts named-
+    // but-unquantified metric references). Examples shift the calibration by
+    // showing the scorer the shape of an acceptable positive rather than
+    // relying on abstract policy language.
+    if (sg.positive_examples && Array.isArray(sg.positive_examples) && sg.positive_examples.length > 0) {
+      scoringGuidance += `\n\nPOSITIVE EXAMPLES (concrete disclosures that SHOULD score Yes):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
+    }
+    if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
+      scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
+    }
   }
 
   const temporalBlock = temporalWarning ? `\n${temporalWarning}\n` : "";
@@ -327,6 +342,14 @@ ${terminologyBlock}`;
     }
     if (sg.temporal_note) {
       scoringGuidance += `\n\nTEMPORAL NOTE: ${sg.temporal_note}`;
+    }
+    // I76: positive_examples give the scorer concrete calibration anchors of
+    // what SHOULD score Yes / Partial (same rationale as the other prompt path).
+    if (sg.positive_examples && Array.isArray(sg.positive_examples) && sg.positive_examples.length > 0) {
+      scoringGuidance += `\n\nPOSITIVE EXAMPLES (concrete disclosures that SHOULD score Yes):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
+    }
+    if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
+      scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
   }
 

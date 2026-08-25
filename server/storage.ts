@@ -2418,28 +2418,31 @@ export async function createMeasure(data: {
   });
 }
 
-export async function updateMeasure(frameworkId: number, measureId: string, updates: Partial<{ title: string; definition: string; scoringGuidance: any; evidenceKeywords: string[]; category: string }>) {
+export async function updateMeasure(
+  frameworkId: number,
+  measureId: string,
+  updates: Partial<{ title: string; definition: string; scoringGuidance: any; evidenceKeywords: string[]; category: string; requiredSourceTypes: string[] }>,
+) {
+  // I76: switched to Drizzle typed update so jsonb (evidenceKeywords,
+  // requiredSourceTypes) columns are serialised correctly. The prior manual
+  // SQL-raw string interpolation would have coerced an array via String(v),
+  // producing broken values for jsonb; that path is now unused via this helper.
   const setObj: any = {};
   if (updates.title !== undefined) setObj.title = updates.title;
   if (updates.definition !== undefined) setObj.definition = updates.definition;
   if (updates.category !== undefined) setObj.category = updates.category;
   if (updates.evidenceKeywords !== undefined) setObj.evidenceKeywords = updates.evidenceKeywords;
+  if (updates.requiredSourceTypes !== undefined) setObj.requiredSourceTypes = updates.requiredSourceTypes;
   if (updates.scoringGuidance !== undefined) {
-    setObj.scoringGuidance = typeof updates.scoringGuidance === 'object'
+    setObj.scoringGuidance = typeof updates.scoringGuidance === "object"
       ? JSON.stringify(updates.scoringGuidance)
       : updates.scoringGuidance;
   }
-  if (Object.keys(setObj).length > 0) {
-    await db.execute(sql`
-      UPDATE framework_measures SET ${sql.raw(
-        Object.entries(setObj).map(([k, v]) => {
-          const col = k.replace(/([A-Z])/g, '_$1').toLowerCase();
-          return `${col} = '${String(v).replace(/'/g, "''")}'`;
-        }).join(', ')
-      )}
-      WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}
-    `);
-  }
+  if (Object.keys(setObj).length === 0) return;
+  await db
+    .update(schema.frameworkMeasures)
+    .set(setObj)
+    .where(sql`framework_id = ${frameworkId} AND measure_id = ${measureId}`);
 }
 
 // ─── Trusted Source Creation (for AI editor) ───────────────────────────────

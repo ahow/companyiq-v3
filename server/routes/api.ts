@@ -1795,6 +1795,39 @@ apiRouter.post("/companies/:id/analyze", async (req: Request, res: Response) => 
   }
 });
 
+// ─── Update Measure (PATCH) ─────────────────────────────────────────────────
+apiRouter.patch("/frameworks/:frameworkId/measures/:measureId", async (req: Request, res: Response) => {
+  // I76: PATCH by measureId (string) so callers can update scoringGuidance and
+  // other fields without knowing the numeric row id. Accepts an object for
+  // scoringGuidance and stringifies before storing.
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const frameworkId = parseInt(req.params.frameworkId);
+    const measureId = req.params.measureId;
+    const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+    if (!framework) return res.status(404).json({ error: "Framework not found" });
+
+    const allowed = ["title", "definition", "scoringGuidance", "evidenceKeywords", "category", "requiredSourceTypes"];
+    const updates: Record<string, any> = {};
+    for (const f of allowed) {
+      if (req.body[f] !== undefined) {
+        if (f === "scoringGuidance" && typeof req.body[f] !== "string") {
+          updates[f] = JSON.stringify(req.body[f]);
+        } else {
+          updates[f] = req.body[f];
+        }
+      }
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No updatable fields provided" });
+    }
+    await storage.updateMeasure(frameworkId, measureId, updates as any);
+    res.json({ success: true, updated: Object.keys(updates) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Delete Measure ─────────────────────────────────────────────────────────
 apiRouter.delete("/frameworks/:frameworkId/measures/:measureId", async (req: Request, res: Response) => {
   try {
