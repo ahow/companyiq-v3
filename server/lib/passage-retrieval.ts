@@ -443,9 +443,15 @@ function splitIntoDocuments(combinedText: string): Array<{ header: string; body:
 // existing, well-tested line/fragment detectors fire without changing their logic.
 // Topic-agnostic: it only restores SEC structural headings, never topic keywords.
 function recoverSecHeadingNewlines(text: string): string {
-  // Cheap pre-check: only do work if at least one canonical item title appears.
+  // Cheap pre-check: only do work if at least one canonical SEC item title
+  // appears. Non-SEC headings already carry the line structure (they're in
+  // native PDFs published with proper newlines) so no recovery is needed.
+  // I75b: only SEC patterns considered here to avoid re-fragmenting non-SEC
+  // documents. Using ALL_ITEM_TITLES caused BCE to fragment its Contentstack
+  // annual filing further and shifted scorer verdicts even for identical
+  // pack composition (chunk boundaries changed).
   let hasCanonical = false;
-  for (const { re } of ALL_ITEM_TITLES) { if (re.test(text)) { hasCanonical = true; break; } }
+  for (const { re } of SEC_ITEM_TITLES) { if (re.test(text)) { hasCanonical = true; break; } }
   if (!hasCanonical) return text;
   let out = text;
   // v3j-r10 FIX (Oracle): do NOT break before an item title that is an in-prose
@@ -460,8 +466,10 @@ function recoverSecHeadingNewlines(text: string): string {
     return `\n${whole}`;
   };
   // Insert a break before each canonical heading occurrence so it starts a fragment.
-  // I75: also break before non-SEC risk/governance headings (UK/EU/APAC).
-  for (const { re } of ALL_ITEM_TITLES) {
+  // I75b: revert to SEC-only patterns here. The section-tagger (detectSecHeading
+  // InFragment) still USES ALL_ITEM_TITLES so non-SEC filings get their sections
+  // tagged — but this normalisation only touches SEC-formatted PDF flat text.
+  for (const { re } of SEC_ITEM_TITLES) {
     const g = new RegExp(re.source, "gi");
     out = out.replace(g, breakBeforeIfHeading as unknown as (substring: string, ...args: any[]) => string);
   }
