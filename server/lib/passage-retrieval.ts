@@ -267,6 +267,52 @@ const SEC_ITEM_TITLES: Array<{ item: string; re: RegExp }> = [
   { item: "item11", re: /item[\s\u00a0]*11\b[\.\:\s\-—]{0,3}\s*executive\s+compensation/i },
 ];
 
+// I75 (Section-tagger non-SEC extension): most non-US annual reports use
+// jurisdiction-specific heading terminology that the SEC canonical titles miss,
+// so risk-factor bodies for UK / EU / APAC filers are never tagged and never
+// benefit from the section boost or force-include mechanisms. These headings
+// are mapped to the SAME normalised section keys (`item1a`, `item7`, etc.) as
+// their SEC equivalents, so no downstream code needs to change — the semantic
+// meaning "this is the risk-factors section" is what matters.
+//
+// Mappings by jurisdiction:
+//   UK / IFRS annual reports  → "Principal Risks and Uncertainties" → item1a
+//                              "Strategic Report" / "Business Review" → item7
+//                              "Directors' Report" / "Corporate Governance Report" → item10
+//   French URD                → "Facteurs de Risque" → item1a
+//                              "Facteurs de risques" (variant) → item1a
+//   Generic chapter form      → "Risk Factors" as a chapter heading (no "Item") → item1a
+//                              "Risk Management" (chapter, not sub-clause) → item1a
+//   APAC (HK / SG / JP EN)    → "Principal Risks" → item1a
+//                              "Risk Management Report" → item1a
+// We keep matches conservative (require multi-word phrases) so we do not tag
+// stray in-prose mentions.
+const NONSEC_ITEM_TITLES: Array<{ item: string; re: RegExp }> = [
+  // UK principal-risks section (dominant UK convention post-Companies Act 2006).
+  { item: "item1a", re: /principal\s+risks?\s+and\s+uncertainties/i },
+  { item: "item1a", re: /principal\s+risks?\b(?!\s+of|\s+to)/i },
+  // French URD (Universal Registration Document — AMF format).
+  { item: "item1a", re: /facteurs?\s+de\s+risques?/i },
+  // Generic chapter-heading "Risk Factors" (no "Item" prefix). Require the
+  // words to be at heading-scale: preceded by a newline (or start) and NOT
+  // preceded by "item" (which the SEC pattern already handles).
+  { item: "item1a", re: /(?:^|\n)\s*(?:\d+\.?\s*)?risk\s+factors\s*(?:\n|$|\s{2,})/i },
+  // Risk Management Report / Risk Management section headings — common in
+  // European insurance URDs and APAC integrated reports.
+  { item: "item1a", re: /(?:^|\n)\s*(?:\d+\.?\s*)?risk\s+management\s+(?:report|section|framework|chapter)/i },
+  // UK strategic-report / business-review chapter (analogous to MD&A).
+  { item: "item7", re: /(?:^|\n)\s*(?:\d+\.?\s*)?strategic\s+report/i },
+  { item: "item7", re: /(?:^|\n)\s*(?:\d+\.?\s*)?business\s+review/i },
+  // Directors' report / corporate governance report (UK/EU governance disclosure).
+  { item: "item10", re: /(?:^|\n)\s*(?:\d+\.?\s*)?directors['’]?\s+report/i },
+  { item: "item10", re: /(?:^|\n)\s*(?:\d+\.?\s*)?corporate\s+governance\s+report/i },
+];
+
+const ALL_ITEM_TITLES: Array<{ item: string; re: RegExp }> = [
+  ...SEC_ITEM_TITLES,
+  ...NONSEC_ITEM_TITLES,
+];
+
 // A line that is really a table-of-contents entry, e.g.
 //   "Item 1A. Risk Factors .......... 23"  or  "Item 1A Risk Factors 23"
 // ends in a (dotted) page number. We must NOT flip the active section on these,
@@ -313,9 +359,13 @@ function detectSecHeadingInFragment(fragment: string): string | undefined {
   // Prefer the RIGHTMOST (last) title-anchored heading in the fragment, so a real
   // "Item 1A. Risk Factors" that follows earlier prose wins over an earlier item.
   let best: { item: string; idx: number } | undefined;
-  for (const { item, re } of SEC_ITEM_TITLES) {
+  for (const { item, re } of ALL_ITEM_TITLES) {
     const m = re.exec(fragment);
-    if (m && /risk\s+factors|management|quantitative|business|directors|executive\s+compensation|unresolved/i.test(m[0])) {
+    // I75: accept both SEC-canonical phrases AND the non-SEC equivalents added
+    // to ALL_ITEM_TITLES (principal risks, facteurs de risque, strategic report,
+    // etc.). The guard prevents accidentally-matched item numbers without a
+    // canonical title from flipping the active section.
+    if (m && /risk\s+factors|management|quantitative|business|directors|executive\s+compensation|unresolved|principal\s+risks|facteurs\s+de\s+risques?|strategic\s+report|business\s+review|corporate\s+governance\s+report/i.test(m[0])) {
       // v3j-r10: skip in-prose cross-references ("...discussion in Item 7 ...").
       if (isCrossReferenceAt(fragment, m.index)) continue;
       if (!best || m.index > best.idx) best = { item, idx: m.index };
@@ -387,7 +437,7 @@ function splitIntoDocuments(combinedText: string): Array<{ header: string; body:
 function recoverSecHeadingNewlines(text: string): string {
   // Cheap pre-check: only do work if at least one canonical item title appears.
   let hasCanonical = false;
-  for (const { re } of SEC_ITEM_TITLES) { if (re.test(text)) { hasCanonical = true; break; } }
+  for (const { re } of ALL_ITEM_TITLES) { if (re.test(text)) { hasCanonical = true; break; } }
   if (!hasCanonical) return text;
   let out = text;
   // v3j-r10 FIX (Oracle): do NOT break before an item title that is an in-prose
@@ -402,7 +452,8 @@ function recoverSecHeadingNewlines(text: string): string {
     return `\n${whole}`;
   };
   // Insert a break before each canonical heading occurrence so it starts a fragment.
-  for (const { re } of SEC_ITEM_TITLES) {
+  // I75: also break before non-SEC risk/governance headings (UK/EU/APAC).
+  for (const { re } of ALL_ITEM_TITLES) {
     const g = new RegExp(re.source, "gi");
     out = out.replace(g, breakBeforeIfHeading as unknown as (substring: string, ...args: any[]) => string);
   }
@@ -549,38 +600,66 @@ export interface EvidencePack {
 // undifferentiated filing blob. Returns an empty set when no section applies (so
 // non-SEC corpora are unaffected).
 function relevantSecSections(measure: FrameworkMeasure): Set<string> {
-  const hay = `${measure.category} ${measure.title} ${measure.definition || ""}`.toLowerCase();
+  // I75 (Section-mapper narrowing): the previous version fired on very loose
+  // keywords ("strategy", "management", "policy", "responsible") that appear in
+  // essentially every measure title, so every measure ended up mapped to 4-6
+  // sections. When we raised RETRIEVAL_SECTION_BOOST to test hypothesis A, that
+  // over-broad mapping indiscriminately promoted item1a/item7/item10 chunks
+  // over topic-relevant chunks and REGRESSED recall (B1123 −2 TP vs B1121).
+  //
+  // New rule: only map a measure to SEC sections when there is an EXPLICIT signal
+  // that the measure requires evidence FROM those sections. Two accepted signals:
+  //   (a) requiredSourceTypes names a periodic regulatory filing, OR
+  //   (b) the measure ID/title/definition contains a LITERAL section reference
+  //       ("item 1a", "risk factors", "MD&A", "10-K", "20-F", "proxy", "DEF 14A",
+  //        "principal risks", "facteurs de risque").
+  // We deliberately DO NOT map on generic words like "strategy", "board",
+  // "governance", "policy", or "risk" (unqualified) — those match everything.
+  const hay = `${measure.measureId} ${measure.title} ${measure.definition || ""}`.toLowerCase();
   const out = new Set<string>();
-  // v3e (Section 5): TOPIC-AGNOSTIC. When a template marks a measure as requiring a
-  // periodic regulatory filing (via requiredSourceTypes), pin it to the risk/MD&A
-  // sections it must come from, so the section boost + force-include always apply
-  // regardless of topic or terse wording. This replaces the old hard-coded `9.x`
-  // (AI-shaped) pin with a declarative, framework-driven signal.
+
   const reqTypes = ((measure as any).requiredSourceTypes || []) as string[];
-  const isFilingBound = reqTypes.some((t) =>
-    /regulatory|filing|10-?k|20-?f|annual|periodic/i.test(String(t)),
-  );
+  const filingRe = /regulatory|filing|10-?k|20-?f|annual\s*report|periodic|def\s*14a|proxy/i;
+  const isFilingBound = reqTypes.some((t) => filingRe.test(String(t)));
+
+  // Literal-reference signals in measure text — these are unambiguous.
+  const mentionsItem1a = /item\s*1a|risk\s*factors?\s*disclosure|risk\s*factors?\s*section|principal\s*risks|facteurs\s*de\s*risque/i.test(hay);
+  const mentionsMDA = /md&a|management['’]s?\s*discussion\s*and\s*analysis|mda\b/i.test(hay);
+  const mentionsProxy = /proxy\s*statement|def\s*14a|management\s*information\s*circular|management\s*proxy\s*circular/i.test(hay);
+  const mentions10Kish = /\b10-?k\b|\b20-?f\b|annual\s*report\s*on\s*form|urd\b|universal\s*registration/i.test(hay);
+
+  // (a) requiredSourceTypes filing — pin to the sections most likely to carry
+  //     the substantive text: Item 1A (risks), Item 7/7A (MD&A / quantitative).
   if (isFilingBound) {
     out.add("item1a");
     out.add("item7");
     out.add("item7a");
   }
-  // Risk identification / risk factors / material risks → Item 1A (and 7/7A).
-  if (/risk|threat|vulnerab|material|uncertaint|mitigat|exposure|incident|safety|harm/.test(hay)) {
+
+  // (b) literal reference to Item 1A / Risk Factors / Principal Risks.
+  if (mentionsItem1a) {
+    out.add("item1a");
+  }
+  // (b) literal reference to MD&A.
+  if (mentionsMDA) {
+    out.add("item7");
+    out.add("item7a");
+  }
+  // (b) literal reference to a proxy statement (DEF 14A) → Item 10/11 sections.
+  if (mentionsProxy) {
+    out.add("item10");
+    out.add("item11");
+  }
+  // (b) literal reference to 10-K/20-F/annual report/URD in the MEASURE itself
+  //     (not just a general "annual report" mention downstream). Add the risk and
+  //     MD&A sections so a measure whose text says "20-F" without further detail
+  //     still gets pinned appropriately.
+  if (mentions10Kish) {
     out.add("item1a");
     out.add("item7");
     out.add("item7a");
   }
-  // Strategy / management discussion / operations / investment → Item 7 (MD&A) & 1.
-  if (/strateg|management|operation|invest|deploy|adopt|business|opportunit|performance/.test(hay)) {
-    out.add("item7");
-    out.add("item1");
-  }
-  // Governance / board / oversight / committee / accountability → Item 10 & 11.
-  if (/governance|board|oversight|committee|director|accountab|ethic|policy|responsib|compliance/.test(hay)) {
-    out.add("item10");
-    out.add("item11");
-  }
+
   return out;
 }
 
@@ -597,7 +676,13 @@ function requiresRegulatoryFiling(measure: FrameworkMeasure): boolean {
     return true;
   }
   const hay = `${measure.measureId} ${measure.title} ${measure.definition || ""}`.toLowerCase();
-  return /10-?k|20-?f|form\s*10|annual report|risk-?factor|risk factor|regulatory filing|securities filing/.test(hay);
+  // I75: extended to jurisdictional equivalents. A measure asking about
+  // "principal risks", "facteurs de risque", or a "universal registration
+  // document" is asking for the same substantive filing content as a 10-K risk-
+  // factor disclosure. Recognising these keeps the force-include path active for
+  // non-SEC filers, which was previously blocked because the text heuristic only
+  // matched US filing terminology.
+  return /10-?k|20-?f|form\s*10|annual report|risk-?factor|risk factor|regulatory filing|securities filing|principal risks?|facteurs\s+de\s+risques?|universal\s+registration\s+document|\burd\b|annual\s+information\s+form|20-?f|40-?f/.test(hay);
 }
 
 // v3g (Bug 2): does this document URL/title look like a regulatory ANNUAL filing
@@ -614,7 +699,29 @@ function isRegulatoryAnnualFilingDoc(url: string | undefined, title: string | un
   if (isProxyDoc(url, title)) return false;
   // EDGAR primary-document archive shape: /archives/edgar/data/<cik>/<accession>/...
   const isEdgarPrimary = /sec\.gov\/archives\/edgar\/data\/\d+\//.test(s) && /\.htm/.test(s) && !/index\.htm|-index\.htm/.test(s);
-  const looksAnnual = /10-?k|20-?f|40-?f|annual.?report|年度报告|年度報告|年报|年報/.test(s);
+  // I75 (non-SEC extension): recognise the well-known non-US annual-filing shapes.
+  // The URL patterns are conservative — they match filenames or path segments that
+  // are unambiguously the primary annual filing / URD document. Marketing or
+  // summary landing pages ARE excluded (they don't contain risk-factor prose).
+  const looksAnnual =
+    /10-?k|20-?f|40-?f|annual.?report|年度报告|年度報告|年报|年報/.test(s) ||
+    // French URD: "universal-registration-document", "urd-", "documenturd"
+    /universal[-_\s]?registration[-_\s]?document|\burd[-_]\d|documenturd|urd_20\d{2}/.test(s) ||
+    // ASX / Australian annual filings ("asxpdf/YYYYMMDD/.../<accession>.pdf").
+    /announcements\.asx\.com\.au\/asxpdf\//.test(s) ||
+    // HK EX filings / HKEX news filings (annual-report-YYYY, ar-YYYY).
+    /\b(?:hkexnews|hkexnew)\b|\bannual[-_\s]?report[-_\s]?20\d{2}\b/.test(s) ||
+    // Canadian AIF (annual information form).
+    /\bannual[-_\s]?information[-_\s]?form\b|\baif[-_\s]?20\d{2}\b/.test(s) ||
+    // Integrated / non-financial statement filings that carry the risk-factor
+    // section under IFRS / EU regulations (e.g., ABB Sustainability Statement).
+    /integrated[-_\s]?annual|sustainability[-_\s]?statement/.test(s);
+  // Exclude marketing summary pages that share the "annual-report" token but do
+  // not contain the substantive risk-factor prose (they are landing pages).
+  const isSummaryLanding =
+    /annual[-_\s]?reports?\/\d{4}summary\/?$|\/summary\/?$|annual[-_\s]?report[-_\s]?summary/.test(s) ||
+    /-summary\.pdf$|_summary\.pdf$/.test(s);
+  if (isSummaryLanding) return false;
   // <ticker>-YYYYMMDD.htm EDGAR primary docs carry no form token in the name; treat
   // an EDGAR primary HTML document as a candidate annual filing (the recency/type
   // layer disambiguates which period it is). This is the Bug 2/3/5 unifier.
