@@ -8,6 +8,7 @@ import { sessionMiddleware } from "./middleware/auth.js";
 import { authRouter } from "./routes/auth.js";
 import { apiRouter } from "./routes/api.js";
 import frameworkBuilderRouter from "./routes/framework-builder.js";
+import frameworkBuilderV2Router from "./routes/framework-builder-v2.js";
 import { startWorker } from "./worker.js";
 import { initializeDatabase } from "./db.js";
 import { cleanupOnStartup } from "./startup-cleanup.js";
@@ -311,6 +312,7 @@ app.post("/api/admin/resume-analysis", async (req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api", apiRouter);
 app.use("/api/framework-builder", frameworkBuilderRouter);
+app.use("/api/framework-builder", frameworkBuilderV2Router);
 
 // ─── Static Files (SPA) ─────────────────────────────────────────────────────
 
