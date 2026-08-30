@@ -109,10 +109,15 @@ function isExceptionMeasure(m: MeasureDraft): boolean {
   return Boolean(m.r3_1_exception_metrics || m.r3_1_exception_coverage);
 }
 
-function containsTopicOrSynonym(text: string, topicTerm: string, synonyms: string[]): boolean {
-  const lc = text.toLowerCase();
-  if (lc.includes(topicTerm.toLowerCase())) return true;
-  for (const s of synonyms) {
+function containsTopicOrSynonym(text: unknown, topicTerm: unknown, synonyms: unknown): boolean {
+  const t = typeof text === "string" ? text : "";
+  const term = typeof topicTerm === "string" ? topicTerm : "";
+  const syns: string[] = Array.isArray(synonyms)
+    ? synonyms.filter((s): s is string => typeof s === "string")
+    : [];
+  const lc = t.toLowerCase();
+  if (term && lc.includes(term.toLowerCase())) return true;
+  for (const s of syns) {
     if (s && lc.includes(s.toLowerCase())) return true;
   }
   return false;
@@ -313,14 +318,19 @@ export function validateC5(fw: FrameworkDraft): ValidationResult {
       continue;
     }
     if (hasAdjacent) {
-      // Check that at least one adjacent-topic name appears in the substantive_definition
-      const found = adjacent.some((a) => sd.toLowerCase().includes(a.name.toLowerCase()));
+      // Check that at least one adjacent-topic name appears in the substantive_definition.
+      // Defensive: some LLM outputs may include adjacent entries missing a `name` field.
+      const sdLower = String(sd || "").toLowerCase();
+      const found = adjacent.some((a) => {
+        const name = typeof a?.name === "string" ? a.name : "";
+        return name && sdLower.includes(name.toLowerCase());
+      });
       if (!found) {
         violations.push({
           measureId: m.measureId,
           rule: "C5",
           severity: "error",
-          message: `substantive_definition does not reference any adjacent-topic exclusion from the intake list [${adjacent.map((a) => a.name).join(", ")}]`,
+          message: `substantive_definition does not reference any adjacent-topic exclusion from the intake list [${adjacent.map((a) => (typeof a?.name === "string" ? a.name : "?")).join(", ")}]`,
           suggestion: `Add a clause naming ≥1 adjacent topic that must NOT count as evidence.`,
         });
       }

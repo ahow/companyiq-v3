@@ -152,13 +152,30 @@ Draft the framework now, following construction rules C1–C10 exactly.`;
     const fwDraft: FrameworkDraft = {
       name: draft.framework?.name || intake.topic || "unnamed",
       topicTerm: draft.framework?.topicTerm || intake.topicTerm,
-      topicSynonyms: draft.framework?.topicSynonyms || intake.topicSynonyms || [],
-      adjacentTopics: draft.framework?.adjacentTopics || intake.adjacentTopics,
-      anchorFrameworks: draft.framework?.anchorFrameworks || intake.anchorFrameworks,
+      topicSynonyms: (Array.isArray(draft.framework?.topicSynonyms) ? draft.framework.topicSynonyms : null) || intake.topicSynonyms || [],
+      adjacentTopics: (Array.isArray(draft.framework?.adjacentTopics) ? draft.framework.adjacentTopics : null) || intake.adjacentTopics,
+      anchorFrameworks: (Array.isArray(draft.framework?.anchorFrameworks) ? draft.framework.anchorFrameworks : null) || intake.anchorFrameworks,
       sensitivityPreference: draft.framework?.sensitivityPreference || intake.sensitivityPreference,
       measures,
     };
-    const validation = validateAll(fwDraft);
+    // Never let a validator throw — return the draft anyway with a synthetic
+    // error violation so the UI can at least display what came back.
+    let validation;
+    try {
+      validation = validateAll(fwDraft);
+    } catch (e: any) {
+      console.error("[framework-builder v2 /draft] validator crashed:", e);
+      validation = {
+        passed: false,
+        violations: [
+          {
+            rule: "internal",
+            severity: "error" as const,
+            message: `Validator threw: ${e?.message || e}. Draft is displayed for review but should be re-drafted.`,
+          },
+        ],
+      };
+    }
 
     return res.json({
       draft,
@@ -168,7 +185,7 @@ Draft the framework now, following construction rules C1–C10 exactly.`;
     });
   } catch (err: any) {
     console.error("[framework-builder v2 /draft] error:", err);
-    return res.status(500).json({ error: err?.message || "internal error" });
+    return res.status(500).json({ error: err?.message || "internal error", stack: err?.stack });
   }
 });
 
