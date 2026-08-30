@@ -2193,6 +2193,63 @@ async function scoreSingleMeasurePass(opts: {
 }): Promise<MeasureResult> {
   const { companyName, companyId, measure, evidenceText, terminology, topicDescription, provider, providerIndex, temporalWarning, scoringMode, framework } = opts;
 
+  // Sprint 10 P3: opt-in two-step verifier. Fires when the measure's
+  // scoringGuidance JSON declares scoring_strategy="two_step_named_entity_quantum"
+  // AND entity_role is one of the supported values. Env flag
+  // FRAMEWORK_V2_TWO_STEP=1 must also be set (default OFF) so v1 frameworks
+  // never accidentally take this path.
+  if (process.env.FRAMEWORK_V2_TWO_STEP === "1") {
+    try {
+      const sgRaw = (measure as any).scoringGuidance;
+      let sgParsed: any = null;
+      if (typeof sgRaw === "string") { try { sgParsed = JSON.parse(sgRaw); } catch {} }
+      else if (sgRaw && typeof sgRaw === "object") sgParsed = sgRaw;
+      const strategy = sgParsed?.scoring_strategy;
+      const role = sgParsed?.entity_role;
+      if (
+        strategy === "two_step_named_entity_quantum" &&
+        (role === "revenue_line" || role === "cost_claim")
+      ) {
+        const fw: any = framework;
+        const topicTerm = fw?.topicTerm || topicDescription || "the topic";
+        const { verifyTwoStep } = await import("./framework-v2/two-step-verifier.js");
+        const twoStep = await verifyTwoStep({
+          companyName,
+          evidenceText,
+          topicTerm,
+          entityRole: role,
+          providerName: provider,
+        });
+        // Map two-step verdict to MeasureResult
+        const twoStepScore = twoStep.verdict === "Yes" ? 1 : (twoStep.verdict === "Partial" ? 0.5 : 0);
+        return {
+          measureId: measure.measureId,
+          title: measure.title,
+          definition: measure.definition,
+          category: measure.category,
+          categoryNumber: measure.categoryNumber,
+          score: (scoringMode === "partial") ? twoStepScore : (twoStepScore >= 0.5 ? 1 : 0),
+          coverage: null,
+          confidence: "High",
+          evidenceSummary: twoStep.verdict === "Yes"
+            ? `Two-step verification passed. Named ${role}: ${twoStep.step1.named_entities.slice(0, 2).join(", ")}. Quantum: ${twoStep.step2.quantum_type} ${twoStep.step2.quantum_value}.`
+            : (twoStep.verdict === "Partial"
+              ? `Two-step partial. Named ${role} found (${twoStep.step1.named_entities.slice(0, 2).join(", ")}) but no quantum attached.`
+              : `Two-step verification failed. ${twoStep.step1.reason || twoStep.step2.reason || "No named entity or quantum found."}`),
+          quotes: twoStep.quotes.map((q) => ({ text: q.text, source: q.source || "" })),
+          verdict: twoStep.verdict,
+          verdictNuance: `[two-step verifier: role=${role}, verdict=${twoStep.verdict}]`,
+          displayOrder: measure.displayOrder,
+          _gradedBy: twoStep.provider || provider,
+          _p3Trace: [`two_step_${role}`],
+        } as MeasureResult & { _gradedBy?: string; _p3Trace?: string[] };
+      }
+    } catch (err: any) {
+      // Non-fatal — fall through to normal scoring
+      console.warn(`[${companyName}] Two-step verifier failed for ${measure.measureId}, falling back to normal scoring: ${err?.message || err}`);
+    }
+  }
+
   // Choose prompt based on scoring mode
   const usePartial = scoringMode === "partial";
   const { system, prompt } = usePartial
@@ -2255,22 +2312,98 @@ async function scoreSingleMeasurePass(opts: {
         return sc !== 0 ? sc : a.text.localeCompare(b.text);
       });
 
+    // ─── Sprint 10 P3: post-verdict hooks ────────────────────────────────
+    // Gated by env flags. All hooks default OFF for backward compatibility.
+
+    let finalScore = score;
+    let finalVerdict: MeasureResult["verdict"] = verdict;
+    let finalNuance: string | null = typeof parsed.verdictNuance === "string" ? parsed.verdictNuance : null;
+    const p3Trace: string[] = [];
+
+    // R3.3 context expansion (soft-mode). Fires on Yes verdicts with a short
+    // quote, if the measure declares min_quote_context_chars. Env flag
+    // FRAMEWORK_V2_CONTEXT_EXPAND=1 enables (default OFF).
+    if (
+      process.env.FRAMEWORK_V2_CONTEXT_EXPAND === "1" &&
+      finalVerdict === "Yes" &&
+      validatedQuotes.length > 0
+    ) {
+      const m: any = measure;
+      const minCtx = typeof m.minQuoteContextChars === "number" ? m.minQuoteContextChars : null;
+      const hasShortQuote = validatedQuotes.some((q: any) => (q?.text || "").length < (minCtx || 120));
+      if (minCtx && hasShortQuote) {
+        try {
+          const { expandAndReverify } = await import("./framework-v2/context-expander.js");
+          const fw: any = framework;
+          const result = await expandAndReverify({
+            companyName,
+            measureTitle: measure.title,
+            measureId: measure.measureId,
+            substantiveDefinition: m.substantiveDefinition || undefined,
+            whatDoesNotConstituteEvidence: m.whatDoesNotConstituteEvidence || undefined,
+            topicTerm: fw?.topicTerm || topicDescription,
+            quotes: validatedQuotes.map((q: any) => ({ text: q.text, source: q.source })),
+            fullEvidenceText: evidenceText,
+            minQuoteContextChars: minCtx,
+            providerName: provider,
+          });
+          if (result.flipped) {
+            finalScore = usePartial ? 0 : 0;
+            finalVerdict = "No";
+            const flipReasons = result.expansions.filter((e) => !e.stillYes).map((e) => e.reason).join(" | ");
+            finalNuance = `[R3.3 flipped Yes→No] ${flipReasons}${finalNuance ? " (original nuance: " + finalNuance + ")" : ""}`;
+            p3Trace.push("r33_flipped");
+          } else {
+            p3Trace.push("r33_kept_yes");
+          }
+        } catch (err: any) {
+          // Non-fatal — keep original verdict
+          console.warn(`[${companyName}] R3.3 context-expansion failed for ${measure.measureId}: ${err?.message || err}`);
+        }
+      }
+    }
+
+    // Evidence-absent tagging. Fires on No verdicts when evidence is empty.
+    // Env flag FRAMEWORK_V2_EVIDENCE_ABSENT=1 enables (default OFF).
+    // Note: reclassifies verdict text only; score remains 0 for backward-compat.
+    if (
+      process.env.FRAMEWORK_V2_EVIDENCE_ABSENT === "1" &&
+      finalVerdict === "No"
+    ) {
+      try {
+        const { classifyVerdictWithAbsence } = await import("./framework-v2/evidence-absent.js");
+        const cls = classifyVerdictWithAbsence({
+          verdict: "No",
+          evidenceText,
+          urlsWithHits: 0, // heuristic: proxy = evidenceText.length === 0
+          measureId: measure.measureId,
+        });
+        if (cls.wasReclassified) {
+          finalNuance = `[Evidence absent] ${cls.reason}${finalNuance ? " (original nuance: " + finalNuance + ")" : ""}`;
+          p3Trace.push("evidence_absent");
+        }
+      } catch (err: any) {
+        console.warn(`[${companyName}] evidence-absent classification failed for ${measure.measureId}: ${err?.message || err}`);
+      }
+    }
+
     return {
       measureId: measure.measureId,
       title: measure.title,
       definition: measure.definition,
       category: measure.category,
       categoryNumber: measure.categoryNumber,
-      score,
+      score: finalScore,
       coverage: null,
       confidence: validConfidence.includes(parsed.confidence) ? parsed.confidence : "Medium",
       evidenceSummary: typeof parsed.evidenceSummary === "string" ? parsed.evidenceSummary : "No evidence found",
       quotes: validatedQuotes,
-      verdict,
-      verdictNuance: typeof parsed.verdictNuance === "string" ? parsed.verdictNuance : null,
+      verdict: finalVerdict,
+      verdictNuance: finalNuance,
       displayOrder: measure.displayOrder,
       _gradedBy: gradedBy,
-    } as MeasureResult & { _gradedBy?: string };
+      _p3Trace: p3Trace.length > 0 ? p3Trace : undefined,
+    } as MeasureResult & { _gradedBy?: string; _p3Trace?: string[] };
   } catch (error: any) {
     // PROVIDER QUOTA/AUTH FAILURE: if the error is a ProviderScoringError with
     // quota_exhausted or authentication class, DO NOT convert to a zero score.
