@@ -325,9 +325,19 @@ export default function FrameworkBuilderV2Page() {
                     />
                   </div>
                 )}
-                {messages.map((m, i) => (
-                  <MessageBubble key={i} role={m.role} content={m.content} />
-                ))}
+                {messages.map((m, i) => {
+                  const isLastAssistant =
+                    m.role === "assistant" && i === messages.length - 1 && !loading;
+                  return (
+                    <MessageBubble
+                      key={i}
+                      role={m.role}
+                      content={m.content}
+                      showOptions={isLastAssistant}
+                      onSelectOption={(label) => sendMessage(label)}
+                    />
+                  );
+                })}
                 {loading && stage === "intake" && (
                   <div className="flex items-center gap-2 text-gray-500 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" /> Thinking…
@@ -453,8 +463,32 @@ function StageBadge({ current }: { current: Stage }) {
   return <span className={`px-3 py-1 rounded-full text-xs font-medium ${s.color}`}>{s.label}</span>;
 }
 
-function MessageBubble({ role, content }: { role: "user" | "assistant"; content: string }) {
+// Parse [[option:label]] markers out of assistant content.
+// Returns { proseWithoutOptions, options }.
+function parseOptions(content: string): { prose: string; options: string[] } {
+  const re = /\[\[option:\s*([\s\S]*?)\]\]/g;
+  const options: string[] = [];
+  const prose = content.replace(re, (_m, label) => {
+    const trimmed = String(label || "").trim();
+    if (trimmed) options.push(trimmed);
+    return "";
+  }).replace(/\n{3,}/g, "\n\n").trim();
+  return { prose, options };
+}
+
+function MessageBubble({
+  role,
+  content,
+  showOptions = false,
+  onSelectOption,
+}: {
+  role: "user" | "assistant";
+  content: string;
+  showOptions?: boolean;
+  onSelectOption?: (label: string) => void;
+}) {
   const isUser = role === "user";
+  const { prose, options } = isUser ? { prose: content, options: [] } : parseOptions(content);
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
@@ -464,7 +498,20 @@ function MessageBubble({ role, content }: { role: "user" | "assistant"; content:
             : "bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100"
         }`}
       >
-        {content}
+        {prose}
+        {showOptions && options.length > 0 && onSelectOption && (
+          <div className="mt-3 flex flex-wrap gap-2 not-prose">
+            {options.map((opt, i) => (
+              <button
+                key={i}
+                onClick={() => onSelectOption(opt)}
+                className="px-3 py-1.5 bg-white dark:bg-gray-800 border border-purple-300 dark:border-purple-700 text-purple-800 dark:text-purple-200 rounded-full text-sm hover:bg-purple-50 dark:hover:bg-purple-900/30 transition"
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
