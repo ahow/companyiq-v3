@@ -179,6 +179,26 @@ test("C5 fails when substantive_definition omits all adjacent topics", () => {
   assert.equal(r.passed, false);
 });
 
+test("C5 passes when LLM paraphrases adjacent-topic names in-sentence", () => {
+  // Regression: the LLM emits an exclusion clause but names adjacent topics
+  // by distinctive keyword rather than exact intake label.
+  const fw = goodFramework({
+    adjacentTopics: [
+      { name: "Climate Change", example_phrases: ["climate scenario analysis"] },
+      { name: "Water Management", example_phrases: [] },
+      { name: "Waste & Pollution", example_phrases: [] },
+    ],
+    measures: [
+      goodMeasure({
+        substantive_definition:
+          "This measure tests nature scenario analysis for nature and biodiversity. Evidence attributed to adjacent topics does NOT satisfy this measure. Adjacent topics that must be excluded include: climate scenario analysis, water scenario planning, and waste and pollution scenarios.",
+      }),
+    ],
+  });
+  const r = validateC5(fw);
+  assert.equal(r.passed, true, `expected passed=true, got violations: ${JSON.stringify(r.violations)}`);
+});
+
 // ─── C6 ──────────────────────────────────────────────────────────────────
 
 test("C6 fails when fewer than 2 negative examples", () => {

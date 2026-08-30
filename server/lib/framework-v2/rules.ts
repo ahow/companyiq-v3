@@ -318,20 +318,79 @@ export function validateC5(fw: FrameworkDraft): ValidationResult {
       continue;
     }
     if (hasAdjacent) {
-      // Check that at least one adjacent-topic name appears in the substantive_definition.
-      // Defensive: some LLM outputs may include adjacent entries missing a `name` field.
+      // Check that at least one adjacent-topic reference appears in the
+      // substantive_definition. The LLM often paraphrases adjacent-topic
+      // names ("climate scenario analysis" instead of "Climate Change") when
+      // embedding them in a sentence — that is correct and natural, so we
+      // match on ANY of:
+      //   1. the full adjacent.name substring, OR
+      //   2. any distinctive content token from adjacent.name (≥4 chars,
+      //      excluding common stopwords like "and", "of", "the",
+      //      "management", "topic", "change", "issues"), OR
+      //   3. any example_phrase from the adjacent-topic entry.
+      // We also require the substantive_definition to contain an "exclusion"
+      // marker phrase so we do not falsely match on random topical mentions.
       const sdLower = String(sd || "").toLowerCase();
+      // Require an explicit exclusion / rejection phrase, not just the word "exclusion".
+      const hasExclusionMarker =
+        /does not satisfy|does not count|not evidence|not sufficient|must be excluded|are excluded|are not evidence|are not sufficient|does not qualify|are not accepted|do not accept|specifically tests .+ (?:and not|not) |does NOT satisfy|adjacent topic/i.test(
+          sd,
+        );
       const found = adjacent.some((a) => {
         const name = typeof a?.name === "string" ? a.name : "";
-        return name && sdLower.includes(name.toLowerCase());
+        if (!name) return false;
+        if (sdLower.includes(name.toLowerCase())) return true;
+        // Tokenised match: any distinctive word from the adjacent-topic name.
+        const tokens = name
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(
+            (t) =>
+              t.length >= 4 &&
+              ![
+                "and",
+                "the",
+                "of",
+                "for",
+                "with",
+                "management",
+                "topic",
+                "topics",
+                "change",
+                "issues",
+                "related",
+                "policy",
+                "general",
+                "other",
+              ].includes(t),
+          );
+        for (const tok of tokens) {
+          if (sdLower.includes(tok)) return true;
+        }
+        // Example-phrase match.
+        const phrases = Array.isArray(a?.example_phrases) ? a.example_phrases : [];
+        for (const p of phrases) {
+          if (typeof p === "string" && p.length >= 4 && sdLower.includes(p.toLowerCase())) {
+            return true;
+          }
+        }
+        return false;
       });
-      if (!found) {
+      if (!hasExclusionMarker) {
         violations.push({
           measureId: m.measureId,
           rule: "C5",
           severity: "error",
-          message: `substantive_definition does not reference any adjacent-topic exclusion from the intake list [${adjacent.map((a) => (typeof a?.name === "string" ? a.name : "?")).join(", ")}]`,
-          suggestion: `Add a clause naming ≥1 adjacent topic that must NOT count as evidence.`,
+          message: `substantive_definition is missing an exclusion clause. Add a sentence naming what does NOT count as evidence (e.g. "Evidence attributed to <adjacent topic> does not satisfy this measure").`,
+          suggestion: `Reference at least one adjacent topic from the intake list [${adjacent.map((a) => (typeof a?.name === "string" ? a.name : "?")).join(", ")}].`,
+        });
+      } else if (!found) {
+        violations.push({
+          measureId: m.measureId,
+          rule: "C5",
+          severity: "warning", // downgraded: exclusion clause exists but doesn't match intake vocabulary
+          message: `substantive_definition has an exclusion clause but does not obviously reference an intake-listed adjacent topic. Verify the exclusion covers at least one of: ${adjacent.map((a) => (typeof a?.name === "string" ? a.name : "?")).join(", ")}.`,
+          suggestion: `Ensure exclusion language names one of the intake's adjacent topics either by name, distinctive keyword, or example phrase.`,
         });
       }
     } else {
