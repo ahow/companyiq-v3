@@ -1,14 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState, useRef, useEffect } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User, Settings, Globe, Search, Ban, Link2 } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User, Settings, Globe, Search, Ban, Link2, Sparkles } from "lucide-react";
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
 
-export default function FrameworkPage() {
+interface FrameworkPageProps {
+  onNavigateToV2Builder?: () => void;
+}
+
+export default function FrameworkPage({ onNavigateToV2Builder }: FrameworkPageProps = {}) {
   const queryClient = useQueryClient();
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -266,12 +270,23 @@ export default function FrameworkPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-gray-900">Framework Templates</h1>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
-        >
-          <Plus className="w-4 h-4" /> New Framework
-        </button>
+        <div className="flex items-center gap-2">
+          {onNavigateToV2Builder && (
+            <button
+              onClick={onNavigateToV2Builder}
+              className="flex items-center gap-1 px-3 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700"
+              title="Correct-by-construction v2 builder: C1–C10 rules, intake pushback, and test-drive validation"
+            >
+              <Sparkles className="w-4 h-4" /> Create with v2 builder
+            </button>
+          )}
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
+          >
+            <Plus className="w-4 h-4" /> New Framework
+          </button>
+        </div>
       </div>
 
       {/* Framework List */}

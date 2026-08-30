@@ -9,6 +9,7 @@ import ListsPage from "./pages/ListsPage";
 import ResultsPage from "./pages/ResultsPage";
 import SettingsPage from "./pages/SettingsPage";
 import AIBuilderPage from "./pages/AIBuilderPage";
+import FrameworkBuilderV2Page from "./pages/FrameworkBuilderV2Page";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import DomainsPage from "./pages/DomainsPage";
 import GuidePage from "./pages/GuidePage";
@@ -44,6 +45,7 @@ type Page =
   | "results"
   | "settings"
   | "ai-builder"
+  | "framework-builder-v2"
   | "diagnostics"
   | "domains"
   | "guide";
@@ -100,11 +102,12 @@ export default function App() {
               onBack={() => navigate("dashboard")}
             />
           )}
-          {page === "framework" && <FrameworkPage />}
+          {page === "framework" && <FrameworkPage onNavigateToV2Builder={() => navigate("framework-builder-v2")} />}
           {page === "lists" && <ListsPage />}
           {page === "results" && <ResultsPage />}
           {page === "settings" && <SettingsPage />}
           {page === "ai-builder" && <AIBuilderPage />}
+          {page === "framework-builder-v2" && <FrameworkBuilderV2Page />}
           {page === "diagnostics" && <DiagnosticsPage />}
           {page === "domains" && <DomainsPage />}
           {page === "guide" && <GuidePage />}
