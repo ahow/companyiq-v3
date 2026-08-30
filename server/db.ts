@@ -144,6 +144,28 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS r3_1_exception_metrics BOOLEAN NOT NULL DEFAULT false`);
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS r3_1_exception_coverage BOOLEAN NOT NULL DEFAULT false`);
 
+    // ─── Framework v2 async jobs ─────────────────────────────────────────────
+    // Sprint 10 P4 fix: /v2/draft LLM call runs ~4 minutes, exceeding mobile
+    // browser socket timeouts. We now dispatch as an async job and let the
+    // client poll. Each row is one draft attempt.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS framework_v2_jobs (
+        id TEXT PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        intake JSONB NOT NULL,
+        provider_name TEXT,
+        result JSONB,
+        error_message TEXT,
+        error_stack TEXT,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS framework_v2_jobs_workspace_idx ON framework_v2_jobs(workspace_id, created_at DESC)`);
+
     // ─── Company Lists ──────────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS company_lists (

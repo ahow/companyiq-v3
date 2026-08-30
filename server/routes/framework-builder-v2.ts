@@ -13,6 +13,9 @@ import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD } from "../lib/framew
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, type TestDriveCompanyResult, type TestDriveSampleRequest } from "../lib/framework-v2/test-drive.js";
 import * as storage from "../storage.js";
+import { db } from "../db.js";
+import { sql } from "drizzle-orm";
+import { randomUUID } from "crypto";
 
 const router = Router();
 
@@ -105,14 +108,57 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
   }
 });
 
-// ─── POST /v2/draft — draft the framework from a confirmed intake ────────
+// ─── Draft execution helper (used by both sync and async paths) ──────────
+
+async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string } | { error: string; raw?: string }> {
+  const { completeWithFallback } = await import("../lib/ai-providers.js");
+  const draftPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C10 exactly.`;
+  const { text: response } = await completeWithFallback(providerName || "claude", {
+    system: DRAFTING_SYSTEM_PROMPT_HEAD,
+    prompt: draftPrompt,
+    maxTokens: 16000,
+    temperature: 0.2,
+    json: true,
+  });
+  let draft: any = null;
+  try {
+    const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\{[\s\S]*\}/);
+    draft = jsonMatch ? JSON.parse(jsonMatch[1] ?? jsonMatch[0]) : JSON.parse(response);
+  } catch (e) {
+    return { error: "Could not parse framework JSON from LLM response", raw: response };
+  }
+  const measures = flattenMeasures(draft);
+  const fwDraft: FrameworkDraft = {
+    name: draft.framework?.name || intake.topic || "unnamed",
+    topicTerm: draft.framework?.topicTerm || intake.topicTerm,
+    topicSynonyms: (Array.isArray(draft.framework?.topicSynonyms) ? draft.framework.topicSynonyms : null) || intake.topicSynonyms || [],
+    adjacentTopics: (Array.isArray(draft.framework?.adjacentTopics) ? draft.framework.adjacentTopics : null) || intake.adjacentTopics,
+    anchorFrameworks: (Array.isArray(draft.framework?.anchorFrameworks) ? draft.framework.anchorFrameworks : null) || intake.anchorFrameworks,
+    sensitivityPreference: draft.framework?.sensitivityPreference || intake.sensitivityPreference,
+    measures,
+  };
+  let validation: any;
+  try {
+    validation = validateAll(fwDraft);
+  } catch (e: any) {
+    console.error("[framework-builder v2 /draft] validator crashed:", e);
+    validation = {
+      passed: false,
+      violations: [
+        { rule: "internal", severity: "error" as const, message: `Validator threw: ${e?.message || e}. Draft is displayed for review but should be re-drafted.` },
+      ],
+    };
+  }
+  return { draft, measures, validation, summary: summariseViolations(validation.violations) };
+}
+
+// ─── POST /v2/draft — draft the framework from a confirmed intake (SYNC) ───
+// Kept for backward compatibility — also enqueues a job so the client can
+// choose to poll if the socket dies before the response arrives.
 
 router.post("/v2/draft", requireWorkspace, async (req: Request, res: Response) => {
   try {
-    const { intake, providerName } = req.body as {
-      intake: IntakeArtefact;
-      providerName?: string;
-    };
+    const { intake, providerName } = req.body as { intake: IntakeArtefact; providerName?: string };
     if (!intake || !intake.topicTerm) {
       return res.status(400).json({ error: "intake with topicTerm required" });
     }
@@ -123,69 +169,106 @@ router.post("/v2/draft", requireWorkspace, async (req: Request, res: Response) =
         robustnessGate: gate,
       });
     }
-
-    const { completeWithFallback } = await import("../lib/ai-providers.js");
-
-    const draftPrompt = `Intake artefact (JSON):
-${JSON.stringify(intake, null, 2)}
-
-Draft the framework now, following construction rules C1–C10 exactly.`;
-
-    const { text: response } = await completeWithFallback(providerName || "claude", {
-      system: DRAFTING_SYSTEM_PROMPT_HEAD,
-      prompt: draftPrompt,
-      maxTokens: 16000,
-      temperature: 0.2,
-      json: true,
-    });
-
-    let draft: any = null;
-    try {
-      const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\{[\s\S]*\}/);
-      draft = jsonMatch ? JSON.parse(jsonMatch[1] ?? jsonMatch[0]) : JSON.parse(response);
-    } catch (e) {
-      return res.status(500).json({ error: "Could not parse framework JSON from LLM response", raw: response });
+    const result = await executeDraft(intake, providerName);
+    if ("error" in result) {
+      return res.status(500).json(result);
     }
-
-    // Flatten categories into a FrameworkDraft for validation
-    const measures = flattenMeasures(draft);
-    const fwDraft: FrameworkDraft = {
-      name: draft.framework?.name || intake.topic || "unnamed",
-      topicTerm: draft.framework?.topicTerm || intake.topicTerm,
-      topicSynonyms: (Array.isArray(draft.framework?.topicSynonyms) ? draft.framework.topicSynonyms : null) || intake.topicSynonyms || [],
-      adjacentTopics: (Array.isArray(draft.framework?.adjacentTopics) ? draft.framework.adjacentTopics : null) || intake.adjacentTopics,
-      anchorFrameworks: (Array.isArray(draft.framework?.anchorFrameworks) ? draft.framework.anchorFrameworks : null) || intake.anchorFrameworks,
-      sensitivityPreference: draft.framework?.sensitivityPreference || intake.sensitivityPreference,
-      measures,
-    };
-    // Never let a validator throw — return the draft anyway with a synthetic
-    // error violation so the UI can at least display what came back.
-    let validation;
-    try {
-      validation = validateAll(fwDraft);
-    } catch (e: any) {
-      console.error("[framework-builder v2 /draft] validator crashed:", e);
-      validation = {
-        passed: false,
-        violations: [
-          {
-            rule: "internal",
-            severity: "error" as const,
-            message: `Validator threw: ${e?.message || e}. Draft is displayed for review but should be re-drafted.`,
-          },
-        ],
-      };
-    }
-
-    return res.json({
-      draft,
-      measures,
-      validation,
-      summary: summariseViolations(validation.violations),
-    });
+    return res.json(result);
   } catch (err: any) {
     console.error("[framework-builder v2 /draft] error:", err);
     return res.status(500).json({ error: err?.message || "internal error", stack: err?.stack });
+  }
+});
+
+// ─── POST /v2/draft/start — kick off draft as an async job ─────────────
+// Returns immediately with a job id. Draft runs in the background and
+// writes result / error to framework_v2_jobs. Client polls /v2/draft/status.
+
+router.post("/v2/draft/start", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const { intake, providerName } = req.body as { intake: IntakeArtefact; providerName?: string };
+    if (!intake || !intake.topicTerm) {
+      return res.status(400).json({ error: "intake with topicTerm required" });
+    }
+    const gate = evaluateRobustness(intake);
+    if (!gate.ready && !intake.confirmed) {
+      return res.status(400).json({
+        error: "Intake robustness gate not satisfied and intake.confirmed is not set to true",
+        robustnessGate: gate,
+      });
+    }
+    const ctx = getSessionContext(req);
+    if (!ctx || !ctx.workspaceId || !ctx.userId) {
+      return res.status(401).json({ error: "session context missing" });
+    }
+
+    const jobId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO framework_v2_jobs (id, workspace_id, user_id, kind, status, intake, provider_name)
+      VALUES (${jobId}, ${ctx.workspaceId}, ${ctx.userId}, 'draft', 'running', ${JSON.stringify(intake)}::jsonb, ${providerName || null})
+    `);
+
+    // Fire-and-forget. Store the result/error on the row when it settles.
+    // We do NOT await; the client polls /v2/draft/status/:jobId.
+    (async () => {
+      try {
+        const result = await executeDraft(intake, providerName);
+        if ("error" in result) {
+          await db.execute(sql`
+            UPDATE framework_v2_jobs
+            SET status = 'failed', error_message = ${result.error}, error_stack = ${result.raw || null}, updated_at = NOW()
+            WHERE id = ${jobId}
+          `);
+          return;
+        }
+        await db.execute(sql`
+          UPDATE framework_v2_jobs
+          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, updated_at = NOW()
+          WHERE id = ${jobId}
+        `);
+      } catch (err: any) {
+        console.error(`[framework-builder v2 /draft/start] job ${jobId} threw:`, err);
+        await db.execute(sql`
+          UPDATE framework_v2_jobs
+          SET status = 'failed', error_message = ${err?.message || String(err)}, error_stack = ${err?.stack || null}, updated_at = NOW()
+          WHERE id = ${jobId}
+        `).catch(() => {});
+      }
+    })();
+
+    return res.json({ jobId, status: "running" });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /draft/start] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error", stack: err?.stack });
+  }
+});
+
+// ─── GET /v2/draft/status/:jobId ─────────────────────────────────────
+
+router.get("/v2/draft/status/:jobId", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx || !ctx.workspaceId) return res.status(401).json({ error: "session context missing" });
+    const jobId = req.params.jobId;
+    const rows = await db.execute(sql`
+      SELECT id, status, result, error_message, error_stack, created_at, updated_at
+      FROM framework_v2_jobs
+      WHERE id = ${jobId} AND workspace_id = ${ctx.workspaceId}
+    `);
+    const row = (rows as any).rows?.[0];
+    if (!row) return res.status(404).json({ error: "job not found" });
+    return res.json({
+      jobId: row.id,
+      status: row.status,
+      result: row.result || null,
+      errorMessage: row.error_message || null,
+      errorStack: row.error_stack || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /draft/status] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
   }
 });
 

@@ -144,6 +144,9 @@ export default function FrameworkBuilderV2Page() {
     }
   }
 
+  const [draftJobId, setDraftJobId] = useState<string | null>(null);
+  const [draftJobStartTime, setDraftJobStartTime] = useState<number | null>(null);
+
   async function draftFramework() {
     if (!intake?.topicTerm) {
       setError("Intake not ready");
@@ -154,16 +157,50 @@ export default function FrameworkBuilderV2Page() {
     setStage("drafting");
     try {
       const confirmedIntake = { ...intake, confirmed: true };
-      const res = await api.request("/framework-builder/v2/draft", {
+      // Start an async draft job — the LLM call takes several minutes and
+      // mobile browsers drop long-running fetch sockets. We poll instead.
+      const startRes = await api.request("/framework-builder/v2/draft/start", {
         method: "POST",
         body: JSON.stringify({ intake: confirmedIntake }),
       });
-      setDraft(res.draft);
-      setValidation(res.validation);
-      setStage("review");
+      const jobId = startRes.jobId;
+      setDraftJobId(jobId);
+      setDraftJobStartTime(Date.now());
+      // Poll every 5s for up to 15 minutes. Each poll is a fresh short-lived
+      // request that survives socket drops.
+      const deadline = Date.now() + 15 * 60_000;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await new Promise((r) => setTimeout(r, 5000));
+        if (Date.now() > deadline) {
+          throw new Error(
+            "Draft still not finished after 15 minutes. You can try again \u2014 your intake is preserved. If this keeps happening the LLM provider may be down.",
+          );
+        }
+        let status: any = null;
+        try {
+          status = await api.request(`/framework-builder/v2/draft/status/${jobId}`);
+        } catch (pollErr: any) {
+          // Transient poll error — do not abort; try again next tick.
+          console.warn("draft-status poll transient error:", pollErr?.message || pollErr);
+          continue;
+        }
+        if (status?.status === "succeeded" && status?.result) {
+          setDraft(status.result.draft);
+          setValidation(status.result.validation);
+          setStage("review");
+          setDraftJobId(null);
+          break;
+        }
+        if (status?.status === "failed") {
+          throw new Error(status.errorMessage || "Draft job failed");
+        }
+        // status === "running" or "pending": keep polling
+      }
     } catch (err: any) {
       setError(err?.message || String(err));
       setStage("intake");
+      setDraftJobId(null);
     } finally {
       setLoading(false);
     }
@@ -291,10 +328,13 @@ export default function FrameworkBuilderV2Page() {
                 {messages.map((m, i) => (
                   <MessageBubble key={i} role={m.role} content={m.content} />
                 ))}
-                {loading && (
+                {loading && stage === "intake" && (
                   <div className="flex items-center gap-2 text-gray-500 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" /> Thinking…
                   </div>
+                )}
+                {loading && stage === "drafting" && (
+                  <DraftingProgress startTime={draftJobStartTime} jobId={draftJobId} />
                 )}
                 <div ref={messagesEndRef} />
               </div>
@@ -691,6 +731,33 @@ function TestDriveReview({
         scoring. To run test-drive scoring, save the framework as draft first, then use the
         existing scoring interface with the proposed company list. Full automated test-drive
         orchestration is a follow-up.
+      </div>
+    </div>
+  );
+}
+
+function DraftingProgress({ startTime, jobId }: { startTime: number | null; jobId: string | null }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!startTime) return;
+    const tick = () => setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startTime]);
+  const mm = Math.floor(elapsed / 60);
+  const ss = String(elapsed % 60).padStart(2, "0");
+  return (
+    <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg space-y-2">
+      <div className="flex items-center gap-2 text-purple-800 dark:text-purple-200 font-medium text-sm">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        Drafting framework… {mm}:{ss} elapsed
+      </div>
+      <div className="text-xs text-purple-700 dark:text-purple-300">
+        The LLM is generating ~30–40 measures with C1–C10 guidance. This normally takes 2–5 minutes.
+        You can safely leave this tab open. If you close it, come back to the same page and
+        the draft will still be waiting.
+        {jobId && <div className="mt-1 text-xs text-purple-600 opacity-70">Job {jobId.slice(0, 8)}</div>}
       </div>
     </div>
   );
