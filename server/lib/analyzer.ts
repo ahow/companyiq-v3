@@ -159,6 +159,87 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
 
 // ─── Prompt Builders ─────────────────────────────────────────────────────────
 
+// Sprint 10 P2 helper: build the v2 guidance block shared by binary + partial prompts.
+// Returns { guidanceBlock, quoteContextInstr }. Both empty for v1 measures (all v2
+// fields null), which makes v1 behaviour byte-identical to pre-P2.
+function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | undefined, topicDescription: string): { guidanceBlock: string; quoteContextInstr: string } {
+  const m: any = measure;
+  const fw: any = framework;
+  let v2Block = "";
+
+  // C10: framework-level topic anchoring — synonyms
+  if (Array.isArray(fw?.topicSynonyms) && fw.topicSynonyms.length > 0) {
+    v2Block += `\n\nTOPIC TERM AND SYNONYMS:\nCanonical: "${fw.topicTerm || topicDescription}"\nSynonyms (treat as equivalent for scoring): ${fw.topicSynonyms.map((s: string) => `"${s}"`).join(", ")}`;
+  }
+
+  // C5: adjacent-topic exclusion drawn from intake
+  const adjacent = Array.isArray(fw?.adjacentTopics) ? fw.adjacentTopics : [];
+  if (adjacent.length > 0) {
+    const lines = adjacent.map((a: any) => {
+      const phrases = Array.isArray(a?.example_phrases) && a.example_phrases.length > 0
+        ? ` (example phrases: ${a.example_phrases.map((p: string) => `"${p}"`).join(", ")})`
+        : "";
+      return `- ${a.name}${phrases}`;
+    }).join("\n");
+    v2Block += `\n\nADJACENT-TOPIC EXCLUSION (C5): Evidence attributed to any of the following ADJACENT topics does NOT satisfy this measure, even if language overlaps:\n${lines}\n\nBefore scoring Yes, verify the evidence attributes the disclosed position specifically to the framework's topic, not to an adjacent topic listed above.`;
+  }
+
+  // C1: per-measure achievement-implies-commitment guidance
+  if (m.c1AchievementGuidance && typeof m.c1AchievementGuidance === "object") {
+    const g = m.c1AchievementGuidance;
+    const yesCases = Array.isArray(g.yes_cases) ? g.yes_cases : [];
+    const noCases = Array.isArray(g.no_cases) ? g.no_cases : [];
+    if (yesCases.length > 0 || noCases.length > 0) {
+      v2Block += `\n\nACHIEVEMENT-CLAIMS GUIDANCE (C1):`;
+      if (g.distinguishing_test) v2Block += `\nDistinguishing test: ${g.distinguishing_test}`;
+      if (yesCases.length > 0) {
+        v2Block += `\nACHIEVEMENT CLAIMS THAT COUNT AS EVIDENCE OF A POSITION (Yes cases):\n${yesCases.map((c: string) => `- ${c}`).join("\n")}`;
+      }
+      if (noCases.length > 0) {
+        v2Block += `\nFACTUAL OUTCOMES WITHOUT TARGET-STATE LANGUAGE (do NOT count):\n${noCases.map((c: string) => `- ${c}`).join("\n")}`;
+      }
+    }
+  }
+
+  // C5/C8: substantive_definition as authoritative semantic anchor
+  if (typeof m.substantiveDefinition === "string" && m.substantiveDefinition.trim().length > 0) {
+    v2Block += `\n\nSUBSTANTIVE DEFINITION (authoritative — vocabulary variants that substantively match this definition satisfy the measure):\n${m.substantiveDefinition}`;
+  }
+
+  // C6: negative_examples as adversarial anchors
+  if (Array.isArray(m.negativeExamples) && m.negativeExamples.length > 0) {
+    v2Block += `\n\nADVERSARIAL NEGATIVE EXAMPLES (SUPERFICIALLY plausible but SHOULD NOT score Yes):\n${m.negativeExamples.map((e: string) => `- ${e}`).join("\n")}`;
+  }
+
+  // C6: positive_examples via top-level column (fallback if scoringGuidance JSON didn't include them)
+  if (Array.isArray(m.positiveExamples) && m.positiveExamples.length > 0) {
+    v2Block += `\n\nCONCRETE POSITIVE EXAMPLES (SHOULD score Yes):\n${m.positiveExamples.map((e: string) => `- ${e}`).join("\n")}`;
+  }
+
+  // C2: whatDoesNotConstituteEvidence via top-level column
+  if (typeof m.whatDoesNotConstituteEvidence === "string" && m.whatDoesNotConstituteEvidence.trim().length > 0) {
+    v2Block += `\n\nSUBSTANTIVE EXCLUSIONS (do NOT score Yes on these grounds):\n${m.whatDoesNotConstituteEvidence}`;
+  }
+
+  // C7: coverage whitelist for coverage measures
+  if (m.r31ExceptionCoverage && Array.isArray(m.coverageWhitelist) && m.coverageWhitelist.length > 0) {
+    v2Block += `\n\nCOVERAGE WHITELIST (these plain-language phrases SATISFY the coverage threshold; do not require a numerical %):\n${m.coverageWhitelist.map((p: string) => `- "${p}"`).join("\n")}`;
+  }
+
+  // C4: topic-anchored fallback
+  if (typeof m.fallbackYesCriterion === "string" && m.fallbackYesCriterion.trim().length > 0) {
+    v2Block += `\n\nFALLBACK YES CRITERION (if primary evidence is weak, fall back to this — ANY numbered condition below being satisfied triggers Yes):\n${m.fallbackYesCriterion}`;
+  }
+
+  // C3: quote-context requirement
+  const minCtx = typeof m.minQuoteContextChars === "number" ? m.minQuoteContextChars : null;
+  const quoteContextInstr = minCtx && minCtx >= 100
+    ? `\n\nQUOTE CONTEXT REQUIREMENT (C3): For every quote you return, provide a verbatim excerpt of at least ${minCtx} characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context. Do not truncate at the topic term.`
+    : "";
+
+  return { guidanceBlock: v2Block, quoteContextInstr };
+}
+
 function buildBinaryScoringPrompt(opts: {
   companyName: string;
   measure: FrameworkMeasure;
@@ -245,6 +326,9 @@ ${terminologyBlock}`;
     }
   }
 
+  // Sprint 10 P2: v2 field integration (framework-measure-level and framework-level)
+  const { guidanceBlock: v2Block, quoteContextInstr } = buildV2GuidanceBlock(measure, framework, topicDescription);
+
   const temporalBlock = temporalWarning ? `\n${temporalWarning}\n` : "";
 
   const prompt = `Company: ${companyName}
@@ -252,7 +336,7 @@ ${temporalBlock}
 MEASURE TO EVALUATE:
 Title: ${measure.title}
 Definition: ${measure.definition || measure.title}
-${scoringGuidance}
+${scoringGuidance}${v2Block}${quoteContextInstr}
 
 EVIDENCE TEXT:
 ${evidenceText || "[No relevant evidence found in the document corpus]"}
@@ -353,6 +437,9 @@ ${terminologyBlock}`;
     }
   }
 
+  // Sprint 10 P2: v2 field integration (identical to binary path).
+  const { guidanceBlock: v2Block, quoteContextInstr } = buildV2GuidanceBlock(measure, framework, topicDescription);
+
   const temporalBlock = temporalWarning ? `\n${temporalWarning}\n` : "";
 
   const prompt = `Company: ${companyName}
@@ -360,7 +447,7 @@ ${temporalBlock}
 MEASURE TO EVALUATE:
 Title: ${measure.title}
 Definition: ${measure.definition || measure.title}
-${scoringGuidance}
+${scoringGuidance}${v2Block}${quoteContextInstr}
 
 EVIDENCE TEXT:
 ${evidenceText || "[No relevant evidence found in the document corpus]"}
