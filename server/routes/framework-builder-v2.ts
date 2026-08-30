@@ -159,27 +159,90 @@ async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, pr
     json: true,
   });
 
-  // Truncation-aware parse. Claude sometimes stops generating mid-JSON at
-  // the token cap. When that happens, response ends without balancing braces
-  // and JSON.parse throws "Expecting delimiter". We surface this explicitly so
-  // the user knows to reduce the target measure count.
+  // Truncation-aware parse with partial-recovery fallback. Claude sometimes
+  // stops generating mid-JSON at the token cap. When that happens, response
+  // ends without balancing braces and JSON.parse throws. We attempt to
+  // salvage the partial framework by locating the last complete measure and
+  // trimming everything after it.
   let draft: any = null;
+  const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\{[\s\S]*\}/);
+  const candidate = jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : response;
   try {
-    const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\{[\s\S]*\}/);
-    const candidate = jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : response;
     draft = JSON.parse(candidate);
   } catch (e: any) {
-    // Check whether it looks like a truncation vs. a malformed JSON.
-    const looksTruncated = response.trim().length > 20000 && !response.trim().endsWith("}") && !response.trim().endsWith("```");
-    const msg = looksTruncated
-      ? `The framework was too large for the model's output limit and got cut off (${response.length} chars generated). Try a smaller target measure count (e.g. Compact or Balanced) or split the framework by sub-area.`
-      : `Could not parse framework JSON from LLM response: ${e?.message || e}`;
-    return { error: msg, raw: response };
+    const salvaged = trySalvageTruncatedFramework(candidate);
+    if (salvaged) {
+      console.warn(`[framework-builder v2] Salvaged truncated draft (${response.length} chars, ${salvaged.categories?.length || 0} categories, ${countMeasures(salvaged)} measures preserved).`);
+      draft = salvaged;
+      (draft as any).__truncationRecovered = true;
+    } else {
+      const looksTruncated = response.trim().length > 20000 && !response.trim().endsWith("}") && !response.trim().endsWith("```");
+      const msg = looksTruncated
+        ? `The framework was too large for the model's output limit and got cut off (${response.length} chars generated). Try a smaller target measure count (e.g. Compact or Balanced) or split the framework by sub-area.`
+        : `Could not parse framework JSON from LLM response: ${e?.message || e}`;
+      return { error: msg, raw: response };
+    }
   }
   return { draft };
 }
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number } | { error: string; raw?: string }> {
+// Attempt to salvage a partial framework from a truncated JSON string.
+// Strategy: find the position of the last complete measure object (looks
+// for `"measureId":` occurrences, walks backward to find a balanced object,
+// then closes the enclosing arrays and top-level object).
+function trySalvageTruncatedFramework(raw: string): any | null {
+  try {
+    // Find the last well-formed "measures": [ ... ] chunk we can complete.
+    // Simplest approach: progressively trim trailing chars, close open braces
+    // and brackets, and try to parse.
+    let text = raw;
+    // Find the last comma that separates measures. Look for `},\s*{` inside a
+    // measures array. We chop after the last complete `}` closing a measure.
+    const closingMeasureRe = /\}\s*(,|\])/g;
+    let lastGood = -1;
+    let m: RegExpExecArray | null;
+    while ((m = closingMeasureRe.exec(text)) !== null) {
+      lastGood = m.index + 1;
+    }
+    if (lastGood <= 0) return null;
+    // Trim everything after the last complete measure closing brace.
+    text = text.slice(0, lastGood);
+    // Now close open structures: count unbalanced { [ and append matching
+    // closers. This is a heuristic but works for the shape our drafter emits.
+    let openBrace = 0;
+    let openBracket = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === "{") openBrace++;
+      else if (c === "}") openBrace--;
+      else if (c === "[") openBracket++;
+      else if (c === "]") openBracket--;
+    }
+    // Close open brackets first (arrays close before their parent object),
+    // then open braces.
+    let closer = "";
+    // If the trim ended with a trailing comma, strip it.
+    text = text.replace(/,\s*$/, "");
+    for (let i = 0; i < openBracket; i++) closer += "]";
+    for (let i = 0; i < openBrace; i++) closer += "}";
+    return JSON.parse(text + closer);
+  } catch {
+    return null;
+  }
+}
+
+function countMeasures(draft: any): number {
+  if (!draft?.categories) return 0;
+  return draft.categories.reduce((sum: number, c: any) => sum + (Array.isArray(c?.measures) ? c.measures.length : 0), 0);
+}
+
+async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean } | { error: string; raw?: string }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
   if ("error" in first) return first;
@@ -222,7 +285,8 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
   }
 
   const measures = flattenMeasures(draft);
-  return { draft, measures, validation, summary: summariseViolations(validation.violations), repairAttempts };
+  const truncationRecovered = Boolean((draft as any).__truncationRecovered);
+  return { draft, measures, validation, summary: summariseViolations(validation.violations), repairAttempts, truncationRecovered };
 }
 
 // ─── POST /v2/draft — draft the framework from a confirmed intake (SYNC) ───

@@ -147,6 +147,7 @@ export default function FrameworkBuilderV2Page() {
   const [draftJobId, setDraftJobId] = useState<string | null>(null);
   const [draftJobStartTime, setDraftJobStartTime] = useState<number | null>(null);
   const [repairAttempts, setRepairAttempts] = useState<number>(0);
+  const [truncationRecovered, setTruncationRecovered] = useState<boolean>(false);
 
   async function draftFramework() {
     if (!intake?.topicTerm) {
@@ -192,6 +193,7 @@ export default function FrameworkBuilderV2Page() {
           if (typeof status.result.repairAttempts === "number") {
             setRepairAttempts(status.result.repairAttempts);
           }
+          setTruncationRecovered(Boolean(status.result.truncationRecovered));
           setStage("review");
           setDraftJobId(null);
           break;
@@ -416,6 +418,7 @@ export default function FrameworkBuilderV2Page() {
               errorCount={errorCount}
               warningCount={warningCount}
               repairAttempts={repairAttempts}
+              truncationRecovered={truncationRecovered}
             />
           )}
 
@@ -582,6 +585,7 @@ function DraftReview({
   errorCount,
   warningCount,
   repairAttempts,
+  truncationRecovered,
 }: {
   draft: any;
   validation: Validation | null;
@@ -590,6 +594,7 @@ function DraftReview({
   loading: boolean;
   measureCount: number;
   repairAttempts?: number;
+  truncationRecovered?: boolean;
   errorCount: number;
   warningCount: number;
 }) {
@@ -704,6 +709,11 @@ function DraftReview({
         ))}
       </div>
 
+      {truncationRecovered && (
+        <div className="mt-4 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-800 rounded text-sm text-orange-800 dark:text-orange-200">
+          <strong>Truncation recovered:</strong> The model's response was cut off before all measures were generated. We salvaged the {measureCount} measures that completed. To get a fuller framework, restart with a smaller target measure count (Compact or Balanced).
+        </div>
+      )}
       {errorCount > 0 && (
         <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-800 rounded text-sm text-yellow-800 dark:text-yellow-200">
           <strong>Note:</strong> {errorCount} validation error{errorCount === 1 ? "" : "s"} remain after the auto-repair passes. You can still save this framework as a draft and run a test-drive to see how it behaves — the errors are LLM compliance gaps in specific measures, not blocking issues. "Save as production-ready" is disabled until errors are cleared or manually reviewed.
