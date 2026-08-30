@@ -70,31 +70,77 @@ export default function FrameworkBuilderV2Page() {
   const [error, setError] = useState<string | null>(null);
   const [testDriveCompanies, setTestDriveCompanies] = useState<TestDriveCandidate[] | null>(null);
   const [savedFrameworkId, setSavedFrameworkId] = useState<number | null>(null);
+  const [lastFailedUserMessage, setLastFailedUserMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  async function sendMessage(text: string) {
-    if (!text.trim() || loading) return;
-    setError(null);
-    const nextMessages: Message[] = [...messages, { role: "user", content: text }];
-    setMessages(nextMessages);
-    setInput("");
-    setLoading(true);
+  // Wrap the chat request in a manual fetch with an AbortController so we can
+  // give a friendly timeout error, and let the user retry the same turn.
+  async function callChatEndpoint(nextMessages: Message[], timeoutMs = 180_000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await api.request("/framework-builder/v2/chat", {
+      const res = await fetch("/api/framework-builder/v2/chat", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        signal: controller.signal,
         body: JSON.stringify({ messages: nextMessages, intake }),
       });
+      clearTimeout(timer);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    } catch (err: any) {
+      clearTimeout(timer);
+      if (err?.name === "AbortError") {
+        throw new Error(
+          "Request timed out after " + Math.round(timeoutMs / 1000) + "s. The model provider is slow right now; please retry.",
+        );
+      }
+      if (typeof err?.message === "string" && err.message.toLowerCase().includes("failed to fetch")) {
+        throw new Error(
+          "Network error before response. Your connection may have dropped or the request was interrupted. Please retry \u2014 your conversation history is preserved.",
+        );
+      }
+      throw err;
+    }
+  }
+
+  async function sendMessage(text: string, isRetry = false) {
+    if (!text.trim() || loading) return;
+    setError(null);
+    setLastFailedUserMessage(null);
+    // On retry we do not append a fresh user turn — the message is already in state.
+    const nextMessages: Message[] = isRetry
+      ? messages
+      : [...messages, { role: "user", content: text }];
+    if (!isRetry) {
+      setMessages(nextMessages);
+      setInput("");
+    }
+    setLoading(true);
+    try {
+      const res = await callChatEndpoint(nextMessages);
       setMessages([...nextMessages, { role: "assistant", content: res.assistantMessage }]);
       if (res.intake) setIntake(res.intake);
       if (res.robustnessGate) setRobustnessGate(res.robustnessGate);
     } catch (err: any) {
       setError(err?.message || String(err));
+      setLastFailedUserMessage(text);
     } finally {
       setLoading(false);
+    }
+  }
+
+  function retryLast() {
+    if (lastFailedUserMessage) {
+      void sendMessage(lastFailedUserMessage, true);
     }
   }
 
@@ -210,8 +256,19 @@ export default function FrameworkBuilderV2Page() {
       </div>
 
       {error && (
-        <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-lg text-red-700 dark:text-red-300">
-          <strong>Error:</strong> {error}
+        <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-lg text-red-700 dark:text-red-300 flex items-start justify-between gap-3">
+          <div>
+            <strong>Error:</strong> {error}
+          </div>
+          {lastFailedUserMessage && (
+            <button
+              onClick={retryLast}
+              disabled={loading}
+              className="flex-shrink-0 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded text-sm disabled:opacity-50"
+            >
+              Retry last turn
+            </button>
+          )}
         </div>
       )}
 

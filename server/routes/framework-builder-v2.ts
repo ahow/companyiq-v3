@@ -51,7 +51,7 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
       temperature: 0.2,
     });
 
-    // Try to extract an intake JSON block if the assistant emitted one this turn
+    // Try to extract a full intake JSON block if the assistant emitted one this turn
     const jsonMatch = response.match(/```json\s*([\s\S]*?)```/);
     let emittedIntake: IntakeArtefact | null = null;
     if (jsonMatch) {
@@ -65,11 +65,37 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
       }
     }
 
-    const gateAfter = emittedIntake ? evaluateRobustness(emittedIntake) : currentGate;
+    // Also try to extract a partial gate_state snapshot the LLM emits every turn.
+    // Merge with the existing intake so the UI gate advances turn-by-turn.
+    let partialIntake: Partial<IntakeArtefact> | null = null;
+    const gateStateMatch = response.match(/```gate_state\s*([\s\S]*?)```/);
+    if (gateStateMatch) {
+      try {
+        const parsed = JSON.parse(gateStateMatch[1]);
+        if (parsed && typeof parsed === "object") {
+          partialIntake = parsed as Partial<IntakeArtefact>;
+        }
+      } catch {
+        // best-effort only
+      }
+    }
+
+    // Merge: prior intake < partial snapshot < full emitted intake (right wins)
+    const mergedIntake: IntakeArtefact | null =
+      emittedIntake ??
+      (partialIntake
+        ? ({ ...(intake ?? {}), ...partialIntake } as IntakeArtefact)
+        : intake ?? null);
+
+    const gateAfter = mergedIntake ? evaluateRobustness(mergedIntake) : currentGate;
+
+    // Strip machine-readable blocks from the user-visible message. The gate_state
+    // block is not meant to be read by the user; only the prose gate summary is.
+    const displayMessage = response.replace(/```gate_state\s*[\s\S]*?```\s*/g, "").trim();
 
     return res.json({
-      assistantMessage: response,
-      intake: emittedIntake ?? intake ?? null,
+      assistantMessage: displayMessage,
+      intake: mergedIntake,
       robustnessGate: gateAfter,
       readyToDraft: Boolean(gateAfter?.ready),
     });
