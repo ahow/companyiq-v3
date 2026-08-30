@@ -317,8 +317,13 @@ app.use("/api/framework-builder", frameworkBuilderV2Router);
 // ─── Static Files (SPA) ─────────────────────────────────────────────────────
 
 const clientDist = path.join(process.cwd(), "dist/client");
-app.use(express.static(clientDist));
+// Serve hashed assets with long cache; ETag revalidation still happens.
+app.use(express.static(clientDist, { maxAge: "1y", immutable: true, index: false }));
+// Always serve index.html fresh so users pick up new bundle hashes immediately.
 app.get("*", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   res.sendFile(path.join(clientDist, "index.html"));
 });
 
