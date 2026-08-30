@@ -146,6 +146,7 @@ export default function FrameworkBuilderV2Page() {
 
   const [draftJobId, setDraftJobId] = useState<string | null>(null);
   const [draftJobStartTime, setDraftJobStartTime] = useState<number | null>(null);
+  const [repairAttempts, setRepairAttempts] = useState<number>(0);
 
   async function draftFramework() {
     if (!intake?.topicTerm) {
@@ -188,6 +189,9 @@ export default function FrameworkBuilderV2Page() {
         if (status?.status === "succeeded" && status?.result) {
           setDraft(status.result.draft);
           setValidation(status.result.validation);
+          if (typeof status.result.repairAttempts === "number") {
+            setRepairAttempts(status.result.repairAttempts);
+          }
           setStage("review");
           setDraftJobId(null);
           break;
@@ -411,6 +415,7 @@ export default function FrameworkBuilderV2Page() {
               measureCount={measureCount}
               errorCount={errorCount}
               warningCount={warningCount}
+              repairAttempts={repairAttempts}
             />
           )}
 
@@ -576,6 +581,7 @@ function DraftReview({
   measureCount,
   errorCount,
   warningCount,
+  repairAttempts,
 }: {
   draft: any;
   validation: Validation | null;
@@ -583,6 +589,7 @@ function DraftReview({
   onSave: (productionReady: boolean) => void;
   loading: boolean;
   measureCount: number;
+  repairAttempts?: number;
   errorCount: number;
   warningCount: number;
 }) {
@@ -594,6 +601,11 @@ function DraftReview({
           <h2 className="text-xl font-semibold">{draft.framework?.name}</h2>
           <p className="text-sm text-gray-500 mt-1">
             {measureCount} measures across {draft.categories?.length || 0} categories · topicTerm: <code>{draft.framework?.topicTerm}</code>
+            {typeof repairAttempts === "number" && repairAttempts > 0 && (
+              <span className="ml-2 text-orange-600 dark:text-orange-400">
+                · auto-repair passes: {repairAttempts}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex gap-4 text-sm">
@@ -801,9 +813,10 @@ function DraftingProgress({ startTime, jobId }: { startTime: number | null; jobI
         Drafting framework… {mm}:{ss} elapsed
       </div>
       <div className="text-xs text-purple-700 dark:text-purple-300">
-        The LLM is generating ~30–40 measures with C1–C10 guidance. This normally takes 2–5 minutes.
-        You can safely leave this tab open. If you close it, come back to the same page and
-        the draft will still be waiting.
+        The LLM is generating ~30–40 measures with C1–C10 guidance, then runs up to two
+        auto-repair passes if any measure violates a construction rule. Total time is
+        typically 4–12 minutes. You can safely leave this tab open. If you close it, come
+        back to the same page and the draft will still be waiting.
         {jobId && <div className="mt-1 text-xs text-purple-600 opacity-70">Job {jobId.slice(0, 8)}</div>}
       </div>
     </div>

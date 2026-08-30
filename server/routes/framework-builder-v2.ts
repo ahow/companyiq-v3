@@ -110,12 +110,46 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
 
 // ─── Draft execution helper (used by both sync and async paths) ──────────
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string } | { error: string; raw?: string }> {
+// Build a FrameworkDraft view over an LLM draft object + intake for validation.
+function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft {
+  const measures = flattenMeasures(draft);
+  const normalisedAdjacent = (() => {
+    const intakeAdj = intake.adjacentTopics;
+    if (Array.isArray(intakeAdj) && intakeAdj.length > 0) return intakeAdj;
+    const drAdj = draft.framework?.adjacentTopics;
+    if (Array.isArray(drAdj)) {
+      return drAdj.map((a: any) => (typeof a === "string" ? { name: a, example_phrases: [] } : a));
+    }
+    return undefined;
+  })();
+  return {
+    name: draft.framework?.name || intake.topic || "unnamed",
+    topicTerm: draft.framework?.topicTerm || intake.topicTerm,
+    topicSynonyms: (Array.isArray(draft.framework?.topicSynonyms) ? draft.framework.topicSynonyms : null) || intake.topicSynonyms || [],
+    adjacentTopics: normalisedAdjacent,
+    anchorFrameworks: (Array.isArray(draft.framework?.anchorFrameworks) ? draft.framework.anchorFrameworks : null) || intake.anchorFrameworks,
+    sensitivityPreference: draft.framework?.sensitivityPreference || intake.sensitivityPreference,
+    measures,
+  };
+}
+
+async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any } | { error: string; raw?: string }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
-  const draftPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C10 exactly.`;
+
+  let userPrompt: string;
+  if (priorAttempt) {
+    // Repair prompt: give the LLM the exact violations to fix.
+    const violationSummary = priorAttempt.violations
+      .map((v: any) => `- [${v.rule}][${v.severity}] ${v.measureId ? `${v.measureId}: ` : ""}${v.message}${v.suggestion ? ` — SUGGESTION: ${v.suggestion}` : ""}`)
+      .join("\n");
+    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nPrior attempt draft (JSON, has validation errors):\n${JSON.stringify(priorAttempt.draft, null, 2)}\n\nViolations to fix (do NOT change measures that are already valid — only edit the fields that trigger these violations):\n${violationSummary}\n\nReturn a corrected framework JSON. Preserve measureId values from the prior attempt. Every construction rule C1–C10 must pass this time.`;
+  } else {
+    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C10 exactly. Every measure must comply with C1–C10 — in particular: every measure's substantive_definition MUST include an explicit adjacent-topic exclusion clause naming at least one adjacent topic from the intake list; every measure's fallback_yes_criterion MUST have at least 3 numbered conditions each referencing the topic term or a synonym; every measure MUST have whatConstitutesEvidence AND whatDoesNotConstituteEvidence AND positive_examples (>=2) AND negative_examples (>=2).`;
+  }
+
   const { text: response } = await completeWithFallback(providerName || "claude", {
     system: DRAFTING_SYSTEM_PROMPT_HEAD,
-    prompt: draftPrompt,
+    prompt: userPrompt,
     maxTokens: 16000,
     temperature: 0.2,
     json: true,
@@ -127,29 +161,53 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
   } catch (e) {
     return { error: "Could not parse framework JSON from LLM response", raw: response };
   }
-  const measures = flattenMeasures(draft);
-  const fwDraft: FrameworkDraft = {
-    name: draft.framework?.name || intake.topic || "unnamed",
-    topicTerm: draft.framework?.topicTerm || intake.topicTerm,
-    topicSynonyms: (Array.isArray(draft.framework?.topicSynonyms) ? draft.framework.topicSynonyms : null) || intake.topicSynonyms || [],
-    adjacentTopics: (Array.isArray(draft.framework?.adjacentTopics) ? draft.framework.adjacentTopics : null) || intake.adjacentTopics,
-    anchorFrameworks: (Array.isArray(draft.framework?.anchorFrameworks) ? draft.framework.anchorFrameworks : null) || intake.anchorFrameworks,
-    sensitivityPreference: draft.framework?.sensitivityPreference || intake.sensitivityPreference,
-    measures,
+  return { draft };
+}
+
+async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number } | { error: string; raw?: string }> {
+  // Attempt 1: initial draft.
+  const first = await callDraftingLLM(intake, providerName);
+  if ("error" in first) return first;
+  let draft = first.draft;
+
+  const validate = (d: any) => {
+    const fwDraft = buildFrameworkDraft(d, intake);
+    try {
+      return validateAll(fwDraft);
+    } catch (e: any) {
+      console.error("[framework-builder v2 /draft] validator crashed:", e);
+      return {
+        passed: false,
+        violations: [
+          { rule: "internal", severity: "error" as const, message: `Validator threw: ${e?.message || e}. Draft is displayed for review but should be re-drafted.` },
+        ],
+      };
+    }
   };
-  let validation: any;
-  try {
-    validation = validateAll(fwDraft);
-  } catch (e: any) {
-    console.error("[framework-builder v2 /draft] validator crashed:", e);
-    validation = {
-      passed: false,
-      violations: [
-        { rule: "internal", severity: "error" as const, message: `Validator threw: ${e?.message || e}. Draft is displayed for review but should be re-drafted.` },
-      ],
-    };
+
+  let validation: any = validate(draft);
+
+  // Up to 2 repair passes for hard errors. Warnings don't trigger a repair.
+  let repairAttempts = 0;
+  const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_MAX_REPAIRS || 2);
+  while (
+    repairAttempts < MAX_REPAIRS &&
+    validation.violations.some((v: any) => v.severity === "error")
+  ) {
+    repairAttempts++;
+    const errors = validation.violations.filter((v: any) => v.severity === "error").slice(0, 30);
+    const repair = await callDraftingLLM(intake, providerName, { draft, violations: errors });
+    if ("error" in repair) {
+      // If the repair pass fails to parse, keep the previous draft and stop.
+      console.warn(`[framework-builder v2] Repair attempt ${repairAttempts} failed to parse; keeping prior draft.`);
+      break;
+    }
+    draft = repair.draft;
+    validation = validate(draft);
   }
-  return { draft, measures, validation, summary: summariseViolations(validation.violations) };
+
+  const measures = flattenMeasures(draft);
+  return { draft, measures, validation, summary: summariseViolations(validation.violations), repairAttempts };
 }
 
 // ─── POST /v2/draft — draft the framework from a confirmed intake (SYNC) ───
