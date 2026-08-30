@@ -42,7 +42,7 @@ After each turn, evaluate the 10-item checklist and report state to the user. Co
    - Universe: [[option:MSCI ACWI]], [[option:S&P 500 / Russell 3000]], [[option:FTSE 350 / STOXX 600]], [[option:Custom universe — tell me]]
    - Reporting period: [[option:Last 3 years, most recent preferred (default)]], [[option:Last 5 years]], [[option:Single most recent year]], [[option:Custom — tell me]]
 7. Sensitivity preference set (default = balanced). Ask this in its OWN turn with chips: [[option:Balanced (default)]], [[option:Precision-leaning (stricter, more No verdicts)]], [[option:Recall-leaning (more permissive, more Yes verdicts)]].
-7a. Target measure count agreed. Ask this in its OWN turn, SEPARATE from calibration, with chips: [[option:Compact (12–18 measures)]], [[option:Balanced (20–30 measures)]], [[option:Comprehensive (35–50 measures)]], [[option:Custom — tell me a number]]. Record as \`targetMeasureCount\`. CRITICAL: due to output-token limits on the drafter, RECOMMEND Balanced (20–30) as the default and warn the user that Comprehensive may not complete within the token budget for topics with many long C1–C10 fields — if they pick Comprehensive, quietly cap the target at 32 measures internally.
+7a. Target measure count agreed. Ask this in its OWN turn, SEPARATE from calibration, with chips: [[option:Compact (12–18 measures)]], [[option:Balanced (20–30 measures)]], [[option:Comprehensive (35–50 measures)]], [[option:Custom — tell me a number]]. Record as \`targetMeasureCount\`. Any of these sizes will work; the drafter uses chunked generation automatically for targets above 25 to stay within the model's output limits.
 8. Sub-area structure agreed (TCFD default or alternative)
 9. Base positive and adversarial examples proposed (≥2 each). CRITICAL: do NOT ask the user for these open-ended. Instead:
    - Pick one representative measure that will exist in every framework on this topic (e.g. "discloses a topic policy" or "board oversight").
@@ -288,3 +288,106 @@ Return a single JSON object with:
 - Per measure: 10–15 evidence keywords (existing platform requirement)
 
 Draft the framework in a single response. Do not defer; there is no follow-up turn to fill in gaps.`;
+
+
+// ─── Chunked drafting prompts ──────────────────────────────────────────────
+// Used when the target measure count would blow past a single LLM call's
+// output budget (>25 measures). Split into two phases:
+//   Phase 1: skeleton (framework metadata + category outlines).
+//   Phase 2: per-category batches of full measures.
+
+export const CHUNKED_SKELETON_SYSTEM_PROMPT = `You are drafting the SKELETON of a CompanyIQ framework. You produce only the framework-level metadata, the category outlines, and the list of measure IDs (with title + one-line purpose) that will populate each category. You do NOT produce full measure bodies — those come in a second phase.
+
+# What you output
+
+A single JSON object with this exact shape:
+
+{
+  "framework": {
+    "name": "...",
+    "topicTerm": "...",
+    "topicSynonyms": [...],
+    "topicDescription": "...",
+    "adjacentTopics": [...],
+    "anchorFrameworks": [...],
+    "sensitivityPreference": "...",
+    "targetMeasureCount": N
+  },
+  "categories": [
+    {
+      "name": "Governance",
+      "purpose": "One-line explanation of what this category tests.",
+      "measureOutlines": [
+        { "measureId": "1.1-board-oversight", "title": "Discloses board-level oversight of <topic>", "purpose": "One-line reason this measure matters." },
+        ...
+      ]
+    },
+    ...
+  ]
+}
+
+# Rules
+
+- Follow the intake's sub-area structure exactly (use the intake categories as-is).
+- Distribute the requested targetMeasureCount roughly evenly across categories. Weight higher-priority categories 20–30% more if the intake purpose suggests.
+- Every measure title must be position-testing (C1): "Discloses [X]", NOT "Achieves [X]".
+- measureId format: "<category_num>.<measure_num>-<slug>", e.g. "1.1-board-oversight".
+- Do NOT emit substantive_definition, scoringGuidance, positive_examples, or any other C1–C10 body fields — those come in the next phase.
+- Do NOT include prose commentary outside the JSON.
+- Keep the response under 4000 tokens.`;
+
+export const CHUNKED_MEASURES_SYSTEM_PROMPT = `You are drafting the FULL BODY of every measure in ONE category of a CompanyIQ framework. The skeleton — framework metadata, other categories, and this category's measure outlines — is provided as context. Your job is to expand the measure outlines into complete C1–C10-compliant measures.
+
+# What you output
+
+A single JSON object with this exact shape:
+
+{
+  "categoryName": "Governance",
+  "measures": [
+    {
+      "measureId": "...",           // preserve from the skeleton
+      "title": "...",                // preserve from the skeleton (unless C1 requires rewording)
+      "displayOrder": 1,
+      "categoryNumber": 1,
+      "category": "Governance",
+      "primary_assessment_target": "...",
+      "substantive_definition": "...",
+      "whatConstitutesEvidence": "...",
+      "whatDoesNotConstituteEvidence": "...",
+      "fallback_yes_criterion": "...",
+      "positive_examples": [...],
+      "negative_examples": [...],
+      "coverage_whitelist": [...],   // required if this is a coverage measure
+      "min_quote_context_chars": 120,
+      "c1_achievement_guidance": {...},
+      "expected_yes_rate": 0.35,
+      "scoringGuidance": "...",
+      "evidenceKeywords": [...],
+      "r3_1_exception_metrics": false,
+      "r3_1_exception_coverage": false,
+      "disclosure_vehicles": [...]
+    }
+  ]
+}
+
+# Construction rules — apply verbatim to EVERY measure
+
+Same C1–C10 rules as the single-shot drafter. In particular:
+
+- C1: Position-testing phrasing with c1_achievement_guidance (yes_cases, no_cases, distinguishing_test).
+- C2: whatDoesNotConstituteEvidence must be substantive (wrong subject, missing specificity, third-party attribution, adjacent-topic evidence). Do NOT reject on tense.
+- C3: min_quote_context_chars = 120 by default; scoringGuidance must instruct verbatim-quote-plus-adjacent-sentence.
+- C4: fallback_yes_criterion is a numbered list of ≥3 substantive conditions, each explicitly referencing the topic term.
+- C5: substantive_definition MUST include an adjacent-topic exclusion clause naming ≥1 adjacent topic from the intake list. Use rejection language like "Evidence attributed to X does NOT satisfy this measure".
+- C6: ≥2 positive_examples AND ≥2 negative_examples per measure.
+- C7: For coverage measures, coverage_whitelist has ≥3 phrases; title states the threshold explicitly (e.g. "enterprise-wide", "≥70% of portfolio").
+- C8: substantive_definition includes vehicle-agnostic evidence clause.
+- C9: expected_yes_rate ∈ {0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95}.
+
+# Constraints
+
+- Only draft measures for the category named in the user prompt. Ignore other categories.
+- Preserve measureId values from the skeleton exactly.
+- Do NOT include prose commentary outside the JSON.
+- Keep the response under 8000 tokens (this is a per-category batch; other categories are handled in parallel).`;

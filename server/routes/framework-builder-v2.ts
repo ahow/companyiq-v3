@@ -9,7 +9,7 @@ import { Router, Request, Response } from "express";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { validateAll, summariseViolations, type FrameworkDraft } from "../lib/framework-v2/rules.js";
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
-import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD } from "../lib/framework-v2/intake-prompt.js";
+import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, type TestDriveCompanyResult, type TestDriveSampleRequest } from "../lib/framework-v2/test-drive.js";
 import * as storage from "../storage.js";
@@ -133,7 +133,128 @@ function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft
   };
 }
 
-async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any } | { error: string; raw?: string }> {
+// Threshold above which we switch to chunked drafting to avoid Claude's
+// per-call output-token ceiling. Configurable via env for tuning.
+const CHUNKED_DRAFT_THRESHOLD = Number(process.env.FRAMEWORK_V2_CHUNK_THRESHOLD || 25);
+
+// Robust JSON extractor + parser used across all drafting phases. Handles
+// fenced ```json blocks, bare JSON, and truncation-recovery.
+function parseDraftJson(response: string): { ok: true; draft: any } | { ok: false; error: string; recovered?: boolean; raw?: string } {
+  const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\{[\s\S]*\}/);
+  const candidate = jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : response;
+  try {
+    return { ok: true, draft: JSON.parse(candidate) };
+  } catch (e: any) {
+    const salvaged = trySalvageTruncatedFramework(candidate);
+    if (salvaged) {
+      (salvaged as any).__truncationRecovered = true;
+      return { ok: true, draft: salvaged };
+    }
+    const looksTruncated = response.trim().length > 20000 && !response.trim().endsWith("}") && !response.trim().endsWith("```");
+    const err = looksTruncated
+      ? `The framework was too large for the model's output limit and got cut off (${response.length} chars generated). Try a smaller target measure count.`
+      : `Could not parse framework JSON from LLM response: ${e?.message || e}`;
+    return { ok: false, error: err, raw: response };
+  }
+}
+
+// ─── Chunked drafting: skeleton + per-category batches in parallel ───────
+
+async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; truncationRecovered: boolean } | { error: string; raw?: string }> {
+  const { completeWithFallback } = await import("../lib/ai-providers.js");
+
+  // Phase 1: skeleton (framework metadata + category outlines).
+  const skeletonPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nProduce the framework skeleton now.`;
+  const skeletonResp = await completeWithFallback(providerName || "claude", {
+    system: CHUNKED_SKELETON_SYSTEM_PROMPT,
+    prompt: skeletonPrompt,
+    maxTokens: 6000,
+    temperature: 0.2,
+    json: true,
+  });
+  const skeletonParsed = parseDraftJson(skeletonResp.text);
+  if (!skeletonParsed.ok) {
+    return { error: `Skeleton phase failed: ${skeletonParsed.error}`, raw: skeletonParsed.raw };
+  }
+  const skeleton = skeletonParsed.draft;
+  if (!Array.isArray(skeleton?.categories) || skeleton.categories.length === 0) {
+    return { error: `Skeleton phase produced no categories.`, raw: skeletonResp.text };
+  }
+
+  // Phase 2: for each category, expand outlines into full measures. Run in parallel.
+  const perCategoryPromises = skeleton.categories.map(async (cat: any, idx: number) => {
+    const outlines = Array.isArray(cat.measureOutlines) ? cat.measureOutlines : [];
+    if (outlines.length === 0) return { categoryName: cat.name, measures: [], skipped: true };
+
+    // Slim skeleton reference so the LLM has enough context but not too much.
+    const skeletonRef = {
+      framework: skeleton.framework,
+      currentCategory: { name: cat.name, purpose: cat.purpose, index: idx + 1, measureOutlines: outlines },
+      otherCategories: skeleton.categories.filter((_: any, i: number) => i !== idx).map((c: any) => ({ name: c.name, purpose: c.purpose })),
+    };
+    const categoryPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nSkeleton reference (JSON):\n${JSON.stringify(skeletonRef, null, 2)}\n\nDraft the full measures for the category "${cat.name}" only. Return the JSON object described in the system prompt.`;
+    const catResp = await completeWithFallback(providerName || "claude", {
+      system: CHUNKED_MEASURES_SYSTEM_PROMPT,
+      prompt: categoryPrompt,
+      maxTokens: 16000,
+      temperature: 0.2,
+      json: true,
+    });
+    const catParsed = parseDraftJson(catResp.text);
+    if (!catParsed.ok) {
+      // Non-fatal: return an empty category so assembly continues, and record the error.
+      console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" failed: ${catParsed.error}`);
+      return { categoryName: cat.name, measures: [], failed: true, error: catParsed.error };
+    }
+    return {
+      categoryName: catParsed.draft?.categoryName || cat.name,
+      measures: Array.isArray(catParsed.draft?.measures) ? catParsed.draft.measures : [],
+      truncationRecovered: Boolean((catParsed.draft as any)?.__truncationRecovered),
+    };
+  });
+
+  const categoryResults = await Promise.all(perCategoryPromises);
+  const anyTruncationRecovered = categoryResults.some((r: any) => r.truncationRecovered);
+  const failedCategories = categoryResults.filter((r: any) => r.failed);
+  if (failedCategories.length === categoryResults.length) {
+    return { error: `All ${failedCategories.length} category-drafting sub-calls failed.`, raw: undefined };
+  }
+
+  // Assemble the final framework in the shape the existing validator expects.
+  const assembled: any = {
+    framework: skeleton.framework,
+    categories: skeleton.categories.map((cat: any, idx: number) => {
+      const catResult = categoryResults[idx];
+      return {
+        name: cat.name,
+        purpose: cat.purpose,
+        measures: catResult.measures || [],
+      };
+    }),
+    searchTemplates: skeleton.searchTemplates || [],
+    evidenceKeywords: skeleton.evidenceKeywords || [],
+  };
+  if (anyTruncationRecovered) assembled.__truncationRecovered = true;
+
+  const totalMeasures = assembled.categories.reduce((s: number, c: any) => s + (c.measures?.length || 0), 0);
+  console.log(`[framework-builder v2] Chunked drafting complete: ${assembled.categories.length} categories, ${totalMeasures} measures, ${failedCategories.length} failed categories.`);
+
+  return { draft: assembled, truncationRecovered: anyTruncationRecovered };
+}
+
+async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; truncationRecovered?: boolean } | { error: string; raw?: string }> {
+  // Route to chunked drafting when the target count exceeds the threshold and
+  // this is a fresh attempt (repair passes always use single-shot with the
+  // prior draft as context).
+  const targetCount = (intake as any).targetMeasureCount;
+  if (!priorAttempt && typeof targetCount === "number" && targetCount > CHUNKED_DRAFT_THRESHOLD) {
+    console.log(`[framework-builder v2] Chunked drafting activated (target=${targetCount}, threshold=${CHUNKED_DRAFT_THRESHOLD}).`);
+    return callChunkedDraftingLLM(intake, providerName);
+  }
+  return callSingleShotDraftingLLM(intake, providerName, priorAttempt);
+}
+
+async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any } | { error: string; raw?: string }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
 
   let userPrompt: string;
