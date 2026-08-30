@@ -144,7 +144,11 @@ async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, pr
       .join("\n");
     userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nPrior attempt draft (JSON, has validation errors):\n${JSON.stringify(priorAttempt.draft, null, 2)}\n\nViolations to fix (do NOT change measures that are already valid — only edit the fields that trigger these violations):\n${violationSummary}\n\nReturn a corrected framework JSON. Preserve measureId values from the prior attempt. Every construction rule C1–C10 must pass this time.`;
   } else {
-    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C10 exactly. Every measure must comply with C1–C10 — in particular: every measure's substantive_definition MUST include an explicit adjacent-topic exclusion clause naming at least one adjacent topic from the intake list; every measure's fallback_yes_criterion MUST have at least 3 numbered conditions each referencing the topic term or a synonym; every measure MUST have whatConstitutesEvidence AND whatDoesNotConstituteEvidence AND positive_examples (>=2) AND negative_examples (>=2).`;
+    const tgt = (intake as any).targetMeasureCount;
+    const countClause = typeof tgt === "number" && tgt > 0
+      ? `The user requested approximately ${tgt} measures in total across all categories. Distribute measures roughly evenly across the sub-areas from the intake, weighting more heavily toward higher-priority sub-areas if the user's purpose emphasises them. Do not fall short by more than 15% or exceed by more than 15%.`
+      : `Produce approximately 20–30 measures in total across all categories — enough to give balanced coverage but not so many as to become fatiguing to review.`;
+    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C10 exactly. ${countClause} Every measure must comply with C1–C10 — in particular: every measure's substantive_definition MUST include an explicit adjacent-topic exclusion clause naming at least one adjacent topic from the intake list; every measure's fallback_yes_criterion MUST have at least 3 numbered conditions each referencing the topic term or a synonym; every measure MUST have whatConstitutesEvidence AND whatDoesNotConstituteEvidence AND positive_examples (>=2) AND negative_examples (>=2).`;
   }
 
   const { text: response } = await completeWithFallback(providerName || "claude", {
@@ -381,20 +385,21 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
     if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
 
     // Re-validate before persisting — server-authoritative
-    const measures = flattenMeasures(draft);
-    const fwDraft: FrameworkDraft = {
-      name: draft.framework.name || intake.topic || "unnamed",
-      topicTerm: draft.framework.topicTerm || intake.topicTerm,
-      topicSynonyms: draft.framework.topicSynonyms || intake.topicSynonyms || [],
-      adjacentTopics: draft.framework.adjacentTopics || intake.adjacentTopics,
-      anchorFrameworks: draft.framework.anchorFrameworks || intake.anchorFrameworks,
-      sensitivityPreference: draft.framework.sensitivityPreference || intake.sensitivityPreference,
-      measures,
-    };
-    const validation = validateAll(fwDraft);
-    if (!validation.passed) {
+    const fwDraft: FrameworkDraft = buildFrameworkDraft(draft, intake);
+    const measures = fwDraft.measures;
+    let validation: any;
+    try {
+      validation = validateAll(fwDraft);
+    } catch (e: any) {
+      validation = { passed: false, violations: [{ rule: "internal", severity: "error", message: `Validator threw: ${e?.message || e}` }] };
+    }
+
+    // Only block save-as-production-ready when validation fails. Save-as-draft
+    // is allowed even with errors so the user can test-drive an imperfect
+    // framework, then edit or repair before promoting.
+    if (productionReady && !validation.passed) {
       return res.status(400).json({
-        error: "Framework fails C1-C10 validation and cannot be saved",
+        error: "Framework fails C1-C10 validation and cannot be saved as production-ready. Save as draft instead.",
         validation,
         summary: summariseViolations(validation.violations),
       });

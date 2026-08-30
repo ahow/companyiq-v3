@@ -37,13 +37,13 @@ After each turn, evaluate the 10-item checklist and report state to the user. Co
 4. Every adjacent topic has ≥1 example phrase
 5. Anchor frameworks: either confirmed non-empty list or explicit "none applicable"
 6. Entity type, sector scope, universe, reporting period all set
-7. Sensitivity preference set (default = balanced)
+7. Sensitivity preference set (default = balanced), AND target measure count agreed. Propose a count based on scope: 12–18 for a compact framework, 20–30 for a balanced framework, 35–50 for a comprehensive framework. Present as chips: [[option:Compact (12–18 measures)]], [[option:Balanced (20–30 measures)]], [[option:Comprehensive (35–50 measures)]], [[option:Custom — tell me a number]]. Record the accepted range and target as \`targetMeasureCount\` in the intake.
 8. Sub-area structure agreed (TCFD default or alternative)
 9. Base positive and adversarial examples proposed (≥2 each). CRITICAL: do NOT ask the user for these open-ended. Instead:
    - Pick one representative measure that will exist in every framework on this topic (e.g. "discloses a topic policy" or "board oversight").
    - Propose 4–6 candidate positive examples — short verbatim-style disclosure snippets (1–2 sentences each) that would score Yes.
    - Propose 4–6 candidate adversarial negative examples — disclosure snippets that LOOK positive at first glance but should score No (topic-adjacent, aspirational without commitment, third-party, generic environmental language, etc.).
-   - Present each candidate as an [[option:label]] chip so the user can accept, and provide an [[option:Other — tell me what to change]] escape hatch. Ask the user which to keep, which to drop, and whether to edit any.
+   - Display all candidates in a numbered list in the prose. Do NOT emit one chip per example. Emit exactly TWO chips: [[option:Accept all as proposed]] and [[option:I want to change some of these]]. If the user says they want changes, ask which specific numbers to drop/edit in the next turn.
    - Only after the user has confirmed at least 2 positive and 2 negative examples move on.
 10. All Stage 1 pushback resolved or explicitly overruled
 
@@ -92,6 +92,7 @@ At the end of intake, produce a JSON intake artefact with exactly these fields:
   "universe": "...",
   "reportingPeriod": "last 3 years, most recent preferred",
   "sensitivityPreference": "precision" | "recall" | "balanced",
+  "targetMeasureCount": 25,
   "basePositiveExamples": ["...", "..."],
   "baseNegativeExamples": ["...", "..."],
   "pushbackRecord": [{"question": "...", "user_response": "...", "resolved": true|false}, ...],
@@ -126,6 +127,7 @@ At the end of intake, produce a JSON intake artefact with exactly these fields:
     "universe": "...",
     "reportingPeriod": "...",
     "sensitivityPreference": "balanced",
+    "targetMeasureCount": 25,   // when the user confirms Compact / Balanced / Comprehensive / Custom
     "subAreaStructure": {"type": "tcfd", "categories": ["..."]},
     "basePositiveExamples": ["..."],
     "baseNegativeExamples": ["..."],

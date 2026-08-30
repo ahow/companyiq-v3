@@ -31,6 +31,7 @@ export interface IntakeArtefact {
   universe?: string;
   reportingPeriod?: string;
   sensitivityPreference?: "precision" | "recall" | "balanced";
+  targetMeasureCount?: number;
   basePositiveExamples?: string[];
   baseNegativeExamples?: string[];
   pushbackRecord?: Array<{

@@ -704,25 +704,31 @@ function DraftReview({
         ))}
       </div>
 
+      {errorCount > 0 && (
+        <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-800 rounded text-sm text-yellow-800 dark:text-yellow-200">
+          <strong>Note:</strong> {errorCount} validation error{errorCount === 1 ? "" : "s"} remain after the auto-repair passes. You can still save this framework as a draft and run a test-drive to see how it behaves — the errors are LLM compliance gaps in specific measures, not blocking issues. "Save as production-ready" is disabled until errors are cleared or manually reviewed.
+        </div>
+      )}
       <div className="mt-6 flex gap-2 flex-wrap justify-end">
         <button
           onClick={() => onSave(false)}
-          disabled={loading || (validation && !validation.passed)}
+          disabled={loading}
           className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg flex items-center gap-1 disabled:opacity-50"
         >
           <Save className="w-4 h-4" /> Save as draft
         </button>
         <button
           onClick={onSelectTestDrive}
-          disabled={loading || (validation && !validation.passed)}
+          disabled={loading}
           className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
         >
           <Play className="w-4 h-4" /> Propose test-drive companies
         </button>
         <button
           onClick={() => onSave(true)}
-          disabled={loading || (validation && !validation.passed)}
+          disabled={loading || errorCount > 0}
           className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+          title={errorCount > 0 ? "Cannot save as production-ready while errors remain" : ""}
         >
           <CheckCircle2 className="w-4 h-4" /> Save as production-ready
         </button>
