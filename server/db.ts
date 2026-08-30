@@ -90,6 +90,25 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS negative_domains JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS known_disclosure_urls JSONB`);
 
+    // Sprint 10 v2 framework-level fields (PR #2). All optional / nullable so legacy
+    // v1 frameworks continue to score exactly as before. Only v2-builder frameworks
+    // populate these; analyzer reads them if present, falls back to legacy behaviour
+    // if null. See docs/framework-creation-design-v2.md.
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS builder_version TEXT NOT NULL DEFAULT 'v1'`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS topic_term TEXT`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS topic_synonyms JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS adjacent_topics JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS anchor_frameworks JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS sensitivity_preference TEXT`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS sub_area_structure JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS pushback_record JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS residual_warnings JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS test_drive_summary JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS test_drive_warnings JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS production_ready BOOLEAN NOT NULL DEFAULT false`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS rules_active JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS intake_artefact JSONB`);
+
     // ─── Framework Measures ─────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS framework_measures (
@@ -107,6 +126,23 @@ export async function initializeDatabase(): Promise<void> {
     `);
     // v3e (Section 3+5): per-measure required source types (topic-agnostic gating).
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS required_source_types JSONB`);
+
+    // Sprint 10 v2 per-measure fields. All optional. Analyzer reads them if
+    // present; falls back to current I76 behaviour when null.
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS primary_assessment_target TEXT`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS substantive_definition TEXT`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS what_constitutes_evidence TEXT`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS what_does_not_constitute_evidence TEXT`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS fallback_yes_criterion TEXT`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS positive_examples JSONB`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS negative_examples JSONB`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS coverage_whitelist JSONB`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS c1_achievement_guidance JSONB`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS min_quote_context_chars INTEGER`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS expected_yes_rate DOUBLE PRECISION`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS disclosure_vehicles JSONB`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS r3_1_exception_metrics BOOLEAN NOT NULL DEFAULT false`);
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS r3_1_exception_coverage BOOLEAN NOT NULL DEFAULT false`);
 
     // ─── Company Lists ──────────────────────────────────────────────────────
     await db.execute(sql`

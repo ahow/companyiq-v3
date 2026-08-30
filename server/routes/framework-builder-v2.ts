@@ -172,6 +172,139 @@ router.post("/v2/validate", async (req: Request, res: Response) => {
   }
 });
 
+// ─── POST /v2/save — persist a validated v2 framework ────────────────────
+// Called by the client after the user has drafted + validated + (optionally)
+// test-driven the framework. Writes framework + measures with builder_version="v2"
+// and all C1-C10 fields populated.
+
+router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const { draft, intake, testDriveSummary, testDriveWarnings, productionReady } = req.body as {
+      draft: any;
+      intake: IntakeArtefact;
+      testDriveSummary?: any;
+      testDriveWarnings?: any[];
+      productionReady?: boolean;
+    };
+    if (!draft?.framework || !Array.isArray(draft?.categories)) {
+      return res.status(400).json({ error: "draft with framework + categories required" });
+    }
+    if (!intake?.topicTerm) {
+      return res.status(400).json({ error: "intake with topicTerm required" });
+    }
+
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+
+    // Re-validate before persisting — server-authoritative
+    const measures = flattenMeasures(draft);
+    const fwDraft: FrameworkDraft = {
+      name: draft.framework.name || intake.topic || "unnamed",
+      topicTerm: draft.framework.topicTerm || intake.topicTerm,
+      topicSynonyms: draft.framework.topicSynonyms || intake.topicSynonyms || [],
+      adjacentTopics: draft.framework.adjacentTopics || intake.adjacentTopics,
+      anchorFrameworks: draft.framework.anchorFrameworks || intake.anchorFrameworks,
+      sensitivityPreference: draft.framework.sensitivityPreference || intake.sensitivityPreference,
+      measures,
+    };
+    const validation = validateAll(fwDraft);
+    if (!validation.passed) {
+      return res.status(400).json({
+        error: "Framework fails C1-C10 validation and cannot be saved",
+        validation,
+        summary: summariseViolations(validation.violations),
+      });
+    }
+
+    // Create framework row
+    const created = await storage.createFramework({
+      workspaceId: ctx.workspaceId,
+      name: fwDraft.name,
+      topicDescription: draft.framework.topicDescription || intake.topic || "",
+      isActive: false,
+      searchTemplates: draft.searchTemplates || null,
+      // v2 fields
+      builderVersion: "v2",
+      topicTerm: fwDraft.topicTerm,
+      topicSynonyms: fwDraft.topicSynonyms || null,
+      adjacentTopics: (fwDraft.adjacentTopics as any) || null,
+      anchorFrameworks: (fwDraft.anchorFrameworks as any) || null,
+      sensitivityPreference: fwDraft.sensitivityPreference || "balanced",
+      subAreaStructure: (intake.subAreaStructure as any) || null,
+      pushbackRecord: (intake.pushbackRecord as any) || null,
+      residualWarnings: (intake.residualWarnings as any) || null,
+      testDriveSummary: testDriveSummary || null,
+      testDriveWarnings: testDriveWarnings || null,
+      productionReady: Boolean(productionReady),
+      rulesActive: draft.framework.rulesActive || {
+        C1: true, C2: true, C3: true, C4: true, C5: true,
+        C6: true, C7: true, C8: true, C9: true, C10: true,
+      },
+      intakeArtefact: intake as any,
+    } as any);
+
+    // Create measures
+    let categoryNumber = 1;
+    for (const category of draft.categories) {
+      let displayOrder = 1;
+      for (const measure of category.measures || []) {
+        await storage.createFrameworkMeasure({
+          frameworkId: created.id,
+          measureId: measure.measureId || `${categoryNumber}.${displayOrder}`,
+          title: measure.title,
+          definition: measure.definition || "",
+          scoringGuidance:
+            typeof measure.scoringGuidance === "string"
+              ? measure.scoringGuidance
+              : JSON.stringify(measure.scoringGuidance || {}),
+          evidenceKeywords: measure.evidenceKeywords || [],
+          category: category.name,
+          categoryNumber,
+          displayOrder,
+          // v2 fields
+          primaryAssessmentTarget: measure.primary_assessment_target || null,
+          substantiveDefinition: measure.substantive_definition || null,
+          whatConstitutesEvidence:
+            typeof measure.whatConstitutesEvidence === "string"
+              ? measure.whatConstitutesEvidence
+              : Array.isArray(measure.whatConstitutesEvidence)
+                ? measure.whatConstitutesEvidence.join("\n")
+                : null,
+          whatDoesNotConstituteEvidence:
+            typeof measure.whatDoesNotConstituteEvidence === "string"
+              ? measure.whatDoesNotConstituteEvidence
+              : Array.isArray(measure.whatDoesNotConstituteEvidence)
+                ? measure.whatDoesNotConstituteEvidence.join("\n")
+                : null,
+          fallbackYesCriterion: measure.fallback_yes_criterion || null,
+          positiveExamples: measure.positive_examples || null,
+          negativeExamples: measure.negative_examples || null,
+          coverageWhitelist: measure.coverage_whitelist || null,
+          c1AchievementGuidance: measure.c1_achievement_guidance || null,
+          minQuoteContextChars: measure.min_quote_context_chars || null,
+          expectedYesRate: typeof measure.expected_yes_rate === "number" ? measure.expected_yes_rate : null,
+          disclosureVehicles: measure.disclosure_vehicles || null,
+          r31ExceptionMetrics: Boolean(measure.r3_1_exception_metrics),
+          r31ExceptionCoverage: Boolean(measure.r3_1_exception_coverage),
+        } as any);
+        displayOrder++;
+      }
+      categoryNumber++;
+    }
+
+    return res.json({
+      frameworkId: created.id,
+      name: created.name,
+      builderVersion: "v2",
+      measureCount: measures.length,
+      productionReady: Boolean(productionReady),
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /save] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
 // ─── POST /v2/test-drive/select — propose 10-company sample ──────────────
 
 router.post("/v2/test-drive/select", async (req: Request, res: Response) => {

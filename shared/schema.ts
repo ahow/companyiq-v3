@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, boolean, timestamp, real, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, timestamp, real, jsonb, uniqueIndex, index, doublePrecision } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
 // ─── Users & Workspaces ─────────────────────────────────────────────────────
@@ -135,6 +135,38 @@ export const frameworks = pgTable("frameworks", {
   antiInferenceRules: jsonb("anti_inference_rules").$type<string[]>(),
   // 41-C: Framework-specific withdrawal detection patterns
   withdrawalPatterns: jsonb("withdrawal_patterns").$type<{ queries: string[]; documentRegex: string[] }>(),
+  // Sprint 10 v2 fields (PR #2). Optional / nullable. Analyzer reads if
+  // present, else falls back to current I76 behaviour on the existing fields.
+  builderVersion: text("builder_version").notNull().default("v1"),
+  topicTerm: text("topic_term"),
+  topicSynonyms: jsonb("topic_synonyms").$type<string[]>(),
+  adjacentTopics: jsonb("adjacent_topics").$type<Array<{
+    name: string;
+    example_phrases?: string[];
+    cooccurrence_possible?: boolean;
+  }>>(),
+  anchorFrameworks: jsonb("anchor_frameworks").$type<Array<{ name: string; source?: string }>>(),
+  sensitivityPreference: text("sensitivity_preference").$type<"precision" | "recall" | "balanced">(),
+  subAreaStructure: jsonb("sub_area_structure").$type<{
+    type: "tcfd" | "custom";
+    categories: string[];
+    rationale?: string;
+  }>(),
+  pushbackRecord: jsonb("pushback_record").$type<Array<{
+    question: string;
+    user_response: string;
+    resolved: boolean;
+  }>>(),
+  residualWarnings: jsonb("residual_warnings").$type<Array<{
+    issue: string;
+    severity: "low" | "medium" | "high";
+    note?: string;
+  }>>(),
+  testDriveSummary: jsonb("test_drive_summary").$type<any>(),
+  testDriveWarnings: jsonb("test_drive_warnings").$type<any[]>(),
+  productionReady: boolean("production_ready").notNull().default(false),
+  rulesActive: jsonb("rules_active").$type<Record<string, boolean>>(),
+  intakeArtefact: jsonb("intake_artefact").$type<any>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -159,6 +191,26 @@ export const frameworkMeasures = pgTable("framework_measures", {
   // (abstained) rather than a hard "No". Empty/null = no requirement (default).
   requiredSourceTypes: jsonb("required_source_types").$type<string[]>(),
   displayOrder: integer("display_order").notNull().default(0),
+  // Sprint 10 v2 per-measure fields (PR #2). Optional / nullable. Analyzer
+  // reads if present, else current I76 behaviour applies.
+  primaryAssessmentTarget: text("primary_assessment_target"),
+  substantiveDefinition: text("substantive_definition"),
+  whatConstitutesEvidence: text("what_constitutes_evidence"),
+  whatDoesNotConstituteEvidence: text("what_does_not_constitute_evidence"),
+  fallbackYesCriterion: text("fallback_yes_criterion"),
+  positiveExamples: jsonb("positive_examples").$type<string[]>(),
+  negativeExamples: jsonb("negative_examples").$type<string[]>(),
+  coverageWhitelist: jsonb("coverage_whitelist").$type<string[]>(),
+  c1AchievementGuidance: jsonb("c1_achievement_guidance").$type<{
+    yes_cases: string[];
+    no_cases: string[];
+    distinguishing_test: string;
+  }>(),
+  minQuoteContextChars: integer("min_quote_context_chars"),
+  expectedYesRate: doublePrecision("expected_yes_rate"),
+  disclosureVehicles: jsonb("disclosure_vehicles").$type<string[]>(),
+  r31ExceptionMetrics: boolean("r3_1_exception_metrics").notNull().default(false),
+  r31ExceptionCoverage: boolean("r3_1_exception_coverage").notNull().default(false),
 }, (table) => ({
   frameworkIdx: index("measures_framework_idx").on(table.frameworkId),
 }));
