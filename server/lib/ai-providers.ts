@@ -135,7 +135,10 @@ class ClaudeProvider implements AIProvider {
       try {
         const response = await client.messages.create({
           model: this.model,
-          max_tokens: Math.min(opts.maxTokens ?? 4096, 8192),
+          // claude-sonnet-4-5 supports up to 64K output tokens.
+          // Cap at 32K so we don't blow through the credit budget on runaway prompts,
+          // but allow the framework drafter to request the whole 16K+ envelope it needs.
+          max_tokens: Math.min(opts.maxTokens ?? 4096, 32000),
           temperature: opts.temperature ?? 0,
           top_p: 1, // 36-B.1: deterministic sampling
           system: opts.system,

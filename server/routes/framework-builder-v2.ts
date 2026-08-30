@@ -154,16 +154,27 @@ async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, pr
   const { text: response } = await completeWithFallback(providerName || "claude", {
     system: DRAFTING_SYSTEM_PROMPT_HEAD,
     prompt: userPrompt,
-    maxTokens: 16000,
+    maxTokens: 24000,
     temperature: 0.2,
     json: true,
   });
+
+  // Truncation-aware parse. Claude sometimes stops generating mid-JSON at
+  // the token cap. When that happens, response ends without balancing braces
+  // and JSON.parse throws "Expecting delimiter". We surface this explicitly so
+  // the user knows to reduce the target measure count.
   let draft: any = null;
   try {
     const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\{[\s\S]*\}/);
-    draft = jsonMatch ? JSON.parse(jsonMatch[1] ?? jsonMatch[0]) : JSON.parse(response);
-  } catch (e) {
-    return { error: "Could not parse framework JSON from LLM response", raw: response };
+    const candidate = jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : response;
+    draft = JSON.parse(candidate);
+  } catch (e: any) {
+    // Check whether it looks like a truncation vs. a malformed JSON.
+    const looksTruncated = response.trim().length > 20000 && !response.trim().endsWith("}") && !response.trim().endsWith("```");
+    const msg = looksTruncated
+      ? `The framework was too large for the model's output limit and got cut off (${response.length} chars generated). Try a smaller target measure count (e.g. Compact or Balanced) or split the framework by sub-area.`
+      : `Could not parse framework JSON from LLM response: ${e?.message || e}`;
+    return { error: msg, raw: response };
   }
   return { draft };
 }
