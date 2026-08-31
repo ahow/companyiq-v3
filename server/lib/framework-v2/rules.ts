@@ -344,17 +344,16 @@ export function validateC4(fw: FrameworkDraft): ValidationResult {
       });
       continue;
     }
-    // Require MAJORITY of conditions to reference the topic term or synonym.
-    // Rationale: conditions are AND-joined, so if 2/3 explicitly anchor to the
-    // topic, the third condition can be a generic sub-clause ("...and this
-    // is integrated into the management structure") without weakening the
-    // fallback. Full-topic requirement per-condition is over-strict and
-    // creates false positives when LLMs use pronouns or omit already-established
-    // scope. If ALL long conditions fail to reference the topic, that IS a
-    // genuine problem — error stays.
+    // Fallback conditions are AND-joined — for the fallback to fire, EVERY
+    // condition must be satisfied. That means scope only needs to be anchored
+    // ONCE in the condition set; the remaining conditions can be general
+    // prerequisites (e.g. "the described responsibility involves oversight").
+    // Requiring every condition to name the topic produces stilted text like
+    // "reviewing nature and biodiversity strategy or monitoring nature and
+    // biodiversity performance". So: enforce at-least-one topic anchor, and
+    // no warning for the remainder.
     const substantive = conditions.filter((c) => c.text.length >= 20);
     const withTopic = substantive.filter((c) => containsTopicOrSynonym(c.text, fw.topicTerm, synonyms));
-    const missingConditions = substantive.filter((c) => !containsTopicOrSynonym(c.text, fw.topicTerm, synonyms));
     if (substantive.length > 0 && withTopic.length === 0) {
       violations.push({
         measureId: m.measureId,
@@ -362,14 +361,6 @@ export function validateC4(fw: FrameworkDraft): ValidationResult {
         severity: "error",
         message: `No fallback condition references the topic term "${fw.topicTerm}" or any registered synonym`,
         suggestion: "At least one numbered condition must name the topic explicitly. Fallback conditions are AND-joined; if none anchor to the topic, generic evidence can trigger a Yes.",
-      });
-    } else if (substantive.length >= 3 && withTopic.length < Math.ceil(substantive.length / 2)) {
-      violations.push({
-        measureId: m.measureId,
-        rule: "C4",
-        severity: "warning",
-        message: `Only ${withTopic.length}/${substantive.length} fallback conditions reference the topic term "${fw.topicTerm}". Prefer topic-anchoring on the majority.`,
-        suggestion: `Non-topic conditions: ${missingConditions.map((c) => `#${c.n}`).join(", ")}. Consider inserting the topic term into these conditions where the sentence otherwise relies on pronouns.`,
       });
     }
   }
