@@ -14,6 +14,7 @@ import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "
 import { analyseTestDrive, buildSampleSelectionPrompt, type TestDriveCompanyResult, type TestDriveSampleRequest } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
 import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
+import { diagnoseRootCauses, type CompanyCorpusStats } from "../lib/framework-v2/root-cause-diagnostic.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -1054,10 +1055,106 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
     let report: any = null;
     let robustness: any = null;
     let edits: any = null;
+    let rootCauses: any = null;
     if (scoringComplete) {
       report = analyseTestDrive(results, measureMetadata);
       robustness = computeRobustnessCriteria(results, measureMetadata, labels);
       edits = proposeEditsForFlags(report.flags || [], measuresById);
+
+      // 6b. Compute per-company corpus stats + per-measure topic-rich coverage
+      //     so we can separate doc-collection failures from framework issues.
+      try {
+        // Fetch framework topic terms for topic-mention detection.
+        const fwRow = await db.execute(sql`
+          SELECT topic_term, topic_synonyms FROM frameworks WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+        `);
+        const fwMeta = ((fwRow as any).rows || [])[0] || {};
+        const topicTerm = String(fwMeta.topic_term || "").trim();
+        const topicSynonyms = Array.isArray(fwMeta.topic_synonyms) ? fwMeta.topic_synonyms : [];
+        const terms = [topicTerm, ...topicSynonyms].filter((t) => t && typeof t === "string" && t.length > 1);
+        const termsLc = terms.map((t) => t.toLowerCase());
+
+        // Pull document text via batch_corpus for this batch only. Batch_corpus
+        // was populated by the analysis pipeline, so this is the exact set of
+        // documents the LLM actually saw.
+        const corpusRows = await db.execute(sql`
+          SELECT bc.company_id, c.name AS company_name, d.id AS doc_id, d.type, d.title,
+                 LENGTH(COALESCE(d.content, dc.content, '')) AS len,
+                 COALESCE(d.content, dc.content, '') AS text
+          FROM batch_corpus bc
+          JOIN companies c ON c.id = bc.company_id
+          JOIN documents d ON d.id = bc.document_id
+          LEFT JOIN document_content dc ON dc.id = d.content_id
+          WHERE bc.batch_id = ${batch.id}
+        `);
+        const perCompany: Record<string, CompanyCorpusStats> = {};
+        for (const r of ((corpusRows as any).rows || [])) {
+          const cid = Number(r.company_id);
+          const key = String(cid);
+          if (!perCompany[key]) {
+            perCompany[key] = {
+              companyId: cid,
+              companyName: r.company_name,
+              docCount: 0,
+              totalChars: 0,
+              pdfCount: 0,
+              thematicReportCount: 0,
+              topicTermMentions: 0,
+              topicMentioningDocs: 0,
+              yesCount: 0,
+              totalMeasures: 0,
+            };
+          }
+          const stats = perCompany[key];
+          stats.docCount++;
+          stats.totalChars += Number(r.len || 0);
+          if (String(r.type || "").toLowerCase() === "pdf") stats.pdfCount++;
+          const titleLc = String(r.title || "").toLowerCase();
+          const isThematic =
+            titleLc.includes("sustainability") ||
+            titleLc.includes("tcfd") ||
+            titleLc.includes("tnfd") ||
+            titleLc.includes("esg report") ||
+            titleLc.includes("climate report") ||
+            titleLc.includes("nature report") ||
+            (topicTerm && titleLc.includes(topicTerm.toLowerCase()));
+          if (isThematic) stats.thematicReportCount++;
+          // Topic mentions across doc text (case-insensitive).
+          const textLc = String(r.text || "").toLowerCase();
+          let docMentions = 0;
+          for (const t of termsLc) {
+            if (!t) continue;
+            let idx = textLc.indexOf(t);
+            while (idx !== -1) {
+              docMentions++;
+              idx = textLc.indexOf(t, idx + t.length);
+            }
+          }
+          stats.topicTermMentions += docMentions;
+          if (docMentions > 0) stats.topicMentioningDocs++;
+        }
+        // Populate yesCount from results.
+        for (const r of results) {
+          const key = String(r.companyId);
+          if (perCompany[key]) {
+            perCompany[key].yesCount = r.measures.filter((m) => m.verdict === "Yes").length;
+            perCompany[key].totalMeasures = r.measures.length;
+          }
+        }
+
+        // Build per-measure verdict lookup.
+        const scoresByCM: Record<string, Record<string, string>> = {};
+        for (const r of results) {
+          const key = String(r.companyId);
+          scoresByCM[key] = {};
+          for (const m of r.measures) scoresByCM[key][m.measureId] = m.verdict;
+        }
+        const measureIds = measureMetadata.map((m: any) => m.measureId);
+
+        rootCauses = diagnoseRootCauses(Object.values(perCompany), measureIds, scoresByCM);
+      } catch (e: any) {
+        console.warn("[framework-builder v2 /test-drive/results] root-cause diagnostic failed:", e?.message);
+      }
     }
 
     return res.json({
@@ -1076,6 +1173,7 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       report,
       robustness,
       edits,
+      rootCauses,
       labelsInferred,
     });
   } catch (err: any) {

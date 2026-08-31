@@ -1052,12 +1052,47 @@ interface MeasureDrillRow {
   nuance: string;
 }
 
+interface CompanyDiagnostic {
+  companyId: number;
+  companyName: string;
+  classification: "healthy" | "doc-collection-failure" | "framework-issue" | "ambiguous";
+  yesCount: number;
+  yesRate: number;
+  corpusSummary: string;
+  reasoning: string;
+  suggestedAction: string;
+}
+
+interface MeasureRootCauseDiag {
+  measureId: string;
+  classification: "healthy" | "measure-definition-issue" | "collection-attributable" | "over-broad" | "ambiguous";
+  yesCount: number;
+  yesRateOnTopicRichCompanies: number;
+  reasoning: string;
+  suggestedAction: string;
+}
+
+interface RootCauseReport {
+  companies: CompanyDiagnostic[];
+  measures: MeasureRootCauseDiag[];
+  summary: {
+    docCollectionFailures: number;
+    frameworkIssues: number;
+    healthy: number;
+    ambiguous: number;
+    deadMeasuresLikelyFrameworkFault: number;
+    deadMeasuresLikelyCorpusFault: number;
+  };
+  headline: string;
+}
+
 function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId: number; listId: number; listName: string | null }) {
   const [batch, setBatch] = useState<{ status: string; completedJobs: number; totalJobs: number; failedJobs: number } | null>(null);
   const [perCompany, setPerCompany] = useState<PerCompanyResult[]>([]);
   const [report, setReport] = useState<{ flags: FlagItem[]; summary: string; passedGracefully: boolean; totalCompanies: number; totalMeasures: number } | null>(null);
   const [robustness, setRobustness] = useState<{ criteria: RobustnessCriterion[]; passedCount: number; totalCount: number; allPassed: boolean } | null>(null);
   const [edits, setEdits] = useState<{ proposals: EditProposal[]; causeBreakdown: Record<string, number>; totalFlags: number; totalWithProposals: number } | null>(null);
+  const [rootCauses, setRootCauses] = useState<RootCauseReport | null>(null);
   const [labelsInferred, setLabelsInferred] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1074,6 +1109,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
       setReport(r.report || null);
       setRobustness(r.robustness || null);
       setEdits(r.edits || null);
+      setRootCauses(r.rootCauses || null);
       setLabelsInferred(!!r.labelsInferred);
       setError(null);
     } catch (e: any) {
@@ -1219,6 +1255,62 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
                 <div className="mt-1 text-xs text-gray-500">{c.detail}</div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Root-cause diagnostic (doc-collection vs framework issues) ─── */}
+      {isComplete && rootCauses && (
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Root-cause analysis
+            <span className="ml-2 text-xs font-normal text-gray-500">
+              separates document-collection failures from framework issues
+            </span>
+          </div>
+          <div className={`p-3 rounded border text-sm ${rootCauses.summary.docCollectionFailures > 0 ? "border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700" : "border-blue-300 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-700"}`}>
+            <div className="font-medium mb-1">Overall: {rootCauses.headline}</div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2 text-xs">
+              <div><span className="font-medium text-green-700">Healthy companies:</span> {rootCauses.summary.healthy}</div>
+              <div><span className="font-medium text-amber-700">Doc-collection failures:</span> {rootCauses.summary.docCollectionFailures}</div>
+              <div><span className="font-medium text-red-700">Framework issues:</span> {rootCauses.summary.frameworkIssues}</div>
+              <div><span className="font-medium text-gray-600">Ambiguous:</span> {rootCauses.summary.ambiguous}</div>
+              <div><span className="font-medium text-red-700">Dead measures (framework):</span> {rootCauses.summary.deadMeasuresLikelyFrameworkFault}</div>
+              <div><span className="font-medium text-amber-700">Dead measures (corpus):</span> {rootCauses.summary.deadMeasuresLikelyCorpusFault}</div>
+            </div>
+          </div>
+
+          {/* Per-company classification table */}
+          <div className="border rounded dark:border-gray-700 overflow-hidden text-sm">
+            <table className="w-full">
+              <thead className="bg-gray-50 dark:bg-gray-900/40">
+                <tr>
+                  <th className="text-left px-3 py-2">Company</th>
+                  <th className="text-left px-3 py-2">Classification</th>
+                  <th className="text-left px-3 py-2">Yes</th>
+                  <th className="text-left px-3 py-2">Corpus summary</th>
+                  <th className="text-left px-3 py-2">Suggested action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rootCauses.companies.map((c) => (
+                  <tr key={c.companyId} className="border-t dark:border-gray-700 align-top">
+                    <td className="px-3 py-2 whitespace-nowrap font-medium">{c.companyName}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span className={`px-1.5 py-0.5 rounded text-xs ${
+                        c.classification === "healthy" ? "bg-green-100 text-green-800" :
+                        c.classification === "doc-collection-failure" ? "bg-amber-100 text-amber-800" :
+                        c.classification === "framework-issue" ? "bg-red-100 text-red-800" :
+                        "bg-gray-100 text-gray-700"
+                      }`}>{c.classification}</span>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">{c.yesCount} <span className="text-gray-500">({(c.yesRate * 100).toFixed(0)}%)</span></td>
+                    <td className="px-3 py-2 text-xs text-gray-600 dark:text-gray-400">{c.corpusSummary}</td>
+                    <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-300">{c.suggestedAction}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
