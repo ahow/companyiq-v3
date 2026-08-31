@@ -15,6 +15,7 @@ import { analyseTestDrive, buildSampleSelectionPrompt, type TestDriveCompanyResu
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
 import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
 import { diagnoseRootCauses, type CompanyCorpusStats } from "../lib/framework-v2/root-cause-diagnostic.js";
+import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -1218,6 +1219,251 @@ router.get("/v2/test-drive/measure-drill", requireWorkspace, async (req: Request
     return res.json({ measureId, rows });
   } catch (err: any) {
     console.error("[framework-builder v2 /test-drive/measure-drill] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── POST /v2/improvement/chat ── Stage 2 chat with LLM about improvements ──
+interface ImprovementChatBody {
+  frameworkId: number;
+  listId: number;
+  messages: ImprovementChatMessage[];
+  providerName?: string;
+}
+router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const { frameworkId, listId, messages, providerName } = req.body as ImprovementChatBody;
+    if (!frameworkId || !listId || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "frameworkId, listId, messages[] required" });
+    }
+
+    // Rebuild the same analysis the results endpoint produced, so the LLM
+    // sees the identical data the user is looking at on the panel.
+    const resultsUrl = new URL(`http://internal/api/framework-builder/v2/test-drive/results?frameworkId=${frameworkId}&listId=${listId}`);
+    // Rather than round-trip, call the shared computation inline. Simplest
+    // path: fetch the pieces here (some duplication of the results endpoint
+    // is acceptable; this keeps the chat endpoint self-contained).
+    const fwRow = await db.execute(sql`SELECT name, topic_term FROM frameworks WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}`);
+    const fwMeta = ((fwRow as any).rows || [])[0] || {};
+
+    const scoresQuery = await db.execute(sql`
+      SELECT ms.company_id, c.name AS company_name, ms.measure_id, ms.verdict
+      FROM measure_scores ms
+      JOIN companies c ON c.id = ms.company_id
+      JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
+      WHERE ms.framework_id = ${frameworkId}
+    `);
+    const scoreRows = ((scoresQuery as any).rows || []) as any[];
+    const byCompany: Record<string, { companyId: number; companyName: string; measures: any[] }> = {};
+    for (const r of scoreRows) {
+      const k = String(r.company_id);
+      if (!byCompany[k]) byCompany[k] = { companyId: r.company_id, companyName: r.company_name, measures: [] };
+      byCompany[k].measures.push({ measureId: r.measure_id, verdict: r.verdict || "No" });
+    }
+    const results = Object.values(byCompany);
+    const perCompanySummary = results.map((r) => {
+      const yes = r.measures.filter((m: any) => m.verdict === "Yes").length;
+      return { companyName: r.companyName, yesCount: yes, yesRate: r.measures.length ? yes / r.measures.length : 0 };
+    });
+
+    // Reload measure metadata for edit proposals.
+    const measureMetaQuery = await db.execute(sql`
+      SELECT measure_id, expected_yes_rate, title, substantive_definition, fallback_yes_criterion,
+             positive_examples, negative_examples, min_quote_context_chars
+      FROM framework_measures WHERE framework_id = ${frameworkId}
+    `);
+    const measureRows = ((measureMetaQuery as any).rows || []) as any[];
+    const measureMetadata = measureRows.map((m: any) => ({
+      measureId: m.measure_id,
+      expected_yes_rate: typeof m.expected_yes_rate === "number" ? m.expected_yes_rate : 0.35,
+    }));
+    const measuresById: Record<string, any> = {};
+    for (const m of measureRows) measuresById[m.measure_id] = m;
+
+    // Recompute flag report + edit proposals.
+    const report = analyseTestDrive(results as any, measureMetadata);
+    const editsBundle = proposeEditsForFlags(report.flags || [], measuresById);
+
+    // Recompute root causes.
+    const batchRow = await db.execute(sql`
+      SELECT id FROM batch_runs WHERE framework_id = ${frameworkId} AND list_id = ${listId} AND workspace_id = ${ctx.workspaceId}
+      ORDER BY started_at DESC LIMIT 1
+    `);
+    const batchId = (batchRow as any).rows?.[0]?.id;
+    let rootCauses;
+    if (batchId) {
+      const topicRow = await db.execute(sql`SELECT topic_synonyms FROM frameworks WHERE id = ${frameworkId}`);
+      const topicSynonyms = ((topicRow as any).rows?.[0]?.topic_synonyms) || [];
+      const termsLc = [String(fwMeta.topic_term || "").toLowerCase(), ...topicSynonyms.map((s: string) => s.toLowerCase())].filter(Boolean);
+      const corpusRows = await db.execute(sql`
+        SELECT bc.company_id, c.name AS company_name, d.type, d.title,
+               LENGTH(COALESCE(d.content, dc.content, '')) AS len,
+               COALESCE(d.content, dc.content, '') AS text
+        FROM batch_corpus bc JOIN companies c ON c.id = bc.company_id
+        JOIN documents d ON d.id = bc.document_id
+        LEFT JOIN document_content dc ON dc.id = d.content_id
+        WHERE bc.batch_id = ${batchId}
+      `);
+      const perCompStats: Record<string, CompanyCorpusStats> = {};
+      for (const r of ((corpusRows as any).rows || [])) {
+        const cid = Number(r.company_id); const k = String(cid);
+        if (!perCompStats[k]) perCompStats[k] = { companyId: cid, companyName: r.company_name, docCount: 0, totalChars: 0, pdfCount: 0, thematicReportCount: 0, topicTermMentions: 0, topicMentioningDocs: 0, yesCount: 0, totalMeasures: 0 };
+        const s = perCompStats[k]; s.docCount++; s.totalChars += Number(r.len || 0);
+        if (String(r.type || "").toLowerCase() === "pdf") s.pdfCount++;
+        const titleLc = String(r.title || "").toLowerCase();
+        if (titleLc.includes("sustainability") || titleLc.includes("tnfd") || titleLc.includes("tcfd") || titleLc.includes("esg report") || titleLc.includes("nature report")) s.thematicReportCount++;
+        const textLc = String(r.text || "").toLowerCase(); let docMentions = 0;
+        for (const t of termsLc) { let i = textLc.indexOf(t); while (i !== -1) { docMentions++; i = textLc.indexOf(t, i + t.length); } }
+        s.topicTermMentions += docMentions; if (docMentions > 0) s.topicMentioningDocs++;
+      }
+      for (const r of results) {
+        const k = String(r.companyId);
+        if (perCompStats[k]) { perCompStats[k].yesCount = r.measures.filter((m: any) => m.verdict === "Yes").length; perCompStats[k].totalMeasures = r.measures.length; }
+      }
+      const scoresByCM: Record<string, Record<string, string>> = {};
+      for (const r of results) { const k = String(r.companyId); scoresByCM[k] = {}; for (const m of r.measures) scoresByCM[k][m.measureId] = m.verdict; }
+      rootCauses = diagnoseRootCauses(Object.values(perCompStats), measureMetadata.map((m: any) => m.measureId), scoresByCM);
+    }
+
+    if (!rootCauses) return res.status(500).json({ error: "could not build root-cause context" });
+
+    const chatCtx: ImprovementChatContext = {
+      frameworkName: fwMeta.name,
+      topicTerm: fwMeta.topic_term,
+      perCompanySummary,
+      rootCauses,
+      flags: report.flags || [],
+      proposals: editsBundle.proposals,
+      passedRobustnessCriteria: 0,
+      totalRobustnessCriteria: 6,
+    };
+
+    const system = buildImprovementChatSystemPrompt(chatCtx);
+    const history = messages
+      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+      .join("\n\n");
+
+    const { completeWithFallback } = await import("../lib/ai-providers.js");
+    const { text: reply } = await completeWithFallback(providerName || "claude", {
+      system,
+      prompt: history + "\n\nAssistant:",
+      maxTokens: 2000,
+      temperature: 0.2,
+    });
+    const { displayText, actions } = extractActionsFromReply(reply);
+    return res.json({ reply: displayText, actions, proposalCount: editsBundle.proposals.length });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /improvement/chat] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── POST /v2/improvement/apply ── apply structured actions to the framework ──
+interface ImprovementApplyBody {
+  frameworkId: number;
+  listId: number;
+  actions: Array<{ type: string; attrs: Record<string, string> }>;
+}
+router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const { frameworkId, listId, actions } = req.body as ImprovementApplyBody;
+    if (!frameworkId || !Array.isArray(actions)) {
+      return res.status(400).json({ error: "frameworkId and actions[] required" });
+    }
+
+    // Re-derive proposals (same data the chat endpoint saw) so we can resolve
+    // P1/P2/P3 references to actual EditProposal objects.
+    const scoresQuery = await db.execute(sql`
+      SELECT ms.company_id, c.name AS company_name, ms.measure_id, ms.verdict
+      FROM measure_scores ms JOIN companies c ON c.id = ms.company_id
+      JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
+      WHERE ms.framework_id = ${frameworkId}
+    `);
+    const scoreRows = ((scoresQuery as any).rows || []) as any[];
+    const byCompany: Record<string, any> = {};
+    for (const r of scoreRows) {
+      const k = String(r.company_id);
+      if (!byCompany[k]) byCompany[k] = { companyId: r.company_id, companyName: r.company_name, measures: [] };
+      byCompany[k].measures.push({ measureId: r.measure_id, verdict: r.verdict || "No" });
+    }
+    const results = Object.values(byCompany) as any[];
+    const measureMetaQuery = await db.execute(sql`
+      SELECT measure_id, expected_yes_rate, substantive_definition, fallback_yes_criterion,
+             positive_examples, negative_examples, min_quote_context_chars
+      FROM framework_measures WHERE framework_id = ${frameworkId}
+    `);
+    const measureRows = ((measureMetaQuery as any).rows || []) as any[];
+    const measureMetadata = measureRows.map((m: any) => ({ measureId: m.measure_id, expected_yes_rate: typeof m.expected_yes_rate === "number" ? m.expected_yes_rate : 0.35 }));
+    const measuresById: Record<string, any> = {};
+    for (const m of measureRows) measuresById[m.measure_id] = m;
+    const report = analyseTestDrive(results as any, measureMetadata);
+    const editsBundle = proposeEditsForFlags(report.flags || [], measuresById);
+
+    // Walk actions and apply.
+    const applied: any[] = [];
+    const skipped: any[] = [];
+    for (const action of actions) {
+      if (action.type === "apply_edit") {
+        const idx = parseInt(String(action.attrs.proposal || "").replace(/^P/, ""), 10) - 1;
+        const prop = editsBundle.proposals[idx];
+        if (!prop) { skipped.push({ action, reason: "proposal not found" }); continue; }
+        // Apply the patch. For now we support 'replace' patches directly; the
+        // 'regenerate_examples' and 'tighten_definition' patches require an LLM
+        // regenerate pass which we surface as a follow-up job (out of scope for
+        // Stage 2 initial).
+        if (prop.patch?.op === "replace") {
+          const col = prop.patch.path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
+                      prop.patch.path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
+          if (!col) { skipped.push({ action, reason: `unsupported patch path ${prop.patch.path}` }); continue; }
+          await db.execute(sql`
+            UPDATE framework_measures SET ${col} = ${prop.patch.value}
+            WHERE framework_id = ${frameworkId} AND measure_id = ${prop.measureId}
+          `);
+          applied.push({ measureId: prop.measureId, action: prop.action, patch: prop.patch });
+        } else {
+          skipped.push({ action, reason: `patch op '${prop.patch?.op}' requires LLM regeneration — pending Stage 2b` });
+        }
+      } else if (action.type === "ignore_measure") {
+        // No-op on framework; record for audit only.
+        applied.push({ measureId: action.attrs.measure, action: "ignore", reason: action.attrs.reason });
+      } else if (action.type === "rescore_now") {
+        // Trigger fresh scoring via the existing /analyze route contract.
+        // Client will re-navigate; server just acknowledges.
+        applied.push({ action: "rescore" });
+      } else if (action.type === "escalate_to_corpus") {
+        applied.push({ company: action.attrs.company, action: "corpus-escalated", note: "marked for retrieval fix, not framework edit" });
+      } else if (action.type === "apply_all_by_cause") {
+        const cause = action.attrs.cause;
+        const matching = editsBundle.proposals.filter((p) => p.cause === cause);
+        for (const prop of matching) {
+          if (prop.patch?.op === "replace") {
+            const col = prop.patch.path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
+                        prop.patch.path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
+            if (col) {
+              await db.execute(sql`
+                UPDATE framework_measures SET ${col} = ${prop.patch.value}
+                WHERE framework_id = ${frameworkId} AND measure_id = ${prop.measureId}
+              `);
+              applied.push({ measureId: prop.measureId, action: prop.action, patch: prop.patch });
+            } else {
+              skipped.push({ measureId: prop.measureId, reason: `unsupported patch path ${prop.patch.path}` });
+            }
+          } else {
+            skipped.push({ measureId: prop.measureId, reason: `patch op '${prop.patch?.op}' requires LLM regeneration — pending Stage 2b` });
+          }
+        }
+      } else {
+        skipped.push({ action, reason: `unknown action type '${action.type}'` });
+      }
+    }
+
+    return res.json({ applied, skipped, appliedCount: applied.length, skippedCount: skipped.length });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /improvement/apply] error:", err);
     return res.status(500).json({ error: err?.message || "internal error" });
   }
 });

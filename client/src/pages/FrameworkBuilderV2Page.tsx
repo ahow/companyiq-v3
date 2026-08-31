@@ -1444,8 +1444,122 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
         </div>
       )}
 
+      {/* ─── Improvement chat (Stage 2) ─── */}
+      {isComplete && (
+        <ImprovementChat frameworkId={frameworkId} listId={listId} />
+      )}
+
       <div className="text-xs text-gray-500">
         Full per-measure quotes and evidence available on the Results page for the framework.
+      </div>
+    </div>
+  );
+}
+
+// ─── Improvement chat component (Stage 2) ───
+interface ChatAction { type: string; attrs: Record<string, string> }
+interface ChatTurn { role: "user" | "assistant"; content: string; actions?: ChatAction[] }
+
+function ImprovementChat({ frameworkId, listId }: { frameworkId: number; listId: number }) {
+  const [turns, setTurns] = useState<ChatTurn[]>([
+    { role: "assistant", content: "I've analysed your test-drive results. Ask me anything about the framework issues, doc-collection failures, or specific proposals — or type 'summarise findings' for an overview." },
+  ]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [applyResult, setApplyResult] = useState<string | null>(null);
+
+  const send = async () => {
+    if (!input.trim() || sending) return;
+    const userTurn: ChatTurn = { role: "user", content: input.trim() };
+    const nextTurns = [...turns, userTurn];
+    setTurns(nextTurns);
+    setInput("");
+    setSending(true);
+    try {
+      const resp = await api.request("/framework-builder/v2/improvement/chat", {
+        method: "POST",
+        body: JSON.stringify({ frameworkId, listId, messages: nextTurns.map((t) => ({ role: t.role, content: t.content })) }),
+      });
+      setTurns([...nextTurns, { role: "assistant", content: resp.reply || "(empty reply)", actions: resp.actions || [] }]);
+    } catch (e: any) {
+      setTurns([...nextTurns, { role: "assistant", content: `Error: ${e?.message || e}` }]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const applyAction = async (action: ChatAction) => {
+    if (applying) return;
+    setApplying(true);
+    setApplyResult(null);
+    try {
+      const resp = await api.request("/framework-builder/v2/improvement/apply", {
+        method: "POST",
+        body: JSON.stringify({ frameworkId, listId, actions: [action] }),
+      });
+      setApplyResult(`Applied ${resp.appliedCount} action${resp.appliedCount === 1 ? "" : "s"}, ${resp.skippedCount} skipped.`);
+    } catch (e: any) {
+      setApplyResult(`Failed: ${e?.message || e}`);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 border rounded dark:border-gray-700 p-3 space-y-2 bg-gray-50 dark:bg-gray-900/40">
+      <div className="flex items-center gap-2">
+        <Sparkles className="w-4 h-4 text-purple-600" />
+        <div className="text-sm font-medium">Chat with framework consultant</div>
+      </div>
+      <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+        {turns.map((t, i) => (
+          <div key={i} className={`text-sm ${t.role === "user" ? "text-gray-900 dark:text-gray-100 font-medium" : "text-gray-700 dark:text-gray-300"}`}>
+            <div className="text-xs uppercase tracking-wide text-gray-500 mb-0.5">{t.role === "user" ? "You" : "Consultant"}</div>
+            <div className="whitespace-pre-wrap">{t.content}</div>
+            {t.actions && t.actions.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {t.actions.map((a, ai) => (
+                  <button
+                    key={ai}
+                    onClick={() => applyAction(a)}
+                    disabled={applying}
+                    className={`px-2 py-1 rounded text-xs font-medium border ${applying ? "bg-gray-200 text-gray-400 cursor-not-allowed border-gray-300" : "bg-white dark:bg-gray-800 hover:bg-purple-50 border-purple-300 text-purple-700 dark:text-purple-300"}`}
+                  >
+                    {a.type === "apply_edit" && `Apply ${a.attrs.proposal}`}
+                    {a.type === "apply_all_by_cause" && `Apply all: ${a.attrs.cause}`}
+                    {a.type === "escalate_to_corpus" && `Fix corpus for ${a.attrs.company}`}
+                    {a.type === "ignore_measure" && `Ignore ${a.attrs.measure}`}
+                    {a.type === "rescore_now" && `Re-score now`}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        {sending && (
+          <div className="text-xs text-gray-500 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Thinking…</div>
+        )}
+        {applyResult && (
+          <div className="text-xs text-green-700 dark:text-green-400 italic">{applyResult}</div>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
+          placeholder="Ask about a company or measure, or 'summarise findings'…"
+          className="flex-1 px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
+          disabled={sending}
+        />
+        <button
+          onClick={() => void send()}
+          disabled={sending || !input.trim()}
+          className={`px-3 py-1.5 rounded text-sm font-medium ${sending || !input.trim() ? "bg-gray-200 text-gray-400" : "bg-purple-600 text-white hover:bg-purple-700"}`}
+        >
+          <Send className="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   );
