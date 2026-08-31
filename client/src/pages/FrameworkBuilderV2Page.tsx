@@ -237,6 +237,57 @@ export default function FrameworkBuilderV2Page() {
     }
   }
 
+  async function redraftWithCorrections() {
+    if (!draft || !intake) return;
+    setError(null);
+    setLoading(true);
+    setStage("drafting");
+    setRepairAttempts(0);
+    setTruncationRecovered(false);
+    try {
+      // Start a refine job and poll to completion (same pattern as draftFramework).
+      const startRes = await api.request("/framework-builder/v2/draft/refine", {
+        method: "POST",
+        body: JSON.stringify({ draft, intake }),
+      });
+      const jobId = startRes.jobId;
+      setDraftJobId(jobId);
+      setDraftJobStartTime(Date.now());
+      const deadline = Date.now() + 15 * 60_000;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await new Promise((r) => setTimeout(r, 5000));
+        if (Date.now() > deadline) {
+          throw new Error("Refine still not finished after 15 minutes.");
+        }
+        let status: any = null;
+        try {
+          status = await api.request(`/framework-builder/v2/draft/status/${jobId}`);
+        } catch (pollErr: any) {
+          console.warn("refine poll transient:", pollErr?.message || pollErr);
+          continue;
+        }
+        if (status?.status === "succeeded" && status?.result) {
+          setDraft(status.result.draft);
+          setValidation(status.result.validation);
+          if (typeof status.result.repairAttempts === "number") setRepairAttempts(status.result.repairAttempts);
+          setStage("review");
+          setDraftJobId(null);
+          break;
+        }
+        if (status?.status === "failed") {
+          throw new Error(status.errorMessage || "Refine job failed");
+        }
+      }
+    } catch (err: any) {
+      setError(err?.message || String(err));
+      setStage("review");
+      setDraftJobId(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function saveFramework(productionReady: boolean): Promise<number | null> {
     if (!draft || !intake) return null;
     setError(null);
@@ -466,6 +517,7 @@ export default function FrameworkBuilderV2Page() {
               warningCount={warningCount}
               repairAttempts={repairAttempts}
               truncationRecovered={truncationRecovered}
+              onRedraft={redraftWithCorrections}
             />
           )}
 
@@ -489,15 +541,8 @@ export default function FrameworkBuilderV2Page() {
                 Framework ID <code>{savedFrameworkId}</code> saved to your workspace with <code>builder_version=v2</code>.
                 It appears in your Frameworks list and can be used to score companies through the existing pipeline.
               </p>
-              {testDriveListId && (
-                <div className="mt-3 p-3 bg-white dark:bg-gray-800 rounded border border-green-300 dark:border-green-700 text-sm">
-                  <div className="font-medium text-gray-900 dark:text-gray-100 mb-1">Test-drive scoring in progress</div>
-                  <div className="text-gray-600 dark:text-gray-400">
-                    Created list: <code>{testDriveListName}</code> (id {testDriveListId}) with {testDriveCompanies?.length || 0} companies.
-                    Scoring has been dispatched — view live progress on the Results page. Depending on
-                    the framework size, scoring 10 companies typically takes 15–30 minutes.
-                  </div>
-                </div>
+              {testDriveListId && savedFrameworkId && (
+                <TestDriveResultsPanel frameworkId={savedFrameworkId} listId={testDriveListId} listName={testDriveListName} />
               )}
               <div className="mt-4 flex gap-2">
                 <button onClick={reset} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg">
@@ -638,6 +683,7 @@ function DraftReview({
   validation,
   onSelectTestDrive,
   onSave,
+  onRedraft,
   loading,
   measureCount,
   errorCount,
@@ -649,6 +695,7 @@ function DraftReview({
   validation: Validation | null;
   onSelectTestDrive: () => void;
   onSave: (productionReady: boolean) => void;
+  onRedraft?: () => void;
   loading: boolean;
   measureCount: number;
   repairAttempts?: number;
@@ -772,9 +819,13 @@ function DraftReview({
           <strong>Truncation recovered:</strong> The model's response was cut off before all measures were generated. We salvaged the {measureCount} measures that completed. To get a fuller framework, restart with a smaller target measure count (Compact or Balanced).
         </div>
       )}
-      {errorCount > 0 && (
+      {(errorCount > 0 || warningCount > 0) && (
         <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-800 rounded text-sm text-yellow-800 dark:text-yellow-200">
-          <strong>Note:</strong> {errorCount} validation error{errorCount === 1 ? "" : "s"} remain after the auto-repair passes. You can still save this framework as a draft and run a test-drive to see how it behaves — the errors are LLM compliance gaps in specific measures, not blocking issues. "Save as production-ready" is disabled until errors are cleared or manually reviewed.
+          <strong>Note:</strong> {errorCount} error{errorCount === 1 ? "" : "s"} and {warningCount} warning{warningCount === 1 ? "" : "s"} remain after the auto-repair passes.
+          {" "}To proceed to test-drive or save as production-ready, resolve them by clicking
+          <strong className="mx-1">Re-draft with corrections</strong> (re-runs the LLM with the exact
+          violation list), or use
+          <strong className="mx-1">Save as draft</strong> to park this framework and edit measures manually later.
         </div>
       )}
       <div className="mt-6 flex gap-2 flex-wrap justify-end">
@@ -785,18 +836,37 @@ function DraftReview({
         >
           <Save className="w-4 h-4" /> Save as draft
         </button>
+        {(errorCount > 0 || warningCount > 0) && onRedraft && (
+          <button
+            onClick={onRedraft}
+            disabled={loading}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+            title="Re-run the LLM with the exact violation list so it can produce a clean version."
+          >
+            <RotateCcw className="w-4 h-4" /> Re-draft with corrections
+          </button>
+        )}
         <button
           onClick={onSelectTestDrive}
-          disabled={loading}
+          disabled={loading || errorCount > 0 || warningCount > 0}
           className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+          title={
+            errorCount > 0 || warningCount > 0
+              ? "Resolve all errors and warnings before test-driving."
+              : ""
+          }
         >
           <Play className="w-4 h-4" /> Propose test-drive companies
         </button>
         <button
           onClick={() => onSave(true)}
-          disabled={loading || errorCount > 0}
+          disabled={loading || errorCount > 0 || warningCount > 0}
           className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
-          title={errorCount > 0 ? "Cannot save as production-ready while errors remain" : ""}
+          title={
+            errorCount > 0 || warningCount > 0
+              ? "Resolve all errors and warnings before saving as production-ready."
+              : ""
+          }
         >
           <CheckCircle2 className="w-4 h-4" /> Save as production-ready
         </button>
@@ -822,11 +892,24 @@ function TestDriveReview({
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-6">
       <h2 className="text-xl font-semibold mb-4">Proposed test-drive sample</h2>
       <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        The LLM proposed 10 companies for a test-drive scoring run. Review, then hit
-        <strong> Save framework and run test-drive</strong> to save the framework as a draft, create these
-        companies (if new) in a fresh list, and kick off scoring immediately. You can watch
-        progress on the Results page.
+        The LLM proposed 10 companies for a test-drive scoring run — a mix of
+        <strong className="mx-1">signal companies</strong> (companies the LLM expects to score high because they
+        are known to disclose on this topic) and
+        <strong className="mx-1">edge cases</strong> (companies where the topic is peripheral, expected to
+        score low). A balanced mix helps you calibrate: signal companies test that the framework doesn't
+        under-fire on real disclosures; edge cases test that the framework doesn't over-fire on
+        unrelated language.
       </p>
+      <div className="flex items-center gap-3 text-xs text-gray-500 mb-3">
+        <div className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded bg-green-100 border border-green-300" />
+          <span>Signal (known discloser — expected to score high)</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded border border-gray-300 dark:border-gray-700" />
+          <span>Edge case (topic peripheral — expected to score low)</span>
+        </div>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {companies.map((c, i) => (
           <div
@@ -842,9 +925,20 @@ function TestDriveReview({
                   {c.country}
                 </div>
               </div>
-              {c.isKnownDiscloser && (
-                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">signal</span>
-              )}
+              <span
+                className={`text-xs px-2 py-0.5 rounded flex-shrink-0 ${
+                  c.isKnownDiscloser
+                    ? "bg-green-100 text-green-800 border border-green-300"
+                    : "bg-gray-100 text-gray-700 border border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600"
+                }`}
+                title={
+                  c.isKnownDiscloser
+                    ? "Signal: LLM expects this company to score high because it is a known discloser on this topic. Use this to check the framework doesn't under-fire on real disclosures."
+                    : "Edge case: LLM expects this company to score low because the topic is peripheral to its business. Use this to check the framework doesn't over-fire on unrelated language."
+                }
+              >
+                {c.isKnownDiscloser ? "signal" : "edge case"}
+              </span>
             </div>
             <div className="text-xs mt-2 text-gray-600 dark:text-gray-400">{c.rationale}</div>
           </div>
@@ -901,6 +995,177 @@ function DraftingProgress({ startTime, jobId }: { startTime: number | null; jobI
         typically 4–12 minutes. You can safely leave this tab open. If you close it, come
         back to the same page and the draft will still be waiting.
         {jobId && <div className="mt-1 text-xs text-purple-600 opacity-70">Job {jobId.slice(0, 8)}</div>}
+      </div>
+    </div>
+  );
+}
+
+interface PerCompanyResult {
+  companyId: number;
+  companyName: string;
+  yesCount: number;
+  noCount: number;
+  partialCount: number;
+  insufficientCount: number;
+  totalMeasures: number;
+  yesRate: number;
+}
+
+interface FlagItem {
+  measureId: string;
+  rule: string;
+  severity: "error" | "warning";
+  message: string;
+  suggestedFix: string;
+  observedRate?: number;
+  expectedRate?: number;
+}
+
+function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId: number; listId: number; listName: string | null }) {
+  const [batch, setBatch] = useState<{ status: string; completedJobs: number; totalJobs: number; failedJobs: number } | null>(null);
+  const [perCompany, setPerCompany] = useState<PerCompanyResult[]>([]);
+  const [report, setReport] = useState<{ flags: FlagItem[]; summary: string; passedGracefully: boolean; totalCompanies: number; totalMeasures: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchStatus = async () => {
+    try {
+      const r = await api.request(`/framework-builder/v2/test-drive/results?frameworkId=${frameworkId}&listId=${listId}`);
+      setBatch(r.batch);
+      setPerCompany(r.perCompany || []);
+      setReport(r.report || null);
+      setError(null);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  };
+
+  useEffect(() => {
+    // Poll every 30 seconds while scoring is in progress; poll once at mount.
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    (async () => {
+      setLoading(true);
+      await fetchStatus();
+      setLoading(false);
+      if (cancelled) return;
+      intervalId = setInterval(async () => {
+        if (cancelled) return;
+        await fetchStatus();
+        if (batch?.status === "completed") {
+          if (intervalId) clearInterval(intervalId);
+        }
+      }, 30_000);
+    })();
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frameworkId, listId]);
+
+  const isRunning = batch && batch.status !== "completed" && batch.status !== "failed";
+  const isComplete = batch?.status === "completed";
+
+  return (
+    <div className="mt-3 p-4 bg-white dark:bg-gray-800 rounded border border-green-300 dark:border-green-700 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-medium text-gray-900 dark:text-gray-100">
+            {isRunning ? "Test-drive scoring in progress" : isComplete ? "Test-drive scoring complete" : "Test-drive scoring status"}
+          </div>
+          <div className="text-xs text-gray-500 mt-0.5">
+            List: <code>{listName}</code> · framework id {frameworkId}
+          </div>
+        </div>
+        {batch && (
+          <div className="text-sm text-gray-600 dark:text-gray-400">
+            {batch.completedJobs}/{batch.totalJobs} companies scored
+            {batch.failedJobs > 0 && <span className="text-red-600 ml-2">({batch.failedJobs} failed)</span>}
+          </div>
+        )}
+      </div>
+
+      {error && <div className="text-sm text-red-600">Poll error: {error}</div>}
+
+      {loading && !batch && (
+        <div className="text-sm text-gray-500 flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading test-drive status…
+        </div>
+      )}
+
+      {batch && isRunning && (
+        <div className="text-sm text-gray-600 dark:text-gray-400">
+          Scoring runs asynchronously. Progress updates every 30 seconds. Typical time for 10 companies × 25 measures: 15–30 minutes.
+        </div>
+      )}
+
+      {perCompany.length > 0 && (
+        <div className="border rounded dark:border-gray-700 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-gray-900/40">
+              <tr>
+                <th className="text-left px-3 py-2">Company</th>
+                <th className="text-right px-3 py-2">Yes</th>
+                <th className="text-right px-3 py-2">No</th>
+                <th className="text-right px-3 py-2">Partial</th>
+                <th className="text-right px-3 py-2">Yes rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perCompany.map((c) => (
+                <tr key={c.companyId} className="border-t dark:border-gray-700">
+                  <td className="px-3 py-1.5">{c.companyName}</td>
+                  <td className="px-3 py-1.5 text-right text-green-700 dark:text-green-400">{c.yesCount}</td>
+                  <td className="px-3 py-1.5 text-right text-gray-500">{c.noCount}</td>
+                  <td className="px-3 py-1.5 text-right text-yellow-700 dark:text-yellow-400">{c.partialCount}</td>
+                  <td className="px-3 py-1.5 text-right">{(c.yesRate * 100).toFixed(0)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {isComplete && report && (
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Framework improvement analysis
+            <span className="ml-2 text-xs font-normal text-gray-500">
+              {report.flags.length} flag{report.flags.length === 1 ? "" : "s"}
+              {report.passedGracefully ? " (all warnings)" : " (some blocking)"}
+            </span>
+          </div>
+          {report.flags.length === 0 ? (
+            <div className="text-sm text-green-700 dark:text-green-400">
+              No calibration flags. The framework's observed Yes rates are within the expected envelope for every measure. Ready for wider testing.
+            </div>
+          ) : (
+            <div className="max-h-96 overflow-y-auto border rounded dark:border-gray-700 text-sm">
+              {report.flags.map((f, i) => (
+                <div key={i} className="p-3 border-b dark:border-gray-700 last:border-b-0">
+                  <div className="flex items-start gap-2">
+                    <span className={`px-2 py-0.5 rounded text-xs flex-shrink-0 ${f.severity === "error" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"}`}>
+                      {f.rule}
+                    </span>
+                    <code className="text-xs text-gray-500 flex-shrink-0">{f.measureId}</code>
+                  </div>
+                  <div className="mt-1 text-gray-700 dark:text-gray-300">{f.message}</div>
+                  <div className="mt-1 text-xs text-gray-500 italic">Suggested fix: {f.suggestedFix}</div>
+                  {(typeof f.observedRate === "number" || typeof f.expectedRate === "number") && (
+                    <div className="mt-1 text-xs text-gray-500">
+                      observed {typeof f.observedRate === "number" ? (f.observedRate * 100).toFixed(0) + "%" : "n/a"} · expected {typeof f.expectedRate === "number" ? (f.expectedRate * 100).toFixed(0) + "%" : "n/a"}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="text-xs text-gray-500">
+        Full per-measure quotes and evidence available on the Results page for the framework.
       </div>
     </div>
   );

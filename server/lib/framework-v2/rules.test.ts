@@ -146,12 +146,29 @@ test("C4 passes with 3+ numbered conditions each referencing the topic", () => {
   assert.equal(r.passed, true);
 });
 
-test("C4 fails when a condition omits the topic", () => {
+test("C4 passes with majority topic-anchoring (2/3 conditions reference topic)", () => {
+  // Two conditions explicitly name the topic, the third uses a pronoun. Since
+  // conditions are AND-joined and the majority anchor to the topic, the
+  // fallback is well-scoped. This is a warning, not an error.
   const fw = goodFramework({
     measures: [
       goodMeasure({
         fallback_yes_criterion:
           "(1) The entity discloses a policy on nature and biodiversity management.\n(2) The entity has any governance structure.\n(3) The entity discloses a monitoring programme on nature and biodiversity management.",
+      }),
+    ],
+  });
+  const r = validateC4(fw);
+  // Now a warning, not an error. Framework still passes construction.
+  assert.equal(r.passed, true);
+});
+
+test("C4 fails when NO condition references the topic", () => {
+  const fw = goodFramework({
+    measures: [
+      goodMeasure({
+        fallback_yes_criterion:
+          "(1) The entity discloses a policy on management topics.\n(2) The entity has any governance structure.\n(3) The entity discloses a monitoring programme on general activities.",
       }),
     ],
   });

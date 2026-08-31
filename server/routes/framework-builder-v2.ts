@@ -110,8 +110,46 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
 
 // ─── Draft execution helper (used by both sync and async paths) ──────────
 
+// Mechanical post-fixes for consistent LLM omissions. These are cheap,
+// deterministic edits that resolve the same class of validator failures we
+// see across drafts, without another LLM round-trip.
+function applyMechanicalFixes(draft: any, intake: IntakeArtefact): void {
+  if (!Array.isArray(draft?.categories)) return;
+  const adj = Array.isArray(intake.adjacentTopics) ? intake.adjacentTopics : [];
+  const adjNames = adj.map((a: any) => (typeof a?.name === "string" ? a.name : "")).filter(Boolean);
+  const topicTerm = draft.framework?.topicTerm || intake.topicTerm || "the topic";
+
+  // Regex that identifies whether a substantive_definition already contains an
+  // exclusion clause. Mirrors validateC5's hasExclusionMarker check.
+  const EXCLUSION_MARKER = /does not satisfy|does not count|not evidence|not sufficient|must be excluded|are excluded|are not evidence|are not sufficient|does not qualify|are not accepted|do not accept|specifically tests .+ (?:and not|not) |does NOT satisfy|adjacent topic/i;
+
+  for (const cat of draft.categories) {
+    if (!Array.isArray(cat?.measures)) continue;
+    for (const m of cat.measures) {
+      const sd = String(m.substantive_definition || "");
+      // Mechanical C5 fix: if the substantive_definition has no exclusion
+      // clause AND we have adjacent topics from the intake, append a canonical
+      // exclusion sentence at the end. This guarantees C5 compliance without
+      // needing another LLM call.
+      if (adjNames.length >= 1 && !EXCLUSION_MARKER.test(sd)) {
+        const appended = ` Evidence attributed to adjacent topics — ${adjNames.slice(0, 3).join(", ")} — does NOT satisfy this measure, even where language overlaps.`;
+        m.substantive_definition = sd.trim().replace(/\s+$/, "") + appended;
+      }
+      // Mechanical C3 fix: if scoringGuidance exists but doesn't mention
+      // context / character threshold / adjacent sentence, append a canonical
+      // instruction. This is a warning not an error but cleaning it up here
+      // keeps the review pane tidy.
+      const sg = String(m.scoringGuidance || "");
+      if (sg && !/adjacent sentence|surrounding context|at least \d+\s*characters?|verbatim quote/i.test(sg)) {
+        m.scoringGuidance = sg.trim() + ` When returning evidence, provide a verbatim quote of at least 120 characters including the full sentence containing "${topicTerm}" plus at least one adjacent sentence for context.`;
+      }
+    }
+  }
+}
+
 // Build a FrameworkDraft view over an LLM draft object + intake for validation.
 function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft {
+  applyMechanicalFixes(draft, intake);
   const measures = flattenMeasures(draft);
   const normalisedAdjacent = (() => {
     const intakeAdj = intake.adjacentTopics;
@@ -438,6 +476,88 @@ router.post("/v2/draft", requireWorkspace, async (req: Request, res: Response) =
   } catch (err: any) {
     console.error("[framework-builder v2 /draft] error:", err);
     return res.status(500).json({ error: err?.message || "internal error", stack: err?.stack });
+  }
+});
+
+// ─── POST /v2/draft/refine — iterative repair on an existing draft ───────
+// Runs the same fire-and-forget job pattern as /v2/draft/start, but starts
+// from an existing draft + its validation output and asks the LLM to fix the
+// listed violations. Returns { jobId } so the client polls /v2/draft/status.
+
+router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const { draft, intake, providerName } = req.body as { draft: any; intake: IntakeArtefact; providerName?: string };
+    if (!draft || !intake) return res.status(400).json({ error: "draft + intake required" });
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId || !ctx.userId) return res.status(401).json({ error: "session context missing" });
+
+    const jobId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO framework_v2_jobs (id, workspace_id, user_id, kind, status, intake, provider_name)
+      VALUES (${jobId}, ${ctx.workspaceId}, ${ctx.userId}, 'refine', 'running', ${JSON.stringify(intake)}::jsonb, ${providerName || null})
+    `);
+
+    (async () => {
+      try {
+        // Compute current violations from the incoming draft, then hand it to
+        // the auto-repair loop by seeding executeDraft with a starting draft.
+        // Simplest: use callDraftingLLM with priorAttempt = { draft, violations }.
+        const fwDraft = buildFrameworkDraft(draft, intake);
+        let currentValidation: any;
+        try { currentValidation = validateAll(fwDraft); }
+        catch (e: any) { currentValidation = { passed: false, violations: [{ rule: "internal", severity: "error", message: e?.message }] }; }
+        const errorsFound = (currentValidation.violations || []).filter((v: any) => v.severity === "error" || v.severity === "warning").slice(0, 30);
+        if (errorsFound.length === 0) {
+          // Nothing to refine — just return the current draft.
+          await db.execute(sql`
+            UPDATE framework_v2_jobs
+            SET status = 'succeeded', result = ${JSON.stringify({ draft, measures: fwDraft.measures, validation: currentValidation, summary: "No violations to refine.", repairAttempts: 0 })}::jsonb, updated_at = NOW()
+            WHERE id = ${jobId}
+          `);
+          return;
+        }
+        // Call the LLM with the exact violation list as a repair prompt.
+        const repairCall = await callSingleShotDraftingLLM(intake, providerName, { draft, violations: errorsFound });
+        if ("error" in repairCall) {
+          await db.execute(sql`
+            UPDATE framework_v2_jobs
+            SET status = 'failed', error_message = ${repairCall.error}, error_stack = ${repairCall.raw || null}, updated_at = NOW()
+            WHERE id = ${jobId}
+          `);
+          return;
+        }
+        // Re-validate the refined draft.
+        const refinedDraft = repairCall.draft;
+        const refinedFwDraft = buildFrameworkDraft(refinedDraft, intake);
+        let refinedValidation: any;
+        try { refinedValidation = validateAll(refinedFwDraft); }
+        catch (e: any) { refinedValidation = { passed: false, violations: [{ rule: "internal", severity: "error", message: e?.message }] }; }
+        const result = {
+          draft: refinedDraft,
+          measures: refinedFwDraft.measures,
+          validation: refinedValidation,
+          summary: summariseViolations(refinedValidation.violations),
+          repairAttempts: 1,
+        };
+        await db.execute(sql`
+          UPDATE framework_v2_jobs
+          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, updated_at = NOW()
+          WHERE id = ${jobId}
+        `);
+      } catch (err: any) {
+        console.error(`[framework-builder v2 /draft/refine] job ${jobId} threw:`, err);
+        await db.execute(sql`
+          UPDATE framework_v2_jobs
+          SET status = 'failed', error_message = ${err?.message || String(err)}, error_stack = ${err?.stack || null}, updated_at = NOW()
+          WHERE id = ${jobId}
+        `).catch(() => {});
+      }
+    })();
+
+    return res.json({ jobId, status: "running" });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /draft/refine] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
   }
 });
 
@@ -795,6 +915,123 @@ router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Re
     });
   } catch (err: any) {
     console.error("[framework-builder v2 /test-drive/run] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error", stack: err?.stack });
+  }
+});
+
+// ─── GET /v2/test-drive/results — fetch scored results + auto-analyse ──────
+// Given ?frameworkId=&listId=, aggregates measure_scores across the list's
+// companies, produces per-company + per-measure summaries, and runs the
+// flag-analysis rules. Also reports batch-run status so the UI can show
+// progress while scoring is still in flight.
+
+router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+
+    const frameworkId = Number(req.query.frameworkId);
+    const listId = Number(req.query.listId);
+    if (!frameworkId || !listId) {
+      return res.status(400).json({ error: "frameworkId and listId query params required" });
+    }
+
+    // 1. Batch-run progress.
+    const batchRow = await db.execute(sql`
+      SELECT id, status, total_jobs, completed_jobs, failed_jobs, started_at, completed_at
+      FROM batch_runs
+      WHERE framework_id = ${frameworkId} AND list_id = ${listId} AND workspace_id = ${ctx.workspaceId}
+      ORDER BY started_at DESC
+      LIMIT 1
+    `);
+    const batch = (batchRow as any).rows?.[0] || null;
+
+    // 2. Fetch measure_scores for the list's companies + framework.
+    const scoresQuery = await db.execute(sql`
+      SELECT ms.company_id, c.name AS company_name, ms.measure_id, ms.verdict,
+             ms.confidence, ms.quotes, ms.verdict_nuance, ms.score
+      FROM measure_scores ms
+      JOIN companies c ON c.id = ms.company_id
+      JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
+      WHERE ms.framework_id = ${frameworkId}
+      ORDER BY c.name, ms.measure_id
+    `);
+    const rows = ((scoresQuery as any).rows || []) as Array<any>;
+
+    // 3. Assemble TestDriveCompanyResult[]
+    const byCompany: Record<string, TestDriveCompanyResult> = {};
+    for (const r of rows) {
+      const key = String(r.company_id);
+      if (!byCompany[key]) {
+        byCompany[key] = { companyId: r.company_id, companyName: r.company_name, measures: [] };
+      }
+      const quotes = Array.isArray(r.quotes) ? r.quotes : [];
+      const nuance = String(r.verdict_nuance || "");
+      byCompany[key].measures.push({
+        measureId: r.measure_id,
+        verdict: (r.verdict || "No") as any,
+        confidence: r.confidence || "Medium",
+        quoteCount: quotes.length,
+        adjacentTopicHits: 0, // could be enhanced by parsing quotes for adjacent-topic markers
+        r33Flipped: /R3\.3 flipped/i.test(nuance),
+      });
+    }
+    const results: TestDriveCompanyResult[] = Object.values(byCompany);
+
+    // 4. Fetch measure metadata (expected_yes_rate).
+    const measureMetaQuery = await db.execute(sql`
+      SELECT measure_id, expected_yes_rate, title
+      FROM framework_measures
+      WHERE framework_id = ${frameworkId}
+    `);
+    const measureMetadata = ((measureMetaQuery as any).rows || []).map((m: any) => ({
+      measureId: m.measure_id,
+      expected_yes_rate: typeof m.expected_yes_rate === "number" ? m.expected_yes_rate : 0.35,
+      title: m.title,
+    }));
+
+    // 5. Compute per-company summaries.
+    const perCompany = results.map((r) => {
+      const yes = r.measures.filter((m) => m.verdict === "Yes").length;
+      const no = r.measures.filter((m) => m.verdict === "No").length;
+      const partial = r.measures.filter((m) => m.verdict === "Partial").length;
+      const insufficient = r.measures.filter((m) => (m.verdict as string).toLowerCase().includes("insufficient")).length;
+      return {
+        companyId: r.companyId,
+        companyName: r.companyName,
+        yesCount: yes,
+        noCount: no,
+        partialCount: partial,
+        insufficientCount: insufficient,
+        totalMeasures: r.measures.length,
+        yesRate: r.measures.length > 0 ? yes / r.measures.length : 0,
+      };
+    });
+
+    // 6. Run flag analysis IF scoring completed and we have results.
+    const scoringComplete = batch?.status === "completed" && results.length > 0;
+    let report: any = null;
+    if (scoringComplete) {
+      report = analyseTestDrive(results, measureMetadata);
+    }
+
+    return res.json({
+      batch: batch
+        ? {
+            status: batch.status,
+            totalJobs: batch.total_jobs,
+            completedJobs: batch.completed_jobs,
+            failedJobs: batch.failed_jobs,
+            startedAt: batch.started_at,
+            completedAt: batch.completed_at,
+          }
+        : null,
+      scoringComplete,
+      perCompany,
+      report,
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /test-drive/results] error:", err);
     return res.status(500).json({ error: err?.message || "internal error", stack: err?.stack });
   }
 });

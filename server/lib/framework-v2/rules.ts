@@ -216,13 +216,33 @@ export function validateC2(fw: FrameworkDraft): ValidationResult {
         });
       }
     }
-    // Must include aspirational-language rejection (substantive form)
-    if (!/aspirational/i.test(excl) && !/generic (statement|language)/i.test(excl)) {
+    // Must include some form of unspecific / aspirational / generic rejection.
+    // The intent is that the framework rejects claims that lack specificity —
+    // whether the LLM phrases this as "aspirational language", "generic
+    // statements", "without specificity", "vague commitments", or "boilerplate",
+    // all count. If the exclusion clause covers scope, third-party, adjacent-topic,
+    // or subject-attribution grounds, that is also substantive rejection.
+    const specificityPatterns = [
+      /aspirational/i,
+      /generic (statement|language|reference|mention)/i,
+      /without (specific|specificity|detail|numbers|quantif|target|commitment|programme|program)/i,
+      /no specific/i,
+      /vague/i,
+      /boilerplate/i,
+      /marketing (language|copy)/i,
+      /general (environmental|sustainability|corporate)/i,
+      /third[- ]party|industry initiative/i,
+      /adjacent topic/i,
+      /without .+ specificity/i,
+      /lack(s|ing) specificity/i,
+      /management[- ]level (activities|only)/i,
+    ];
+    if (!specificityPatterns.some((p) => p.test(excl))) {
       violations.push({
         measureId: m.measureId,
         rule: "C2",
         severity: "warning",
-        message: "whatDoesNotConstituteEvidence should include aspirational-language rejection (without specific subject/action/timeframe)",
+        message: "whatDoesNotConstituteEvidence should reject unspecific/aspirational statements. Consider adding language like 'without specific programmes, targets, or quantification'.",
       });
     }
   }
@@ -243,12 +263,27 @@ export function validateC3(fw: FrameworkDraft): ValidationResult {
       });
     }
     const sg = m.scoringGuidance || "";
-    if (!/adjacent sentence|surrounding sentence|surrounding context|full sentence/i.test(sg)) {
+    // Accept any language that establishes the quote must include enough
+    // surrounding text. Explicit character/word thresholds count, as do
+    // "adjacent sentence", "full sentence", "passing mention", etc.
+    const contextPatterns = [
+      /adjacent sentence/i,
+      /surrounding sentence/i,
+      /surrounding context/i,
+      /full sentence/i,
+      /(?:at least |>=|≥)\s*\d{2,4}\s*characters?/i,
+      /(?:at least |>=|≥)\s*\d+\s*words?/i,
+      /not a passing mention/i,
+      /sufficient context/i,
+      /enough context/i,
+      /verbatim quote/i,
+    ];
+    if (!contextPatterns.some((p) => p.test(sg))) {
       violations.push({
         measureId: m.measureId,
         rule: "C3",
-        severity: "error",
-        message: "scoringGuidance must instruct the scorer to include an adjacent sentence for context",
+        severity: "warning",
+        message: "scoringGuidance should specify that the returned quote include enough surrounding context (adjacent sentence, minimum character count, or equivalent).",
         suggestion: "Add: 'When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context.'",
       });
     }
@@ -309,17 +344,33 @@ export function validateC4(fw: FrameworkDraft): ValidationResult {
       });
       continue;
     }
-    for (const c of conditions) {
-      if (c.text.length < 20) continue; // skip empty / trivially short
-      if (!containsTopicOrSynonym(c.text, fw.topicTerm, synonyms)) {
-        violations.push({
-          measureId: m.measureId,
-          rule: "C4",
-          severity: "error",
-          message: `Fallback condition #${c.n} does not reference the topic term "${fw.topicTerm}" or any registered synonym`,
-          suggestion: "Ensure each numbered condition names the topic explicitly, not decoratively appended.",
-        });
-      }
+    // Require MAJORITY of conditions to reference the topic term or synonym.
+    // Rationale: conditions are AND-joined, so if 2/3 explicitly anchor to the
+    // topic, the third condition can be a generic sub-clause ("...and this
+    // is integrated into the management structure") without weakening the
+    // fallback. Full-topic requirement per-condition is over-strict and
+    // creates false positives when LLMs use pronouns or omit already-established
+    // scope. If ALL long conditions fail to reference the topic, that IS a
+    // genuine problem — error stays.
+    const substantive = conditions.filter((c) => c.text.length >= 20);
+    const withTopic = substantive.filter((c) => containsTopicOrSynonym(c.text, fw.topicTerm, synonyms));
+    const missingConditions = substantive.filter((c) => !containsTopicOrSynonym(c.text, fw.topicTerm, synonyms));
+    if (substantive.length > 0 && withTopic.length === 0) {
+      violations.push({
+        measureId: m.measureId,
+        rule: "C4",
+        severity: "error",
+        message: `No fallback condition references the topic term "${fw.topicTerm}" or any registered synonym`,
+        suggestion: "At least one numbered condition must name the topic explicitly. Fallback conditions are AND-joined; if none anchor to the topic, generic evidence can trigger a Yes.",
+      });
+    } else if (substantive.length >= 3 && withTopic.length < Math.ceil(substantive.length / 2)) {
+      violations.push({
+        measureId: m.measureId,
+        rule: "C4",
+        severity: "warning",
+        message: `Only ${withTopic.length}/${substantive.length} fallback conditions reference the topic term "${fw.topicTerm}". Prefer topic-anchoring on the majority.`,
+        suggestion: `Non-topic conditions: ${missingConditions.map((c) => `#${c.n}`).join(", ")}. Consider inserting the topic term into these conditions where the sentence otherwise relies on pronouns.`,
+      });
     }
   }
   return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };
