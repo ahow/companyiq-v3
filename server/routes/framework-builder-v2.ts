@@ -110,46 +110,13 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
 
 // ─── Draft execution helper (used by both sync and async paths) ──────────
 
-// Mechanical post-fixes for consistent LLM omissions. These are cheap,
-// deterministic edits that resolve the same class of validator failures we
-// see across drafts, without another LLM round-trip.
-function applyMechanicalFixes(draft: any, intake: IntakeArtefact): void {
-  if (!Array.isArray(draft?.categories)) return;
-  const adj = Array.isArray(intake.adjacentTopics) ? intake.adjacentTopics : [];
-  const adjNames = adj.map((a: any) => (typeof a?.name === "string" ? a.name : "")).filter(Boolean);
-  const topicTerm = draft.framework?.topicTerm || intake.topicTerm || "the topic";
-
-  // Regex that identifies whether a substantive_definition already contains an
-  // exclusion clause. Mirrors validateC5's hasExclusionMarker check.
-  const EXCLUSION_MARKER = /does not satisfy|does not count|not evidence|not sufficient|must be excluded|are excluded|are not evidence|are not sufficient|does not qualify|are not accepted|do not accept|specifically tests .+ (?:and not|not) |does NOT satisfy|adjacent topic/i;
-
-  for (const cat of draft.categories) {
-    if (!Array.isArray(cat?.measures)) continue;
-    for (const m of cat.measures) {
-      const sd = String(m.substantive_definition || "");
-      // Mechanical C5 fix: if the substantive_definition has no exclusion
-      // clause AND we have adjacent topics from the intake, append a canonical
-      // exclusion sentence at the end. This guarantees C5 compliance without
-      // needing another LLM call.
-      if (adjNames.length >= 1 && !EXCLUSION_MARKER.test(sd)) {
-        const appended = ` Evidence attributed to adjacent topics — ${adjNames.slice(0, 3).join(", ")} — does NOT satisfy this measure, even where language overlaps.`;
-        m.substantive_definition = sd.trim().replace(/\s+$/, "") + appended;
-      }
-      // Mechanical C3 fix: if scoringGuidance exists but doesn't mention
-      // context / character threshold / adjacent sentence, append a canonical
-      // instruction. This is a warning not an error but cleaning it up here
-      // keeps the review pane tidy.
-      const sg = String(m.scoringGuidance || "");
-      if (sg && !/adjacent sentence|surrounding context|at least \d+\s*characters?|verbatim quote/i.test(sg)) {
-        m.scoringGuidance = sg.trim() + ` When returning evidence, provide a verbatim quote of at least 120 characters including the full sentence containing "${topicTerm}" plus at least one adjacent sentence for context.`;
-      }
-    }
-  }
-}
-
 // Build a FrameworkDraft view over an LLM draft object + intake for validation.
+// (Previously included mechanical post-fixes that appended boilerplate when the
+// LLM omitted exclusion clauses or scoring-guidance context language. Those
+// were removed on user feedback: they hid the LLM's compliance gap instead of
+// exposing it. Compliance is now driven purely by the drafting prompt + the
+// auto-repair loop.)
 function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft {
-  applyMechanicalFixes(draft, intake);
   const measures = flattenMeasures(draft);
   const normalisedAdjacent = (() => {
     const intakeAdj = intake.adjacentTopics;

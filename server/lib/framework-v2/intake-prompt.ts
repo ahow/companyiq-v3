@@ -165,6 +165,26 @@ export const DRAFTING_SYSTEM_PROMPT_HEAD = `You are drafting a CompanyIQ framewo
 
 A single JSON object with the framework structure. See schema below. Do not include prose commentary in the JSON block; the caller will validate it.
 
+# MANDATORY BOILERPLATE (insert into every measure without paraphrasing)
+
+The following clauses MUST appear in every measure's substantive_definition and scoringGuidance. Insert them VERBATIM, appended to whatever measure-specific prose you write. Paraphrasing them will fail the validator.
+
+1. Substantive_definition MUST end with this canonical exclusion clause, with <TOPIC> and <ADJACENT LIST> substituted from the intake:
+
+   > "Evidence attributed to adjacent topics — <ADJACENT LIST from intake, comma-separated> — does NOT satisfy this measure, even where language overlaps."
+
+2. Substantive_definition MUST also include this canonical vehicle-agnostic clause:
+
+   > "Evidence may be disclosed in any vehicle — annual report, sustainability report, dedicated policy document, code-of-conduct section, KPI table, or entity website — provided content substantively matches this measure."
+
+3. scoringGuidance MUST end with this canonical quote-context instruction:
+
+   > "When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context."
+
+4. whatDoesNotConstituteEvidence MUST include at least one of these substantive-rejection phrases (choose the one that fits): "aspirational statements without specific programmes"; "generic environmental language without <TOPIC>-specificity"; "third-party or industry initiatives without company action"; "management-level activities only without board or governance sign-off"; "adjacent-topic references without <TOPIC> attribution".
+
+Every measure MUST have positive_examples (≥2 disclosure-style excerpts) and negative_examples (≥2 adversarial excerpts drawn from adjacent topics). c1_achievement_guidance MUST be a JSON object with yes_cases, no_cases, and distinguishing_test — either as arrays OR as single non-empty strings, but present in all three keys.
+
 # Construction rules — apply verbatim
 
 ## C1 — Position-testing phrasing, permissive achievement interpretation
@@ -370,6 +390,26 @@ A single JSON object with this exact shape:
     }
   ]
 }
+
+# MANDATORY BOILERPLATE (insert verbatim in every measure)
+
+The following clauses MUST appear in every measure. Insert them VERBATIM, appended to whatever measure-specific prose you write. Paraphrasing them WILL fail the validator downstream.
+
+1. Every substantive_definition MUST end with this canonical exclusion clause (substitute <ADJACENT LIST> from the skeleton's framework.adjacentTopics, comma-separated):
+
+   > "Evidence attributed to adjacent topics — <ADJACENT LIST> — does NOT satisfy this measure, even where language overlaps."
+
+2. Every substantive_definition MUST also include this canonical vehicle-agnostic clause:
+
+   > "Evidence may be disclosed in any vehicle — annual report, sustainability report, dedicated policy document, code-of-conduct section, KPI table, or entity website — provided content substantively matches this measure."
+
+3. Every scoringGuidance MUST end with:
+
+   > "When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context."
+
+4. Every whatDoesNotConstituteEvidence MUST include at least one substantive-rejection phrase (choose one): "aspirational statements without specific programmes", "generic environmental language without topic-specificity", "third-party or industry initiatives without company action", "management-level activities only without board or governance sign-off", or "adjacent-topic references without topic attribution".
+
+5. Every c1_achievement_guidance MUST be a JSON object with all three keys populated: yes_cases, no_cases, distinguishing_test (each may be an array OR a single non-empty descriptive string, but none may be null or empty).
 
 # Construction rules — apply verbatim to EVERY measure
 
