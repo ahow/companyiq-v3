@@ -172,13 +172,15 @@ export default function FrameworkBuilderV2Page() {
       setDraftJobStartTime(Date.now());
       // Poll every 5s for up to 15 minutes. Each poll is a fresh short-lived
       // request that survives socket drops.
-      const deadline = Date.now() + 15 * 60_000;
+      // 25 minutes: chunked drafts of 25–50 measures with an auto-repair pass
+      // legitimately take 15–20 minutes. Below this we saw false timeouts.
+      const deadline = Date.now() + 25 * 60_000;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         await new Promise((r) => setTimeout(r, 5000));
         if (Date.now() > deadline) {
           throw new Error(
-            "Draft still not finished after 15 minutes. You can try again \u2014 your intake is preserved. If this keeps happening the LLM provider may be down.",
+            "Draft still not finished after 25 minutes. You can try again \u2014 your intake is preserved. If this keeps happening the LLM provider may be down.",
           );
         }
         let status: any = null;

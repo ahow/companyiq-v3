@@ -395,9 +395,19 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
   let validation: any = validate(draft);
 
   // Up to 2 repair passes for hard errors. Warnings don't trigger a repair.
+  //
+  // For chunked drafts (>15 measures), the repair loop is DISABLED because
+  // a single-shot repair prompt containing the full assembled draft exceeds
+  // Claude's 10-min non-streaming limit ("Streaming is required for operations
+  // that may take longer than 10 minutes"). Chunked drafts already run
+  // per-category so per-category repair should be handled separately; for now
+  // we accept that a chunked draft's errors flow to the user's review pane
+  // where they can hit "Re-draft with corrections" for a targeted repair.
   let repairAttempts = 0;
   const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_MAX_REPAIRS || 2);
+  const wasChunked = Boolean((first as any).truncationRecovered) || (Array.isArray((draft as any).categories) && (draft as any).categories.some((c: any) => Array.isArray(c.measures) && c.measures.length > 0)) && (intake as any).targetMeasureCount > 15;
   while (
+    !wasChunked &&
     repairAttempts < MAX_REPAIRS &&
     validation.violations.some((v: any) => v.severity === "error")
   ) {

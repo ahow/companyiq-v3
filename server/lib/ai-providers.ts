@@ -140,7 +140,9 @@ class ClaudeProvider implements AIProvider {
           // but allow the framework drafter to request the whole 16K+ envelope it needs.
           max_tokens: Math.min(opts.maxTokens ?? 4096, 32000),
           temperature: opts.temperature ?? 0,
-          top_p: 1, // 36-B.1: deterministic sampling
+          // NOTE: claude-sonnet-4-5 and newer models reject requests that
+          // include BOTH temperature and top_p. We rely on temperature for
+          // determinism and omit top_p (default is 1 anyway).
           system: opts.system,
           messages: [{ role: "user", content: opts.prompt }],
         });
@@ -241,7 +243,10 @@ class OpenAICompatibleProvider implements AIProvider {
       ],
       max_tokens: Math.min(opts.maxTokens ?? 4096, this.maxOutputTokens),
       temperature: opts.temperature ?? 0,
-      top_p: 1, // 36-B.1: deterministic sampling
+      // Note: top_p omitted intentionally. See Claude provider above — modern
+      // Anthropic models reject having both temperature and top_p specified.
+      // Other providers (OpenAI, DeepSeek) accept either; we standardise on
+      // temperature for determinism.
     };
 
     // I45: Always pass seed when provider supports it — caller-provided seed takes
