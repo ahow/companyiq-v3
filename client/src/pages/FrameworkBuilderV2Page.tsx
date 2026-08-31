@@ -1023,12 +1023,48 @@ interface FlagItem {
   expectedRate?: number;
 }
 
+interface RobustnessCriterion {
+  id: string;
+  label: string;
+  passed: boolean;
+  observed: string;
+  threshold: string;
+  detail: string;
+}
+
+interface EditProposal {
+  measureId: string;
+  flagRule: string;
+  cause: string;
+  action: string;
+  fieldPath: string;
+  currentValueSummary: string;
+  proposedValueSummary: string;
+  rationale: string;
+  expectedImpact: string;
+}
+
+interface MeasureDrillRow {
+  companyName: string;
+  verdict: string;
+  confidence: string;
+  quotes: string[];
+  nuance: string;
+}
+
 function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId: number; listId: number; listName: string | null }) {
   const [batch, setBatch] = useState<{ status: string; completedJobs: number; totalJobs: number; failedJobs: number } | null>(null);
   const [perCompany, setPerCompany] = useState<PerCompanyResult[]>([]);
   const [report, setReport] = useState<{ flags: FlagItem[]; summary: string; passedGracefully: boolean; totalCompanies: number; totalMeasures: number } | null>(null);
+  const [robustness, setRobustness] = useState<{ criteria: RobustnessCriterion[]; passedCount: number; totalCount: number; allPassed: boolean } | null>(null);
+  const [edits, setEdits] = useState<{ proposals: EditProposal[]; causeBreakdown: Record<string, number>; totalFlags: number; totalWithProposals: number } | null>(null);
+  const [labelsInferred, setLabelsInferred] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [decisions, setDecisions] = useState<Record<string, "accept" | "reject">>({});
+  const [expandedMeasure, setExpandedMeasure] = useState<string | null>(null);
+  const [drillRows, setDrillRows] = useState<Record<string, MeasureDrillRow[]>>({});
+  const [drillLoading, setDrillLoading] = useState<string | null>(null);
 
   const fetchStatus = async () => {
     try {
@@ -1036,11 +1072,30 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
       setBatch(r.batch);
       setPerCompany(r.perCompany || []);
       setReport(r.report || null);
+      setRobustness(r.robustness || null);
+      setEdits(r.edits || null);
+      setLabelsInferred(!!r.labelsInferred);
       setError(null);
     } catch (e: any) {
       setError(e?.message || String(e));
     }
   };
+
+  const loadDrill = async (measureId: string) => {
+    if (drillRows[measureId] || drillLoading === measureId) return;
+    setDrillLoading(measureId);
+    try {
+      const r = await api.request(`/framework-builder/v2/test-drive/measure-drill?frameworkId=${frameworkId}&listId=${listId}&measureId=${encodeURIComponent(measureId)}`);
+      setDrillRows((prev) => ({ ...prev, [measureId]: r.rows || [] }));
+    } catch (e: any) {
+      setError(`Failed to load drill-down for ${measureId}: ${e?.message || e}`);
+    } finally {
+      setDrillLoading(null);
+    }
+  };
+
+  const acceptedCount = Object.values(decisions).filter((d) => d === "accept").length;
+  const rejectedCount = Object.values(decisions).filter((d) => d === "reject").length;
 
   useEffect(() => {
     // Poll every 30 seconds while scoring is in progress; poll once at mount.
@@ -1129,40 +1184,171 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
         </div>
       )}
 
-      {isComplete && report && (
+      {/* ─── Robustness Criteria Scorecard ─── */}
+      {isComplete && robustness && (
         <div className="space-y-2">
-          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-            Framework improvement analysis
-            <span className="ml-2 text-xs font-normal text-gray-500">
-              {report.flags.length} flag{report.flags.length === 1 ? "" : "s"}
-              {report.passedGracefully ? " (all warnings)" : " (some blocking)"}
-            </span>
-          </div>
-          {report.flags.length === 0 ? (
-            <div className="text-sm text-green-700 dark:text-green-400">
-              No calibration flags. The framework's observed Yes rates are within the expected envelope for every measure. Ready for wider testing.
+          <div className="flex items-baseline justify-between">
+            <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              Robustness scorecard
+              <span className={`ml-2 text-xs font-normal ${robustness.allPassed ? "text-green-700" : "text-yellow-700"}`}>
+                {robustness.passedCount}/{robustness.totalCount} criteria passed
+                {robustness.allPassed ? " — framework is robust enough for wider use" : " — iteration recommended"}
+              </span>
             </div>
-          ) : (
-            <div className="max-h-96 overflow-y-auto border rounded dark:border-gray-700 text-sm">
-              {report.flags.map((f, i) => (
-                <div key={i} className="p-3 border-b dark:border-gray-700 last:border-b-0">
-                  <div className="flex items-start gap-2">
-                    <span className={`px-2 py-0.5 rounded text-xs flex-shrink-0 ${f.severity === "error" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"}`}>
-                      {f.rule}
-                    </span>
-                    <code className="text-xs text-gray-500 flex-shrink-0">{f.measureId}</code>
-                  </div>
-                  <div className="mt-1 text-gray-700 dark:text-gray-300">{f.message}</div>
-                  <div className="mt-1 text-xs text-gray-500 italic">Suggested fix: {f.suggestedFix}</div>
-                  {(typeof f.observedRate === "number" || typeof f.expectedRate === "number") && (
-                    <div className="mt-1 text-xs text-gray-500">
-                      observed {typeof f.observedRate === "number" ? (f.observedRate * 100).toFixed(0) + "%" : "n/a"} · expected {typeof f.expectedRate === "number" ? (f.expectedRate * 100).toFixed(0) + "%" : "n/a"}
-                    </div>
-                  )}
+            {labelsInferred && (
+              <span className="text-xs text-gray-500 italic">
+                Signal/edge labels inferred from result distribution; discrimination criterion is not reliable for legacy batches.
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {robustness.criteria.map((c) => (
+              <div
+                key={c.id}
+                className={`p-2.5 border rounded text-sm ${c.passed ? "border-green-300 bg-green-50 dark:bg-green-900/20 dark:border-green-700" : "border-yellow-300 bg-yellow-50 dark:bg-yellow-900/20 dark:border-yellow-700"}`}
+              >
+                <div className="flex items-center gap-2">
+                  {c.passed ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <AlertTriangle className="w-4 h-4 text-yellow-600" />}
+                  <span className="font-medium text-gray-900 dark:text-gray-100">{c.label}</span>
                 </div>
+                <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                  <span className="font-medium">Observed:</span> {c.observed}
+                  <span className="mx-1.5 text-gray-400">|</span>
+                  <span className="font-medium">Target:</span> {c.threshold}
+                </div>
+                <div className="mt-1 text-xs text-gray-500">{c.detail}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Cause breakdown + edit proposals ─── */}
+      {isComplete && edits && edits.proposals.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between">
+            <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              Proposed measure edits
+              <span className="ml-2 text-xs font-normal text-gray-500">
+                {edits.proposals.length} proposal{edits.proposals.length === 1 ? "" : "s"} — {acceptedCount} accepted, {rejectedCount} rejected
+              </span>
+            </div>
+            <div className="flex gap-1 text-xs text-gray-500">
+              {Object.entries(edits.causeBreakdown).map(([cause, n]) => (
+                <span key={cause} className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700">{cause}: {n}</span>
               ))}
             </div>
-          )}
+          </div>
+          <div className="space-y-2">
+            {edits.proposals.map((p, i) => {
+              const key = `${p.measureId}::${p.flagRule}`;
+              const dec = decisions[key];
+              const isExpanded = expandedMeasure === p.measureId;
+              return (
+                <div
+                  key={i}
+                  className={`p-3 border rounded text-sm ${dec === "accept" ? "border-green-300 bg-green-50/50 dark:bg-green-900/10 dark:border-green-700" : dec === "reject" ? "border-gray-300 bg-gray-50 dark:bg-gray-900/30 opacity-60" : "border-gray-300 dark:border-gray-600"}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <code className="text-xs text-gray-500">{p.measureId}</code>
+                        <span className="px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">{p.cause}</span>
+                        <span className="px-1.5 py-0.5 rounded text-xs bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300">{p.action}</span>
+                      </div>
+                      <div className="mt-1 text-gray-800 dark:text-gray-200">{p.rationale}</div>
+                      <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                        <span className="font-medium">Field:</span> <code>{p.fieldPath}</code>
+                      </div>
+                      <div className="mt-1 grid grid-cols-1 md:grid-cols-2 gap-1 text-xs">
+                        <div><span className="text-gray-500">Current:</span> {p.currentValueSummary || <span className="italic text-gray-400">empty</span>}</div>
+                        <div><span className="text-gray-500">Proposed:</span> {p.proposedValueSummary}</div>
+                      </div>
+                      <div className="mt-1 text-xs italic text-gray-500">Expected impact: {p.expectedImpact}</div>
+                    </div>
+                    <div className="flex flex-col gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => setDecisions((prev) => ({ ...prev, [key]: prev[key] === "accept" ? undefined : "accept" as any }))}
+                        className={`px-2 py-1 rounded text-xs font-medium ${dec === "accept" ? "bg-green-600 text-white" : "bg-white dark:bg-gray-700 border border-green-300 text-green-700 dark:text-green-400 hover:bg-green-50"}`}
+                      >
+                        {dec === "accept" ? "✓ Accepted" : "Accept"}
+                      </button>
+                      <button
+                        onClick={() => setDecisions((prev) => ({ ...prev, [key]: prev[key] === "reject" ? undefined : "reject" as any }))}
+                        className={`px-2 py-1 rounded text-xs font-medium ${dec === "reject" ? "bg-gray-600 text-white" : "bg-white dark:bg-gray-700 border border-gray-300 text-gray-700 dark:text-gray-400 hover:bg-gray-50"}`}
+                      >
+                        {dec === "reject" ? "✗ Rejected" : "Reject"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-dashed border-gray-200 dark:border-gray-700">
+                    <button
+                      onClick={() => {
+                        const next = isExpanded ? null : p.measureId;
+                        setExpandedMeasure(next);
+                        if (next) void loadDrill(p.measureId);
+                      }}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      {isExpanded ? "▾ Hide evidence" : "▸ Show evidence (per-company quotes)"}
+                    </button>
+                    {isExpanded && (
+                      <div className="mt-2">
+                        {drillLoading === p.measureId && (
+                          <div className="text-xs text-gray-500 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" /> Loading quotes…</div>
+                        )}
+                        {drillRows[p.measureId] && (
+                          <div className="space-y-1.5 text-xs">
+                            {drillRows[p.measureId].map((row, ri) => (
+                              <div key={ri} className="pl-3 border-l-2 border-gray-200 dark:border-gray-600">
+                                <div className="font-medium">
+                                  {row.companyName}
+                                  <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] ${row.verdict === "Yes" ? "bg-green-100 text-green-800" : row.verdict === "Partial" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-700"}`}>{row.verdict}</span>
+                                  <span className="ml-2 text-gray-500">confidence: {row.confidence}</span>
+                                </div>
+                                {row.quotes.length === 0 ? (
+                                  <div className="italic text-gray-500">no quotes returned</div>
+                                ) : (
+                                  <ul className="list-disc pl-5 text-gray-700 dark:text-gray-300">
+                                    {row.quotes.slice(0, 3).map((q, qi) => (<li key={qi}>"{q.length > 300 ? q.slice(0, 300) + "…" : q}"</li>))}
+                                    {row.quotes.length > 3 && (<li className="italic text-gray-500">+ {row.quotes.length - 3} more</li>)}
+                                  </ul>
+                                )}
+                                {row.nuance && (
+                                  <div className="mt-0.5 italic text-gray-500">nuance: {row.nuance.length > 200 ? row.nuance.slice(0, 200) + "…" : row.nuance}</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {isComplete && report && report.flags.length === 0 && (
+        <div className="text-sm text-green-700 dark:text-green-400">
+          No calibration flags. The framework's observed Yes rates are within the expected envelope for every measure. Ready for wider testing.
+        </div>
+      )}
+
+      {isComplete && edits && edits.proposals.length > 0 && (
+        <div className="pt-2 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
+          <div className="text-xs text-gray-500">
+            When ready, apply {acceptedCount} accepted edit{acceptedCount === 1 ? "" : "s"} to regenerate affected measures and re-score. Rejected edits are dropped.
+          </div>
+          <button
+            disabled={acceptedCount === 0}
+            className={`px-3 py-1.5 rounded text-sm font-medium ${acceptedCount === 0 ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-700"}`}
+            title={acceptedCount === 0 ? "Accept at least one edit to enable iteration" : "Regenerate affected measures and start iteration N+1"}
+          >
+            Apply {acceptedCount} edit{acceptedCount === 1 ? "" : "s"} → iterate
+          </button>
         </div>
       )}
 

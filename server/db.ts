@@ -179,6 +179,11 @@ export async function initializeDatabase(): Promise<void> {
 
     await db.execute(sql`ALTER TABLE company_lists ADD COLUMN IF NOT EXISTS is_shared BOOLEAN NOT NULL DEFAULT false`);
 
+    // Framework Creation v2 test-drive labels: {companyId:number, isKnownDiscloser:boolean}[]
+    // Populated at /v2/test-drive/run and consumed by /v2/test-drive/results to
+    // compute the discrimination robustness criterion (signal vs edge Yes-rate gap).
+    await db.execute(sql`ALTER TABLE company_lists ADD COLUMN IF NOT EXISTS test_drive_labels JSONB`);
+
     // ─── Companies ──────────────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS companies (

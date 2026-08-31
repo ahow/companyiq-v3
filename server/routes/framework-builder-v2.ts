@@ -12,6 +12,8 @@ import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/rob
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, type TestDriveCompanyResult, type TestDriveSampleRequest } from "../lib/framework-v2/test-drive.js";
+import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
+import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -842,7 +844,7 @@ router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Re
     const { frameworkId, companies, frameworkName } = req.body as {
       frameworkId: number;
       frameworkName?: string;
-      companies: Array<{ name: string; ticker?: string; sector?: string; country?: string }>;
+      companies: Array<{ name: string; ticker?: string; sector?: string; country?: string; isKnownDiscloser?: boolean }>;
     };
     if (!frameworkId || !Array.isArray(companies) || companies.length === 0) {
       return res.status(400).json({ error: "frameworkId and companies[] required" });
@@ -881,6 +883,19 @@ router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Re
     // 3. Add companies to the list.
     for (const cid of companyIds) {
       try { await storage.addCompanyToList((list as any).id, cid); } catch { /* dup add — ignore */ }
+    }
+
+    // 4. Persist signal/edge labels for later robustness analysis (discrimination criterion).
+    const labels = companies.map((c, i) => ({
+      companyId: companyIds[i],
+      isKnownDiscloser: c.isKnownDiscloser === true,
+    }));
+    try {
+      await db.execute(sql`
+        UPDATE company_lists SET test_drive_labels = ${JSON.stringify(labels)}::jsonb WHERE id = ${(list as any).id}
+      `);
+    } catch (e: any) {
+      console.warn("[framework-builder v2 /test-drive/run] label persist failed (non-fatal):", e?.message);
     }
 
     return res.json({
@@ -955,17 +970,65 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
     }
     const results: TestDriveCompanyResult[] = Object.values(byCompany);
 
-    // 4. Fetch measure metadata (expected_yes_rate).
+    // 4. Fetch measure metadata (expected_yes_rate + full definition for edit proposals).
     const measureMetaQuery = await db.execute(sql`
-      SELECT measure_id, expected_yes_rate, title
+      SELECT measure_id, expected_yes_rate, title, substantive_definition,
+             fallback_yes_criterion, positive_examples, negative_examples,
+             min_quote_context_chars
       FROM framework_measures
       WHERE framework_id = ${frameworkId}
     `);
-    const measureMetadata = ((measureMetaQuery as any).rows || []).map((m: any) => ({
+    const measureRows = ((measureMetaQuery as any).rows || []) as any[];
+    const measureMetadata = measureRows.map((m: any) => ({
       measureId: m.measure_id,
       expected_yes_rate: typeof m.expected_yes_rate === "number" ? m.expected_yes_rate : 0.35,
       title: m.title,
     }));
+    // Full measure definitions keyed by measure_id, for edit-proposal generation.
+    const measuresById: Record<string, any> = {};
+    for (const m of measureRows) {
+      measuresById[m.measure_id] = {
+        substantive_definition: m.substantive_definition,
+        fallback_yes_criterion: m.fallback_yes_criterion,
+        positive_examples: m.positive_examples,
+        negative_examples: m.negative_examples,
+        min_quote_context_chars: m.min_quote_context_chars,
+      };
+    }
+
+    // 4b. Load signal/edge labels from company_lists.test_drive_labels.
+    let labels: CompanyLabel[] = [];
+    try {
+      const labelQuery = await db.execute(sql`
+        SELECT test_drive_labels FROM company_lists WHERE id = ${listId} AND workspace_id = ${ctx.workspaceId}
+      `);
+      const raw = (labelQuery as any).rows?.[0]?.test_drive_labels;
+      if (Array.isArray(raw)) {
+        labels = raw.map((r: any) => ({
+          companyId: Number(r.companyId),
+          isKnownDiscloser: !!r.isKnownDiscloser,
+        }));
+      }
+    } catch (e: any) {
+      console.warn("[framework-builder v2 /test-drive/results] label load failed (non-fatal):", e?.message);
+    }
+    // Fallback heuristic when labels are missing (legacy batches like framework 3):
+    // top-quartile Yes-rate companies are treated as "signal", bottom-quartile as
+    // "edge". This is inference from results themselves and MUST NOT be used to
+    // claim discrimination pass; it exists so the criterion still renders.
+    let labelsInferred = false;
+    if (labels.length === 0 && Object.values(byCompany).length > 0) {
+      labelsInferred = true;
+      const perC = Object.values(byCompany).map((r) => ({
+        companyId: r.companyId,
+        yesRate: r.measures.length > 0 ? r.measures.filter((m) => m.verdict === "Yes").length / r.measures.length : 0,
+      })).sort((a, b) => b.yesRate - a.yesRate);
+      const n = perC.length;
+      const topN = Math.max(1, Math.floor(n / 2));
+      for (let i = 0; i < n; i++) {
+        labels.push({ companyId: perC[i].companyId, isKnownDiscloser: i < topN });
+      }
+    }
 
     // 5. Compute per-company summaries.
     const perCompany = results.map((r) => {
@@ -985,11 +1048,16 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       };
     });
 
-    // 6. Run flag analysis IF scoring completed and we have results.
+    // 6. Run flag analysis + 6 robustness criteria + edit proposals
+    //    when scoring has completed and there are results.
     const scoringComplete = batch?.status === "completed" && results.length > 0;
     let report: any = null;
+    let robustness: any = null;
+    let edits: any = null;
     if (scoringComplete) {
       report = analyseTestDrive(results, measureMetadata);
+      robustness = computeRobustnessCriteria(results, measureMetadata, labels);
+      edits = proposeEditsForFlags(report.flags || [], measuresById);
     }
 
     return res.json({
@@ -1006,6 +1074,9 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       scoringComplete,
       perCompany,
       report,
+      robustness,
+      edits,
+      labelsInferred,
     });
   } catch (err: any) {
     console.error("[framework-builder v2 /test-drive/results] error:", err);
@@ -1016,6 +1087,42 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
 // ─── POST /v2/test-drive/analyse — analyse scored test-drive results ─────
 // Caller passes company-level results already produced by the existing pipeline.
 // This endpoint applies flag rules and returns a fix plan.
+
+// ─── GET /v2/test-drive/measure-drill ── per-company evidence for one measure ─
+// Given ?frameworkId=&listId=&measureId=, returns quotes/verdicts/nuance for
+// every company in the list. Used by the Improvement Analysis panel to let the
+// user audit surprising results in-place (Layer 1 audit).
+router.get("/v2/test-drive/measure-drill", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const frameworkId = Number(req.query.frameworkId);
+    const listId = Number(req.query.listId);
+    const measureId = String(req.query.measureId || "");
+    if (!frameworkId || !listId || !measureId) {
+      return res.status(400).json({ error: "frameworkId, listId, measureId query params required" });
+    }
+    const rowsQ = await db.execute(sql`
+      SELECT c.name AS company_name, ms.verdict, ms.confidence, ms.quotes, ms.verdict_nuance
+      FROM measure_scores ms
+      JOIN companies c ON c.id = ms.company_id
+      JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
+      WHERE ms.framework_id = ${frameworkId} AND ms.measure_id = ${measureId}
+      ORDER BY ms.verdict, c.name
+    `);
+    const rows = ((rowsQ as any).rows || []).map((r: any) => ({
+      companyName: r.company_name,
+      verdict: r.verdict || "No",
+      confidence: r.confidence || "Medium",
+      quotes: Array.isArray(r.quotes) ? r.quotes : [],
+      nuance: r.verdict_nuance || "",
+    }));
+    return res.json({ measureId, rows });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /test-drive/measure-drill] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
 
 router.post("/v2/test-drive/analyse", async (req: Request, res: Response) => {
   try {
