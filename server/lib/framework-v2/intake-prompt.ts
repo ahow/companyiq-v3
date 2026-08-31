@@ -230,8 +230,8 @@ Every measure's substantive_definition must include: "This measure specifically 
 
 ## C6 — Positive AND adversarial-negative examples
 Every measure has:
-- positive_examples: 2–4 short (≤200-char) excerpts that clearly satisfy the measure
-- negative_examples: 2–4 short excerpts that superficially look like they satisfy the measure but should NOT (draw from adjacent-topics list)
+- positive_examples: 2–4 verbatim-style excerpts (target 200–600 chars each; up to 800 permitted) that clearly satisfy the measure. Include real substantive detail — specific commitments, named methodologies, quantified targets — not stripped one-line summaries.
+- negative_examples: 2–4 excerpts (same length envelope) that superficially look like they satisfy the measure but should NOT (draw from adjacent-topics list, aspirational-without-commitment phrasing, or generic environmental language).
 
 ## C7 — Coverage-explicit phrasing
 Coverage measures state the threshold in the title (e.g. "enterprise-wide OR ≥70% of portfolio") and include coverage_whitelist: ≥3 plain-language phrases that satisfy the threshold (e.g. ["across the group", "enterprise-wide", "all our operations"]).

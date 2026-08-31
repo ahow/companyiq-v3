@@ -499,23 +499,44 @@ export function validateC6(fw: FrameworkDraft): ValidationResult {
         message: `negative_examples must have ≥2 entries (found ${neg.length})`,
       });
     }
+    // Length cap: 800 chars per example. Real corporate disclosures on
+    // complex topics (TNFD/SBTN biodiversity, TCFD climate, modern-slavery
+    // policy paragraphs) routinely run 400–700 chars. 800 is comfortable
+    // headroom while still guarding against pasting whole reports.
+    // A 1200-char hard error catches obvious mistakes.
+    const CAP_WARN = 800;
+    const CAP_ERROR = 1200;
     for (const p of pos) {
-      if (p.length > 300) {
+      if (p.length > CAP_ERROR) {
+        violations.push({
+          measureId: m.measureId,
+          rule: "C6",
+          severity: "error",
+          message: `positive_example exceeds ${CAP_ERROR} characters (${p.length}) — likely pasted from a full report; trim to a single substantive commitment.`,
+        });
+      } else if (p.length > CAP_WARN) {
         violations.push({
           measureId: m.measureId,
           rule: "C6",
           severity: "warning",
-          message: `positive_example exceeds 300 characters (${p.length})`,
+          message: `positive_example longer than ${CAP_WARN} characters (${p.length}) — consider trimming to the specific substantive claim.`,
         });
       }
     }
     for (const n of neg) {
-      if (n.length > 300) {
+      if (n.length > CAP_ERROR) {
+        violations.push({
+          measureId: m.measureId,
+          rule: "C6",
+          severity: "error",
+          message: `negative_example exceeds ${CAP_ERROR} characters (${n.length}) — likely pasted from a full report; trim to a single misleading claim.`,
+        });
+      } else if (n.length > CAP_WARN) {
         violations.push({
           measureId: m.measureId,
           rule: "C6",
           severity: "warning",
-          message: `negative_example exceeds 300 characters (${n.length})`,
+          message: `negative_example longer than ${CAP_WARN} characters (${n.length}) — consider trimming to the specific misleading claim.`,
         });
       }
     }
