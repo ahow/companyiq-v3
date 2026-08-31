@@ -17,6 +17,7 @@ import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
 import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
 import { isCreditAlertActive, ProviderScoringError } from "./lib/credit-breaker.js";
+import { hasAnyLiveScoringProvider } from "./lib/ai-providers.js";
 import {
   classifyProviderError,
   pauseProvider,
@@ -196,12 +197,15 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
 
-  // CREDIT BREAKER PAUSE: if a credit-exhaustion alert is active system-wide, do
-  // NOT process (which would burn time/credits on 402s). Re-queue this job with a
-  // delay so that once credit is topped up — and the breaker auto-clears on a
-  // successful probe — the job resumes automatically. We DO NOT mark it failed or
-  // claim it, so no progress/attempt is lost.
-  if (process.env.CREDIT_PAUSE_ENABLED !== "false" && await isCreditAlertActive()) {
+  // CREDIT BREAKER PAUSE: only pause when the ENTIRE fallback chain is exhausted.
+  // A single provider hitting 402 raises an alert, but that alone should NOT halt
+  // the worker — the fallback chain (OpenRouter, DeepSeek, Claude, OpenAI, ...) can
+  // still carry the load. The correct pause condition is: alert active AND no
+  // scoring provider is live. This lets OpenRouter (with independent billing) act
+  // as the fail-safe route when a specific provider runs out of credit.
+  const alertActive = await isCreditAlertActive();
+  const noLiveProvider = alertActive && !hasAnyLiveScoringProvider();
+  if (process.env.CREDIT_PAUSE_ENABLED !== "false" && noLiveProvider) {
     if (!(cancelledBatches.has(batchId) || isBatchCancelledCached(batchId))) {
       const delayMs = parseInt(process.env.CREDIT_PAUSE_REQUEUE_MS || "60000", 10);
       try {
@@ -209,12 +213,12 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
         const q = getQueue();
         const jobIdStr = "batch-" + batchId + "-company-" + companyId + "-creditpause-" + Date.now();
         await q.add("analysis-creditpause-" + batchId + "-" + companyId, job.data, { delay: delayMs, priority: 1, jobId: jobIdStr });
-        console.warn("[Worker] CREDIT PAUSE active — job " + jobId + " re-queued with " + delayMs + "ms delay (not processed, no credits spent)");
+        console.warn("[Worker] ALL SCORING PROVIDERS EXHAUSTED — job " + jobId + " re-queued with " + delayMs + "ms delay (add credit to any provider incl. OpenRouter to resume)");
       } catch (err: any) {
         console.error("[Worker] Credit-pause re-enqueue failed for job " + jobId + ": " + err.message);
       }
     }
-    return { success: false, error: "Paused: credit exhausted", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+    return { success: false, error: "Paused: all scoring providers credit-exhausted", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
   // OFF-PEAK SCHEDULING GATE: If this batch is marked offPeakOnly and we are

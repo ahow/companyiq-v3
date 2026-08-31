@@ -499,6 +499,26 @@ export function getAvailableProviders(): AIProvider[] {
   return Array.from(providers.values()).filter((p) => p.isAvailable());
 }
 
+/**
+ * Returns true if at least one scoring provider is available AND has not been
+ * tripped (credit-exhausted) or paused. Used by the worker credit-pause gate
+ * to distinguish "one provider is out of credit" (keep working, fall through)
+ * from "the whole fallback chain is exhausted" (real pause).
+ *
+ * This is why the worker should NEVER pause on any single provider's alert:
+ * OpenRouter (and other independent-billing routes) can carry the load until
+ * the primary is topped up.
+ */
+export function hasAnyLiveScoringProvider(): boolean {
+  for (const [name, p] of providers) {
+    if (!p.isAvailable()) continue;
+    if (isProviderTripped(name)) continue;
+    if (isProviderPaused(name)) continue;
+    return true;
+  }
+  return false;
+}
+
 export function getProviderStatus(): Record<string, { available: boolean; model: string; family: string }> {
   const status: Record<string, { available: boolean; model: string; family: string }> = {};
   for (const [name, provider] of providers) {
