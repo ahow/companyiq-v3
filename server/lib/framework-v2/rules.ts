@@ -151,24 +151,32 @@ export function validateC1(fw: FrameworkDraft): ValidationResult {
         suggestion: `Add c1_achievement_guidance with yes_cases (achievement claims that entail a position), no_cases (factual outcomes without target-state language), and distinguishing_test.`,
       });
     } else {
-      const g = m.c1_achievement_guidance;
-      if (!Array.isArray(g.yes_cases) || g.yes_cases.length === 0) {
+      const g = m.c1_achievement_guidance as any;
+      // Accept either array-of-strings OR a single non-empty string. Some LLM
+      // outputs emit a single descriptive sentence rather than a list.
+      const yesOk =
+        (Array.isArray(g.yes_cases) && g.yes_cases.length > 0) ||
+        (typeof g.yes_cases === "string" && g.yes_cases.trim().length >= 10);
+      const noOk =
+        (Array.isArray(g.no_cases) && g.no_cases.length > 0) ||
+        (typeof g.no_cases === "string" && g.no_cases.trim().length >= 10);
+      if (!yesOk) {
         violations.push({
           measureId: m.measureId,
           rule: "C1",
           severity: "error",
-          message: "c1_achievement_guidance.yes_cases is empty",
+          message: "c1_achievement_guidance.yes_cases is empty (must be non-empty array or non-empty string)",
         });
       }
-      if (!Array.isArray(g.no_cases) || g.no_cases.length === 0) {
+      if (!noOk) {
         violations.push({
           measureId: m.measureId,
           rule: "C1",
           severity: "error",
-          message: "c1_achievement_guidance.no_cases is empty",
+          message: "c1_achievement_guidance.no_cases is empty (must be non-empty array or non-empty string)",
         });
       }
-      if (!g.distinguishing_test || g.distinguishing_test.length < 20) {
+      if (!g.distinguishing_test || String(g.distinguishing_test).length < 20) {
         violations.push({
           measureId: m.measureId,
           rule: "C1",
@@ -264,24 +272,42 @@ export function validateC4(fw: FrameworkDraft): ValidationResult {
       });
       continue;
     }
-    // Count numbered conditions (1) (2) (3) ...
-    const numbered = fb.match(/\(\d+\)/g) || [];
-    if (numbered.length < 3) {
+    // Count numbered conditions. Accept multiple styles: (1) (2), 1. 2., 1) 2),
+    // or list-array form if the LLM emitted an array. Bullet-style dashes are
+    // not accepted — conditions must be enumerable.
+    let conditions: Array<{ n: string; text: string }> = [];
+    if (Array.isArray(fb)) {
+      conditions = (fb as unknown as string[]).map((t, i) => ({ n: String(i + 1), text: String(t) }));
+    } else {
+      // Try parenthesised "(1)", then dotted "1." (allowing multi-line), then
+      // paren-suffix "1)".
+      const parenPattern = /\((\d+)\)\s*([\s\S]*?)(?=\(\d+\)|$)/g;
+      const dottedPattern = /(?:^|\n|\.\s)(\d+)\.\s+([\s\S]*?)(?=(?:^|\n|\.\s)\d+\.\s+|$)/g;
+      const suffixPattern = /(?:^|\n)(\d+)\)\s+([\s\S]*?)(?=(?:^|\n)\d+\)\s+|$)/g;
+      for (const pat of [parenPattern, dottedPattern, suffixPattern]) {
+        pat.lastIndex = 0;
+        const found: Array<{ n: string; text: string }> = [];
+        let match: RegExpExecArray | null;
+        while ((match = pat.exec(fb as string)) !== null) {
+          const text = String(match[2] || "").trim();
+          if (text.length >= 10) found.push({ n: match[1], text });
+        }
+        if (found.length >= 3) {
+          conditions = found;
+          break;
+        }
+        // Keep the best partial for reporting
+        if (found.length > conditions.length) conditions = found;
+      }
+    }
+    if (conditions.length < 3) {
       violations.push({
         measureId: m.measureId,
         rule: "C4",
         severity: "error",
-        message: `fallback_yes_criterion has ${numbered.length} numbered conditions; requires ≥3`,
+        message: `fallback_yes_criterion has ${conditions.length} numbered conditions; requires ≥3 (accepted formats: "(1) ...", "1. ...", or "1) ...")`,
       });
       continue;
-    }
-    // Every numbered condition must reference topicTerm or a synonym
-    // Match "(N) ... until next (N) or end"
-    const conditionPattern = /\((\d+)\)\s*([\s\S]*?)(?=\(\d+\)|$)/g;
-    let match: RegExpExecArray | null;
-    const conditions: Array<{ n: string; text: string }> = [];
-    while ((match = conditionPattern.exec(fb)) !== null) {
-      conditions.push({ n: match[1], text: match[2].trim() });
     }
     for (const c of conditions) {
       if (c.text.length < 20) continue; // skip empty / trivially short
@@ -491,15 +517,45 @@ export function validateC7(fw: FrameworkDraft): ValidationResult {
 
 export function validateC8(fw: FrameworkDraft): ValidationResult {
   const violations: Violation[] = [];
+  // Accept ANY of the following as evidence that the framework is
+  // vehicle-agnostic:
+  //   1. An explicit "any vehicle" / "any document" / "regardless of vehicle"
+  //      phrase in the substantive_definition, OR
+  //   2. The substantive_definition enumerates >=2 disclosure vehicles from a
+  //      known set (annual report, sustainability report, policy document,
+  //      website, code of conduct, KPI table, ESG report, etc.), OR
+  //   3. The measure has a disclosure_vehicles array with >=2 entries.
+  const VEHICLE_KEYWORDS = [
+    "annual report",
+    "sustainability report",
+    "esg report",
+    "policy document",
+    "code of conduct",
+    "kpi table",
+    "entity website",
+    "company website",
+    "corporate website",
+    "integrated report",
+    "proxy statement",
+    "10-k",
+    "annual filing",
+    "disclosure document",
+    "regulatory filing",
+  ];
+  const AGNOSTIC_PHRASES = /any vehicle|any disclosure vehicle|any document type|regardless of (the )?disclosure vehicle|regardless of the (report|vehicle|document|form)|whether disclosed in|any of the following (vehicles|documents|reports)/i;
   for (const m of fw.measures) {
-    const sd = m.substantive_definition || "";
-    if (!/any vehicle|any disclosure vehicle|any document type|regardless of (the )?disclosure vehicle/i.test(sd)) {
+    const sd = String(m.substantive_definition || "").toLowerCase();
+    const hasAgnosticPhrase = AGNOSTIC_PHRASES.test(sd);
+    const vehicleHits = VEHICLE_KEYWORDS.filter((v) => sd.includes(v)).length;
+    const hasDisclosureVehiclesField =
+      Array.isArray((m as any).disclosure_vehicles) && ((m as any).disclosure_vehicles as string[]).length >= 2;
+    if (!hasAgnosticPhrase && vehicleHits < 2 && !hasDisclosureVehiclesField) {
       violations.push({
         measureId: m.measureId,
         rule: "C8",
-        severity: "error",
-        message: "substantive_definition must include a vehicle-agnostic clause (\"any vehicle\" or equivalent)",
-        suggestion: "Add: 'Evidence may be disclosed in any vehicle — annual reports, sustainability reports, dedicated policy documents, code-of-conduct sections, KPI tables, or entity website — provided content substantively matches this measure.'",
+        severity: "warning",
+        message: `substantive_definition should describe vehicle-agnostic evidence acceptance (found ${vehicleHits} vehicle mentions and no explicit agnostic phrase).`,
+        suggestion: `Either add an explicit phrase like "disclosed in any vehicle" OR mention ≥2 disclosure vehicles (annual report, sustainability report, policy document, website, etc.) OR populate disclosure_vehicles: [...].`,
       });
     }
   }

@@ -241,12 +241,26 @@ test("C7 passes on coverage measure with 3+ whitelist entries and threshold in t
 
 // ─── C8 ──────────────────────────────────────────────────────────────────
 
-test("C8 fails when vehicle-agnostic clause is missing", () => {
+test("C8 warns when vehicle-agnostic clause is missing (soft check)", () => {
   const fw = goodFramework({
     measures: [goodMeasure({ substantive_definition: "Testing biodiversity policy. Adjacent topics: general environmental management, climate change strategy." })],
   });
   const r = validateC8(fw);
-  assert.equal(r.passed, false);
+  // C8 is now a soft warning — doesn't block validation, but should still surface a violation.
+  assert.equal(r.violations.length, 1);
+  assert.equal(r.violations[0].severity, "warning");
+  assert.equal(r.passed, true);
+});
+
+test("C8 passes when substantive_definition mentions >=2 disclosure vehicles", () => {
+  const fw = goodFramework({
+    measures: [goodMeasure({
+      substantive_definition: "This measure tests policy disclosure for nature and biodiversity. Evidence attributed to adjacent topics like climate change does NOT satisfy this measure. Evidence may appear in the annual report, sustainability report, or a dedicated policy document.",
+    })],
+  });
+  const r = validateC8(fw);
+  assert.equal(r.passed, true);
+  assert.equal(r.violations.length, 0);
 });
 
 // ─── C9 ──────────────────────────────────────────────────────────────────

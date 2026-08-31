@@ -148,6 +148,8 @@ export default function FrameworkBuilderV2Page() {
   const [draftJobStartTime, setDraftJobStartTime] = useState<number | null>(null);
   const [repairAttempts, setRepairAttempts] = useState<number>(0);
   const [truncationRecovered, setTruncationRecovered] = useState<boolean>(false);
+  const [testDriveListId, setTestDriveListId] = useState<number | null>(null);
+  const [testDriveListName, setTestDriveListName] = useState<string | null>(null);
 
   async function draftFramework() {
     if (!intake?.topicTerm) {
@@ -235,8 +237,8 @@ export default function FrameworkBuilderV2Page() {
     }
   }
 
-  async function saveFramework(productionReady: boolean) {
-    if (!draft || !intake) return;
+  async function saveFramework(productionReady: boolean): Promise<number | null> {
+    if (!draft || !intake) return null;
     setError(null);
     setLoading(true);
     try {
@@ -251,6 +253,51 @@ export default function FrameworkBuilderV2Page() {
         }),
       });
       setSavedFrameworkId(res.frameworkId);
+      setStage("saved");
+      return res.frameworkId as number;
+    } catch (err: any) {
+      setError(err?.message || String(err));
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runTestDriveScoring() {
+    if (!draft || !intake || !testDriveCompanies || testDriveCompanies.length === 0) return;
+    setError(null);
+    setLoading(true);
+    try {
+      // 1. Save framework as draft first so we have a frameworkId.
+      let fwId = savedFrameworkId;
+      if (!fwId) {
+        const save = await api.request("/framework-builder/v2/save", {
+          method: "POST",
+          body: JSON.stringify({ draft, intake, productionReady: false }),
+        });
+        fwId = save.frameworkId as number;
+        setSavedFrameworkId(fwId);
+      }
+      // 2. Create companies + list.
+      const run = await api.request("/framework-builder/v2/test-drive/run", {
+        method: "POST",
+        body: JSON.stringify({
+          frameworkId: fwId,
+          frameworkName: draft.framework?.name,
+          companies: testDriveCompanies,
+        }),
+      });
+      // 3. Kick off /api/analyze against the new list + framework.
+      await api.request("/analyze", {
+        method: "POST",
+        body: JSON.stringify({
+          frameworkId: fwId,
+          listId: run.listId,
+        }),
+      });
+      // 4. Advance UI to the saved stage; user can go watch progress on Results.
+      setTestDriveListId(run.listId);
+      setTestDriveListName(run.listName);
       setStage("saved");
     } catch (err: any) {
       setError(err?.message || String(err));
@@ -427,6 +474,7 @@ export default function FrameworkBuilderV2Page() {
               companies={testDriveCompanies || []}
               onBack={() => setStage("review")}
               onSaveWithoutTestDrive={() => saveFramework(false)}
+              onRunTestDrive={runTestDriveScoring}
               loading={loading}
             />
           )}
@@ -435,12 +483,22 @@ export default function FrameworkBuilderV2Page() {
             <div className="bg-green-50 dark:bg-green-900/20 border border-green-300 dark:border-green-800 rounded-lg p-6">
               <div className="flex items-center gap-2 mb-2">
                 <CheckCircle2 className="w-6 h-6 text-green-600" />
-                <h2 className="text-xl font-semibold">Framework saved</h2>
+                <h2 className="text-xl font-semibold">Framework saved{testDriveListId ? " and test-drive started" : ""}</h2>
               </div>
               <p>
                 Framework ID <code>{savedFrameworkId}</code> saved to your workspace with <code>builder_version=v2</code>.
                 It appears in your Frameworks list and can be used to score companies through the existing pipeline.
               </p>
+              {testDriveListId && (
+                <div className="mt-3 p-3 bg-white dark:bg-gray-800 rounded border border-green-300 dark:border-green-700 text-sm">
+                  <div className="font-medium text-gray-900 dark:text-gray-100 mb-1">Test-drive scoring in progress</div>
+                  <div className="text-gray-600 dark:text-gray-400">
+                    Created list: <code>{testDriveListName}</code> (id {testDriveListId}) with {testDriveCompanies?.length || 0} companies.
+                    Scoring has been dispatched — view live progress on the Results page. Depending on
+                    the framework size, scoring 10 companies typically takes 15–30 minutes.
+                  </div>
+                </div>
+              )}
               <div className="mt-4 flex gap-2">
                 <button onClick={reset} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg">
                   Build another
@@ -751,20 +809,23 @@ function TestDriveReview({
   companies,
   onBack,
   onSaveWithoutTestDrive,
+  onRunTestDrive,
   loading,
 }: {
   companies: TestDriveCandidate[];
   onBack: () => void;
   onSaveWithoutTestDrive: () => void;
+  onRunTestDrive: () => void;
   loading: boolean;
 }) {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-6">
       <h2 className="text-xl font-semibold mb-4">Proposed test-drive sample</h2>
       <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        The LLM has proposed 10 companies for a test-drive scoring run. Review, then either save
-        as draft to run the scoring separately, or proceed to save as production-ready without
-        test-drive (not recommended for new frameworks).
+        The LLM proposed 10 companies for a test-drive scoring run. Review, then hit
+        <strong> Save framework and run test-drive</strong> to save the framework as a draft, create these
+        companies (if new) in a fresh list, and kick off scoring immediately. You can watch
+        progress on the Results page.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {companies.map((c, i) => (
@@ -789,23 +850,29 @@ function TestDriveReview({
           </div>
         ))}
       </div>
-      <div className="mt-6 flex gap-2 justify-end">
+      <div className="mt-6 flex flex-wrap gap-2 justify-end">
         <button onClick={onBack} className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg">
           Back to draft review
         </button>
         <button
           onClick={onSaveWithoutTestDrive}
           disabled={loading}
-          className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg"
+          className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg"
         >
           Save framework (skip scoring)
         </button>
+        <button
+          onClick={onRunTestDrive}
+          disabled={loading}
+          className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-1"
+        >
+          <Play className="w-4 h-4" /> Save framework and run test-drive
+        </button>
       </div>
       <div className="mt-4 text-xs text-gray-500">
-        Note: this initial UI shows the sample but does not automatically run the 10-company
-        scoring. To run test-drive scoring, save the framework as draft first, then use the
-        existing scoring interface with the proposed company list. Full automated test-drive
-        orchestration is a follow-up.
+        “Save framework and run test-drive” creates any missing companies, groups them in a new
+        list, and dispatches scoring against the newly-saved framework. Scoring runs
+        asynchronously — you can leave this page and return to Results later.
       </div>
     </div>
   );

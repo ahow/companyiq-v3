@@ -729,6 +729,76 @@ router.post("/v2/test-drive/select", async (req: Request, res: Response) => {
   }
 });
 
+// ─── POST /v2/test-drive/run — create companies + list, kick off scoring ───
+// Frontend calls this AFTER /v2/save (which returns a frameworkId) and
+// /v2/test-drive/select (which returned the 10 candidate companies).
+// The endpoint:
+//   1. Ensures each proposed company exists in the workspace (create if missing)
+//   2. Creates a new company list "Test-drive: <framework name>"
+//   3. Adds the companies to the list
+//   4. Returns { listId, companyIds } so the client can POST /api/analyze itself
+// We do not call /analyze internally because it depends on session context and
+// req.body shape that varies with the caller.
+
+router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const { frameworkId, companies, frameworkName } = req.body as {
+      frameworkId: number;
+      frameworkName?: string;
+      companies: Array<{ name: string; ticker?: string; sector?: string; country?: string }>;
+    };
+    if (!frameworkId || !Array.isArray(companies) || companies.length === 0) {
+      return res.status(400).json({ error: "frameworkId and companies[] required" });
+    }
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+
+    // 1. For each proposed company, either find existing (by exact name match)
+    //    or create. Company creation is idempotent-ish: duplicate names are OK,
+    //    the test-drive just uses whichever record exists first.
+    const companyIds: number[] = [];
+    for (const c of companies) {
+      const existing = await db.execute(sql`
+        SELECT id FROM companies
+        WHERE workspace_id = ${ctx.workspaceId} AND LOWER(name) = LOWER(${c.name})
+        LIMIT 1
+      `);
+      const existingRow = (existing as any).rows?.[0];
+      if (existingRow?.id) {
+        companyIds.push(existingRow.id);
+        continue;
+      }
+      const created = await storage.createCompany({
+        workspaceId: ctx.workspaceId,
+        name: c.name,
+        ticker: c.ticker || null,
+        sector: c.sector || null,
+        country: c.country || null,
+      } as any);
+      companyIds.push((created as any).id);
+    }
+
+    // 2. Create a test-drive list.
+    const listName = `Test-drive: ${frameworkName || "framework " + frameworkId} — ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+    const list = await storage.createCompanyList(ctx.workspaceId, listName, "Auto-generated v2 test-drive sample");
+    // 3. Add companies to the list.
+    for (const cid of companyIds) {
+      try { await storage.addCompanyToList((list as any).id, cid); } catch { /* dup add — ignore */ }
+    }
+
+    return res.json({
+      listId: (list as any).id,
+      listName,
+      companyIds,
+      companyCount: companyIds.length,
+      hint: "POST /api/analyze with { frameworkId, listId } to kick off scoring, or navigate to Results with these IDs.",
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /test-drive/run] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error", stack: err?.stack });
+  }
+});
+
 // ─── POST /v2/test-drive/analyse — analyse scored test-drive results ─────
 // Caller passes company-level results already produced by the existing pipeline.
 // This endpoint applies flag rules and returns a fix plan.
