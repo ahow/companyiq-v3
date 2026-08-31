@@ -143,7 +143,7 @@ function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft
 // Chunk-drafting threshold. Set conservatively: even 25 measures with rich
 // C1-C10 fields regularly hits Claude's ~32K output-token ceiling in a single
 // call. Anything at or above 20 gets chunked for safety.
-const CHUNKED_DRAFT_THRESHOLD = Number(process.env.FRAMEWORK_V2_CHUNK_THRESHOLD || 20);
+const CHUNKED_DRAFT_THRESHOLD = Number(process.env.FRAMEWORK_V2_CHUNK_THRESHOLD || 15);
 
 // Robust JSON extractor + parser used across all drafting phases. Handles
 // fenced ```json blocks, bare JSON, and truncation-recovery.
