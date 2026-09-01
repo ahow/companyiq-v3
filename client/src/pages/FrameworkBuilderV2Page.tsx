@@ -187,7 +187,14 @@ export default function FrameworkBuilderV2Page() {
 
   // Persist state SERVER-side too, so switching browser or clearing local storage
   // still lets the user resume via the Framework page's 'Continue in v2 builder' link.
+  //
+  // GUARD: skip the save until the initial deep-link load has completed. Without
+  // this guard, mount fires the effect once with default stage='intake' BEFORE
+  // the /v2/state/load response arrives, and we would clobber the DB with
+  // stage='intake' every time the user opens a resume URL.
+  const [hasHydrated, setHasHydrated] = useState(false);
   useEffect(() => {
+    if (!hasHydrated) return;
     if (savedFrameworkId == null) return;
     (async () => {
       try {
@@ -197,12 +204,16 @@ export default function FrameworkBuilderV2Page() {
         });
       } catch (e) { /* non-fatal; localStorage still works */ }
     })();
-  }, [savedFrameworkId, stage, testDriveListId, testDriveListName]);
+  }, [savedFrameworkId, stage, testDriveListId, testDriveListName, hasHydrated]);
 
   // On mount: check URL params for ?frameworkId= (deep-link from Framework page's
   // 'Continue in v2 builder' action). If present, load server-side state.
   // Otherwise if we restored saved-framework state from localStorage but the
   // stage is still "intake", jump the user straight to the results view.
+  //
+  // Order matters: we set hasHydrated=true only AFTER the initial state read
+  // completes, so the persistence effect above can't clobber the DB before
+  // we know what state to persist.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const fwId = params.get("frameworkId");
@@ -221,10 +232,15 @@ export default function FrameworkBuilderV2Page() {
           }
         } catch (e: any) {
           setError(`Failed to restore framework ${fwId}: ${e?.message || e}`);
+        } finally {
+          setHasHydrated(true);
         }
       })();
-    } else if (savedFrameworkId && testDriveListId && stage === "intake") {
-      setStage("saved");
+    } else {
+      if (savedFrameworkId && testDriveListId && stage === "intake") {
+        setStage("saved");
+      }
+      setHasHydrated(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
