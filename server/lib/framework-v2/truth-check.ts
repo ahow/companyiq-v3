@@ -148,13 +148,18 @@ export async function runTruthCheck(input: TruthCheckInput): Promise<TruthCheckR
   }
   const json: any = await resp.json();
   const message = json?.choices?.[0]?.message?.content || "";
-  const citations: Array<any> = json?.citations || [];
 
-  // Extract sources — Sonar via OpenRouter typically returns a flat array of URL strings.
-  const sources: TruthCheckSource[] = citations
+  // OpenRouter surfaces Perplexity/Sonar citations in `message.annotations[]`
+  // as { type: "url_citation", url_citation: { url, title } }. Older shape used
+  // top-level `citations` (kept as fallback). We accept either.
+  const annotations: Array<any> = json?.choices?.[0]?.message?.annotations || [];
+  const legacyCitations: Array<any> = json?.citations || [];
+  const rawSources: Array<any> = annotations.length ? annotations : legacyCitations;
+  const sources: TruthCheckSource[] = rawSources
     .map((c: any) => {
       if (typeof c === "string") return { url: c };
-      if (c && typeof c === "object" && typeof c.url === "string") return { url: c.url, title: c.title };
+      if (c?.url_citation?.url) return { url: c.url_citation.url, title: c.url_citation.title };
+      if (typeof c?.url === "string") return { url: c.url, title: c.title };
       return null;
     })
     .filter(Boolean) as TruthCheckSource[];
