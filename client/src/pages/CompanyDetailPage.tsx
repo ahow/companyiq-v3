@@ -187,9 +187,10 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                               <span className={`text-xs px-2 py-0.5 rounded-full ${
                                 m.confidence === "High" ? "bg-green-100 text-green-700" :
                                 m.confidence === "Medium" ? "bg-yellow-100 text-yellow-700" :
+                                m.confidence === "Review-required" ? "bg-red-100 text-red-700" :
                                 "bg-gray-100 text-gray-600"
-                              }`}>
-                                {m.confidence}
+                              }`} title={m.confidence === "Review-required" ? "Cascade: DeepSeek, GLM, and Claude produced three different verdicts — analyst review recommended." : undefined}>
+                                {m.confidence === "Review-required" ? "Review" : m.confidence}
                               </span>
                             </div>
                           </div>

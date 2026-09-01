@@ -130,6 +130,11 @@ interface AnalysisSettings {
   // v3e (Section 4): verdict cache is OPT-IN BY DEFAULT (ON). Set
   // verdict_cache_enabled="false" to force fresh scoring for variability studies.
   verdictCacheEnabled: boolean;
+  // I80: Cross-architecture cascade (DeepSeek → GLM → Claude arbiter)
+  scoringCascade: boolean;
+  cascadePrimary: string;
+  cascadeSecondary: string;
+  cascadeArbiter: string;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -148,6 +153,10 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     crossVerifyEnabled: settings.cross_verify_enabled === "true",
     scoringMode: settings.scoring_mode || "binary",
     lowConfidenceHandling: settings.low_confidence_handling || "downgrade",
+    scoringCascade: settings.scoring_cascade === "true",
+    cascadePrimary: settings.cascade_primary || "deepseek",
+    cascadeSecondary: settings.cascade_secondary || "glm-4.6",
+    cascadeArbiter: settings.cascade_arbiter || "claude-arbiter",
     // v3g (Bug 1 §3 action 5): verdict cache is now OPT-IN (default OFF) until the
     // fingerprint contract is independently re-verified. The cost of recomputing a
     // few measures per re-run is trivial vs the risk of cross-company verdict reuse
@@ -2456,6 +2465,27 @@ async function scoreWithEnsemble(opts: {
 }): Promise<MeasureResult> {
   const { companyName, companyId, measure, evidenceText, terminology, topicDescription, settings, temporalWarning, framework } = opts;
 
+  // ─── Cascade mode (I80): DeepSeek → GLM → Claude arbiter ─────────────────
+  // When enabled, replaces the classic same-provider self-consistency loop
+  // with a cross-architecture cascade:
+  //   1. Score with primary (DeepSeek)
+  //   2. Score with secondary (GLM-4.6) — different training data & architecture
+  //   3. If verdicts agree → High confidence, done (~80% of cells)
+  //      If verdicts disagree → fire Claude Sonnet 4.5 as arbiter
+  //        a. If Claude matches one of them → Medium confidence, 2-of-3 majority
+  //        b. If Claude produces a third distinct verdict → flag for review
+  // Enabled via SCORING_CASCADE=1 or workspace_settings.scoring_cascade=true.
+  const cascadeEnabled = (process.env.SCORING_CASCADE || "0") === "1"
+    || settings.scoringCascade === true;
+
+  if (cascadeEnabled) {
+    return scoreWithCascade({
+      companyName, companyId, measure, evidenceText, terminology,
+      topicDescription, settings, temporalWarning, framework,
+    });
+  }
+
+  // ─── Classic ensemble (same-provider or rotating-provider self-consistency) ─
   const providers = [settings.pipelineLlm1, settings.pipelineLlm2, settings.pipelineLlm3];
   const iterations = Math.min(settings.ensembleIterations, providers.length);
 
@@ -2513,6 +2543,123 @@ async function scoreWithEnsemble(opts: {
     (a.evidenceSummary?.length || 0) > (b.evidenceSummary?.length || 0) ? a : b
   );
   return best;
+}
+
+// ─── Cascade scoring (I80) ─────────────────────────────────────────
+async function scoreWithCascade(opts: {
+  companyName: string;
+  companyId?: number;
+  measure: FrameworkMeasure;
+  evidenceText: string;
+  terminology?: TerminologyMap;
+  topicDescription: string;
+  settings: AnalysisSettings;
+  temporalWarning?: string | null;
+  framework?: Framework;
+}): Promise<MeasureResult> {
+  const { companyName, companyId, measure, evidenceText, terminology, topicDescription, settings, temporalWarning, framework } = opts;
+
+  const primary = settings.cascadePrimary || "deepseek";
+  const secondary = settings.cascadeSecondary || "glm-4.6";
+  const arbiter = settings.cascadeArbiter || "claude-arbiter";
+
+  const scoreOne = async (provider: string): Promise<MeasureResult> => scoreSingleMeasure({
+    companyName, companyId, measure, evidenceText, terminology,
+    topicDescription, provider, temporalWarning,
+    scoringMode: settings.scoringMode, framework,
+  });
+
+  // Stage 1 + Stage 2 in parallel (each is one LLM call; run concurrently to halve latency)
+  const [stage1, stage2] = await Promise.all([scoreOne(primary), scoreOne(secondary)]);
+
+  const s1 = stage1.score;
+  const s2 = stage2.score;
+
+  // ─── Agreement (~80% of cells) ──────────────────────────────────
+  if (s1 === s2) {
+    // Pick the richer result as the canonical one: prefer positive verdicts with quotes
+    const withQuotes = [stage1, stage2].filter(r => r.quotes.length > 0);
+    const canonical = withQuotes.length > 0
+      ? withQuotes.reduce((a, b) => (b.quotes.length > a.quotes.length ? b : a))
+      : stage1;
+
+    // Merge quotes from both providers to give the analyst the fullest evidence
+    const allQuotes = [...stage1.quotes, ...stage2.quotes];
+    const uniqueQuotes = allQuotes.filter(
+      (q, idx) => allQuotes.findIndex((oq) => oq.text === q.text) === idx
+    );
+
+    return {
+      ...canonical,
+      quotes: uniqueQuotes,
+      confidence: "High",
+      _gradedBy: `${primary}+${secondary}`,
+      _cascade: { stage: "agreed", providers: [primary, secondary], votes: [s1, s2] },
+    } as MeasureResult & { _gradedBy?: string; _cascade?: any };
+  }
+
+  // ─── Disagreement (~15-20% of cells) → Claude arbiter ──────────────────
+  const stage3 = await scoreOne(arbiter);
+  const s3 = stage3.score;
+
+  const votes = [s1, s2, s3];
+  const uniqueScores = Array.from(new Set(votes));
+
+  if (uniqueScores.length === 3) {
+    // Three-way split — flag for analyst review, no auto-verdict
+    // Return the arbiter's result as the tentative one but mark low confidence
+    const allQuotes = [...stage1.quotes, ...stage2.quotes, ...stage3.quotes];
+    const uniqueQuotes = allQuotes.filter(
+      (q, idx) => allQuotes.findIndex((oq) => oq.text === q.text) === idx
+    );
+    return {
+      ...stage3,
+      quotes: uniqueQuotes,
+      confidence: "Review-required",
+      verdictNuance: `Three-way split: ${primary}=${verdictLabel(s1)}, ${secondary}=${verdictLabel(s2)}, ${arbiter}=${verdictLabel(s3)}. Analyst review recommended.`,
+      _gradedBy: `${primary}+${secondary}+${arbiter}(3-way)`,
+      _cascade: { stage: "3-way", providers: [primary, secondary, arbiter], votes },
+    } as MeasureResult & { _gradedBy?: string; _cascade?: any };
+  }
+
+  // 2-of-3 majority. Find the score that appears at least twice.
+  const majorityScore = votes.find((v) => votes.filter((x) => x === v).length >= 2)!;
+  const majorityResults = [stage1, stage2, stage3].filter((r) => r.score === majorityScore);
+
+  // Prefer the majority result with the richest quotes as canonical
+  const withQuotes = majorityResults.filter(r => r.quotes.length > 0);
+  const canonical = withQuotes.length > 0
+    ? withQuotes.reduce((a, b) => (b.quotes.length > a.quotes.length ? b : a))
+    : majorityResults[0];
+
+  const allQuotes = majorityResults.flatMap((r) => r.quotes);
+  const uniqueQuotes = allQuotes.filter(
+    (q, idx) => allQuotes.findIndex((oq) => oq.text === q.text) === idx
+  );
+
+  // Which of primary/secondary did the arbiter side with?
+  const arbiterSidedWith = s3 === s1 ? primary : (s3 === s2 ? secondary : "neither");
+
+  return {
+    ...canonical,
+    quotes: uniqueQuotes,
+    confidence: "Medium",
+    verdictNuance: canonical.verdictNuance
+      || `Arbiter (${arbiter}) sided with ${arbiterSidedWith} on this verdict.`,
+    _gradedBy: `${primary}+${secondary}+${arbiter}(arbiter→${arbiterSidedWith})`,
+    _cascade: {
+      stage: "arbiter",
+      providers: [primary, secondary, arbiter],
+      votes,
+      arbiterSidedWith,
+    },
+  } as MeasureResult & { _gradedBy?: string; _cascade?: any };
+}
+
+function verdictLabel(score: number): string {
+  if (score === 1) return "Yes";
+  if (score === 0.5) return "Partial";
+  return "No";
 }
 
 // ─── Summary Narrative Generation ────────────────────────────────────────────

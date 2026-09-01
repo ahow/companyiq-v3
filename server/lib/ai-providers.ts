@@ -473,6 +473,38 @@ function initProviders() {
   });
   providers.set("deepseek-r1", deepseekR1);
 
+  // ─── GLM-4.6 via OpenRouter ─────────────────────────────────────────────
+  // Cascade stage 2: second opinion from a different architecture family
+  // (Zhipu, Chinese-hosted, distinct from DeepSeek). $0.60/M in, $2.20/M out
+  // on OpenRouter — near-Claude quality at ~1/7 the price. 200K context.
+  const glm46 = new OpenAICompatibleProvider({
+    name: "glm-4.6",
+    model: "z-ai/glm-4.6",
+    family: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    seed: 42,
+    maxOutputTokens: 16384,
+    extraHeaders: openrouterHeaders,
+  });
+  providers.set("glm-4.6", glm46);
+
+  // ─── Claude Sonnet 4.5 via OpenRouter — cascade arbiter ────────────────
+  // Stage 3 tiebreaker only. Fires ~15-20% of measures when DeepSeek + GLM
+  // disagree. Routed via OpenRouter so we don't need a separate Anthropic key.
+  // $3/M in, $15/M out — kept off the bulk path.
+  const claudeArbiter = new OpenAICompatibleProvider({
+    name: "claude-arbiter",
+    model: "anthropic/claude-sonnet-4.5",
+    family: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    seed: 42,
+    maxOutputTokens: 16384,
+    extraHeaders: openrouterHeaders,
+  });
+  providers.set("claude-arbiter", claudeArbiter);
+
   // Kimi (moonshot supports up to 4K output tokens)
   // KIMI_API_KEY must be set via environment variable
   const kimi = new OpenAICompatibleProvider({
