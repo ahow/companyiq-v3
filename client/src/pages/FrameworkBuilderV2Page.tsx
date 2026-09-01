@@ -1150,7 +1150,7 @@ interface TruthFinding {
 // Quotes returned by the server can be plain strings (truth-check output) OR
 // objects {text, source} (measure_scores.quotes JSONB shape). Normalise in the
 // UI so we never call .length/.slice on undefined.
-type QuoteLike = string | { text?: string; source?: string } | any;
+type QuoteLike = string | { text?: string; source?: string; sourceUrl?: string } | any;
 
 function quoteText(q: QuoteLike): string {
   if (typeof q === "string") return q;
@@ -1160,6 +1160,38 @@ function quoteText(q: QuoteLike): string {
 function quoteSource(q: QuoteLike): string | undefined {
   if (q && typeof q === "object" && typeof q.source === "string") return q.source;
   return undefined;
+}
+
+interface RetrievalDiagnostic {
+  chunks: number;
+  chars: number;
+  topicHits: number;
+  topChunks: Array<{ url: string; title: string; score: number }>;
+  docBreakdown: Array<{ docUrl: string; chunkCount: number }>;
+}
+
+// If a quote is a retrieval-diagnostic pack (stored when the scorer returned
+// No), parse the embedded JSON string and return a structured summary.
+function parseRetrievalDiagnostic(q: QuoteLike): RetrievalDiagnostic | null {
+  if (!q || typeof q !== "object") return null;
+  if (q.source !== "retrieval-diagnostic") return null;
+  try {
+    const data = JSON.parse(String(q.text || ""));
+    return {
+      chunks: Number(data.chunks || 0),
+      chars: Number(data.chars || 0),
+      topicHits: Number(data.topicHits || 0),
+      topChunks: (data.topChunks || []).map((c: any) => ({
+        url: String(c.u || ""),
+        title: String(c.t || ""),
+        score: Number(c.s || 0),
+      })),
+      docBreakdown: (data.docBreakdown || []).map((d: any) => ({
+        docUrl: String(d.docUrl || ""),
+        chunkCount: Number(d.chunkCount || 0),
+      })),
+    };
+  } catch { return null; }
 }
 
 interface MeasureDrillRow {
@@ -1623,49 +1655,97 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
                           <div className="text-xs text-gray-500 flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" /> Loading quotes…</div>
                         )}
                         {drillRows[p.measureId] && (
-                          <div className="space-y-1.5 text-xs">
+                          <div className="space-y-2 mt-2">
                             {drillRows[p.measureId].map((row, ri) => {
                               const truthKey = `${p.measureId}::${row.companyId}`;
                               const truth = truthResults[truthKey] || row.truth || null;
                               const truthErr = truthErrors[truthKey];
                               const truthBusy = truthLoading[truthKey];
                               const agree = truth && truth.verdict === row.verdict;
+                              const firstDiag = row.quotes.map(parseRetrievalDiagnostic).find(Boolean) || null;
+                              const realQuotes = row.quotes.filter((q) => !parseRetrievalDiagnostic(q));
                               return (
-                                <div key={ri} className="pl-3 border-l-2 border-gray-200 dark:border-gray-600 pb-2">
-                                  <div className="flex items-start justify-between gap-2">
-                                    <div className="font-medium">
-                                      {row.companyName}
-                                      <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] ${row.verdict === "Yes" ? "bg-green-100 text-green-800" : row.verdict === "Partial" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-700"}`}>app: {row.verdict}</span>
-                                      <span className="ml-2 text-gray-500">confidence: {row.confidence}</span>
+                                <div key={ri} className="p-3 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                                  {/* Header row — company + app verdict + Explore truth button */}
+                                  <div className="flex items-start justify-between gap-3 pb-2 border-b border-gray-100 dark:border-gray-700">
+                                    <div className="flex items-baseline gap-2 flex-wrap">
+                                      <span className="font-medium text-gray-900 dark:text-gray-100">{row.companyName}</span>
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${row.verdict === "Yes" ? "bg-green-100 text-green-800" : row.verdict === "Partial" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-700"}`}>app: {row.verdict}</span>
+                                      <span className="text-[11px] text-gray-500">confidence {row.confidence}</span>
                                     </div>
                                     <button
                                       onClick={() => void runTruthCheck(p.measureId, row.companyId, !!truth)}
                                       disabled={truthBusy}
-                                      className={`px-2 py-0.5 rounded text-[10px] font-medium border ${truthBusy ? "bg-gray-100 text-gray-400 border-gray-300" : "bg-white hover:bg-blue-50 border-blue-300 text-blue-700"} flex items-center gap-1 whitespace-nowrap`}
+                                      className={`px-2 py-1 rounded text-[11px] font-medium border ${truthBusy ? "bg-gray-100 text-gray-400 border-gray-300" : "bg-white hover:bg-blue-50 border-blue-300 text-blue-700"} flex items-center gap-1 whitespace-nowrap`}
                                       title={truth ? "Re-run independent Perplexity search for this cell" : "Run independent Perplexity search against the company's primary reports"}
                                     >
-                                      {truthBusy ? <><Loader2 className="w-2.5 h-2.5 animate-spin" /> Checking…</> : truth ? "↻ Re-check truth" : "🔎 Explore truth"}
+                                      {truthBusy ? <><Loader2 className="w-3 h-3 animate-spin" /> Checking…</> : truth ? "↻ Re-check truth" : "🔎 Explore truth"}
                                     </button>
                                   </div>
-                                  {row.quotes.length === 0 ? (
-                                    <div className="italic text-gray-500 mt-1">no app quotes returned</div>
-                                  ) : (
-                                    <ul className="list-disc pl-5 text-gray-700 dark:text-gray-300 mt-1">
-                                      {row.quotes.slice(0, 3).map((q, qi) => {
-                                        const t = quoteText(q);
-                                        const src = quoteSource(q);
-                                        return (
-                                          <li key={qi}>
-                                            "{t.length > 300 ? t.slice(0, 300) + "…" : t}"
-                                            {src && <span className="ml-1 text-gray-400 italic">— {src}</span>}
-                                          </li>
-                                        );
-                                      })}
-                                      {row.quotes.length > 3 && (<li className="italic text-gray-500">+ {row.quotes.length - 3} more</li>)}
-                                    </ul>
-                                  )}
+
+                                  {/* Nuance from app scorer, if any */}
                                   {row.nuance && (
-                                    <div className="mt-0.5 italic text-gray-500">nuance: {row.nuance.length > 200 ? row.nuance.slice(0, 200) + "…" : row.nuance}</div>
+                                    <div className="mt-2 text-[11px] text-gray-600 dark:text-gray-400">
+                                      <span className="font-medium">Scorer note:</span> {row.nuance.length > 400 ? row.nuance.slice(0, 400) + "…" : row.nuance}
+                                    </div>
+                                  )}
+
+                                  {/* Real quotes (if the measure surfaced any) */}
+                                  {realQuotes.length > 0 && (
+                                    <div className="mt-2">
+                                      <div className="text-[11px] font-medium text-gray-600 dark:text-gray-400 mb-1">Passages the app used</div>
+                                      <ul className="space-y-1.5">
+                                        {realQuotes.slice(0, 3).map((q, qi) => {
+                                          const t = quoteText(q);
+                                          const src = quoteSource(q);
+                                          return (
+                                            <li key={qi} className="pl-3 border-l-2 border-blue-200 dark:border-blue-800 text-[11px]">
+                                              <div className="text-gray-700 dark:text-gray-300">"{t.length > 300 ? t.slice(0, 300) + "…" : t}"</div>
+                                              {src && <div className="text-[10px] text-gray-500 italic mt-0.5">source: {src}</div>}
+                                            </li>
+                                          );
+                                        })}
+                                        {realQuotes.length > 3 && (<li className="italic text-[11px] text-gray-500">+ {realQuotes.length - 3} more</li>)}
+                                      </ul>
+                                    </div>
+                                  )}
+
+                                  {/* Retrieval diagnostic (when scorer returned No without evidence) */}
+                                  {firstDiag && (
+                                    <details className="mt-2 text-[11px]">
+                                      <summary className="cursor-pointer text-gray-600 dark:text-gray-400 hover:text-gray-800">
+                                        ▸ Retrieval diagnostic: no supporting evidence found
+                                        <span className="ml-1 text-gray-400">({firstDiag.chunks} chunks scanned, {firstDiag.topicHits} topic hits across {firstDiag.docBreakdown.length} docs)</span>
+                                      </summary>
+                                      <div className="mt-1.5 pl-3 border-l-2 border-gray-200 dark:border-gray-600 space-y-1.5">
+                                        {firstDiag.docBreakdown.length > 0 && (
+                                          <div>
+                                            <div className="font-medium text-gray-600">Documents scanned:</div>
+                                            <ul className="list-disc pl-5">
+                                              {firstDiag.docBreakdown.slice(0, 8).map((d, di) => (
+                                                <li key={di}>
+                                                  <a href={d.docUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline break-all">{d.docUrl.length > 90 ? d.docUrl.slice(0, 90) + "…" : d.docUrl}</a>
+                                                  <span className="ml-1 text-gray-500">({d.chunkCount} chunks)</span>
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        )}
+                                        {firstDiag.topChunks.length > 0 && (
+                                          <div>
+                                            <div className="font-medium text-gray-600">Top-scored chunks retriever considered:</div>
+                                            <ul className="list-disc pl-5">
+                                              {firstDiag.topChunks.slice(0, 5).map((c, ci) => (
+                                                <li key={ci}>
+                                                  <span className="text-gray-700 dark:text-gray-300">{c.title || "(untitled)"}</span>
+                                                  <span className="ml-1 text-gray-500">(score {c.score.toFixed(1)})</span>
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </details>
                                   )}
                                   {truthErr && (
                                     <div className="mt-1 text-red-600 text-xs">Truth-check error: {truthErr}</div>
