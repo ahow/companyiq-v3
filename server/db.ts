@@ -212,6 +212,28 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v2_iter_fw_list ON framework_v2_iterations(framework_id, list_id, iteration_number)`);
 
+    // Framework Creation v2 truth-check findings. One row per (framework, company, measure)
+    // representing the independent Perplexity truth check. Multiple runs replace the
+    // prior row so the DB always has the LATEST truth-check for a given cell.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS framework_v2_truth_findings (
+        id SERIAL PRIMARY KEY,
+        framework_id INTEGER NOT NULL REFERENCES frameworks(id) ON DELETE CASCADE,
+        company_id INTEGER NOT NULL,
+        measure_id TEXT NOT NULL,
+        verdict TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+        reasoning TEXT,
+        quotes JSONB,
+        sources JSONB,
+        provider TEXT,
+        model_id TEXT,
+        checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (framework_id, company_id, measure_id)
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v2_truth_fw ON framework_v2_truth_findings(framework_id, measure_id)`);
+
     // ─── Companies ──────────────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS companies (

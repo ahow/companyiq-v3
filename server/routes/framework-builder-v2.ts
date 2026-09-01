@@ -17,6 +17,7 @@ import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
 import { diagnoseRootCauses, type CompanyCorpusStats } from "../lib/framework-v2/root-cause-diagnostic.js";
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import { batchTightenDefinitions, batchAppendExclusions, batchRegenerateExamples, groupProposalsByPatch, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
+import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -1208,6 +1209,108 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
 // Caller passes company-level results already produced by the existing pipeline.
 // This endpoint applies flag rules and returns a fix plan.
 
+// ─── POST /v2/truth-check ── independent Perplexity verification of one cell ──
+// Body: { frameworkId, companyId, measureId, force? }
+// Runs a fresh Perplexity Sonar search for the specific measure-company
+// combination, using the SAME measure definition the app uses to score.
+// Caches the result in framework_v2_truth_findings so re-opening the drill
+// doesn't re-hit the API. Pass force=true to bust the cache.
+router.post("/v2/truth-check", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const { frameworkId, companyId, measureId, force } = req.body as {
+      frameworkId: number; companyId: number; measureId: string; force?: boolean;
+    };
+    if (!frameworkId || !companyId || !measureId) {
+      return res.status(400).json({ error: "frameworkId, companyId, measureId required" });
+    }
+
+    // Return cached finding unless the caller asked for a fresh run.
+    if (!force) {
+      const cached = await db.execute(sql`
+        SELECT verdict, confidence, reasoning, quotes, sources, provider, model_id, checked_at
+        FROM framework_v2_truth_findings
+        WHERE framework_id = ${frameworkId} AND company_id = ${companyId} AND measure_id = ${measureId}
+      `);
+      const r = (cached as any).rows?.[0];
+      if (r) {
+        return res.json({
+          cached: true,
+          verdict: r.verdict, confidence: r.confidence, reasoning: r.reasoning,
+          quotes: r.quotes || [], sources: r.sources || [],
+          provider: r.provider, modelId: r.model_id, checkedAt: r.checked_at,
+        });
+      }
+    }
+
+    // Load the measure definition + framework topic context.
+    const fwRow = await db.execute(sql`
+      SELECT topic_term, topic_synonyms, adjacent_topics FROM frameworks
+      WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+    `);
+    const fw = ((fwRow as any).rows || [])[0];
+    if (!fw) return res.status(404).json({ error: "framework not found" });
+
+    const measureRow = await db.execute(sql`
+      SELECT measure_id, title, substantive_definition, fallback_yes_criterion,
+             positive_examples, negative_examples
+      FROM framework_measures
+      WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}
+    `);
+    const m = ((measureRow as any).rows || [])[0];
+    if (!m) return res.status(404).json({ error: "measure not found" });
+
+    const companyRow = await db.execute(sql`
+      SELECT name, COALESCE(domain, fmp_website) AS company_domain FROM companies
+      WHERE id = ${companyId} AND workspace_id = ${ctx.workspaceId}
+    `);
+    const company = ((companyRow as any).rows || [])[0];
+    if (!company) return res.status(404).json({ error: "company not found" });
+
+    let result: TruthCheckResult;
+    try {
+      result = await runTruthCheck({
+        companyName: company.name,
+        companyDomain: company.company_domain || undefined,
+        measureId: m.measure_id,
+        measureTitle: m.title || m.measure_id,
+        measureSubstantiveDefinition: m.substantive_definition || "",
+        measureFallbackYesCriterion: m.fallback_yes_criterion || "",
+        measurePositiveExamples: Array.isArray(m.positive_examples) ? m.positive_examples : [],
+        measureNegativeExamples: Array.isArray(m.negative_examples) ? m.negative_examples : [],
+        topicTerm: fw.topic_term || "",
+        adjacentTopics: Array.isArray(fw.adjacent_topics) ? fw.adjacent_topics : [],
+      });
+    } catch (e: any) {
+      return res.status(502).json({ error: `truth-check provider error: ${e?.message || e}` });
+    }
+
+    // Persist (upsert)
+    await db.execute(sql`
+      INSERT INTO framework_v2_truth_findings
+        (framework_id, company_id, measure_id, verdict, confidence, reasoning, quotes, sources, provider, model_id)
+      VALUES (${frameworkId}, ${companyId}, ${measureId}, ${result.verdict}, ${result.confidence},
+              ${result.reasoning}, ${JSON.stringify(result.quotes)}::jsonb, ${JSON.stringify(result.sources)}::jsonb,
+              ${result.provider}, ${result.modelId})
+      ON CONFLICT (framework_id, company_id, measure_id) DO UPDATE SET
+        verdict = EXCLUDED.verdict, confidence = EXCLUDED.confidence, reasoning = EXCLUDED.reasoning,
+        quotes = EXCLUDED.quotes, sources = EXCLUDED.sources, provider = EXCLUDED.provider,
+        model_id = EXCLUDED.model_id, checked_at = NOW()
+    `);
+
+    return res.json({
+      cached: false,
+      verdict: result.verdict, confidence: result.confidence, reasoning: result.reasoning,
+      quotes: result.quotes, sources: result.sources,
+      provider: result.provider, modelId: result.modelId,
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /truth-check] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
 // ─── GET /v2/test-drive/measure-drill ── per-company evidence for one measure ─
 // Given ?frameworkId=&listId=&measureId=, returns quotes/verdicts/nuance for
 // every company in the list. Used by the Improvement Analysis panel to let the
@@ -1223,19 +1326,34 @@ router.get("/v2/test-drive/measure-drill", requireWorkspace, async (req: Request
       return res.status(400).json({ error: "frameworkId, listId, measureId query params required" });
     }
     const rowsQ = await db.execute(sql`
-      SELECT c.name AS company_name, ms.verdict, ms.confidence, ms.quotes, ms.verdict_nuance
+      SELECT c.id AS company_id, c.name AS company_name,
+             ms.verdict, ms.confidence, ms.quotes, ms.verdict_nuance,
+             tf.verdict AS truth_verdict, tf.confidence AS truth_confidence,
+             tf.reasoning AS truth_reasoning, tf.quotes AS truth_quotes,
+             tf.sources AS truth_sources, tf.checked_at AS truth_checked_at
       FROM measure_scores ms
       JOIN companies c ON c.id = ms.company_id
       JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
+      LEFT JOIN framework_v2_truth_findings tf ON tf.framework_id = ms.framework_id
+           AND tf.company_id = ms.company_id AND tf.measure_id = ms.measure_id
       WHERE ms.framework_id = ${frameworkId} AND ms.measure_id = ${measureId}
       ORDER BY ms.verdict, c.name
     `);
     const rows = ((rowsQ as any).rows || []).map((r: any) => ({
+      companyId: r.company_id,
       companyName: r.company_name,
       verdict: r.verdict || "No",
       confidence: r.confidence || "Medium",
       quotes: Array.isArray(r.quotes) ? r.quotes : [],
       nuance: r.verdict_nuance || "",
+      truth: r.truth_verdict ? {
+        verdict: r.truth_verdict,
+        confidence: r.truth_confidence,
+        reasoning: r.truth_reasoning,
+        quotes: r.truth_quotes || [],
+        sources: r.truth_sources || [],
+        checkedAt: r.truth_checked_at,
+      } : null,
     }));
     return res.json({ measureId, rows });
   } catch (err: any) {

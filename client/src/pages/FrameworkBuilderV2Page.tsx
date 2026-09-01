@@ -1138,12 +1138,23 @@ interface EditProposal {
   expectedImpact: string;
 }
 
+interface TruthFinding {
+  verdict: string;
+  confidence: string;
+  reasoning: string;
+  quotes: string[];
+  sources: Array<{ url: string; title?: string }>;
+  checkedAt?: string;
+}
+
 interface MeasureDrillRow {
+  companyId: number;
   companyName: string;
   verdict: string;
   confidence: string;
   quotes: string[];
   nuance: string;
+  truth?: TruthFinding | null;
 }
 
 interface CompanyDiagnostic {
@@ -1205,6 +1216,28 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
   const [expandedMeasure, setExpandedMeasure] = useState<string | null>(null);
   const [drillRows, setDrillRows] = useState<Record<string, MeasureDrillRow[]>>({});
   const [drillLoading, setDrillLoading] = useState<string | null>(null);
+  // Truth-check state, keyed by "<measureId>::<companyId>"
+  const [truthLoading, setTruthLoading] = useState<Record<string, boolean>>({});
+  const [truthResults, setTruthResults] = useState<Record<string, TruthFinding & { cached?: boolean }>>({});
+  const [truthErrors, setTruthErrors] = useState<Record<string, string>>({});
+
+  const runTruthCheck = async (measureId: string, companyId: number, force = false) => {
+    const key = `${measureId}::${companyId}`;
+    if (truthLoading[key]) return;
+    setTruthLoading((s) => ({ ...s, [key]: true }));
+    setTruthErrors((s) => { const c = { ...s }; delete c[key]; return c; });
+    try {
+      const r = await api.request("/framework-builder/v2/truth-check", {
+        method: "POST",
+        body: JSON.stringify({ frameworkId, companyId, measureId, force }),
+      });
+      setTruthResults((s) => ({ ...s, [key]: r as TruthFinding & { cached?: boolean } }));
+    } catch (e: any) {
+      setTruthErrors((s) => ({ ...s, [key]: e?.message || String(e) }));
+    } finally {
+      setTruthLoading((s) => ({ ...s, [key]: false }));
+    }
+  };
   const [iterations, setIterations] = useState<IterationSnapshot[]>([]);
   const [rescoring, setRescoring] = useState(false);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
@@ -1576,26 +1609,76 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
                         )}
                         {drillRows[p.measureId] && (
                           <div className="space-y-1.5 text-xs">
-                            {drillRows[p.measureId].map((row, ri) => (
-                              <div key={ri} className="pl-3 border-l-2 border-gray-200 dark:border-gray-600">
-                                <div className="font-medium">
-                                  {row.companyName}
-                                  <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] ${row.verdict === "Yes" ? "bg-green-100 text-green-800" : row.verdict === "Partial" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-700"}`}>{row.verdict}</span>
-                                  <span className="ml-2 text-gray-500">confidence: {row.confidence}</span>
+                            {drillRows[p.measureId].map((row, ri) => {
+                              const truthKey = `${p.measureId}::${row.companyId}`;
+                              const truth = truthResults[truthKey] || row.truth || null;
+                              const truthErr = truthErrors[truthKey];
+                              const truthBusy = truthLoading[truthKey];
+                              const agree = truth && truth.verdict === row.verdict;
+                              return (
+                                <div key={ri} className="pl-3 border-l-2 border-gray-200 dark:border-gray-600 pb-2">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="font-medium">
+                                      {row.companyName}
+                                      <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] ${row.verdict === "Yes" ? "bg-green-100 text-green-800" : row.verdict === "Partial" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-700"}`}>app: {row.verdict}</span>
+                                      <span className="ml-2 text-gray-500">confidence: {row.confidence}</span>
+                                    </div>
+                                    <button
+                                      onClick={() => void runTruthCheck(p.measureId, row.companyId, !!truth)}
+                                      disabled={truthBusy}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-medium border ${truthBusy ? "bg-gray-100 text-gray-400 border-gray-300" : "bg-white hover:bg-blue-50 border-blue-300 text-blue-700"} flex items-center gap-1 whitespace-nowrap`}
+                                      title={truth ? "Re-run independent Perplexity search for this cell" : "Run independent Perplexity search against the company's primary reports"}
+                                    >
+                                      {truthBusy ? <><Loader2 className="w-2.5 h-2.5 animate-spin" /> Checking…</> : truth ? "↻ Re-check truth" : "🔎 Explore truth"}
+                                    </button>
+                                  </div>
+                                  {row.quotes.length === 0 ? (
+                                    <div className="italic text-gray-500 mt-1">no app quotes returned</div>
+                                  ) : (
+                                    <ul className="list-disc pl-5 text-gray-700 dark:text-gray-300 mt-1">
+                                      {row.quotes.slice(0, 3).map((q, qi) => (<li key={qi}>"{q.length > 300 ? q.slice(0, 300) + "…" : q}"</li>))}
+                                      {row.quotes.length > 3 && (<li className="italic text-gray-500">+ {row.quotes.length - 3} more</li>)}
+                                    </ul>
+                                  )}
+                                  {row.nuance && (
+                                    <div className="mt-0.5 italic text-gray-500">nuance: {row.nuance.length > 200 ? row.nuance.slice(0, 200) + "…" : row.nuance}</div>
+                                  )}
+                                  {truthErr && (
+                                    <div className="mt-1 text-red-600 text-xs">Truth-check error: {truthErr}</div>
+                                  )}
+                                  {truth && (
+                                    <div className={`mt-2 p-2 rounded border ${agree ? "border-green-300 bg-green-50 dark:bg-green-900/20" : "border-amber-300 bg-amber-50 dark:bg-amber-900/20"}`}>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-medium text-gray-800 dark:text-gray-200">Independent truth check</span>
+                                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${truth.verdict === "Yes" ? "bg-green-200 text-green-900" : truth.verdict === "Partial" ? "bg-yellow-200 text-yellow-900" : truth.verdict === "Evidence absent" ? "bg-gray-200 text-gray-700" : "bg-red-200 text-red-900"}`}>truth: {truth.verdict}</span>
+                                        <span className="text-gray-500">confidence: {truth.confidence}</span>
+                                        {agree ? <span className="text-green-700">✓ agrees with app</span> : <span className="text-amber-700">⚠ disagrees with app</span>}
+                                      </div>
+                                      {truth.reasoning && (
+                                        <div className="mt-1 text-gray-700 dark:text-gray-300">{truth.reasoning}</div>
+                                      )}
+                                      {truth.quotes && truth.quotes.length > 0 && (
+                                        <div className="mt-1">
+                                          <div className="text-gray-600 dark:text-gray-400 font-medium">Primary-source quotes:</div>
+                                          <ul className="list-disc pl-5">
+                                            {truth.quotes.slice(0, 3).map((q, qi) => (<li key={qi} className="text-gray-700 dark:text-gray-300">"{q.length > 400 ? q.slice(0, 400) + "…" : q}"</li>))}
+                                          </ul>
+                                        </div>
+                                      )}
+                                      {truth.sources && truth.sources.length > 0 && (
+                                        <div className="mt-1">
+                                          <div className="text-gray-600 dark:text-gray-400 font-medium">Sources:</div>
+                                          <ol className="list-decimal pl-5">
+                                            {truth.sources.slice(0, 8).map((s, si) => (<li key={si}><a href={s.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{s.title || s.url}</a></li>))}
+                                            {truth.sources.length > 8 && (<li className="italic text-gray-500">+ {truth.sources.length - 8} more</li>)}
+                                          </ol>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                                {row.quotes.length === 0 ? (
-                                  <div className="italic text-gray-500">no quotes returned</div>
-                                ) : (
-                                  <ul className="list-disc pl-5 text-gray-700 dark:text-gray-300">
-                                    {row.quotes.slice(0, 3).map((q, qi) => (<li key={qi}>"{q.length > 300 ? q.slice(0, 300) + "…" : q}"</li>))}
-                                    {row.quotes.length > 3 && (<li className="italic text-gray-500">+ {row.quotes.length - 3} more</li>)}
-                                  </ul>
-                                )}
-                                {row.nuance && (
-                                  <div className="mt-0.5 italic text-gray-500">nuance: {row.nuance.length > 200 ? row.nuance.slice(0, 200) + "…" : row.nuance}</div>
-                                )}
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
