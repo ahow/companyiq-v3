@@ -1416,7 +1416,36 @@ router.post("/v2/state/save", requireWorkspace, async (req: Request, res: Respon
       frameworkId: number; stage: string; testDriveListId?: number; testDriveListName?: string;
     };
     if (!frameworkId || !stage) return res.status(400).json({ error: "frameworkId and stage required" });
-    const state = { stage, testDriveListId: testDriveListId ?? null, testDriveListName: testDriveListName ?? null, lastUpdated: new Date().toISOString() };
+
+    // MONOTONIC GUARD: never regress a framework's stage backwards. Stages
+    // conceptually go intake -> drafting -> review -> saved. Once a framework
+    // reaches 'saved', we do not accept writes that push it back to 'intake'
+    // or earlier stages — those are almost always races on client mount where
+    // a resuming tab's default state briefly is 'intake' before the load
+    // response arrives. This protects the DB from stale-default clobbers.
+    const STAGE_RANK: Record<string, number> = { intake: 0, drafting: 1, review: 2, saved: 3 };
+    const existingRow = await db.execute(sql`
+      SELECT v2_state FROM frameworks WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+    `);
+    const existing = (existingRow as any).rows?.[0]?.v2_state || null;
+    const existingStage = existing?.stage || "intake";
+    if ((STAGE_RANK[stage] ?? 0) < (STAGE_RANK[existingStage] ?? 0)) {
+      // Regression request. Keep existing state; only update lastUpdated timestamp
+      // and lists if the caller has better information for them.
+      const merged = {
+        stage: existingStage,
+        testDriveListId: testDriveListId ?? existing?.testDriveListId ?? null,
+        testDriveListName: testDriveListName ?? existing?.testDriveListName ?? null,
+        lastUpdated: new Date().toISOString(),
+      };
+      await db.execute(sql`
+        UPDATE frameworks SET v2_state = ${JSON.stringify(merged)}::jsonb
+        WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+      `);
+      return res.json({ ok: true, state: merged, note: "stage regression rejected; existing stage preserved" });
+    }
+
+    const state = { stage, testDriveListId: testDriveListId ?? existing?.testDriveListId ?? null, testDriveListName: testDriveListName ?? existing?.testDriveListName ?? null, lastUpdated: new Date().toISOString() };
     await db.execute(sql`
       UPDATE frameworks SET v2_state = ${JSON.stringify(state)}::jsonb
       WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
