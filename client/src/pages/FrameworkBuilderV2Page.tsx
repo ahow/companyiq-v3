@@ -1164,6 +1164,17 @@ interface RootCauseReport {
   headline: string;
 }
 
+interface IterationSnapshot {
+  id: number;
+  iterationNumber: number;
+  batchId: number | null;
+  scoredAt: string;
+  perCompany: Array<{ companyId: number; companyName: string; yesCount: number; noCount: number; partialCount: number; yesRate: number }>;
+  perMeasure: Record<string, { yesCount: number; totalCount: number; verdictsByCompany: Record<string, string> }>;
+  robustness: { criteria: RobustnessCriterion[]; passedCount: number; totalCount: number; allPassed: boolean } | null;
+  rootCauses: RootCauseReport | null;
+}
+
 function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId: number; listId: number; listName: string | null }) {
   const [batch, setBatch] = useState<{ status: string; completedJobs: number; totalJobs: number; failedJobs: number } | null>(null);
   const [perCompany, setPerCompany] = useState<PerCompanyResult[]>([]);
@@ -1178,6 +1189,35 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
   const [expandedMeasure, setExpandedMeasure] = useState<string | null>(null);
   const [drillRows, setDrillRows] = useState<Record<string, MeasureDrillRow[]>>({});
   const [drillLoading, setDrillLoading] = useState<string | null>(null);
+  const [iterations, setIterations] = useState<IterationSnapshot[]>([]);
+  const [rescoring, setRescoring] = useState(false);
+  const [rescoreError, setRescoreError] = useState<string | null>(null);
+
+  const fetchIterations = async () => {
+    try {
+      const r = await api.request(`/framework-builder/v2/iterations?frameworkId=${frameworkId}&listId=${listId}`);
+      setIterations(r.iterations || []);
+    } catch { /* non-fatal */ }
+  };
+
+  const triggerRescore = async () => {
+    if (rescoring) return;
+    setRescoring(true);
+    setRescoreError(null);
+    try {
+      const r = await api.request("/framework-builder/v2/rescore", {
+        method: "POST",
+        body: JSON.stringify({ frameworkId, listId }),
+      });
+      // Reset batch to running so polling picks up the new run.
+      setBatch({ status: "running", completedJobs: 0, totalJobs: r.totalJobs || 10, failedJobs: 0 });
+      await fetchIterations();
+    } catch (e: any) {
+      setRescoreError(e?.message || String(e));
+    } finally {
+      setRescoring(false);
+    }
+  };
 
   const fetchStatus = async () => {
     try {
@@ -1189,6 +1229,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
       setEdits(r.edits || null);
       setRootCauses(r.rootCauses || null);
       setLabelsInferred(!!r.labelsInferred);
+      if (r.scoringComplete) void fetchIterations();
       setError(null);
     } catch (e: any) {
       setError(e?.message || String(e));
@@ -1249,13 +1290,26 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
             List: <code>{listName}</code> · framework id {frameworkId}
           </div>
         </div>
-        {batch && (
-          <div className="text-sm text-gray-600 dark:text-gray-400">
-            {batch.completedJobs}/{batch.totalJobs} companies scored
-            {batch.failedJobs > 0 && <span className="text-red-600 ml-2">({batch.failedJobs} failed)</span>}
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {batch && (
+            <div className="text-sm text-gray-600 dark:text-gray-400">
+              {batch.completedJobs}/{batch.totalJobs} companies scored
+              {batch.failedJobs > 0 && <span className="text-red-600 ml-2">({batch.failedJobs} failed)</span>}
+            </div>
+          )}
+          {isComplete && (
+            <button
+              onClick={() => void triggerRescore()}
+              disabled={rescoring}
+              className={`px-3 py-1.5 rounded text-sm font-medium flex items-center gap-1 ${rescoring ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-700"}`}
+              title="Snapshot current results as an iteration, then re-score the same test-drive companies with the current framework definition"
+            >
+              {rescoring ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Starting…</> : <><Play className="w-3.5 h-3.5" /> Re-score now</>}
+            </button>
+          )}
+        </div>
       </div>
+      {rescoreError && <div className="text-sm text-red-600">Rescore error: {rescoreError}</div>}
 
       {error && <div className="text-sm text-red-600">Poll error: {error}</div>}
 
@@ -1335,6 +1389,11 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
             ))}
           </div>
         </div>
+      )}
+
+      {/* ─── Iteration history ─── */}
+      {isComplete && iterations.length > 0 && (
+        <IterationHistoryView iterations={iterations} />
       )}
 
       {/* ─── Root-cause diagnostic (doc-collection vs framework issues) ─── */}
@@ -1537,6 +1596,101 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
 // ─── Improvement chat component (Stage 2) ───
 interface ChatAction { type: string; attrs: Record<string, string> }
 interface ChatTurn { role: "user" | "assistant"; content: string; actions?: ChatAction[] }
+
+// ─── Iteration history view (Q3) ───
+// Shows how Yes-rate per company changed across iterations, and how many
+// robustness criteria passed each iteration. Latest iteration is on the right.
+// Delta arrows highlight companies moving up or down between iterations.
+function IterationHistoryView({ iterations }: { iterations: IterationSnapshot[] }) {
+  if (!iterations.length) return null;
+
+  // Union of all company IDs across iterations, ordered by latest yes-count desc
+  const allCompanyIds = new Set<number>();
+  for (const it of iterations) for (const c of it.perCompany) allCompanyIds.add(c.companyId);
+  const latest = iterations[iterations.length - 1];
+  const orderedCompanyIds = Array.from(allCompanyIds).sort((a, b) => {
+    const av = latest.perCompany.find((c) => c.companyId === a)?.yesCount ?? -1;
+    const bv = latest.perCompany.find((c) => c.companyId === b)?.yesCount ?? -1;
+    return bv - av;
+  });
+  const companyName = (cid: number): string => {
+    for (let i = iterations.length - 1; i >= 0; i--) {
+      const c = iterations[i].perCompany.find((x) => x.companyId === cid);
+      if (c) return c.companyName;
+    }
+    return "?";
+  };
+
+  const yesRate = (it: IterationSnapshot, cid: number): number | null => {
+    const c = it.perCompany.find((x) => x.companyId === cid);
+    return c ? c.yesRate : null;
+  };
+
+  const passedCount = (it: IterationSnapshot): string => {
+    if (!it.robustness) return "n/a";
+    return `${it.robustness.passedCount}/${it.robustness.totalCount}`;
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+        Iteration history
+        <span className="ml-2 text-xs font-normal text-gray-500">
+          {iterations.length} iteration{iterations.length === 1 ? "" : "s"} recorded; latest on the right
+        </span>
+      </div>
+      <div className="border rounded dark:border-gray-700 overflow-x-auto text-sm">
+        <table className="w-full">
+          <thead className="bg-gray-50 dark:bg-gray-900/40">
+            <tr>
+              <th className="text-left px-3 py-2 sticky left-0 bg-gray-50 dark:bg-gray-900/40">Company</th>
+              {iterations.map((it) => (
+                <th key={it.id} className="text-right px-3 py-2">
+                  <div className="whitespace-nowrap">Iter {it.iterationNumber}</div>
+                  <div className="text-[10px] font-normal text-gray-500">{new Date(it.scoredAt).toLocaleString()}</div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {orderedCompanyIds.map((cid) => (
+              <tr key={cid} className="border-t dark:border-gray-700">
+                <td className="px-3 py-1.5 whitespace-nowrap sticky left-0 bg-white dark:bg-gray-800">{companyName(cid)}</td>
+                {iterations.map((it, idx) => {
+                  const rate = yesRate(it, cid);
+                  const prevRate = idx > 0 ? yesRate(iterations[idx - 1], cid) : null;
+                  const delta = rate != null && prevRate != null ? rate - prevRate : null;
+                  return (
+                    <td key={it.id} className="px-3 py-1.5 text-right">
+                      {rate == null ? (
+                        <span className="text-gray-400">—</span>
+                      ) : (
+                        <>
+                          <span>{(rate * 100).toFixed(0)}%</span>
+                          {delta != null && Math.abs(delta) >= 0.05 && (
+                            <span className={`ml-1 text-xs ${delta > 0 ? "text-green-600" : "text-red-600"}`}>
+                              {delta > 0 ? "▲" : "▼"}{Math.abs(delta * 100).toFixed(0)}pp
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            <tr className="border-t-2 border-gray-300 dark:border-gray-500 bg-gray-50 dark:bg-gray-900/40 font-medium">
+              <td className="px-3 py-1.5 sticky left-0 bg-gray-50 dark:bg-gray-900/40">Robustness criteria passed</td>
+              {iterations.map((it) => (
+                <td key={it.id} className="px-3 py-1.5 text-right">{passedCount(it)}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function ImprovementChat({ frameworkId, listId }: { frameworkId: number; listId: number }) {
   const [turns, setTurns] = useState<ChatTurn[]>([

@@ -1156,6 +1156,26 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       } catch (e: any) {
         console.warn("[framework-builder v2 /test-drive/results] root-cause diagnostic failed:", e?.message);
       }
+
+      // Snapshot this batch's outputs (per-company, per-measure, robustness,
+      // root-causes) into the iteration history table. Idempotent — already-
+      // snapshotted batches are skipped by the UNIQUE(batch_id) check inside
+      // snapshotIteration(). Then top up the latest row with robustness+rootCauses
+      // that snapshotIteration doesn't compute itself.
+      try {
+        const snap = await snapshotIteration(frameworkId, listId, ctx.workspaceId);
+        if (snap?.iterationNumber) {
+          await db.execute(sql`
+            UPDATE framework_v2_iterations
+            SET robustness = ${JSON.stringify(robustness)}::jsonb,
+                rootCauses = ${JSON.stringify(rootCauses)}::jsonb
+            WHERE framework_id = ${frameworkId} AND list_id = ${listId}
+              AND iteration_number = ${snap.iterationNumber}
+          `);
+        }
+      } catch (e: any) {
+        console.warn("[framework-builder v2 /test-drive/results] iteration snapshot failed:", e?.message);
+      }
     }
 
     return res.json({
@@ -1219,6 +1239,158 @@ router.get("/v2/test-drive/measure-drill", requireWorkspace, async (req: Request
     return res.json({ measureId, rows });
   } catch (err: any) {
     console.error("[framework-builder v2 /test-drive/measure-drill] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── Helper: snapshot the CURRENT test-drive results into iteration history ──
+// Called when the user hits "Re-score now" (before creating a fresh batch) and
+// when a batch completes for the first time (via /v2/test-drive/results if no
+// snapshot exists for that batch yet). Idempotent — UNIQUE constraint on
+// (framework_id, list_id, iteration_number) prevents duplicate rows.
+async function snapshotIteration(
+  frameworkId: number,
+  listId: number,
+  workspaceId: number,
+): Promise<{ iterationNumber: number; created: boolean } | null> {
+  // Pull the batch for this framework+list (the current "latest" batch)
+  const batchRow = await db.execute(sql`
+    SELECT id FROM batch_runs
+    WHERE framework_id = ${frameworkId} AND list_id = ${listId} AND workspace_id = ${workspaceId}
+    ORDER BY started_at DESC LIMIT 1
+  `);
+  const batchId = (batchRow as any).rows?.[0]?.id;
+  if (!batchId) return null;
+
+  // Get current iteration count (0 if none)
+  const countRow = await db.execute(sql`
+    SELECT COALESCE(MAX(iteration_number), 0) AS maxn FROM framework_v2_iterations
+    WHERE framework_id = ${frameworkId} AND list_id = ${listId}
+  `);
+  const nextIter = Number((countRow as any).rows?.[0]?.maxn || 0) + 1;
+
+  // Check whether this batch has already been snapshotted (idempotent)
+  const existingRow = await db.execute(sql`
+    SELECT iteration_number FROM framework_v2_iterations
+    WHERE framework_id = ${frameworkId} AND list_id = ${listId} AND batch_id = ${batchId}
+  `);
+  if (((existingRow as any).rows || []).length > 0) {
+    return { iterationNumber: Number((existingRow as any).rows[0].iteration_number), created: false };
+  }
+
+  // Compute per-company and per-measure summaries from measure_scores.
+  const scoresQ = await db.execute(sql`
+    SELECT ms.company_id, c.name AS company_name, ms.measure_id, ms.verdict
+    FROM measure_scores ms JOIN companies c ON c.id = ms.company_id
+    JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
+    WHERE ms.framework_id = ${frameworkId}
+  `);
+  const scoreRows = ((scoresQ as any).rows || []) as any[];
+
+  const byCompany: Record<string, any> = {};
+  const byMeasure: Record<string, { yesCount: number; totalCount: number; verdictsByCompany: Record<string, string> }> = {};
+  for (const r of scoreRows) {
+    const cid = String(r.company_id);
+    if (!byCompany[cid]) byCompany[cid] = { companyId: r.company_id, companyName: r.company_name, yesCount: 0, noCount: 0, partialCount: 0, total: 0 };
+    byCompany[cid].total++;
+    if (r.verdict === "Yes") byCompany[cid].yesCount++;
+    else if (r.verdict === "Partial") byCompany[cid].partialCount++;
+    else byCompany[cid].noCount++;
+
+    if (!byMeasure[r.measure_id]) byMeasure[r.measure_id] = { yesCount: 0, totalCount: 0, verdictsByCompany: {} };
+    byMeasure[r.measure_id].totalCount++;
+    if (r.verdict === "Yes") byMeasure[r.measure_id].yesCount++;
+    byMeasure[r.measure_id].verdictsByCompany[cid] = r.verdict || "No";
+  }
+  const perCompany = Object.values(byCompany).map((c: any) => ({
+    ...c,
+    yesRate: c.total > 0 ? c.yesCount / c.total : 0,
+  }));
+
+  await db.execute(sql`
+    INSERT INTO framework_v2_iterations
+      (framework_id, list_id, batch_id, iteration_number, per_company, per_measure)
+    VALUES
+      (${frameworkId}, ${listId}, ${batchId}, ${nextIter},
+       ${JSON.stringify(perCompany)}::jsonb, ${JSON.stringify(byMeasure)}::jsonb)
+    ON CONFLICT (framework_id, list_id, iteration_number) DO NOTHING
+  `);
+  return { iterationNumber: nextIter, created: true };
+}
+
+// ─── GET /v2/iterations?frameworkId=&listId= ── iteration history ──
+router.get("/v2/iterations", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const frameworkId = Number(req.query.frameworkId);
+    const listId = Number(req.query.listId);
+    if (!frameworkId || !listId) return res.status(400).json({ error: "frameworkId + listId required" });
+
+    // Best-effort: also snapshot the CURRENT batch if not already snapshotted.
+    // This backfills iteration 1 automatically the first time the user views
+    // the panel after scoring completed.
+    try { await snapshotIteration(frameworkId, listId, ctx.workspaceId); } catch { /* non-fatal */ }
+
+    const rows = await db.execute(sql`
+      SELECT id, iteration_number, batch_id, scored_at, per_company, per_measure, robustness, rootCauses
+      FROM framework_v2_iterations
+      WHERE framework_id = ${frameworkId} AND list_id = ${listId}
+      ORDER BY iteration_number ASC
+    `);
+    return res.json({
+      iterations: ((rows as any).rows || []).map((r: any) => ({
+        id: r.id,
+        iterationNumber: r.iteration_number,
+        batchId: r.batch_id,
+        scoredAt: r.scored_at,
+        perCompany: r.per_company,
+        perMeasure: r.per_measure,
+        robustness: r.robustness,
+        rootCauses: r.rootcauses,
+      })),
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /iterations] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── POST /v2/rescore ── snapshot + fire fresh batch against the same list ──
+router.post("/v2/rescore", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const { frameworkId, listId } = req.body as { frameworkId: number; listId: number };
+    if (!frameworkId || !listId) return res.status(400).json({ error: "frameworkId + listId required" });
+
+    // 1. Snapshot the CURRENT state as an iteration. If nothing new to snapshot
+    //    (already recorded), this is idempotent.
+    const snap = await snapshotIteration(frameworkId, listId, ctx.workspaceId);
+
+    // 2. Fire a fresh analyze batch by calling the existing /api/analyze route
+    //    server-side, forwarding session cookies so it authenticates as this user.
+    //    This keeps the batch-creation logic in one place rather than duplicating it.
+    const cookieHeader = req.headers.cookie || "";
+    const port = process.env.PORT || "3000";
+    const analyzeResp = await fetch(`http://127.0.0.1:${port}/api/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", cookie: cookieHeader },
+      body: JSON.stringify({ frameworkId, listId }),
+    });
+    const analyzeJson = await analyzeResp.json().catch(() => ({}));
+    if (!analyzeResp.ok) {
+      return res.status(analyzeResp.status).json({ error: analyzeJson?.error || "analyze route rejected rescore" });
+    }
+
+    return res.json({
+      snapshotted: snap,
+      newBatchId: analyzeJson?.batchId,
+      totalJobs: analyzeJson?.totalJobs,
+      nextIterationNumberWhenComplete: (snap?.iterationNumber || 0) + 1,
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /rescore] error:", err);
     return res.status(500).json({ error: err?.message || "internal error" });
   }
 });
@@ -1421,10 +1593,14 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       .join("\n\n");
 
     const { completeWithFallback } = await import("../lib/ai-providers.js");
+    // Chat is a long-form consultation — use the widest allowable output window
+    // (32K on Claude Sonnet). The provider clamps further if needed. The full
+    // conversation is passed each turn so the LLM sees the entire back-and-forth,
+    // not just a truncated window.
     const { text: reply } = await completeWithFallback(providerName || "claude", {
       system,
       prompt: history + "\n\nAssistant:",
-      maxTokens: 2000,
+      maxTokens: 32000,
       temperature: 0.2,
     });
     const { displayText, actions } = extractActionsFromReply(reply);

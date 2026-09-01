@@ -190,6 +190,28 @@ export async function initializeDatabase(): Promise<void> {
     // /v2/state/load. Lets a user (or teammate) resume a v2 draft from any browser.
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS v2_state JSONB`);
 
+    // Framework Creation v2 iteration history. Every time the user re-runs the
+    // test-drive against the same list, we snapshot the batch's per-measure scores
+    // AND the computed robustness scorecard so the improvement panel can show the
+    // trend across iterations. Storage grows linearly with iteration count —
+    // acceptable at test-drive scale (10 companies × 20-40 measures per batch).
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS framework_v2_iterations (
+        id SERIAL PRIMARY KEY,
+        framework_id INTEGER NOT NULL REFERENCES frameworks(id) ON DELETE CASCADE,
+        list_id INTEGER NOT NULL,
+        batch_id INTEGER,
+        iteration_number INTEGER NOT NULL,
+        scored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        per_company JSONB NOT NULL,          -- [{companyId, companyName, yesCount, noCount, partialCount, yesRate}]
+        per_measure JSONB NOT NULL,          -- {measureId: {yesCount, verdictsByCompany: {companyId: verdict}}}
+        robustness JSONB,                    -- from computeRobustnessCriteria()
+        rootCauses JSONB,                    -- from diagnoseRootCauses()
+        UNIQUE (framework_id, list_id, iteration_number)
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v2_iter_fw_list ON framework_v2_iterations(framework_id, list_id, iteration_number)`);
+
     // ─── Companies ──────────────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS companies (
