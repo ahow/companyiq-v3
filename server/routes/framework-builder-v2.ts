@@ -16,6 +16,7 @@ import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v
 import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
 import { diagnoseRootCauses, type CompanyCorpusStats } from "../lib/framework-v2/root-cause-diagnostic.js";
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
+import { batchTightenDefinitions, batchAppendExclusions, batchRegenerateExamples, groupProposalsByPatch, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -1654,29 +1655,123 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     const report = analyseTestDrive(results as any, measureMetadata);
     const editsBundle = proposeEditsForFlags(report.flags || [], measuresById);
 
+    // Collect proposals we need LLM regeneration for, then run one batched
+    // regeneration call per (op, path) group. This preserves consistency
+    // across measures AND keeps latency O(1) rather than O(N).
+    async function applyProposal(prop: any, applied: any[], skipped: any[]) {
+      if (prop.patch?.op === "replace") {
+        const col = prop.patch.path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
+                    prop.patch.path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
+        if (!col) { skipped.push({ measureId: prop.measureId, reason: `unsupported patch path ${prop.patch.path}` }); return; }
+        await db.execute(sql`
+          UPDATE framework_measures SET ${col} = ${prop.patch.value}
+          WHERE framework_id = ${frameworkId} AND measure_id = ${prop.measureId}
+        `);
+        applied.push({ measureId: prop.measureId, action: prop.action, patch: prop.patch });
+      } else {
+        // LLM regeneration paths get grouped into batches; caller processes them.
+      }
+    }
+
+    async function runBatchedRegenerations(proposals: any[], applied: any[], skipped: any[]) {
+      if (!proposals.length) return;
+      const groups = groupProposalsByPatch(proposals);
+      // Load framework topic context for the LLM.
+      const fwRow = await db.execute(sql`
+        SELECT name, topic_term, topic_synonyms, adjacent_topics FROM frameworks
+        WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+      `);
+      const fw = ((fwRow as any).rows || [])[0] || {};
+      const fctx: FrameworkContext = {
+        topicTerm: fw.topic_term || "",
+        topicSynonyms: Array.isArray(fw.topic_synonyms) ? fw.topic_synonyms : [],
+        adjacentTopics: Array.isArray(fw.adjacent_topics) ? fw.adjacent_topics : [],
+        frameworkName: fw.name || "",
+      };
+      for (const [groupKey, groupProps] of Object.entries(groups)) {
+        const measureIds = groupProps.map((p: any) => p.measureId);
+        // Fetch current measures for the LLM context.
+        const measureRowsQ = await db.execute(sql`
+          SELECT measure_id, title, substantive_definition, fallback_yes_criterion,
+                 positive_examples, negative_examples
+          FROM framework_measures
+          WHERE framework_id = ${frameworkId} AND measure_id = ANY(${measureIds}::text[])
+        `);
+        const measuresForLLM: MeasureBefore[] = ((measureRowsQ as any).rows || []).map((m: any) => ({
+          measureId: m.measure_id,
+          title: m.title,
+          substantive_definition: m.substantive_definition || "",
+          fallback_yes_criterion: m.fallback_yes_criterion || "",
+          positive_examples: Array.isArray(m.positive_examples) ? m.positive_examples : [],
+          negative_examples: Array.isArray(m.negative_examples) ? m.negative_examples : [],
+        }));
+
+        let result: { updates: any[]; provider: string } | null = null;
+        try {
+          if (groupKey === "tighten_definition::substantive_definition") {
+            result = await batchTightenDefinitions(measuresForLLM, fctx);
+          } else if (groupKey === "append_exclusion::substantive_definition") {
+            result = await batchAppendExclusions(measuresForLLM, fctx);
+          } else if (groupKey === "regenerate_examples::positive_examples") {
+            result = await batchRegenerateExamples(measuresForLLM, fctx, "positive");
+          } else if (groupKey === "regenerate_examples::negative_examples") {
+            result = await batchRegenerateExamples(measuresForLLM, fctx, "negative");
+          } else {
+            for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: `no regenerator for group '${groupKey}'` });
+            continue;
+          }
+        } catch (e: any) {
+          for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: `LLM regeneration failed: ${e?.message || e}` });
+          continue;
+        }
+
+        if (!result || !result.updates || !result.updates.length) {
+          for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: "LLM returned no updates" });
+          continue;
+        }
+        for (const u of result.updates) {
+          // Persist each field the LLM produced
+          if (u.substantive_definition) {
+            await db.execute(sql`
+              UPDATE framework_measures SET substantive_definition = ${u.substantive_definition}
+              WHERE framework_id = ${frameworkId} AND measure_id = ${u.measureId}
+            `);
+          }
+          if (Array.isArray(u.positive_examples) && u.positive_examples.length) {
+            await db.execute(sql`
+              UPDATE framework_measures SET positive_examples = ${JSON.stringify(u.positive_examples)}::jsonb
+              WHERE framework_id = ${frameworkId} AND measure_id = ${u.measureId}
+            `);
+          }
+          if (Array.isArray(u.negative_examples) && u.negative_examples.length) {
+            await db.execute(sql`
+              UPDATE framework_measures SET negative_examples = ${JSON.stringify(u.negative_examples)}::jsonb
+              WHERE framework_id = ${frameworkId} AND measure_id = ${u.measureId}
+            `);
+          }
+          applied.push({ measureId: u.measureId, action: `regenerated:${groupKey}`, source: "llm" });
+        }
+        // Any group proposal without a returned update:
+        const returnedIds = new Set(result.updates.map((u: any) => u.measureId));
+        for (const p of groupProps) {
+          if (!returnedIds.has(p.measureId)) skipped.push({ measureId: p.measureId, reason: "LLM did not return update for this measureId" });
+        }
+      }
+    }
+
     // Walk actions and apply.
     const applied: any[] = [];
     const skipped: any[] = [];
+    const deferredForLLM: any[] = [];
     for (const action of actions) {
       if (action.type === "apply_edit") {
         const idx = parseInt(String(action.attrs.proposal || "").replace(/^P/, ""), 10) - 1;
         const prop = editsBundle.proposals[idx];
         if (!prop) { skipped.push({ action, reason: "proposal not found" }); continue; }
-        // Apply the patch. For now we support 'replace' patches directly; the
-        // 'regenerate_examples' and 'tighten_definition' patches require an LLM
-        // regenerate pass which we surface as a follow-up job (out of scope for
-        // Stage 2 initial).
         if (prop.patch?.op === "replace") {
-          const col = prop.patch.path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
-                      prop.patch.path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
-          if (!col) { skipped.push({ action, reason: `unsupported patch path ${prop.patch.path}` }); continue; }
-          await db.execute(sql`
-            UPDATE framework_measures SET ${col} = ${prop.patch.value}
-            WHERE framework_id = ${frameworkId} AND measure_id = ${prop.measureId}
-          `);
-          applied.push({ measureId: prop.measureId, action: prop.action, patch: prop.patch });
+          await applyProposal(prop, applied, skipped);
         } else {
-          skipped.push({ action, reason: `patch op '${prop.patch?.op}' requires LLM regeneration — pending Stage 2b` });
+          deferredForLLM.push(prop);
         }
       } else if (action.type === "ignore_measure") {
         // No-op on framework; record for audit only.
@@ -1691,26 +1786,16 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         const cause = action.attrs.cause;
         const matching = editsBundle.proposals.filter((p) => p.cause === cause);
         for (const prop of matching) {
-          if (prop.patch?.op === "replace") {
-            const col = prop.patch.path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
-                        prop.patch.path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
-            if (col) {
-              await db.execute(sql`
-                UPDATE framework_measures SET ${col} = ${prop.patch.value}
-                WHERE framework_id = ${frameworkId} AND measure_id = ${prop.measureId}
-              `);
-              applied.push({ measureId: prop.measureId, action: prop.action, patch: prop.patch });
-            } else {
-              skipped.push({ measureId: prop.measureId, reason: `unsupported patch path ${prop.patch.path}` });
-            }
-          } else {
-            skipped.push({ measureId: prop.measureId, reason: `patch op '${prop.patch?.op}' requires LLM regeneration — pending Stage 2b` });
-          }
+          if (prop.patch?.op === "replace") await applyProposal(prop, applied, skipped);
+          else deferredForLLM.push(prop);
         }
       } else {
         skipped.push({ action, reason: `unknown action type '${action.type}'` });
       }
     }
+
+    // Run batched LLM regeneration for any deferred proposals.
+    await runBatchedRegenerations(deferredForLLM, applied, skipped);
 
     return res.json({ applied, skipped, appliedCount: applied.length, skippedCount: skipped.length });
   } catch (err: any) {

@@ -1192,6 +1192,38 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
   const [iterations, setIterations] = useState<IterationSnapshot[]>([]);
   const [rescoring, setRescoring] = useState(false);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
+  const [applyingIterate, setApplyingIterate] = useState(false);
+  const [applyIterateResult, setApplyIterateResult] = useState<string | null>(null);
+  const [applyIterateError, setApplyIterateError] = useState<string | null>(null);
+
+  const applyAcceptedAndIterate = async () => {
+    if (applyingIterate || acceptedCount === 0) return;
+    setApplyingIterate(true);
+    setApplyIterateResult(null);
+    setApplyIterateError(null);
+    try {
+      // Build one apply_edit action per accepted proposal, referencing its 1-based index.
+      const actions: Array<{ type: string; attrs: Record<string, string> }> = [];
+      (edits?.proposals || []).forEach((p, idx) => {
+        const key = `${p.measureId}::${p.flagRule}`;
+        if (decisions[key] === "accept") {
+          actions.push({ type: "apply_edit", attrs: { proposal: `P${idx + 1}` } });
+        }
+      });
+      const applyResp = await api.request("/framework-builder/v2/improvement/apply", {
+        method: "POST",
+        body: JSON.stringify({ frameworkId, listId, actions }),
+      });
+      setApplyIterateResult(`Applied ${applyResp.appliedCount} edit${applyResp.appliedCount === 1 ? "" : "s"}; ${applyResp.skippedCount} skipped. Now starting a fresh test-drive…`);
+      // Kick off a re-score against the updated framework
+      await triggerRescore();
+      setApplyIterateResult(`Applied ${applyResp.appliedCount} edit${applyResp.appliedCount === 1 ? "" : "s"} and started iteration — watch the counter above.`);
+    } catch (e: any) {
+      setApplyIterateError(e?.message || String(e));
+    } finally {
+      setApplyingIterate(false);
+    }
+  };
 
   const fetchIterations = async () => {
     try {
@@ -1567,17 +1599,22 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
       )}
 
       {isComplete && edits && edits.proposals.length > 0 && (
-        <div className="pt-2 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
-          <div className="text-xs text-gray-500">
-            When ready, apply {acceptedCount} accepted edit{acceptedCount === 1 ? "" : "s"} to regenerate affected measures and re-score. Rejected edits are dropped.
+        <div className="pt-2 border-t border-gray-200 dark:border-gray-700 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-gray-500">
+              When ready, apply {acceptedCount} accepted edit{acceptedCount === 1 ? "" : "s"} to regenerate affected measures and re-score. Rejected edits are dropped. LLM regenerations run in one batched call per patch type.
+            </div>
+            <button
+              onClick={() => void applyAcceptedAndIterate()}
+              disabled={acceptedCount === 0 || applyingIterate}
+              className={`px-3 py-1.5 rounded text-sm font-medium flex items-center gap-1 ${(acceptedCount === 0 || applyingIterate) ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-700"}`}
+              title={acceptedCount === 0 ? "Accept at least one edit to enable iteration" : "Apply accepted edits and immediately re-score"}
+            >
+              {applyingIterate ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying…</> : `Apply ${acceptedCount} edit${acceptedCount === 1 ? "" : "s"} → iterate`}
+            </button>
           </div>
-          <button
-            disabled={acceptedCount === 0}
-            className={`px-3 py-1.5 rounded text-sm font-medium ${acceptedCount === 0 ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-700"}`}
-            title={acceptedCount === 0 ? "Accept at least one edit to enable iteration" : "Regenerate affected measures and start iteration N+1"}
-          >
-            Apply {acceptedCount} edit{acceptedCount === 1 ? "" : "s"} → iterate
-          </button>
+          {applyIterateResult && <div className="text-xs text-green-700 dark:text-green-400">{applyIterateResult}</div>}
+          {applyIterateError && <div className="text-xs text-red-600">{applyIterateError}</div>}
         </div>
       )}
 
