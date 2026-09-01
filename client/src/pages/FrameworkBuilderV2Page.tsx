@@ -82,36 +82,6 @@ export default function FrameworkBuilderV2Page() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // Persist test-drive identifiers across refreshes so users can return to the
-  // improvement panel without losing state. Cleared by the "Build another" button.
-  useEffect(() => {
-    try {
-      if (savedFrameworkId != null) localStorage.setItem("fw-builder-v2-savedFrameworkId", String(savedFrameworkId));
-      else localStorage.removeItem("fw-builder-v2-savedFrameworkId");
-    } catch {}
-  }, [savedFrameworkId]);
-  useEffect(() => {
-    try {
-      if (testDriveListId != null) localStorage.setItem("fw-builder-v2-testDriveListId", String(testDriveListId));
-      else localStorage.removeItem("fw-builder-v2-testDriveListId");
-    } catch {}
-  }, [testDriveListId]);
-  useEffect(() => {
-    try {
-      if (testDriveListName) localStorage.setItem("fw-builder-v2-testDriveListName", testDriveListName);
-      else localStorage.removeItem("fw-builder-v2-testDriveListName");
-    } catch {}
-  }, [testDriveListName]);
-
-  // On mount: if we restored saved-framework state from localStorage but the
-  // stage is still "intake", jump the user straight to the results view.
-  useEffect(() => {
-    if (savedFrameworkId && testDriveListId && stage === "intake") {
-      setStage("saved");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Wrap the chat request in a manual fetch with an AbortController so we can
   // give a friendly timeout error, and let the user retry the same turn.
   async function callChatEndpoint(nextMessages: Message[], timeoutMs = 180_000) {
@@ -192,6 +162,37 @@ export default function FrameworkBuilderV2Page() {
   const [testDriveListName, setTestDriveListName] = useState<string | null>(() => {
     try { return localStorage.getItem("fw-builder-v2-testDriveListName"); } catch { return null; }
   });
+
+  // Persist test-drive identifiers across refreshes so users can return to the
+  // improvement panel without losing state. Cleared by the "Build another" button.
+  // Placed AFTER all useState declarations so closures see the current values.
+  useEffect(() => {
+    try {
+      if (savedFrameworkId != null) localStorage.setItem("fw-builder-v2-savedFrameworkId", String(savedFrameworkId));
+      else localStorage.removeItem("fw-builder-v2-savedFrameworkId");
+    } catch {}
+  }, [savedFrameworkId]);
+  useEffect(() => {
+    try {
+      if (testDriveListId != null) localStorage.setItem("fw-builder-v2-testDriveListId", String(testDriveListId));
+      else localStorage.removeItem("fw-builder-v2-testDriveListId");
+    } catch {}
+  }, [testDriveListId]);
+  useEffect(() => {
+    try {
+      if (testDriveListName) localStorage.setItem("fw-builder-v2-testDriveListName", testDriveListName);
+      else localStorage.removeItem("fw-builder-v2-testDriveListName");
+    } catch {}
+  }, [testDriveListName]);
+
+  // On mount: if we restored saved-framework state from localStorage but the
+  // stage is still "intake", jump the user straight to the results view.
+  useEffect(() => {
+    if (savedFrameworkId && testDriveListId && stage === "intake") {
+      setStage("saved");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function draftFramework() {
     if (!intake?.topicTerm) {
