@@ -1285,6 +1285,31 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
       setTruthLoading((s) => ({ ...s, [key]: false }));
     }
   };
+
+  // Bulk-run truth checks for every company shown in one measure's drill-down.
+  // Fires up to 3 in parallel to keep provider rate limits comfortable; the
+  // per-row loading indicator surfaces progress as each finishes.
+  const [bulkTruthBusy, setBulkTruthBusy] = useState<string | null>(null);
+  const runTruthCheckAll = async (measureId: string, rows: MeasureDrillRow[], force = false) => {
+    if (bulkTruthBusy) return;
+    setBulkTruthBusy(measureId);
+    // Skip rows that already have a cached truth finding unless force=true.
+    const targets = rows.filter((r) => force || !(truthResults[`${measureId}::${r.companyId}`] || r.truth));
+    const CONCURRENCY = 3;
+    let i = 0;
+    const workers: Promise<void>[] = [];
+    for (let w = 0; w < CONCURRENCY; w++) {
+      workers.push((async () => {
+        while (true) {
+          const idx = i++;
+          if (idx >= targets.length) return;
+          await runTruthCheck(measureId, targets[idx].companyId, force);
+        }
+      })());
+    }
+    await Promise.all(workers);
+    setBulkTruthBusy(null);
+  };
   const [iterations, setIterations] = useState<IterationSnapshot[]>([]);
   const [rescoring, setRescoring] = useState(false);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
@@ -1639,16 +1664,28 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
                     </div>
                   </div>
                   <div className="mt-2 pt-2 border-t border-dashed border-gray-200 dark:border-gray-700">
-                    <button
-                      onClick={() => {
-                        const next = isExpanded ? null : p.measureId;
-                        setExpandedMeasure(next);
-                        if (next) void loadDrill(p.measureId);
-                      }}
-                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                    >
-                      {isExpanded ? "▾ Hide evidence" : "▸ Show evidence (per-company quotes)"}
-                    </button>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button
+                        onClick={() => {
+                          const next = isExpanded ? null : p.measureId;
+                          setExpandedMeasure(next);
+                          if (next) void loadDrill(p.measureId);
+                        }}
+                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        {isExpanded ? "▾ Hide evidence" : "▸ Show evidence (per-company quotes)"}
+                      </button>
+                      {isExpanded && drillRows[p.measureId] && drillRows[p.measureId].length > 0 && (
+                        <button
+                          onClick={() => void runTruthCheckAll(p.measureId, drillRows[p.measureId])}
+                          disabled={bulkTruthBusy === p.measureId}
+                          className={`px-2 py-1 rounded text-[11px] font-medium border ${bulkTruthBusy === p.measureId ? "bg-gray-100 text-gray-400 border-gray-300" : "bg-white hover:bg-blue-50 border-blue-300 text-blue-700"} flex items-center gap-1`}
+                          title="Run an independent Perplexity truth-check for every company in this measure. Cached rows are skipped unless you re-check individually."
+                        >
+                          {bulkTruthBusy === p.measureId ? <><Loader2 className="w-3 h-3 animate-spin" /> Checking all…</> : "🔎 Explore truth for all companies"}
+                        </button>
+                      )}
+                    </div>
                     {isExpanded && (
                       <div className="mt-2">
                         {drillLoading === p.measureId && (
