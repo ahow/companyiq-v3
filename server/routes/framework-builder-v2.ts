@@ -1690,13 +1690,17 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
       };
       for (const [groupKey, groupProps] of Object.entries(groups)) {
         const measureIds = groupProps.map((p: any) => p.measureId);
-        // Fetch current measures for the LLM context.
-        const measureRowsQ = await db.execute(sql`
+        // Fetch current measures for the LLM context. Drizzle's sql`` template
+        // treats JS arrays as records unless we serialise to a Postgres-array
+        // literal or unroll. Simplest: fetch all measures and filter in JS.
+        const measureIdSet = new Set(measureIds);
+        const allMeasuresQ = await db.execute(sql`
           SELECT measure_id, title, substantive_definition, fallback_yes_criterion,
                  positive_examples, negative_examples
           FROM framework_measures
-          WHERE framework_id = ${frameworkId} AND measure_id = ANY(${measureIds}::text[])
+          WHERE framework_id = ${frameworkId}
         `);
+        const measureRowsQ = { rows: ((allMeasuresQ as any).rows || []).filter((m: any) => measureIdSet.has(m.measure_id)) };
         const measuresForLLM: MeasureBefore[] = ((measureRowsQ as any).rows || []).map((m: any) => ({
           measureId: m.measure_id,
           title: m.title,
