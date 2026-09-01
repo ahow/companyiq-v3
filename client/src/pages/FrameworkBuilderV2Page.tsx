@@ -1147,12 +1147,27 @@ interface TruthFinding {
   checkedAt?: string;
 }
 
+// Quotes returned by the server can be plain strings (truth-check output) OR
+// objects {text, source} (measure_scores.quotes JSONB shape). Normalise in the
+// UI so we never call .length/.slice on undefined.
+type QuoteLike = string | { text?: string; source?: string } | any;
+
+function quoteText(q: QuoteLike): string {
+  if (typeof q === "string") return q;
+  if (q && typeof q === "object") return String(q.text ?? q.quote ?? "");
+  return String(q ?? "");
+}
+function quoteSource(q: QuoteLike): string | undefined {
+  if (q && typeof q === "object" && typeof q.source === "string") return q.source;
+  return undefined;
+}
+
 interface MeasureDrillRow {
   companyId: number;
   companyName: string;
   verdict: string;
   confidence: string;
-  quotes: string[];
+  quotes: QuoteLike[];
   nuance: string;
   truth?: TruthFinding | null;
 }
@@ -1636,7 +1651,16 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
                                     <div className="italic text-gray-500 mt-1">no app quotes returned</div>
                                   ) : (
                                     <ul className="list-disc pl-5 text-gray-700 dark:text-gray-300 mt-1">
-                                      {row.quotes.slice(0, 3).map((q, qi) => (<li key={qi}>"{q.length > 300 ? q.slice(0, 300) + "…" : q}"</li>))}
+                                      {row.quotes.slice(0, 3).map((q, qi) => {
+                                        const t = quoteText(q);
+                                        const src = quoteSource(q);
+                                        return (
+                                          <li key={qi}>
+                                            "{t.length > 300 ? t.slice(0, 300) + "…" : t}"
+                                            {src && <span className="ml-1 text-gray-400 italic">— {src}</span>}
+                                          </li>
+                                        );
+                                      })}
                                       {row.quotes.length > 3 && (<li className="italic text-gray-500">+ {row.quotes.length - 3} more</li>)}
                                     </ul>
                                   )}
@@ -1661,7 +1685,10 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
                                         <div className="mt-1">
                                           <div className="text-gray-600 dark:text-gray-400 font-medium">Primary-source quotes:</div>
                                           <ul className="list-disc pl-5">
-                                            {truth.quotes.slice(0, 3).map((q, qi) => (<li key={qi} className="text-gray-700 dark:text-gray-300">"{q.length > 400 ? q.slice(0, 400) + "…" : q}"</li>))}
+                                            {truth.quotes.slice(0, 3).map((q, qi) => {
+                                              const t = quoteText(q);
+                                              return (<li key={qi} className="text-gray-700 dark:text-gray-300">"{t.length > 400 ? t.slice(0, 400) + "…" : t}"</li>);
+                                            })}
                                           </ul>
                                         </div>
                                       )}
