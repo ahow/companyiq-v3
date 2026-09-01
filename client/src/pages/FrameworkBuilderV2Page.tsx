@@ -185,10 +185,45 @@ export default function FrameworkBuilderV2Page() {
     } catch {}
   }, [testDriveListName]);
 
-  // On mount: if we restored saved-framework state from localStorage but the
+  // Persist state SERVER-side too, so switching browser or clearing local storage
+  // still lets the user resume via the Framework page's 'Continue in v2 builder' link.
+  useEffect(() => {
+    if (savedFrameworkId == null) return;
+    (async () => {
+      try {
+        await api.request("/framework-builder/v2/state/save", {
+          method: "POST",
+          body: JSON.stringify({ frameworkId: savedFrameworkId, stage, testDriveListId, testDriveListName }),
+        });
+      } catch (e) { /* non-fatal; localStorage still works */ }
+    })();
+  }, [savedFrameworkId, stage, testDriveListId, testDriveListName]);
+
+  // On mount: check URL params for ?frameworkId= (deep-link from Framework page's
+  // 'Continue in v2 builder' action). If present, load server-side state.
+  // Otherwise if we restored saved-framework state from localStorage but the
   // stage is still "intake", jump the user straight to the results view.
   useEffect(() => {
-    if (savedFrameworkId && testDriveListId && stage === "intake") {
+    const params = new URLSearchParams(window.location.search);
+    const fwId = params.get("frameworkId");
+    if (fwId) {
+      (async () => {
+        try {
+          const r = await api.request(`/framework-builder/v2/state/load?frameworkId=${fwId}`);
+          setSavedFrameworkId(r.frameworkId);
+          if (r.state) {
+            if (r.state.testDriveListId) setTestDriveListId(r.state.testDriveListId);
+            if (r.state.testDriveListName) setTestDriveListName(r.state.testDriveListName);
+            if (r.state.stage) setStage(r.state.stage as any);
+            else setStage("saved");
+          } else {
+            setStage("saved");
+          }
+        } catch (e: any) {
+          setError(`Failed to restore framework ${fwId}: ${e?.message || e}`);
+        }
+      })();
+    } else if (savedFrameworkId && testDriveListId && stage === "intake") {
       setStage("saved");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

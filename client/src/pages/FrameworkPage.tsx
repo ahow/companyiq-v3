@@ -10,11 +10,23 @@ interface ChatMessage {
 
 interface FrameworkPageProps {
   onNavigateToV2Builder?: () => void;
+  onContinueV2Framework?: (frameworkId: number) => void;
 }
 
-export default function FrameworkPage({ onNavigateToV2Builder }: FrameworkPageProps = {}) {
+export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Framework }: FrameworkPageProps = {}) {
   const queryClient = useQueryClient();
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
+
+  // v2 frameworks with resumable state (from /v2/state/list)
+  const [v2Drafts, setV2Drafts] = useState<Array<{ frameworkId: number; frameworkName: string; state: any; updatedAt: string }>>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.request("/framework-builder/v2/state/list");
+        setV2Drafts(r.frameworks || []);
+      } catch { /* non-fatal */ }
+    })();
+  }, []);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [showAIEditor, setShowAIEditor] = useState(false);
@@ -288,6 +300,40 @@ export default function FrameworkPage({ onNavigateToV2Builder }: FrameworkPagePr
           </button>
         </div>
       </div>
+
+      {/* v2 Drafts — resumable frameworks built via the v2 builder */}
+      {v2Drafts.length > 0 && onContinueV2Framework && (
+        <div className="bg-white rounded-lg border">
+          <div className="p-4 border-b flex items-center justify-between">
+            <h2 className="font-semibold text-gray-700">v2 Frameworks (resumable)</h2>
+            <span className="text-xs text-gray-500">Continue an in-progress v2 build or return to a test-drive result.</span>
+          </div>
+          <div className="divide-y">
+            {v2Drafts.map((d) => {
+              const stage = d.state?.stage as string | undefined;
+              const hasTest = !!d.state?.testDriveListId;
+              return (
+                <div key={d.frameworkId} className="flex items-center justify-between p-3 hover:bg-purple-50">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-gray-900 truncate">{d.frameworkName}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {stage ? `stage: ${stage}` : "no saved stage"}
+                      {hasTest ? ` · test-drive list #${d.state.testDriveListId}` : ""}
+                      {d.updatedAt ? ` · updated ${new Date(d.updatedAt).toLocaleString()}` : ""}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onContinueV2Framework(d.frameworkId)}
+                    className="ml-3 flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> Continue in v2 builder
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Framework List */}
       <div className="bg-white rounded-lg border">

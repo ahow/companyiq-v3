@@ -184,6 +184,12 @@ export async function initializeDatabase(): Promise<void> {
     // compute the discrimination robustness criterion (signal vs edge Yes-rate gap).
     await db.execute(sql`ALTER TABLE company_lists ADD COLUMN IF NOT EXISTS test_drive_labels JSONB`);
 
+    // Framework Creation v2 draft state: cross-session resumable client state.
+    // Shape: { stage: string, testDriveListId?: number, testDriveListName?: string,
+    //          lastUpdated: ISO-string }. Populated by /v2/state/save; consumed by
+    // /v2/state/load. Lets a user (or teammate) resume a v2 draft from any browser.
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS v2_state JSONB`);
+
     // ─── Companies ──────────────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS companies (

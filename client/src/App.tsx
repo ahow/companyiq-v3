@@ -102,7 +102,14 @@ export default function App() {
               onBack={() => navigate("dashboard")}
             />
           )}
-          {page === "framework" && <FrameworkPage onNavigateToV2Builder={() => navigate("framework-builder-v2")} />}
+          {page === "framework" && <FrameworkPage
+            onNavigateToV2Builder={() => navigate("framework-builder-v2")}
+            onContinueV2Framework={(fwId) => {
+              // Deep-link into the builder with the frameworkId so it restores server-side state.
+              window.history.pushState({}, "", `?frameworkId=${fwId}`);
+              navigate("framework-builder-v2");
+            }}
+          />}
           {page === "lists" && <ListsPage />}
           {page === "results" && <ResultsPage />}
           {page === "settings" && <SettingsPage />}

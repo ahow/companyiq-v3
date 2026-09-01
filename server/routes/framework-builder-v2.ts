@@ -1223,6 +1223,81 @@ router.get("/v2/test-drive/measure-drill", requireWorkspace, async (req: Request
   }
 });
 
+// ─── POST /v2/state/save ── persist client state to the framework row ──
+// Body: { frameworkId, stage, testDriveListId?, testDriveListName? }
+// Writes to frameworks.v2_state as a JSONB blob. Enables cross-session /
+// cross-browser resume via /v2/state/load and the frameworks list.
+router.post("/v2/state/save", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const { frameworkId, stage, testDriveListId, testDriveListName } = req.body as {
+      frameworkId: number; stage: string; testDriveListId?: number; testDriveListName?: string;
+    };
+    if (!frameworkId || !stage) return res.status(400).json({ error: "frameworkId and stage required" });
+    const state = { stage, testDriveListId: testDriveListId ?? null, testDriveListName: testDriveListName ?? null, lastUpdated: new Date().toISOString() };
+    await db.execute(sql`
+      UPDATE frameworks SET v2_state = ${JSON.stringify(state)}::jsonb
+      WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+    `);
+    return res.json({ ok: true, state });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /state/save] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── GET /v2/state/load?frameworkId= ── restore a v2 draft's client state ──
+router.get("/v2/state/load", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const frameworkId = Number(req.query.frameworkId);
+    if (!frameworkId) return res.status(400).json({ error: "frameworkId required" });
+    const row = await db.execute(sql`
+      SELECT id, name, builder_version, v2_state FROM frameworks
+      WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+    `);
+    const r = ((row as any).rows || [])[0];
+    if (!r) return res.status(404).json({ error: "framework not found" });
+    return res.json({
+      frameworkId: r.id,
+      frameworkName: r.name,
+      builderVersion: r.builder_version,
+      state: r.v2_state || null,
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /state/load] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── GET /v2/state/list ── list v2 frameworks + their most-recent state ──
+// Used by the Framework page to show a 'Continue in v2 builder' entry for
+// any framework that has resumable state.
+router.get("/v2/state/list", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const rows = await db.execute(sql`
+      SELECT id, name, v2_state, updated_at, created_at FROM frameworks
+      WHERE workspace_id = ${ctx.workspaceId} AND builder_version = 'v2'
+      ORDER BY updated_at DESC NULLS LAST, created_at DESC
+    `);
+    return res.json({
+      frameworks: ((rows as any).rows || []).map((r: any) => ({
+        frameworkId: r.id,
+        frameworkName: r.name,
+        state: r.v2_state || null,
+        updatedAt: r.updated_at || r.created_at,
+      })),
+    });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /state/list] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
 // ─── POST /v2/improvement/chat ── Stage 2 chat with LLM about improvements ──
 interface ImprovementChatBody {
   frameworkId: number;
