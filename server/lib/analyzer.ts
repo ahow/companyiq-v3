@@ -2563,11 +2563,22 @@ async function scoreWithCascade(opts: {
   const secondary = settings.cascadeSecondary || "glm-4.6";
   const arbiter = settings.cascadeArbiter || "claude-arbiter";
 
-  const scoreOne = async (provider: string): Promise<MeasureResult> => scoreSingleMeasure({
-    companyName, companyId, measure, evidenceText, terminology,
-    topicDescription, provider, temporalWarning,
-    scoringMode: settings.scoringMode, framework,
-  });
+  // Inside cascade: run ONE pass per stage (cascade IS the diversity mechanism;
+  // triple self-consistency per stage would be 9 calls/measure and wasteful).
+  const scoreOne = async (provider: string): Promise<MeasureResult> => {
+    const prev = process.env.SCORING_SELF_CONSISTENCY;
+    process.env.SCORING_SELF_CONSISTENCY = "1";
+    try {
+      return await scoreSingleMeasure({
+        companyName, companyId, measure, evidenceText, terminology,
+        topicDescription, provider, temporalWarning,
+        scoringMode: settings.scoringMode, framework,
+      });
+    } finally {
+      if (prev === undefined) delete process.env.SCORING_SELF_CONSISTENCY;
+      else process.env.SCORING_SELF_CONSISTENCY = prev;
+    }
+  };
 
   // Stage 1 + Stage 2 in parallel (each is one LLM call; run concurrently to halve latency)
   const [stage1, stage2] = await Promise.all([scoreOne(primary), scoreOne(secondary)]);
