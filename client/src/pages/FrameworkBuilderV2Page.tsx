@@ -1661,7 +1661,26 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
                               const truth = truthResults[truthKey] || row.truth || null;
                               const truthErr = truthErrors[truthKey];
                               const truthBusy = truthLoading[truthKey];
-                              const agree = truth && truth.verdict === row.verdict;
+                              // Agreement logic: normalise the four-level truth verdict
+                              // (Yes / Partial / No / Evidence absent) to the app's schema
+                              // before comparing. Partial and No both mean "not a Yes";
+                              // Evidence absent is closer to No than to Partial for user
+                              // interpretation. Only flag disagreement when the two land
+                              // on materially different sides of the Yes/No divide.
+                              const normalise = (v: string): "yes" | "partial" | "no" => {
+                                const lc = String(v || "").toLowerCase();
+                                if (lc.startsWith("yes")) return "yes";
+                                if (lc.startsWith("partial")) return "partial";
+                                return "no"; // covers 'No', 'Evidence absent', anything else
+                              };
+                              const appN = normalise(row.verdict);
+                              const truthN = truth ? normalise(truth.verdict) : null;
+                              let agreementLabel: null | "agree" | "disagree" | "partial-diff" = null;
+                              if (truth) {
+                                if (appN === truthN) agreementLabel = "agree";
+                                else if ((appN === "no" && truthN === "partial") || (appN === "partial" && truthN === "no")) agreementLabel = "partial-diff";
+                                else agreementLabel = "disagree";
+                              }
                               const firstDiag = row.quotes.map(parseRetrievalDiagnostic).find(Boolean) || null;
                               const realQuotes = row.quotes.filter((q) => !parseRetrievalDiagnostic(q));
                               return (
@@ -1751,12 +1770,16 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
                                     <div className="mt-1 text-red-600 text-xs">Truth-check error: {truthErr}</div>
                                   )}
                                   {truth && (
-                                    <div className={`mt-2 p-2 rounded border ${agree ? "border-green-300 bg-green-50 dark:bg-green-900/20" : "border-amber-300 bg-amber-50 dark:bg-amber-900/20"}`}>
+                                    <div className={`mt-2 p-2 rounded border ${agreementLabel === "agree" ? "border-green-300 bg-green-50 dark:bg-green-900/20" : agreementLabel === "partial-diff" ? "border-blue-300 bg-blue-50 dark:bg-blue-900/20" : "border-amber-300 bg-amber-50 dark:bg-amber-900/20"}`}>
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-medium text-gray-800 dark:text-gray-200">Independent truth check</span>
                                         <span className={`px-1.5 py-0.5 rounded text-[10px] ${truth.verdict === "Yes" ? "bg-green-200 text-green-900" : truth.verdict === "Partial" ? "bg-yellow-200 text-yellow-900" : truth.verdict === "Evidence absent" ? "bg-gray-200 text-gray-700" : "bg-red-200 text-red-900"}`}>truth: {truth.verdict}</span>
                                         <span className="text-gray-500">confidence: {truth.confidence}</span>
-                                        {agree ? <span className="text-green-700">✓ agrees with app</span> : <span className="text-amber-700">⚠ disagrees with app</span>}
+                                        {agreementLabel === "agree" && <span className="text-green-700">✓ agrees with app</span>}
+                                        {agreementLabel === "partial-diff" && (
+                                          <span className="text-blue-700" title="Both agree it isn't a clear Yes; one calls it 'Partial' the other 'No/Evidence absent'">◐ aligned within ‘not Yes’</span>
+                                        )}
+                                        {agreementLabel === "disagree" && <span className="text-amber-700">⚠ disagrees with app</span>}
                                       </div>
                                       {truth.reasoning && (
                                         <div className="mt-1 text-gray-700 dark:text-gray-300">{truth.reasoning}</div>
