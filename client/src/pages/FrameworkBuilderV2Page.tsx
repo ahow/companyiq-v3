@@ -69,13 +69,48 @@ export default function FrameworkBuilderV2Page() {
   const [validation, setValidation] = useState<Validation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testDriveCompanies, setTestDriveCompanies] = useState<TestDriveCandidate[] | null>(null);
-  const [savedFrameworkId, setSavedFrameworkId] = useState<number | null>(null);
+  const [savedFrameworkId, setSavedFrameworkId] = useState<number | null>(() => {
+    try {
+      const stored = localStorage.getItem("fw-builder-v2-savedFrameworkId");
+      return stored ? Number(stored) : null;
+    } catch { return null; }
+  });
   const [lastFailedUserMessage, setLastFailedUserMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  // Persist test-drive identifiers across refreshes so users can return to the
+  // improvement panel without losing state. Cleared by the "Build another" button.
+  useEffect(() => {
+    try {
+      if (savedFrameworkId != null) localStorage.setItem("fw-builder-v2-savedFrameworkId", String(savedFrameworkId));
+      else localStorage.removeItem("fw-builder-v2-savedFrameworkId");
+    } catch {}
+  }, [savedFrameworkId]);
+  useEffect(() => {
+    try {
+      if (testDriveListId != null) localStorage.setItem("fw-builder-v2-testDriveListId", String(testDriveListId));
+      else localStorage.removeItem("fw-builder-v2-testDriveListId");
+    } catch {}
+  }, [testDriveListId]);
+  useEffect(() => {
+    try {
+      if (testDriveListName) localStorage.setItem("fw-builder-v2-testDriveListName", testDriveListName);
+      else localStorage.removeItem("fw-builder-v2-testDriveListName");
+    } catch {}
+  }, [testDriveListName]);
+
+  // On mount: if we restored saved-framework state from localStorage but the
+  // stage is still "intake", jump the user straight to the results view.
+  useEffect(() => {
+    if (savedFrameworkId && testDriveListId && stage === "intake") {
+      setStage("saved");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Wrap the chat request in a manual fetch with an AbortController so we can
   // give a friendly timeout error, and let the user retry the same turn.
@@ -148,8 +183,15 @@ export default function FrameworkBuilderV2Page() {
   const [draftJobStartTime, setDraftJobStartTime] = useState<number | null>(null);
   const [repairAttempts, setRepairAttempts] = useState<number>(0);
   const [truncationRecovered, setTruncationRecovered] = useState<boolean>(false);
-  const [testDriveListId, setTestDriveListId] = useState<number | null>(null);
-  const [testDriveListName, setTestDriveListName] = useState<string | null>(null);
+  const [testDriveListId, setTestDriveListId] = useState<number | null>(() => {
+    try {
+      const stored = localStorage.getItem("fw-builder-v2-testDriveListId");
+      return stored ? Number(stored) : null;
+    } catch { return null; }
+  });
+  const [testDriveListName, setTestDriveListName] = useState<string | null>(() => {
+    try { return localStorage.getItem("fw-builder-v2-testDriveListName"); } catch { return null; }
+  });
 
   async function draftFramework() {
     if (!intake?.topicTerm) {
