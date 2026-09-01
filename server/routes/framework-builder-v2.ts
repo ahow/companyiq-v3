@@ -1254,11 +1254,14 @@ async function snapshotIteration(
   listId: number,
   workspaceId: number,
 ): Promise<{ iterationNumber: number; created: boolean } | null> {
-  // Pull the batch for this framework+list (the current "latest" batch)
+  // Pull the most recent COMPLETED batch for this framework+list. Running/failed
+  // batches are skipped — their measure_scores are either absent or stale. This
+  // guarantees the snapshot reflects data actually written by that batch.
   const batchRow = await db.execute(sql`
     SELECT id FROM batch_runs
     WHERE framework_id = ${frameworkId} AND list_id = ${listId} AND workspace_id = ${workspaceId}
-    ORDER BY started_at DESC LIMIT 1
+      AND status = 'completed'
+    ORDER BY completed_at DESC NULLS LAST, started_at DESC LIMIT 1
   `);
   const batchId = (batchRow as any).rows?.[0]?.id;
   if (!batchId) return null;
@@ -1357,7 +1360,11 @@ router.get("/v2/iterations", requireWorkspace, async (req: Request, res: Respons
   }
 });
 
-// ─── POST /v2/rescore ── snapshot + fire fresh batch against the same list ──
+// ─── POST /v2/rescore ── fire fresh batch against the same list ──
+// Iteration snapshots are created by /v2/test-drive/results the FIRST time it
+// observes a completed batch — not here. Snapshotting at rescore-start would
+// either duplicate the previous batch's row or create a stale row pointing to
+// the new empty batch.
 router.post("/v2/rescore", requireWorkspace, async (req: Request, res: Response) => {
   try {
     const ctx = getSessionContext(req);
@@ -1365,11 +1372,12 @@ router.post("/v2/rescore", requireWorkspace, async (req: Request, res: Response)
     const { frameworkId, listId } = req.body as { frameworkId: number; listId: number };
     if (!frameworkId || !listId) return res.status(400).json({ error: "frameworkId + listId required" });
 
-    // 1. Snapshot the CURRENT state as an iteration. If nothing new to snapshot
-    //    (already recorded), this is idempotent.
+    // Ensure the current batch (about to be replaced in measure_scores) is
+    // snapshotted first, if it hasn't been already. Idempotent — no-op if the
+    // most-recent completed batch is already recorded as an iteration.
     const snap = await snapshotIteration(frameworkId, listId, ctx.workspaceId);
 
-    // 2. Fire a fresh analyze batch by calling the existing /api/analyze route
+    // Fire a fresh analyze batch by calling the existing /api/analyze route
     //    server-side, forwarding session cookies so it authenticates as this user.
     //    This keeps the batch-creation logic in one place rather than duplicating it.
     const cookieHeader = req.headers.cookie || "";
