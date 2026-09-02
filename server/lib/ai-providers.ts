@@ -505,6 +505,29 @@ function initProviders() {
   });
   providers.set("claude-arbiter", claudeArbiter);
 
+  // ─── Mistral Large 3 — cascade arbiter (PR 2) ───────────────────────────
+  // Alternative to claude-arbiter. Introduced after iteration 8 audit showed
+  // Claude deferred 92% of the time to DeepSeek on DeepSeek/GLM disagreements,
+  // producing no independent tiebreaking value. Mistral Large 3 (mistral-large-
+  // latest on Mistral's own API) is European-hosted, structurally independent
+  // from both DeepSeek and GLM (Chinese) and Claude (US), and has distinct
+  // training data + methodology. Same underlying model as the existing
+  // "mistral" provider but registered under a dedicated name so the cascade
+  // stage-3 role is clearly attributable in telemetry (`_gradedBy` strings).
+  //
+  // Note: MISTRAL_API_KEY is already set by the "mistral" provider block above;
+  // this arbiter reuses the same env var without a fallback default here.
+  const mistralArbiter = new OpenAICompatibleProvider({
+    name: "mistral-arbiter",
+    model: "mistral-large-latest",
+    family: "mistral",
+    apiKeyEnv: "MISTRAL_API_KEY",
+    baseUrl: "https://api.mistral.ai/v1",
+    maxOutputTokens: 8192,
+    supportsSeed: false,
+  });
+  providers.set("mistral-arbiter", mistralArbiter);
+
   // Kimi (moonshot supports up to 4K output tokens)
   // KIMI_API_KEY must be set via environment variable
   const kimi = new OpenAICompatibleProvider({
