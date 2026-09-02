@@ -304,6 +304,24 @@ function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | 
   return { guidanceBlock: v2Block, quoteContextInstr };
 }
 
+// U2: Base-rate prior injection. The framework author sets expected_yes_rate
+// per measure (validated by C9). Injecting it as a scoring-prompt calibration
+// line reduces systematic under-scoring on high-disclosure topics and over-
+// scoring on sparse ones. Sprint 9 v3→v4 measured this at fw3 recall +0.029 /
+// F1 +0.019 with zero marginal inference cost. Guarded because the prior
+// nudges Yes upward — recall/correlation gains, some precision cost.
+function buildBaseRatePriorBlock(measure: FrameworkMeasure): string {
+  if (process.env.SCORING_BASE_RATE_PRIOR !== "true") return "";
+  const rate = (measure as any).expectedYesRate;
+  if (typeof rate !== "number" || rate <= 0 || rate >= 1) return "";
+  const pct = Math.round(rate * 100);
+  // Framing avoids telling the LLM to change its verdict. It tells the LLM
+  // what the disclosure landscape looks like so "present evidence" and "absent
+  // evidence" get the same standard of proof regardless of base rate.
+  return `\n\nCALIBRATION — DISCLOSURE BASE RATE:
+Across the universe of large-cap listed companies to which this framework applies, approximately ${pct}% would score Yes on this measure. This reflects current disclosure practice on the topic, not an aspiration. Use it to calibrate the evidentiary bar: apply the same evidentiary standard whether disclosure on this topic is common (higher base rate) or rare (lower). Do not default to No when concrete evidence is present just because you expect the answer to usually be No; do not lower the bar for evidence quality just because you expect the answer to usually be Yes.`;
+}
+
 function buildBinaryScoringPrompt(opts: {
   companyName: string;
   measure: FrameworkMeasure;
@@ -327,9 +345,11 @@ This company uses the following specific terms for this topic. Treat these as eq
 Do not penalise evidence for using these terms instead of the framework's language.\n`;
   }
 
+  const baseRateBlock = buildBaseRatePriorBlock(measure);
+
   const system = `You are an expert ESG/governance analyst scoring corporate disclosures against a structured assessment framework.
 
-Topic: ${topicDescription}
+Topic: ${topicDescription}${baseRateBlock}
 
 SCORING RULES (Binary Mode):
 - Score 1 (Yes): The company provides clear, specific evidence that directly addresses this measure. At least one verbatim quote from the source documents must support the score.
@@ -445,9 +465,11 @@ This company uses the following specific terms for this topic. Treat these as eq
 Do not penalise evidence for using these terms instead of the framework's language.\n`;
   }
 
+  const baseRateBlock = buildBaseRatePriorBlock(measure);
+
   const system = `You are an expert ESG/governance analyst scoring corporate disclosures against a structured assessment framework.
 
-Topic: ${topicDescription}
+Topic: ${topicDescription}${baseRateBlock}
 
 SCORING RULES (Partial Credit Mode):
 - Score 1 (Yes): The company provides clear, specific evidence that FULLY addresses this measure. At least one verbatim quote from the source documents must support the score.
@@ -2373,7 +2395,17 @@ async function scoreSingleMeasure(opts: {
   // I36-B: Check verdict cache — identical evidence + measure + provider = identical result
   // The cache salt (bumped on prompt changes) is included as the promptText proxy
   // I45: companyId included to prevent cross-company cache contamination
-  const vKey = verdictCacheKey(measure.measureId, opts.evidenceText, opts.provider, scoringMode || "binary", "v3n-no-govterms", opts.companyId);
+  // U2: include base-rate prior state + expected_yes_rate value in the salt.
+  //     A cached verdict from a run with the prior OFF must not be reused when
+  //     the prior is ON (or vice versa), and a change to expected_yes_rate on
+  //     the measure must invalidate too. Rate is rounded to 2 dp for stability.
+  const baseRateOn = process.env.SCORING_BASE_RATE_PRIOR === "true";
+  const rateVal = (measure as any).expectedYesRate;
+  const rateTag = baseRateOn && typeof rateVal === "number" && rateVal > 0 && rateVal < 1
+    ? `br${Math.round(rateVal * 100)}`
+    : "br0";
+  const promptSalt = `v3n-no-govterms-${rateTag}`;
+  const vKey = verdictCacheKey(measure.measureId, opts.evidenceText, opts.provider, scoringMode || "binary", promptSalt, opts.companyId);
   const cachedVerdict = verdictCache.get(vKey);
   if (cachedVerdict && (Date.now() - cachedVerdict.ts) < VERDICT_CACHE_TTL_MS) {
     return { ...cachedVerdict.result };
