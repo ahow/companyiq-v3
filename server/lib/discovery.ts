@@ -980,7 +980,7 @@ IMPORTANT: The queries MUST be relevant to the topic "${framework.name}". Do NOT
 
 // ─── Query Construction ──────────────────────────────────────────────────────
 
-interface DiscoveryCandidate {
+export interface DiscoveryCandidate {
   url: string;
   title: string;
   snippet: string;
@@ -2717,6 +2717,17 @@ export interface DiscoveryDiagnostics {
   retrievalDiagnostics?: RetrievalDiagnostics;
   registrySearchSummary?: RegistrySearchSummary;
   queryExpansionResult?: QueryExpansionResult;
+  /**
+   * PR 1 · Change 1a: telemetry for the latest-primary-disclosure repair pass.
+   * Populated ONLY by pipeline.ts (post-discovery); the internal discovery
+   * path never sets this. `missing` is the list of requirement ids that were
+   * absent from the initial corpus; `queriesFired` is the number of targeted
+   * follow-up queries actually issued to close those gaps.
+   */
+  primaryDisclosureRepair?: {
+    missing: string[];
+    queriesFired: number;
+  };
 }
 
 export interface DiscoveryResult {
@@ -2735,6 +2746,38 @@ export interface DiscoveryResult {
 // P0 fix: Per-company discovery timeout (10 minutes). If discovery takes longer
 // than this, it fails the job with a clear reason rather than hanging the batch.
 const DISCOVERY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * PR 1 · Change 1a: run a single targeted web-search query for a company
+ * (used by pipeline.ts to close latest-primary-disclosure gaps identified by
+ * verifyLatestPrimaryDisclosure). Wraps the internal `webSearch` helper so
+ * the caller does not need to know which search provider is configured
+ * (Serper.dev vs SerpAPI) and gets the same rate-limiting and caching as
+ * the rest of discovery.
+ *
+ * Returns DiscoveryCandidate rows tagged with lane="primary-disclosure-repair"
+ * and a lower-than-average priority so they merge into the corpus without
+ * disturbing the existing ranking key. Never throws — returns [] on error.
+ */
+export async function runTargetedDisclosureQuery(
+  query: string,
+  companyName: string,
+  opts: { num?: number } = {},
+): Promise<DiscoveryCandidate[]> {
+  try {
+    const results = await webSearch(query, { num: opts.num ?? 10 });
+    return results.map((r) => ({
+      url: r.link,
+      title: r.title || "",
+      snippet: r.snippet || "",
+      lane: "primary-disclosure-repair",
+      priority: 55, // between IR (60+) and secondary (40) — rank layer decides final order
+    }));
+  } catch (e: any) {
+    console.warn(`[${companyName}] Targeted disclosure query failed for "${query.slice(0, 80)}": ${e?.message}`);
+    return [];
+  }
+}
 
 export async function searchCompanyDocuments(opts: {
   companyName: string;

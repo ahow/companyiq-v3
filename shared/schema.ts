@@ -512,6 +512,11 @@ export const platformSources = pgTable("platform_sources", {
 }));
 
 // ─── Workspace Settings ────────────────────────────────────────────────────
+// Per-workspace key/value store. Known feature-flag keys (all values stored
+// as text; treat missing/other values as "false"):
+//   - scoring_cascade   "true" | "false"  (I80 cascade)
+//   - retrieval_v2      "true" | "false"  (PR 1 · Change 1a — latest-primary-
+//                        disclosure verification + targeted follow-up queries)
 
 export const workspaceSettings = pgTable("workspace_settings", {
   id: serial("id").primaryKey(),

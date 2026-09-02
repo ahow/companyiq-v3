@@ -27,7 +27,11 @@
  */
 
 import * as storage from "../storage.js";
-import { searchCompanyDocuments, type DiscoveryResult } from "./discovery.js";
+import { searchCompanyDocuments, runTargetedDisclosureQuery, type DiscoveryResult } from "./discovery.js";
+import {
+  getRequirementsForJurisdiction,
+  verifyLatestPrimaryDisclosure,
+} from "./primary-disclosure-check.js";
 import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
@@ -199,6 +203,63 @@ async function runFetchPhase(opts: {
   });
 
   console.log(`[${companyName}] Discovery found ${discoveryResult.documents.length} accepted documents`);
+
+  // ─── PR 1 · Change 1a: verify latest primary disclosure ──────────────────
+  // Gated behind the `retrieval_v2` workspace flag. When enabled, we check
+  // whether the discovered corpus contains the LATEST primary regulatory
+  // disclosure for this issuer's jurisdiction; for anything missing we fire
+  // ONE targeted follow-up search and merge the results back into the corpus
+  // so the downstream ranker/gate can score them alongside the original set.
+  if (settings.retrieval_v2 === "true") {
+    const currentYear = new Date().getUTCFullYear();
+    // company.exchange is not a stored column today; pass null. Country
+    // handles the audit-driven cases (Unilever GB, Kering FR) directly.
+    const requirements = getRequirementsForJurisdiction(
+      (company.country || null),
+      null,
+      currentYear,
+    );
+    const check = verifyLatestPrimaryDisclosure(
+      discoveryResult.documents,
+      requirements,
+      companyName,
+    );
+
+    if (check.missing.length > 0) {
+      console.log(
+        `[${companyName}] Missing primary disclosures: ${check.missing.map(r => r.label).join(", ")}`
+      );
+
+      let queriesFired = 0;
+      for (const query of check.targetedQueries) {
+        try {
+          const extra = await runTargetedDisclosureQuery(query, companyName);
+          queriesFired++;
+          if (extra.length > 0) {
+            // Merge into corpus WITHOUT recomputing ranking — new docs slot in
+            // via the same tier/priority path used by the rest of discovery.
+            discoveryResult.documents.push(...extra);
+            console.log(
+              `[${companyName}] Targeted query yielded ${extra.length} candidates for repair`
+            );
+          }
+        } catch (e: any) {
+          console.warn(
+            `[${companyName}] Targeted Sonar query failed: ${e?.message}`
+          );
+        }
+      }
+
+      // Record which requirements were missing for telemetry.
+      discoveryResult.diagnostics = {
+        ...discoveryResult.diagnostics,
+        primaryDisclosureRepair: {
+          missing: check.missing.map(r => r.id),
+          queriesFired,
+        },
+      };
+    }
+  }
 
   // Persist an auto-detected domain back to the company record so future runs
   // (and the Domains dashboard) have it, and so contamination heuristics can

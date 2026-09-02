@@ -135,6 +135,10 @@ interface AnalysisSettings {
   cascadePrimary: string;
   cascadeSecondary: string;
   cascadeArbiter: string;
+  // PR 1 · Change 1a: gates the retrieval-hardening pass (latest-primary-disclosure
+  // verification + targeted follow-up queries in pipeline.ts). Default OFF so
+  // iteration-8 behaviour is preserved until we opt individual workspaces in.
+  retrievalV2: boolean;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -157,6 +161,8 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     cascadePrimary: settings.cascade_primary || "deepseek",
     cascadeSecondary: settings.cascade_secondary || "glm-4.6",
     cascadeArbiter: settings.cascade_arbiter || "claude-arbiter",
+    // PR 1 · Change 1a: default OFF. Enabled via workspace_settings.retrieval_v2="true".
+    retrievalV2: settings.retrieval_v2 === "true",
     // v3g (Bug 1 §3 action 5): verdict cache is now OPT-IN (default OFF) until the
     // fingerprint contract is independently re-verified. The cost of recomputing a
     // few measures per re-run is trivial vs the risk of cross-company verdict reuse
