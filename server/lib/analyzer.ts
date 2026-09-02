@@ -135,6 +135,14 @@ interface AnalysisSettings {
   cascadePrimary: string;
   cascadeSecondary: string;
   cascadeArbiter: string;
+  // PR 2: Cascade v2 — Mistral Large 3 replaces Claude as default arbiter AND
+  // the post-cascade auto-downgrade rule is disabled when cascade is active.
+  // Iteration 8 audit showed (a) Claude deferred 92% to DeepSeek producing no
+  // independent tiebreaking value, and (b) the auto-downgrade rule pushed 37%
+  // of cells to Low confidence post-cascade, double-counting the diversity
+  // signal the cascade already provides. Enabling `cascade_v2=true` addresses
+  // both. Inert when scoringCascade=false.
+  cascadeV2: boolean;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -156,7 +164,12 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     scoringCascade: settings.scoring_cascade === "true",
     cascadePrimary: settings.cascade_primary || "deepseek",
     cascadeSecondary: settings.cascade_secondary || "glm-4.6",
-    cascadeArbiter: settings.cascade_arbiter || "claude-arbiter",
+    // PR 2: when cascade_v2 flag is on and no explicit arbiter override is
+    // set, default to mistral-arbiter (Mistral Large 3) instead of
+    // claude-arbiter. Legacy behaviour preserved when cascade_v2="false".
+    cascadeArbiter: settings.cascade_arbiter
+      || (settings.cascade_v2 === "true" ? "mistral-arbiter" : "claude-arbiter"),
+    cascadeV2: settings.cascade_v2 === "true",
     // v3g (Bug 1 §3 action 5): verdict cache is now OPT-IN (default OFF) until the
     // fingerprint contract is independently re-verified. The cost of recomputing a
     // few measures per re-run is trivial vs the risk of cross-company verdict reuse
@@ -1737,8 +1750,30 @@ export async function analyzeCompanyMeasures(opts: {
       }
 
       // Low-confidence positive handling
+      //
+      // PR 2 — Cascade v2: when scoringCascade AND cascadeV2 are BOTH on, the
+      // auto-downgrade rule is suppressed. Rationale from iteration 8 audit:
+      // the cascade already provides diversity via 3 independent models voting;
+      // the verbatim-quote rule then double-counts by penalising paraphrased
+      // quotes as an additional Low-confidence downgrade, pushing 37% of cells
+      // to Low post-cascade. Suppressing lets the cascade's own verdict stand.
+      // In non-cascade mode, or when cascadeV2 is off, legacy behaviour applies.
+      const cascadeV2DowngradeSuppressed =
+        settings.scoringCascade && settings.cascadeV2;
+
       if (measureResult.score > 0 && measureResult.confidence === "Low") {
-        if (settings.lowConfidenceHandling === "downgrade") {
+        if (cascadeV2DowngradeSuppressed) {
+          // PR 2: cascade already provided diversity via 3 models; keep the
+          // verdict as-is. Annotate for telemetry so post-run analysis can
+          // attribute confidence-distribution shifts to this change.
+          measureResult.verdictNuance = (measureResult.verdictNuance || "") +
+            " [Cascade v2: auto-downgrade suppressed — cascade already provides diversity]";
+          const withTelemetry = measureResult as MeasureResult & { _cascade?: any };
+          withTelemetry._cascade = {
+            ...(withTelemetry._cascade || {}),
+            downgradeSuppressed: true,
+          };
+        } else if (settings.lowConfidenceHandling === "downgrade") {
           // Downgrade to Partial (0.5) — preserves the evidence but reduces the score
           if (measureResult.score === 1) {
             measureResult.score = 0.5;

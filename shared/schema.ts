@@ -512,6 +512,15 @@ export const platformSources = pgTable("platform_sources", {
 }));
 
 // ─── Workspace Settings ────────────────────────────────────────────────────
+//
+// Key/value table. Feature-flag values are the string "true" or "false".
+// Known feature-flag keys:
+//   - scoring_cascade   "true" | "false"  (I80 — DeepSeek/GLM/arbiter cascade)
+//   - cascade_v2        "true" | "false"  (PR 2 — Mistral arbiter + downgrade
+//                                          suppression when cascade fires)
+//   - cascade_arbiter   provider name     (explicit override; when unset and
+//                                          cascade_v2=true defaults to
+//                                          mistral-arbiter, else claude-arbiter)
 
 export const workspaceSettings = pgTable("workspace_settings", {
   id: serial("id").primaryKey(),
