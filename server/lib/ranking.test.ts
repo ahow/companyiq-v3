@@ -18,6 +18,7 @@ import {
   computeRankerDiagnostics,
   authorityClass,
 } from "./ranking.js";
+import type { IssuerProfile } from "./issuer-profile.js";
 
 let passed = 0;
 let failed = 0;
@@ -131,6 +132,209 @@ section("Determinism — repeated ranking identical");
 const r1 = rankDocuments(fixture, { companyDomain: COMPANY_DOMAIN }).map(r => r.doc.url).join("|");
 const r2 = rankDocuments([...fixture].reverse(), { companyDomain: COMPANY_DOMAIN }).map(r => r.doc.url).join("|");
 ok(r1 === r2, "ranking is input-order-independent (deterministic)");
+
+// ─── PR 1 · Change 1b: retrievalV2 penalty components ────────────────────────
+// Tests for the three new penalty helpers (subsidiary / vintage / press-page)
+// and the backward-compatibility invariant that fineScore is byte-identical
+// when retrievalV2 is absent/false.
+
+// Minimal profile mirroring the brief §6 spec (legalName + domains only).
+// A richer profile (FIGI name + high-conf aliases containing "unilever")
+// would push HUL from the "weak" (-8) into the "moderate" (-3) band because
+// scoreEntityMatch adds +10..+15 per matching alias/FIGI word. The brief's
+// expected "≤ -8" assumes the minimal profile shape.
+function makeUnileverProfile(): IssuerProfile {
+  return {
+    companyId: 1,
+    legalName: "Unilever PLC",
+    tradingNames: [],
+    formerNames: [],
+    localLanguageNames: [],
+    aliases: [],
+    queryAliases: [],
+    isin: null,
+    ticker: null,
+    figiName: null,
+    figiTicker: null,
+    lei: null,
+    verifiedDomains: ["unilever.com"],
+    domainCandidates: [],
+    country: "GB",
+    supportedLanguages: ["en"],
+    resolvedAt: new Date("2026-01-01").toISOString(),
+    pipelineVersion: "test",
+  };
+}
+
+section("PR 1 · 1b · entityMatchPenalty (subsidiary detection)");
+{
+  const profile = makeUnileverProfile();
+  // Strong parent match: unilever.com domain + "Unilever plc" legal name in title
+  const parent = {
+    url: "https://unilever.com/2025-annual-report.pdf",
+    title: "Unilever plc Annual Report 2025",
+  };
+  const sigParent = computeRankSignals(parent, { retrievalV2: true, issuerProfile: profile });
+  ok(sigParent.components.entityMatch === 0, `parent Unilever plc doc → 0 (got ${sigParent.components.entityMatch})`);
+
+  // Subsidiary (Hindustan Unilever) — different domain, subsidiary name; should
+  // score weakly and get penalty ≤ -8.
+  const sub = {
+    url: "https://hul.co.in/annual-report-2025.pdf",
+    title: "Hindustan Unilever Limited Integrated Report 2025",
+  };
+  const sigSub = computeRankSignals(sub, { retrievalV2: true, issuerProfile: profile });
+  ok(sigSub.components.entityMatch <= -8, `HUL doc penalised ≤ -8 (got ${sigSub.components.entityMatch})`);
+
+  // No profile → 0 regardless of flag
+  const sigNoProfile = computeRankSignals(sub, { retrievalV2: true });
+  ok(sigNoProfile.components.entityMatch === 0, "no profile → 0 (backward compat)");
+}
+
+section("PR 1 · 1b · vintagePenalty (deep-vintage docs)");
+{
+  // Use titles only (no URL year noise). CURRENT_YEAR is derived at runtime
+  // from the ranking.ts module; use CY (this test's copy) to build titles that
+  // hit each age band deterministically regardless of when the test runs.
+  const current = {
+    url: `https://example.com/doc-${CY}.pdf`,
+    title: `Annual Report ${CY}`,
+  };
+  const sigCurrent = computeRankSignals(current, { retrievalV2: true });
+  ok(sigCurrent.components.vintage === 0, `current-year doc → 0 (got ${sigCurrent.components.vintage})`);
+
+  const age4 = {
+    url: `https://example.com/doc-${CY - 4}.pdf`,
+    title: `Annual Report ${CY - 4}`,
+  };
+  const sigAge4 = computeRankSignals(age4, { retrievalV2: true });
+  ok(sigAge4.components.vintage === -5, `age-4 doc → -5 (got ${sigAge4.components.vintage})`);
+
+  const age7 = {
+    url: `https://example.com/doc-${CY - 7}.pdf`,
+    title: `Annual Report ${CY - 7}`,
+  };
+  const sigAge7 = computeRankSignals(age7, { retrievalV2: true });
+  ok(sigAge7.components.vintage === -8, `age-7 doc → -8 (got ${sigAge7.components.vintage})`);
+
+  const noYear = { url: "https://example.com/document.pdf", title: "Annual Report" };
+  const sigNoYear = computeRankSignals(noYear, { retrievalV2: true });
+  ok(sigNoYear.components.vintage === 0, `no-year doc → 0 (got ${sigNoYear.components.vintage})`);
+}
+
+section("PR 1 · 1b · pressPagePenalty");
+{
+  const pressGeneric = {
+    url: "https://kering.com/press/announcement",
+    title: "Kering announces new leadership",
+  };
+  const sigPress = computeRankSignals(pressGeneric, { retrievalV2: true });
+  ok(sigPress.components.pressPage === -4, `plain press page → -4 (got ${sigPress.components.pressPage})`);
+
+  const pressFiling = {
+    url: "https://kering.com/press/annual-report-2025",
+    title: "Kering 2025 Annual Report",
+  };
+  const sigPressFiling = computeRankSignals(pressFiling, { retrievalV2: true });
+  ok(sigPressFiling.components.pressPage === 0, `press URL with filing keyword → 0 (got ${sigPressFiling.components.pressPage})`);
+
+  const investors = {
+    url: "https://kering.com/investors/2025-annual-report.pdf",
+    title: "Kering 2025 Annual Report",
+  };
+  const sigInvestors = computeRankSignals(investors, { retrievalV2: true });
+  ok(sigInvestors.components.pressPage === 0, `non-press URL → 0 (got ${sigInvestors.components.pressPage})`);
+}
+
+section("PR 1 · 1b · retrievalV2 backward-compat invariant (fineScore byte-identical)");
+{
+  // A doc that would trigger ALL three penalties under retrievalV2=true:
+  //   - HUL-style URL/title (weak entity match under Unilever profile)
+  //   - Vintage 2018 (age >= 5 → -8)
+  //   - Press-page URL without filing keyword
+  const profile = makeUnileverProfile();
+  const doc = {
+    url: "https://hul.co.in/press/announcement-2018",
+    title: "Hindustan Unilever Ltd Statement 2018",
+  };
+  const sigOff = computeRankSignals(doc, { issuerProfile: profile });
+  const sigOffFalse = computeRankSignals(doc, { issuerProfile: profile, retrievalV2: false });
+  const sigDefault = computeRankSignals(doc, {});
+  ok(sigOff.fineScore === sigOffFalse.fineScore, `fineScore identical: flag absent vs false (${sigOff.fineScore} vs ${sigOffFalse.fineScore})`);
+  ok(sigOff.fineScore === sigDefault.fineScore, `fineScore identical: flag absent vs empty opts (${sigOff.fineScore} vs ${sigDefault.fineScore})`);
+  ok(sigOff.components.entityMatch === 0, "entityMatch is 0 when retrievalV2 absent");
+  ok(sigOff.components.vintage === 0, "vintage is 0 when retrievalV2 absent");
+  ok(sigOff.components.pressPage === 0, "pressPage is 0 when retrievalV2 absent");
+
+  // And with retrievalV2 ON, all three should fire and fineScore must be lower.
+  const sigOn = computeRankSignals(doc, { issuerProfile: profile, retrievalV2: true });
+  ok(sigOn.components.entityMatch < 0, `entityMatch < 0 when flag on (got ${sigOn.components.entityMatch})`);
+  ok(sigOn.components.vintage < 0, `vintage < 0 when flag on (got ${sigOn.components.vintage})`);
+  ok(sigOn.components.pressPage < 0, `pressPage < 0 when flag on (got ${sigOn.components.pressPage})`);
+  ok(sigOn.fineScore < sigOff.fineScore, `fineScore drops with all penalties on (${sigOn.fineScore} < ${sigOff.fineScore})`);
+}
+
+section("PR 1 · 1b · realistic ranking end-to-end (Unilever plc corpus)");
+{
+  const profile = makeUnileverProfile();
+  const corpus = [
+    { url: `https://unilever.com/sustainability/${CY}-sustainability-statement.pdf`,
+      title: `Unilever plc ${CY} Sustainability Statement` },
+    { url: `https://hul.co.in/${CY}-integrated-report.pdf`,
+      title: `Hindustan Unilever Limited Integrated Report ${CY}` },
+    { url: `https://unilever.com/sustainability/${CY - 6}-sustainability-report.pdf`,
+      title: `Unilever plc ${CY - 6} Sustainability Report` },
+  ];
+
+  // Pre-1b baseline: capture whatever order the ranker produces so we assert
+  // it is preserved when the flag is off (this is the byte-identical guardrail
+  // extended to the end-to-end sort).
+  const baseline = rankDocuments(corpus, { companyDomain: "unilever.com" });
+  const baselineOrder = baseline.map((r) => r.doc.url).join("|");
+
+  // With flag off but issuerProfile supplied, order must be unchanged.
+  const offWithProfile = rankDocuments(corpus, { companyDomain: "unilever.com", issuerProfile: profile });
+  ok(offWithProfile.map((r) => r.doc.url).join("|") === baselineOrder,
+    "flag off + profile supplied preserves baseline order");
+
+  // With flag on: the current-year Unilever plc doc should be first, and both
+  // the HUL doc and the deep-vintage doc should rank later than it.
+  const onRanked = rankDocuments(corpus, {
+    companyDomain: "unilever.com",
+    issuerProfile: profile,
+    retrievalV2: true,
+  });
+  const firstUrl = onRanked[0].doc.url;
+  ok(firstUrl.includes("unilever.com") && firstUrl.includes(`${CY}-sustainability-statement`),
+    `current Unilever plc doc ranks first with retrievalV2 (got ${firstUrl})`);
+}
+
+section("PR 1 · 1b · diagnostics count penalty hits");
+{
+  const profile = makeUnileverProfile();
+  const docs = [
+    { url: "https://unilever.com/2025-annual-report.pdf", title: "Unilever plc Annual Report 2025" }, // clean
+    { url: "https://hul.co.in/2025-report.pdf", title: "Hindustan Unilever Report 2025" },              // entity penalty
+    { url: `https://unilever.com/${CY - 6}-old.pdf`, title: `Unilever plc Report ${CY - 6}` },        // vintage penalty
+    { url: "https://unilever.com/press/announcement", title: "Unilever plc statement" },              // press penalty
+  ];
+  const rankedOn = rankDocuments(docs, {
+    companyDomain: "unilever.com",
+    issuerProfile: profile,
+    retrievalV2: true,
+  });
+  const diagOn = computeRankerDiagnostics(rankedOn);
+  ok(diagOn.entityMatchPenaltyHits >= 1, `entityMatch hits >=1 (got ${diagOn.entityMatchPenaltyHits})`);
+  ok(diagOn.vintagePenaltyHits >= 1, `vintage hits >=1 (got ${diagOn.vintagePenaltyHits})`);
+  ok(diagOn.pressPagePenaltyHits >= 1, `pressPage hits >=1 (got ${diagOn.pressPagePenaltyHits})`);
+
+  // With flag off — none of the counters may fire.
+  const rankedOff = rankDocuments(docs, { companyDomain: "unilever.com", issuerProfile: profile });
+  const diagOff = computeRankerDiagnostics(rankedOff);
+  ok(diagOff.entityMatchPenaltyHits === 0, `flag off → entityMatch hits 0 (got ${diagOff.entityMatchPenaltyHits})`);
+  ok(diagOff.vintagePenaltyHits === 0, `flag off → vintage hits 0 (got ${diagOff.vintagePenaltyHits})`);
+  ok(diagOff.pressPagePenaltyHits === 0, `flag off → pressPage hits 0 (got ${diagOff.pressPagePenaltyHits})`);
+}
 
 console.log(`\n────────────────────────────\nPASSED: ${passed}   FAILED: ${failed}`);
 if (failed > 0) process.exit(1);

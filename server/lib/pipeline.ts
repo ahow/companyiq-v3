@@ -27,7 +27,11 @@
  */
 
 import * as storage from "../storage.js";
-import { searchCompanyDocuments, type DiscoveryResult } from "./discovery.js";
+import { searchCompanyDocuments, runTargetedDisclosureQuery, type DiscoveryResult } from "./discovery.js";
+import {
+  getRequirementsForJurisdiction,
+  verifyLatestPrimaryDisclosure,
+} from "./primary-disclosure-check.js";
 import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
@@ -123,7 +127,7 @@ async function runFetchPhase(opts: {
   batchId?: number;
   cancelCheck?: () => boolean;
   batchFetchState?: BatchFetchState; // 42-F
-}): Promise<{ fetchedCount: number; totalAccepted: number }> {
+}): Promise<{ fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile }> {
   const { company, framework, workspaceId, batchId, cancelCheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
@@ -196,9 +200,70 @@ async function runFetchPhase(opts: {
     peerCompanyNames,
     companyRow: company, // 40-G: pass full row for cached domain family + FIGI fields
     evidenceKeywords: aggregatedEvidenceKeywords, // Instruction 46
+    // PR 1 · Change 1b: forward the retrieval_v2 workspace flag so the
+    // ranker can apply subsidiary/vintage/press-page penalties. Same read
+    // pattern used by the 1a latest-primary-disclosure verification below.
+    retrievalV2: settings.retrieval_v2 === "true",
   });
 
   console.log(`[${companyName}] Discovery found ${discoveryResult.documents.length} accepted documents`);
+
+  // ─── PR 1 · Change 1a: verify latest primary disclosure ──────────────────
+  // Gated behind the `retrieval_v2` workspace flag. When enabled, we check
+  // whether the discovered corpus contains the LATEST primary regulatory
+  // disclosure for this issuer's jurisdiction; for anything missing we fire
+  // ONE targeted follow-up search and merge the results back into the corpus
+  // so the downstream ranker/gate can score them alongside the original set.
+  if (settings.retrieval_v2 === "true") {
+    const currentYear = new Date().getUTCFullYear();
+    // company.exchange is not a stored column today; pass null. Country
+    // handles the audit-driven cases (Unilever GB, Kering FR) directly.
+    const requirements = getRequirementsForJurisdiction(
+      (company.country || null),
+      null,
+      currentYear,
+    );
+    const check = verifyLatestPrimaryDisclosure(
+      discoveryResult.documents,
+      requirements,
+      companyName,
+    );
+
+    if (check.missing.length > 0) {
+      console.log(
+        `[${companyName}] Missing primary disclosures: ${check.missing.map(r => r.label).join(", ")}`
+      );
+
+      let queriesFired = 0;
+      for (const query of check.targetedQueries) {
+        try {
+          const extra = await runTargetedDisclosureQuery(query, companyName);
+          queriesFired++;
+          if (extra.length > 0) {
+            // Merge into corpus WITHOUT recomputing ranking — new docs slot in
+            // via the same tier/priority path used by the rest of discovery.
+            discoveryResult.documents.push(...extra);
+            console.log(
+              `[${companyName}] Targeted query yielded ${extra.length} candidates for repair`
+            );
+          }
+        } catch (e: any) {
+          console.warn(
+            `[${companyName}] Targeted Sonar query failed: ${e?.message}`
+          );
+        }
+      }
+
+      // Record which requirements were missing for telemetry.
+      discoveryResult.diagnostics = {
+        ...discoveryResult.diagnostics,
+        primaryDisclosureRepair: {
+          missing: check.missing.map(r => r.id),
+          queriesFired,
+        },
+      };
+    }
+  }
 
   // Persist an auto-detected domain back to the company record so future runs
   // (and the Domains dashboard) have it, and so contamination heuristics can
@@ -1059,7 +1124,10 @@ async function runFetchPhase(opts: {
   // Update status to fetched
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "fetched" });
 
-  return { fetchedCount: totalFetched, totalAccepted: totalFetched };
+  // PR 1 · Change 1c: return the resolved issuerProfile so runAnalysisPipeline
+  // can thread it into the analyze phase for the pre-BM25 sanity gate. Optional
+  // — discoveryResult.issuerProfile is itself optional and may be undefined.
+  return { fetchedCount: totalFetched, totalAccepted: totalFetched, issuerProfile: discoveryResult.issuerProfile };
 }
 
 // ─── Phase 2: Analyze Documents (Framework-Specific) ────────────────────────
@@ -1072,8 +1140,19 @@ async function runAnalyzePhase(opts: {
   batchId?: number;
   sourceBatchId?: number; // Corpus replay: read from source batch corpus
   cancelCheck?: () => boolean;
+  // PR 1 · Change 1c: threaded from runAnalysisPipeline (which captured it from
+  // runFetchPhase's discovery step). Optional — absent on replay / skip-fetch
+  // runs, in which case the analyzer's pre-BM25 sanity gate is inert.
+  issuerProfile?: import("./issuer-profile.js").IssuerProfile;
+  // PR 1 · Change 4: per-batch dedupe registry, instantiated once in
+  // runAnalysisPipeline and threaded down so re-retrieval fires at most 1x
+  // per (company, measure) per batch. Absent ⇒ re-retrieval disabled.
+  reviewQueue?: import("./retrieval-review-queue.js").RetrievalReviewQueue;
+  // PR 1 · Change 4: signals replay / skipFetch — suppresses network calls
+  // even when reviewQueue is present so replay determinism is preserved.
+  skipFetch?: boolean;
 }): Promise<AnalysisResult | null> {
-  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck } = opts;
+  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck, issuerProfile, reviewQueue, skipFetch } = opts;
   const companyId = company.id;
   const companyName = company.name;
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
@@ -1239,6 +1318,11 @@ async function runAnalyzePhase(opts: {
   // and the verdict cache silently masks retrieval-side changes when chunks
   // happen to hash identically. Env var CIQ_FORCE_FRESH_SCORING also opts in.
   const freshScoring = !!sourceBatchId || process.env.CIQ_FORCE_FRESH_SCORING === "1";
+  // PR 1 · Change 4: load workspace-scoped trusted sources so re-retrieval uses
+  // the same discovery configuration as the fetch phase. Cheap to load once
+  // per company; skipped-when-inert cost is negligible.
+  const trustedSourcesForRetrieval = await storage.getTrustedSources(workspaceId);
+
   const analysis = await analyzeCompanyMeasures({
     workspaceId,
     companyName,
@@ -1250,6 +1334,18 @@ async function runAnalyzePhase(opts: {
     measures,
     temporalContext,
     freshScoring,
+    // PR 1 · Change 1c: threaded through from runAnalysisPipeline (which captured
+    // it from runFetchPhase's discovery step). Undefined when discovery had no
+    // profile to resolve OR when this is a replay/skip-fetch run; gate is inert
+    // in either case.
+    issuerProfile,
+    // PR 1 · Change 4: threaded so the analyzer's Low-confidence handler can
+    // invoke runTargetedReretrieval. When reviewQueue is undefined (worker did
+    // not construct one) the analyzer skips re-retrieval entirely.
+    reviewQueue,
+    company,
+    trustedSources: trustedSourcesForRetrieval,
+    skipFetch,
   });
 
   // ─── I49: PRESERVE PRE-ADJUSTMENT CONFIDENCE ────────────────────────────────
@@ -1770,6 +1866,18 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   const companyId = company.id;
   const pipelineStart = Date.now();
 
+  // PR 1 · Change 4: instantiate the per-batch dedupe registry ONCE per pipeline
+  // run. Threaded into runAnalyzePhase → analyzeCompanyMeasures so re-retrieval
+  // can fire at most 1x per (company, measure) per batch. Cost gate.
+  //
+  // NOTE: today runAnalysisPipeline is invoked once per (company, framework)
+  // by the worker, so "per batch" collapses to "per company" — which is still
+  // the correct cost bound for this change since dedupe is keyed on
+  // (companyId, measureId). Batch-scoped sharing would only widen the guard,
+  // never narrow it, and can be layered on later without touching this file.
+  const { RetrievalReviewQueue } = await import("./retrieval-review-queue.js");
+  const reviewQueue = new RetrievalReviewQueue();
+
   // CORPUS REPLAY GUARD: when sourceBatchId is set, fetch/discovery/upsert is forbidden.
   // The pipeline MUST operate in score-only mode reading from the source corpus.
   if (sourceBatchId && !skipFetch) {
@@ -1782,7 +1890,9 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   const pipelinePromise = (async (): Promise<PipelineResult> => {
     try {
       // Phase 1: Fetch (unless skipping to reuse cached docs)
-      let fetchResult = { fetchedCount: 0, totalAccepted: 0 };
+      // PR 1 · Change 1c: type widened to carry the optional issuerProfile returned
+      // by runFetchPhase; used to thread the profile into the analyze phase.
+      let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile } = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
         fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck, batchFetchState: opts.batchFetchState });
         
@@ -1827,7 +1937,20 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       }
 
       // Phase 2: Analyze
-      const analysis = await runAnalyzePhase({ company, framework, measures, workspaceId, batchId, sourceBatchId: opts.sourceBatchId, cancelCheck });
+      // PR 1 · Change 1c: pass the resolved issuerProfile from Phase 1 into the
+      // analyze phase so the pre-BM25 chunk sanity gate can fire. Undefined when
+      // skipFetch=true (replay); gate is inert in that case.
+      // PR 1 · Change 4: pass the reviewQueue + skipFetch through so the analyzer
+      // can gate auto re-retrieval on the same dedupe registry used for the
+      // whole pipeline run.
+      const analysis = await runAnalyzePhase({
+        company, framework, measures, workspaceId, batchId,
+        sourceBatchId: opts.sourceBatchId,
+        cancelCheck,
+        issuerProfile: fetchResult.issuerProfile,
+        reviewQueue,
+        skipFetch,
+      });
 
       if (!analysis) {
         return {

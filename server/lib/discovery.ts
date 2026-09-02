@@ -980,7 +980,7 @@ IMPORTANT: The queries MUST be relevant to the topic "${framework.name}". Do NOT
 
 // ─── Query Construction ──────────────────────────────────────────────────────
 
-interface DiscoveryCandidate {
+export interface DiscoveryCandidate {
   url: string;
   title: string;
   snippet: string;
@@ -2717,6 +2717,17 @@ export interface DiscoveryDiagnostics {
   retrievalDiagnostics?: RetrievalDiagnostics;
   registrySearchSummary?: RegistrySearchSummary;
   queryExpansionResult?: QueryExpansionResult;
+  /**
+   * PR 1 · Change 1a: telemetry for the latest-primary-disclosure repair pass.
+   * Populated ONLY by pipeline.ts (post-discovery); the internal discovery
+   * path never sets this. `missing` is the list of requirement ids that were
+   * absent from the initial corpus; `queriesFired` is the number of targeted
+   * follow-up queries actually issued to close those gaps.
+   */
+  primaryDisclosureRepair?: {
+    missing: string[];
+    queriesFired: number;
+  };
 }
 
 export interface DiscoveryResult {
@@ -2736,6 +2747,38 @@ export interface DiscoveryResult {
 // than this, it fails the job with a clear reason rather than hanging the batch.
 const DISCOVERY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
+/**
+ * PR 1 · Change 1a: run a single targeted web-search query for a company
+ * (used by pipeline.ts to close latest-primary-disclosure gaps identified by
+ * verifyLatestPrimaryDisclosure). Wraps the internal `webSearch` helper so
+ * the caller does not need to know which search provider is configured
+ * (Serper.dev vs SerpAPI) and gets the same rate-limiting and caching as
+ * the rest of discovery.
+ *
+ * Returns DiscoveryCandidate rows tagged with lane="primary-disclosure-repair"
+ * and a lower-than-average priority so they merge into the corpus without
+ * disturbing the existing ranking key. Never throws — returns [] on error.
+ */
+export async function runTargetedDisclosureQuery(
+  query: string,
+  companyName: string,
+  opts: { num?: number } = {},
+): Promise<DiscoveryCandidate[]> {
+  try {
+    const results = await webSearch(query, { num: opts.num ?? 10 });
+    return results.map((r) => ({
+      url: r.link,
+      title: r.title || "",
+      snippet: r.snippet || "",
+      lane: "primary-disclosure-repair",
+      priority: 55, // between IR (60+) and secondary (40) — rank layer decides final order
+    }));
+  } catch (e: any) {
+    console.warn(`[${companyName}] Targeted disclosure query failed for "${query.slice(0, 80)}": ${e?.message}`);
+    return [];
+  }
+}
+
 export async function searchCompanyDocuments(opts: {
   companyName: string;
   companyId: number;
@@ -2752,6 +2795,10 @@ export async function searchCompanyDocuments(opts: {
   peerCompanyNames?: string[]; // Fix C: workspace-derived peer list for anti-contamination
   companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
   evidenceKeywords?: string[]; // Instruction 46: aggregated from measures
+  /** PR 1 · Change 1b: enable retrievalV2 ranking penalties (subsidiary /
+   *  vintage / press-page). Threaded down to the ComputeOpts used by the
+   *  layered ranker. Off by default — pre-1b behaviour is preserved. */
+  retrievalV2?: boolean;
 }): Promise<DiscoveryResult> {
   // Wrap the entire discovery in a hard timeout
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -2776,6 +2823,8 @@ async function searchCompanyDocumentsInner(opts: {
   peerCompanyNames?: string[];
   companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
   evidenceKeywords?: string[]; // Instruction 46: aggregated from measures
+  /** PR 1 · Change 1b: forwarded from searchCompanyDocuments. */
+  retrievalV2?: boolean;
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
   const localeProfile = resolveLocaleProfile(opts.country);
@@ -3854,6 +3903,10 @@ async function searchCompanyDocumentsInner(opts: {
     nativeNonLatinMarket,
     frameworkRegistries: (framework as any).authoritativeRegistries || undefined,
     frameworkFilingTypes: (framework as any).authoritativeFilingTypes || undefined,
+    // ─── PR 1 · Change 1b: pass through issuerProfile + retrievalV2 so the
+    // ranker can apply subsidiary/vintage/press-page penalties when enabled.
+    issuerProfile,
+    retrievalV2: opts.retrievalV2,
   });
 
   // §4: candidate-pool fingerprint over the FULL gated set BEFORE the cap, so
@@ -4053,6 +4106,8 @@ export async function searchCompanyDocumentsWithEnsemble(opts: {
   framework: Framework;
   trustedSources: TrustedSource[];
   iterations?: number;
+  /** PR 1 · Change 1b: forwarded to searchCompanyDocuments on each pass. */
+  retrievalV2?: boolean;
 }): Promise<DiscoveryResult> {
   const iterations = opts.iterations || 1;
 

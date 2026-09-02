@@ -2,7 +2,11 @@ import * as storage from "../storage.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
 import { ProviderScoringError } from "./credit-breaker.js";
 import { classifyProviderError, type ProviderFailureClass } from "./provider-resilience.js";
-import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
+import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, applyChunkSanityGate, type EvidencePack, type Chunk, type ChunkSanityResult } from "./passage-retrieval.js";
+import type { IssuerProfile } from "./issuer-profile.js";
+// PR 1 · Change 4: auto re-retrieval on Low-confidence cells (behind autoReretrieval flag).
+import { runTargetedReretrieval, type RetrievalReviewQueue } from "./retrieval-review-queue.js";
+import type { Company, TrustedSource } from "../../shared/schema.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash } from "./processor.js";
@@ -135,6 +139,15 @@ interface AnalysisSettings {
   cascadePrimary: string;
   cascadeSecondary: string;
   cascadeArbiter: string;
+  // PR 1 · Change 1a: gates the retrieval-hardening pass (latest-primary-disclosure
+  // verification + targeted follow-up queries in pipeline.ts). Default OFF so
+  // iteration-8 behaviour is preserved until we opt individual workspaces in.
+  retrievalV2: boolean;
+  // PR 1 · Change 4: gates the per-measure auto re-retrieval that fires a
+  // targeted `searchCompanyDocuments` query for Low-confidence cells and
+  // re-scores on the augmented corpus. Default OFF — inert unless the caller
+  // also passes a reviewQueue AND retrievalV2 is on.
+  autoReretrieval: boolean;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -157,6 +170,11 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     cascadePrimary: settings.cascade_primary || "deepseek",
     cascadeSecondary: settings.cascade_secondary || "glm-4.6",
     cascadeArbiter: settings.cascade_arbiter || "claude-arbiter",
+    // PR 1 · Change 1a: default OFF. Enabled via workspace_settings.retrieval_v2="true".
+    retrievalV2: settings.retrieval_v2 === "true",
+    // PR 1 · Change 4: default OFF. Enabled via workspace_settings.auto_reretrieval="true".
+    // Requires retrievalV2 AND a reviewQueue plumbed from pipeline.ts to have any effect.
+    autoReretrieval: settings.auto_reretrieval === "true",
     // v3g (Bug 1 §3 action 5): verdict cache is now OPT-IN (default OFF) until the
     // fingerprint contract is independently re-verified. The cost of recomputing a
     // few measures per re-run is trivial vs the risk of cross-company verdict reuse
@@ -762,8 +780,14 @@ async function summarizeDocuments(opts: {
   documentTitles?: string[];
   topicDescription: string;
   framework: Framework;
-}): Promise<{ text: string; model: string; reservedAnnualUrl?: string; corpusTopicWarning?: string; topicPrimaryDocUrls?: string[] }> {
-  const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription, framework } = opts;
+  // PR 1 · Change 1c: threaded through so the sanity gate (below) can run
+  // BEFORE the BM25 candidate pool is built. Both are required for the gate
+  // to fire; if either is missing the pool is built exactly as before (the
+  // backward-compat invariant tested in passage-retrieval.test.ts).
+  retrievalV2?: boolean;
+  issuerProfile?: IssuerProfile;
+}): Promise<{ text: string; model: string; reservedAnnualUrl?: string; corpusTopicWarning?: string; topicPrimaryDocUrls?: string[]; chunkSanityDiagnostics?: ChunkSanityResult }> {
+  const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription, framework, retrievalV2, issuerProfile } = opts;
 
   // Check summary cache. v3g: salt the cache key so the OLD header-lossy LLM
   // summaries (which dropped document URLs) are never reused; only the new
@@ -1007,7 +1031,31 @@ async function summarizeDocuments(opts: {
   // with BM25 and rebuild a corpus that RE-EMITS the document header (with URL)
   // whenever the source document changes — preserving provenance AND verbatim text.
   // The document-aware chunker carries docUrl/docTitle on every chunk.
-  const docChunks = chunkDocuments(combined);
+  let docChunks = chunkDocuments(combined);
+  let chunkSanityDiagnostics: ChunkSanityResult | null = null;
+
+  // ─── PR 1 · Change 1c: sanity gate ──────────────────────────────────────────
+  // Hard-filter chunks whose parent document is deep-vintage or a wrong-entity
+  // match BEFORE they enter the BM25 candidate pool. Only fires when BOTH the
+  // retrievalV2 flag is on AND an issuerProfile is available; otherwise
+  // `docChunks` is untouched (backward-compat invariant).
+  if (retrievalV2 && issuerProfile) {
+    const gate = applyChunkSanityGate(docChunks, {
+      issuerProfile,
+      currentYear: new Date().getUTCFullYear(),
+      preserveIfOnlySource: false,
+    });
+    if (gate.rejected.length > 0) {
+      const totalRejected = gate.rejected.reduce((a, r) => a + r.chunkCount, 0);
+      console.log(`[${companyName}] Change 1c gate: ${totalRejected} chunks rejected across ${gate.rejected.length} docs (${gate.rejected.map(r => `${r.reason}:${r.docTitle || r.docUrl}`).join(", ")})`);
+    }
+    if (gate.softFlagged.length > 0) {
+      console.log(`[${companyName}] Change 1c gate: ${gate.softFlagged.length} doc(s) soft-flagged (${gate.softFlagged.map(f => `${f.reason}:${f.docTitle || f.docUrl}`).join(", ")})`);
+    }
+    docChunks = gate.keep;
+    chunkSanityDiagnostics = gate;
+  }
+
   const bm25Index = buildBM25Index(docChunks.map((c) => c.text));
 
   const scoredChunks = docChunks.map((chunk, idx) => ({
@@ -1368,7 +1416,15 @@ async function summarizeDocuments(opts: {
     summarizerModel: "bm25-headers-v3l-topicaware",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3l-topicaware", reservedAnnualUrl, corpusTopicWarning, topicPrimaryDocUrls };
+  return {
+    text: relevantText,
+    model: "bm25-headers-v3l-topicaware",
+    reservedAnnualUrl,
+    corpusTopicWarning,
+    topicPrimaryDocUrls,
+    // PR 1 · Change 1c: surface gate telemetry to the caller when it fired.
+    chunkSanityDiagnostics: chunkSanityDiagnostics || undefined,
+  };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
@@ -1385,8 +1441,30 @@ export async function analyzeCompanyMeasures(opts: {
   temporalContext?: { withdrawals: Array<{ type: string; description: string; affectedTopics: string[]; detectedDate: string | null; confidence: string }>; temporalWarning: string | null };
   // v3e (Section 4): per-run opt-out of the verdict cache for variability studies.
   freshScoring?: boolean;
+  // PR 1 · Change 1c: threaded from pipeline.ts (discoveryResult.issuerProfile) so
+  // the pre-BM25 chunk sanity gate inside summarizeDocuments can drop wrong-
+  // entity / deep-vintage doc chunks before they reach the candidate pool.
+  // Optional — gate is inert when absent.
+  issuerProfile?: IssuerProfile;
+  // PR 1 · Change 4: per-batch dedupe registry for auto re-retrieval. When
+  // absent, re-retrieval is disabled regardless of the autoReretrieval flag.
+  // Instantiated ONCE at runAnalysisPipeline scope; caps re-retrieval at 1
+  // per (companyId, measureId) per batch.
+  reviewQueue?: RetrievalReviewQueue;
+  // PR 1 · Change 4: full company row for the targeted query — discovery
+  // needs id/name/domain/isin/ticker/sector/country to rank + verify. Optional;
+  // when absent, re-retrieval is skipped (falls back to legacy Low-confidence
+  // handling).
+  company?: Company;
+  // PR 1 · Change 4: trusted-source list, threaded through so re-retrieval
+  // uses the same discovery configuration as the original fetch phase.
+  trustedSources?: TrustedSource[];
+  // PR 1 · Change 4: signals a replay / cached-corpus run — network calls on
+  // replay would defeat determinism, so re-retrieval is suppressed regardless
+  // of flags.
+  skipFetch?: boolean;
 }): Promise<AnalysisResult> {
-  const { workspaceId, companyName, companyId, documentTexts, documentUrls, documentTitles, framework, measures, temporalContext, freshScoring } = opts;
+  const { workspaceId, companyName, companyId, documentTexts, documentUrls, documentTitles, framework, measures, temporalContext, freshScoring, issuerProfile, reviewQueue, company, trustedSources, skipFetch } = opts;
 
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
@@ -1528,11 +1606,27 @@ export async function analyzeCompanyMeasures(opts: {
       documentTitles,
       topicDescription: framework.topicDescription || framework.name,
       framework,
+      // PR 1 · Change 1c: enable the pre-BM25 sanity gate when both the retrieval
+      // feature flag is on and an issuerProfile is available. Backward-compat:
+      // when either is missing the gate is inert and docChunks is untouched.
+      retrievalV2: settings.retrievalV2,
+      issuerProfile,
     });
     combinedText = result.text;
     summarizerModel = result.model;
     reservedAnnualUrl = result.reservedAnnualUrl;
     topicPrimaryDocUrls = result.topicPrimaryDocUrls;
+    // PR 1 · Change 1c: log a per-company gate summary (or absence) alongside the
+    // existing summarizer log. Diagnostic-only; not persisted to a new column.
+    if (result.chunkSanityDiagnostics) {
+      const g = result.chunkSanityDiagnostics;
+      const rejectedChunks = g.rejected.reduce((a, r) => a + r.chunkCount, 0);
+      const softChunks = g.softFlagged.reduce((a, r) => a + r.chunkCount, 0);
+      const byReason: Record<string, number> = {};
+      for (const r of g.rejected) byReason[r.reason] = (byReason[r.reason] || 0) + r.chunkCount;
+      for (const r of g.softFlagged) byReason[r.reason] = (byReason[r.reason] || 0) + r.chunkCount;
+      console.log(`[${companyName}] Change 1c gate summary: rejected=${rejectedChunks} chunks / ${g.rejected.length} docs, softFlagged=${softChunks} chunks / ${g.softFlagged.length} docs, byReason=${JSON.stringify(byReason)}`);
+    }
     console.log(`[${companyName}] Summarized via ${summarizerModel} (${combinedText.length} chars)${reservedAnnualUrl ? ` reservedAnnual=${reservedAnnualUrl.slice(0,70)}` : ""} topicPrimary=${topicPrimaryDocUrls?.length ?? 0}`);
   }
 
@@ -1561,6 +1655,16 @@ export async function analyzeCompanyMeasures(opts: {
   }
   const corpusTopicStats = computeCorpusTopicStats(combinedText, topicTerms);
   console.log(`[${companyName}] Corpus topic evidence: ${corpusTopicStats.topicChunks}/${corpusTopicStats.totalChunks} chunks contain topic terms (${corpusTopicStats.topicHits} hits)`);
+
+  // PR 1 · Change 4: dedupe set of URLs already in the analyzed corpus. Built
+  // ONCE per call (not per measure) and passed into every runTargetedReretrieval
+  // invocation so newly-discovered candidates whose URL matches an existing doc
+  // are dropped without a fetch. Undefined URLs are skipped (guard for exotic
+  // corpus rows lacking a stable URL).
+  const existingDocUrlSet = new Set<string>();
+  for (const u of documentUrls) {
+    if (u) existingDocUrlSet.add(u);
+  }
 
   // Group measures by category
   const categoryMap = new Map<string, FrameworkMeasure[]>();
@@ -1738,20 +1842,108 @@ export async function analyzeCompanyMeasures(opts: {
 
       // Low-confidence positive handling
       if (measureResult.score > 0 && measureResult.confidence === "Low") {
-        if (settings.lowConfidenceHandling === "downgrade") {
-          // Downgrade to Partial (0.5) — preserves the evidence but reduces the score
-          if (measureResult.score === 1) {
-            measureResult.score = 0.5;
-            measureResult.verdict = "Partial";
-            measureResult.verdictNuance = (measureResult.verdictNuance || "") +
-              " [Auto-downgraded: Low confidence positive reduced to Partial]";
+        // ─── PR 1 · Change 4: auto re-retrieval BEFORE downgrade ─────────────
+        // Guard order matters — skip the whole block unless every dependency is
+        // present. When any guard fails, existing downgrade/flag behaviour runs
+        // unchanged, preserving the backward-compat invariant.
+        let reretrievalAdopted = false;
+        const reretrievalEligible =
+          settings.retrievalV2 &&
+          settings.autoReretrieval &&
+          !skipFetch &&
+          !!reviewQueue &&
+          !!company &&
+          !reviewQueue.hasFired(company.id, measure.measureId);
+        if (reretrievalEligible && reviewQueue && company) {
+          try {
+            const reretrievalResult = await runTargetedReretrieval({
+              company: {
+                id: company.id,
+                name: company.name,
+                domain: company.domain,
+                isin: company.isin,
+                ticker: company.ticker,
+                sector: company.sector,
+                country: company.country,
+              },
+              measure,
+              framework,
+              trustedSources: trustedSources || [],
+              issuerProfile,
+              existingCorpusText: combinedText,
+              existingDocUrls: existingDocUrlSet,
+              fingerprintKey: `${company.id}:${measure.measureId}`,
+            }, reviewQueue.getFiredSet());
+
+            if (
+              reretrievalResult.fired &&
+              reretrievalResult.newEvidencePack &&
+              reretrievalResult.newDocsAdded > 0
+            ) {
+              // Re-score on the augmented evidence pack for THIS measure only.
+              const newMeasureResult = await scoreWithEnsemble({
+                companyName,
+                companyId,
+                measure,
+                evidenceText: reretrievalResult.newEvidencePack.text,
+                terminology,
+                topicDescription: framework.topicDescription || framework.name,
+                settings,
+                temporalWarning: tw,
+                framework,
+              });
+
+              // Adopt only if the augmented result is at least as strong — same
+              // never-lower invariant as the deep-read pass below.
+              if (newMeasureResult.score >= measureResult.score) {
+                console.log(`[${companyName}] Change 4 re-retrieval adopted for ${measure.measureId}: score ${measureResult.score}→${newMeasureResult.score}, confidence ${measureResult.confidence}→${newMeasureResult.confidence}`);
+                const deltaScore = newMeasureResult.score - measureResult.score;
+                const priorConfidence = measureResult.confidence;
+                measureResult = newMeasureResult;
+                measureResult.verdictNuance = (measureResult.verdictNuance || "") +
+                  ` [Re-retrieval: ${reretrievalResult.newDocsAdded} new doc(s) added, re-scored]`;
+                (measureResult as MeasureResult & { _reretrieval?: unknown })._reretrieval = {
+                  fired: true,
+                  deltaScore,
+                  newDocsAdded: reretrievalResult.newDocsAdded,
+                  targetedQuery: reretrievalResult.targetedQuery,
+                  priorConfidence,
+                };
+                reretrievalAdopted = true;
+              } else {
+                console.log(`[${companyName}] Change 4 re-retrieval NOT adopted for ${measure.measureId}: new score ${newMeasureResult.score} < ${measureResult.score}`);
+              }
+            } else if (reretrievalResult.reason === "search-failed") {
+              console.warn(`[${companyName}] Change 4 re-retrieval search failed for ${measure.measureId}: ${reretrievalResult.detail || "unknown"}`);
+            }
+          } catch (rrErr: unknown) {
+            const msg = rrErr instanceof Error ? rrErr.message : String(rrErr);
+            console.warn(`[${companyName}] Change 4 re-retrieval error for ${measure.measureId}: ${msg}`);
           }
-        } else if (settings.lowConfidenceHandling === "flag") {
-          // Flag for review — keep score but mark in nuance
-          measureResult.verdictNuance = (measureResult.verdictNuance || "") +
-            " [NEEDS REVIEW: Low confidence positive — manual verification recommended]";
+        } else if (settings.retrievalV2 && settings.autoReretrieval && skipFetch) {
+          console.log(`[change 4] skipped for ${companyName}:${measure.measureId} (skipFetch=true)`);
         }
-        // "keep" = do nothing, accept the score as-is
+
+        // Existing downgrade / flag behaviour runs ONLY if re-retrieval did not
+        // upgrade the cell out of Low-confidence. When flags/reviewQueue/company
+        // are missing, `reretrievalAdopted` stays false and the original branches
+        // run byte-identical to pre-change.
+        if (!reretrievalAdopted && measureResult.score > 0 && measureResult.confidence === "Low") {
+          if (settings.lowConfidenceHandling === "downgrade") {
+            // Downgrade to Partial (0.5) — preserves the evidence but reduces the score
+            if (measureResult.score === 1) {
+              measureResult.score = 0.5;
+              measureResult.verdict = "Partial";
+              measureResult.verdictNuance = (measureResult.verdictNuance || "") +
+                " [Auto-downgraded: Low confidence positive reduced to Partial]";
+            }
+          } else if (settings.lowConfidenceHandling === "flag") {
+            // Flag for review — keep score but mark in nuance
+            measureResult.verdictNuance = (measureResult.verdictNuance || "") +
+              " [NEEDS REVIEW: Low confidence positive — manual verification recommended]";
+          }
+          // "keep" = do nothing, accept the score as-is
+        }
       }
 
       // Source normalization: ensure quote sources match actual document titles
