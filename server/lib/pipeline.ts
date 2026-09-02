@@ -1144,8 +1144,15 @@ async function runAnalyzePhase(opts: {
   // runFetchPhase's discovery step). Optional — absent on replay / skip-fetch
   // runs, in which case the analyzer's pre-BM25 sanity gate is inert.
   issuerProfile?: import("./issuer-profile.js").IssuerProfile;
+  // PR 1 · Change 4: per-batch dedupe registry, instantiated once in
+  // runAnalysisPipeline and threaded down so re-retrieval fires at most 1x
+  // per (company, measure) per batch. Absent ⇒ re-retrieval disabled.
+  reviewQueue?: import("./retrieval-review-queue.js").RetrievalReviewQueue;
+  // PR 1 · Change 4: signals replay / skipFetch — suppresses network calls
+  // even when reviewQueue is present so replay determinism is preserved.
+  skipFetch?: boolean;
 }): Promise<AnalysisResult | null> {
-  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck, issuerProfile } = opts;
+  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck, issuerProfile, reviewQueue, skipFetch } = opts;
   const companyId = company.id;
   const companyName = company.name;
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
@@ -1311,6 +1318,11 @@ async function runAnalyzePhase(opts: {
   // and the verdict cache silently masks retrieval-side changes when chunks
   // happen to hash identically. Env var CIQ_FORCE_FRESH_SCORING also opts in.
   const freshScoring = !!sourceBatchId || process.env.CIQ_FORCE_FRESH_SCORING === "1";
+  // PR 1 · Change 4: load workspace-scoped trusted sources so re-retrieval uses
+  // the same discovery configuration as the fetch phase. Cheap to load once
+  // per company; skipped-when-inert cost is negligible.
+  const trustedSourcesForRetrieval = await storage.getTrustedSources(workspaceId);
+
   const analysis = await analyzeCompanyMeasures({
     workspaceId,
     companyName,
@@ -1327,6 +1339,13 @@ async function runAnalyzePhase(opts: {
     // profile to resolve OR when this is a replay/skip-fetch run; gate is inert
     // in either case.
     issuerProfile,
+    // PR 1 · Change 4: threaded so the analyzer's Low-confidence handler can
+    // invoke runTargetedReretrieval. When reviewQueue is undefined (worker did
+    // not construct one) the analyzer skips re-retrieval entirely.
+    reviewQueue,
+    company,
+    trustedSources: trustedSourcesForRetrieval,
+    skipFetch,
   });
 
   // ─── I49: PRESERVE PRE-ADJUSTMENT CONFIDENCE ────────────────────────────────
@@ -1847,6 +1866,18 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   const companyId = company.id;
   const pipelineStart = Date.now();
 
+  // PR 1 · Change 4: instantiate the per-batch dedupe registry ONCE per pipeline
+  // run. Threaded into runAnalyzePhase → analyzeCompanyMeasures so re-retrieval
+  // can fire at most 1x per (company, measure) per batch. Cost gate.
+  //
+  // NOTE: today runAnalysisPipeline is invoked once per (company, framework)
+  // by the worker, so "per batch" collapses to "per company" — which is still
+  // the correct cost bound for this change since dedupe is keyed on
+  // (companyId, measureId). Batch-scoped sharing would only widen the guard,
+  // never narrow it, and can be layered on later without touching this file.
+  const { RetrievalReviewQueue } = await import("./retrieval-review-queue.js");
+  const reviewQueue = new RetrievalReviewQueue();
+
   // CORPUS REPLAY GUARD: when sourceBatchId is set, fetch/discovery/upsert is forbidden.
   // The pipeline MUST operate in score-only mode reading from the source corpus.
   if (sourceBatchId && !skipFetch) {
@@ -1909,11 +1940,16 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // PR 1 · Change 1c: pass the resolved issuerProfile from Phase 1 into the
       // analyze phase so the pre-BM25 chunk sanity gate can fire. Undefined when
       // skipFetch=true (replay); gate is inert in that case.
+      // PR 1 · Change 4: pass the reviewQueue + skipFetch through so the analyzer
+      // can gate auto re-retrieval on the same dedupe registry used for the
+      // whole pipeline run.
       const analysis = await runAnalyzePhase({
         company, framework, measures, workspaceId, batchId,
         sourceBatchId: opts.sourceBatchId,
         cancelCheck,
         issuerProfile: fetchResult.issuerProfile,
+        reviewQueue,
+        skipFetch,
       });
 
       if (!analysis) {
