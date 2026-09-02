@@ -39,6 +39,30 @@ export function getPipelineVersion(): string {
   return PIPELINE_VERSION;
 }
 
+// I81: When CSRD/ESRS Non-Financial Statements are flattened by pdf-parse,
+// the IRO summary tables lose column alignment. Row-level time-horizon
+// indicators — typically drawn as filled circles or bullets ("•", "••",
+// "•••") — end up on their own lines detached from the header row that
+// defined "Short term / Medium term / Long term". Our PDF post-processor
+// (csrd-table-normaliser.ts) inlines a "[horizon: ...]" annotation next to
+// each such line, but for chunks that miss the annotation (older cached
+// content, non-standard notations, or documents where the header is too
+// distant), we also tell the scorer directly. This prevents the scorer
+// from mistakenly concluding "no time horizons disclosed" when the source
+// clearly has an ESRS-standard IRO table with horizon columns.
+const CSRD_TABLE_NOTATION_NOTE = `CSRD/ESRS TABLE NOTATION:
+European CSRD/ESRS Non-Financial Statements often present impacts, risks and
+opportunities (IROs) in tables with three time-horizon columns: Short term,
+Medium term, Long term. In flattened PDF text, these columns are drawn as
+filled circles or bullets (e.g. "•", "••", "•••", or "●●○") on their own
+lines next to each risk description. Treat these bullet-only lines as
+legitimate horizon indicators when a table header referencing Short/Medium/
+Long term is present nearby (may be many lines away). A "•••" or "●●●" run
+next to a risk description means all three horizons (short, medium and long
+term) are marked for that row. Do not require explicit written "short-term"
+/ "medium-term" / "long-term" wording on each row if the standard column-
+marker notation is present.`;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface MeasureResult {
@@ -307,6 +331,8 @@ CONFIDENCE LEVELS:
 CRITICAL ANTI-INFERENCE RULES:
 ${composeAntiInferenceRules(measure.measureId, measure.title || "", (framework as any)?.antiInferenceRules)}
 
+${CSRD_TABLE_NOTATION_NOTE}
+
 CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
 CRITICAL: For the "source" field in quotes, you MUST use the EXACT document title as it appears in the "--- DOCUMENT: <title> [<url>] ---" headers in the evidence text. Use the title portion (before the [url]), not an invented or paraphrased name.
 ${terminologyBlock}`;
@@ -429,6 +455,8 @@ CONFIDENCE LEVELS:
 
 CRITICAL ANTI-INFERENCE RULES:
 ${composeAntiInferenceRules(measure.measureId, measure.title || "", (framework as any)?.antiInferenceRules)}
+
+${CSRD_TABLE_NOTATION_NOTE}
 
 CRITICAL: Every quote MUST be a verbatim excerpt from the provided evidence text. Do not paraphrase or fabricate quotes.
 CRITICAL: For the "source" field in quotes, you MUST use the EXACT document title as it appears in the "--- DOCUMENT: <title> [<url>] ---" headers in the evidence text.
