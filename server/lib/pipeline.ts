@@ -200,6 +200,10 @@ async function runFetchPhase(opts: {
     peerCompanyNames,
     companyRow: company, // 40-G: pass full row for cached domain family + FIGI fields
     evidenceKeywords: aggregatedEvidenceKeywords, // Instruction 46
+    // PR 1 · Change 1b: forward the retrieval_v2 workspace flag so the
+    // ranker can apply subsidiary/vintage/press-page penalties. Same read
+    // pattern used by the 1a latest-primary-disclosure verification below.
+    retrievalV2: settings.retrieval_v2 === "true",
   });
 
   console.log(`[${companyName}] Discovery found ${discoveryResult.documents.length} accepted documents`);

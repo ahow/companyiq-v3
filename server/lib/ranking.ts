@@ -15,6 +15,7 @@
 // responsible for the bounded, best-effort HEAD probe on the POST-GATE set only.
 
 import { createHash } from "crypto";
+import { scoreEntityMatch, type IssuerProfile } from "./issuer-profile.js";
 
 export interface RankSignals {
   /** Coarse authority tier: 0 = regulatory primary … 4 = secondary/aggregator. */
@@ -304,6 +305,89 @@ function pdfVsLandingSignal(url: string, title: string, isCompanyDomain: boolean
   if (/reports?.and.presentations|report.library|download.centre|document.library/i.test(t) && !/\.pdf/i.test(u)) score -= 4;
   return score;
 }
+/**
+ * PR 1 · Change 1b · Component: entity-match penalty (subsidiary detection).
+ *
+ * Runs the pre-existing `scoreEntityMatch` from issuer-profile.ts against
+ * the doc, using domain + legal-name + ticker + ISIN + alias signals.
+ * The idea is to detect subsidiaries or unrelated entities that leak into
+ * a parent-company corpus (e.g. Hindustan Unilever docs surfacing for a
+ * Unilever plc audit — "unilever" is a substring of "hindustan unilever").
+ *
+ * Score → penalty mapping (matches the score bands in issuer-profile.ts):
+ *   >= 60  →  0    (strong parent match)
+ *   40-59  → -3    (moderate — possibly related entity)
+ *   20-39  → -8    (weak — likely subsidiary or different entity)
+ *   < 20   → -15   (definite mismatch)
+ *
+ * If `profile` is undefined the function returns 0 so callers that do not
+ * have a resolved issuer profile see no ranking change.
+ */
+function entityMatchPenalty(
+  url: string,
+  title: string,
+  profile: IssuerProfile | undefined,
+): number {
+  if (!profile) return 0;
+  const { score } = scoreEntityMatch({ url, title }, profile, []);
+  if (score >= 60) return 0;
+  if (score >= 40) return -3;
+  if (score >= 20) return -8;
+  return -15;
+}
+
+/**
+ * PR 1 · Change 1b · Component: vintage penalty (deep-vintage docs).
+ *
+ * `recencyWeight` already decays smoothly, but sustainability disclosures
+ * that are 3+ years old should be actively penalised (not just less rewarded)
+ * so a slightly-lower-priority current doc can outrank them.
+ *
+ * Detection reuses the same year-extraction pattern as `recencyWeight`:
+ * find plausible 4-digit years (1990..CURRENT_YEAR+1) in the URL + title,
+ * take the max, and penalise based on age.
+ *   age >= 5  → -8
+ *   age  = 4  → -5
+ *   age  = 3  → -3
+ *   age <= 2  →  0  (recencyWeight already handles these)
+ * If no year is detected, returns 0.
+ */
+function vintagePenalty(url: string, title: string): number {
+  const s = (url + " " + (title || "")).toLowerCase();
+  const years = (s.match(/\b(19|20)\d{2}\b/g) || [])
+    .map(Number)
+    .filter(y => y >= 1990 && y <= CURRENT_YEAR + 1);
+  if (years.length === 0) return 0;
+  const docYear = Math.max(...years);
+  const age = CURRENT_YEAR - docYear;
+  if (age >= 5) return -8;
+  if (age === 4) return -5;
+  if (age === 3) return -3;
+  return 0;
+}
+
+const PRESS_PAGE_PATH_RX = /(\/press\/|\/news\/|\/media\/|\/blog\/|\/newsroom\/|press-release|media-release)/i;
+const FILING_KEYWORD_RX = /(10-?k|20-?f|annual.?report|integrated.?report|sustainability.?(?:report|statement)|esrs|csrd|tcfd|proxy)/i;
+
+/**
+ * PR 1 · Change 1b · Component: press-page penalty.
+ *
+ * Press releases, news, media, blog, and newsroom URLs are dampened UNLESS
+ * they also carry an explicit filing keyword (10-K, 20-F, annual report,
+ * integrated report, sustainability report/statement, ESRS, CSRD, TCFD,
+ * proxy). This suppresses press-release noise when a real filing exists,
+ * while allowing e.g. a "press release announcing the 2025 annual report"
+ * URL that is genuinely pointing at a filing to pass through unpenalised.
+ *
+ * Match is against BOTH url and title. Returns -4 when press pattern hits
+ * AND filing pattern does not, otherwise 0.
+ */
+function pressPagePenalty(url: string, title: string): number {
+  const hay = url + " " + (title || "");
+  if (PRESS_PAGE_PATH_RX.test(hay) && !FILING_KEYWORD_RX.test(hay)) return -4;
+  return 0;
+}
+
 // ─── Public: compute the full layered ranking signal for one document ─────────
 
 export interface ComputeOpts {
@@ -318,6 +402,14 @@ export interface ComputeOpts {
   frameworkRegistries?: string[];
   /** Instruction 31: Framework-declared filing-type patterns with weights */
   frameworkFilingTypes?: Array<{ pattern: string; weight: number }>;
+  /** PR 1 · Change 1b: pre-resolved issuer profile for subsidiary detection.
+   *  When present AND `retrievalV2` is true, `scoreEntityMatch` runs against
+   *  every ranked doc and contributes an entityMatch penalty to fineScore. */
+  issuerProfile?: IssuerProfile;
+  /** PR 1 · Change 1b: enable the new penalty components (subsidiary, vintage,
+   *  press-page). When false or absent, ranking behaviour is byte-identical to
+   *  the pre-1b baseline. */
+  retrievalV2?: boolean;
 }
 
 export function computeRankSignals(doc: RankableDoc, opts: ComputeOpts = {}): RankSignals {
@@ -340,6 +432,12 @@ export function computeRankSignals(doc: RankableDoc, opts: ComputeOpts = {}): Ra
     // P2a: Prefer the actual document (PDF) over the landing/index page.
     // Company-domain PDFs are the actual reports; section landing pages are navigation.
     pdfVsLanding: pdfVsLandingSignal(url, title, isCompanyDomain),
+    // ─── PR 1 · Change 1b: retrievalV2 penalties (inert when flag off) ─
+    // These three components MUST return 0 when `retrievalV2` is absent/false
+    // so fineScore stays byte-identical to the pre-1b baseline.
+    entityMatch: opts.retrievalV2 ? entityMatchPenalty(url, title, opts.issuerProfile) : 0,
+    vintage: opts.retrievalV2 ? vintagePenalty(url, title) : 0,
+    pressPage: opts.retrievalV2 ? pressPagePenalty(url, title) : 0,
   };
   const fineScore = Object.values(components).reduce((a, b) => a + b, 0);
   const urlHash = createHash("sha1").update(url).digest("hex");
@@ -476,6 +574,13 @@ export interface RankerDiagnostics {
   largestTieCountPreUrlHash: number;
   urlhashDecisionFraction: number;
   totalDocs: number;
+  /** PR 1 · Change 1b: count of docs whose entityMatch component is < 0
+   *  (i.e. the retrievalV2 subsidiary-detection penalty fired). */
+  entityMatchPenaltyHits: number;
+  /** PR 1 · Change 1b: count of docs whose vintage component is < 0. */
+  vintagePenaltyHits: number;
+  /** PR 1 · Change 1b: count of docs whose pressPage component is < 0. */
+  pressPagePenaltyHits: number;
 }
 
 /**
@@ -504,10 +609,25 @@ export function computeRankerDiagnostics(ranked: RankedDoc<any>[]): RankerDiagno
     const a = ranked[i - 1].signals, b = ranked[i].signals;
     if (a.authorityClass === b.authorityClass && a.fineScore === b.fineScore) urlhashBroken++;
   }
+  // PR 1 · Change 1b: count how many docs each new penalty fired on. These
+  // are 0 in the pre-1b behaviour path (flag off) because the components
+  // themselves are 0 in that path.
+  let entityMatchPenaltyHits = 0;
+  let vintagePenaltyHits = 0;
+  let pressPagePenaltyHits = 0;
+  for (const r of ranked) {
+    const c = r.signals.components;
+    if ((c.entityMatch ?? 0) < 0) entityMatchPenaltyHits++;
+    if ((c.vintage ?? 0) < 0) vintagePenaltyHits++;
+    if ((c.pressPage ?? 0) < 0) pressPagePenaltyHits++;
+  }
   return {
     distinctPrioritiesInTop20: distinct.size,
     largestTieCountPreUrlHash: largestTie,
     urlhashDecisionFraction: decisions > 0 ? urlhashBroken / decisions : 0,
     totalDocs: ranked.length,
+    entityMatchPenaltyHits,
+    vintagePenaltyHits,
+    pressPagePenaltyHits,
   };
 }

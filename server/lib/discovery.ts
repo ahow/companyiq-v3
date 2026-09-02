@@ -2795,6 +2795,10 @@ export async function searchCompanyDocuments(opts: {
   peerCompanyNames?: string[]; // Fix C: workspace-derived peer list for anti-contamination
   companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
   evidenceKeywords?: string[]; // Instruction 46: aggregated from measures
+  /** PR 1 · Change 1b: enable retrievalV2 ranking penalties (subsidiary /
+   *  vintage / press-page). Threaded down to the ComputeOpts used by the
+   *  layered ranker. Off by default — pre-1b behaviour is preserved. */
+  retrievalV2?: boolean;
 }): Promise<DiscoveryResult> {
   // Wrap the entire discovery in a hard timeout
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -2819,6 +2823,8 @@ async function searchCompanyDocumentsInner(opts: {
   peerCompanyNames?: string[];
   companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
   evidenceKeywords?: string[]; // Instruction 46: aggregated from measures
+  /** PR 1 · Change 1b: forwarded from searchCompanyDocuments. */
+  retrievalV2?: boolean;
 }): Promise<DiscoveryResult> {
   const { companyName, companyId, companyDomain, pinnedUrls, framework, trustedSources } = opts;
   const localeProfile = resolveLocaleProfile(opts.country);
@@ -3897,6 +3903,10 @@ async function searchCompanyDocumentsInner(opts: {
     nativeNonLatinMarket,
     frameworkRegistries: (framework as any).authoritativeRegistries || undefined,
     frameworkFilingTypes: (framework as any).authoritativeFilingTypes || undefined,
+    // ─── PR 1 · Change 1b: pass through issuerProfile + retrievalV2 so the
+    // ranker can apply subsidiary/vintage/press-page penalties when enabled.
+    issuerProfile,
+    retrievalV2: opts.retrievalV2,
   });
 
   // §4: candidate-pool fingerprint over the FULL gated set BEFORE the cap, so
@@ -4096,6 +4106,8 @@ export async function searchCompanyDocumentsWithEnsemble(opts: {
   framework: Framework;
   trustedSources: TrustedSource[];
   iterations?: number;
+  /** PR 1 · Change 1b: forwarded to searchCompanyDocuments on each pass. */
+  retrievalV2?: boolean;
 }): Promise<DiscoveryResult> {
   const iterations = opts.iterations || 1;
 
