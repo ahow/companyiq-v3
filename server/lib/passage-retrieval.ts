@@ -2,6 +2,8 @@ import type { FrameworkMeasure } from "../../shared/schema.js";
 import { createHash } from "crypto";
 import type { TerminologyMap } from "./terminology-discovery.js";
 import { flattenTerms } from "./terminology-discovery.js";
+import type { IssuerProfile } from "./issuer-profile.js";
+import { scoreEntityMatch } from "./issuer-profile.js";
 
 // ─── BM25 Implementation ─────────────────────────────────────────────────────
 
@@ -63,6 +65,161 @@ export function tokenize(text: string): string[] {
 /** True if the text contains any CJK characters. */
 export function hasCJK(text: string): boolean {
   return CJK_CHAR.test(text);
+}
+
+// ─── PR 1 · Change 1c: Chunk sanity gate ─────────────────────────────────────
+//
+// The gate runs BEFORE the BM25 candidate pool is built (analyzer.ts line ~1016).
+// It groups chunks by parent document and drops chunks whose parent is:
+//   - a wrong-entity match (e.g. subsidiary docs — HUL vs Unilever plc), or
+//   - a deep-vintage doc (age >= 5 years by URL/title year detection).
+// Softer failures (weak-entity 20-39, vintage 3-4y) are kept but flagged for
+// diagnostics. Chunks pass through untouched when the gate is not invoked.
+
+export interface ChunkSanityResult {
+  keep: Chunk[];
+  rejected: Array<{
+    docUrl: string | null;
+    docTitle: string | null;
+    reason: "vintage" | "weak-entity" | "no-entity";
+    detail: string;   // human-readable, for diagnostics
+    chunkCount: number; // how many chunks from this doc were dropped
+  }>;
+  softFlagged: Array<{
+    docUrl: string | null;
+    docTitle: string | null;
+    reason: "vintage-warning" | "weak-entity-warning";
+    detail: string;
+    chunkCount: number;
+  }>;
+}
+
+// Year detection reused from ranking.ts's vintagePenalty pattern (duplicated,
+// as 1b already duplicated it — precedent). Extracts the max plausible year
+// in the URL + title, clamped to [1990, currentYear+1]; returns null if none.
+function extractDocYear(url: string | null | undefined, title: string | null | undefined, currentYear: number): number | null {
+  const s = ((url || "") + " " + (title || "")).toLowerCase();
+  const years = (s.match(/\b(19|20)\d{2}\b/g) || [])
+    .map(Number)
+    .filter((y) => y >= 1990 && y <= currentYear + 1);
+  if (years.length === 0) return null;
+  return Math.max(...years);
+}
+
+/**
+ * PR 1 · Change 1c: Sanity gate applied to chunks BEFORE they enter the BM25
+ * candidate pool. Groups chunks by parent document, evaluates each document
+ * against issuer-profile and vintage rules, and returns a filtered chunk list
+ * plus telemetry about what was removed and why.
+ *
+ * Hard reject (chunk excluded from pool) when:
+ *   - scoreEntityMatch(doc, issuerProfile) < 20    (definite wrong entity)
+ *   - detected year <= currentYear - 5             (deep-vintage)
+ *
+ * Soft flag (chunk kept, but tagged in diagnostics) when:
+ *   - scoreEntityMatch < 40                        (weak entity match)
+ *   - detected year <= currentYear - 2             (vintage; age >= 3)
+ *
+ * Reject rules are OVERRIDDEN if the doc is the ONLY source with topic hits —
+ * see `preserveIfOnlySource` in opts. This protects small corpora from being
+ * emptied by the gate. Default false; callers set it true when they can
+ * measure topic-hit uniqueness. (See TODO below — implemented in a later change.)
+ *
+ * When `issuerProfile` is undefined, entity checks are skipped (vintage only).
+ * When the retrievalV2 flag is off, the caller should not invoke this — but
+ * for safety the function is idempotent when `issuerProfile` is undefined
+ * AND all docs pass the vintage check.
+ */
+export function applyChunkSanityGate(
+  chunks: Chunk[],
+  opts: {
+    issuerProfile?: IssuerProfile;
+    currentYear?: number;              // default new Date().getUTCFullYear()
+    preserveIfOnlySource?: boolean;    // default false — TODO: implement in change 4
+  } = {},
+): ChunkSanityResult {
+  const currentYear = opts.currentYear ?? new Date().getUTCFullYear();
+  const issuerProfile = opts.issuerProfile;
+  // TODO: implement in change 4 — currently accepted but not yet used.
+  void opts.preserveIfOnlySource;
+
+  if (chunks.length === 0) {
+    return { keep: [], rejected: [], softFlagged: [] };
+  }
+
+  // Group chunks by parent document. Key = docUrl || docTitle || "unknown".
+  // We preserve first-seen chunk order per group so keep[] order is stable.
+  interface Group {
+    key: string;
+    docUrl: string | null;
+    docTitle: string | null;
+    chunks: Chunk[];
+  }
+  const groups = new Map<string, Group>();
+  for (const c of chunks) {
+    const key = c.docUrl || c.docTitle || "unknown";
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, docUrl: c.docUrl ?? null, docTitle: c.docTitle ?? null, chunks: [] };
+      groups.set(key, g);
+    }
+    g.chunks.push(c);
+  }
+
+  const keep: Chunk[] = [];
+  const rejected: ChunkSanityResult["rejected"] = [];
+  const softFlagged: ChunkSanityResult["softFlagged"] = [];
+
+  for (const g of groups.values()) {
+    const entityScore: number | null = issuerProfile
+      ? scoreEntityMatch({ url: g.docUrl || "", title: g.docTitle || "" }, issuerProfile, []).score
+      : null;
+    const year = extractDocYear(g.docUrl, g.docTitle, currentYear);
+    const age = year !== null ? currentYear - year : null;
+
+    // Decision priority: entity mismatch dominates, then vintage, then soft flags.
+    if (entityScore !== null && entityScore < 20) {
+      rejected.push({
+        docUrl: g.docUrl,
+        docTitle: g.docTitle,
+        reason: entityScore === 0 ? "no-entity" : "weak-entity",
+        detail: `entity match score: ${entityScore} (<20)`,
+        chunkCount: g.chunks.length,
+      });
+      continue;
+    }
+    if (age !== null && age >= 5) {
+      rejected.push({
+        docUrl: g.docUrl,
+        docTitle: g.docTitle,
+        reason: "vintage",
+        detail: `document year: ${year}, age ${age} years`,
+        chunkCount: g.chunks.length,
+      });
+      continue;
+    }
+    if (entityScore !== null && entityScore < 40) {
+      softFlagged.push({
+        docUrl: g.docUrl,
+        docTitle: g.docTitle,
+        reason: "weak-entity-warning",
+        detail: `entity match score: ${entityScore} (<40)`,
+        chunkCount: g.chunks.length,
+      });
+    } else if (age !== null && age >= 3) {
+      softFlagged.push({
+        docUrl: g.docUrl,
+        docTitle: g.docTitle,
+        reason: "vintage-warning",
+        detail: `document year: ${year}, age ${age} years`,
+        chunkCount: g.chunks.length,
+      });
+    }
+    // Keep the chunks (soft flag or clean).
+    for (const c of g.chunks) keep.push(c);
+  }
+
+  return { keep, rejected, softFlagged };
 }
 
 export function buildBM25Index(chunks: string[]): BM25Index {

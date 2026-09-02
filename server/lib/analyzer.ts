@@ -2,7 +2,8 @@ import * as storage from "../storage.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
 import { ProviderScoringError } from "./credit-breaker.js";
 import { classifyProviderError, type ProviderFailureClass } from "./provider-resilience.js";
-import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, type EvidencePack, type Chunk } from "./passage-retrieval.js";
+import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, applyChunkSanityGate, type EvidencePack, type Chunk, type ChunkSanityResult } from "./passage-retrieval.js";
+import type { IssuerProfile } from "./issuer-profile.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash } from "./processor.js";
@@ -768,8 +769,14 @@ async function summarizeDocuments(opts: {
   documentTitles?: string[];
   topicDescription: string;
   framework: Framework;
-}): Promise<{ text: string; model: string; reservedAnnualUrl?: string; corpusTopicWarning?: string; topicPrimaryDocUrls?: string[] }> {
-  const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription, framework } = opts;
+  // PR 1 · Change 1c: threaded through so the sanity gate (below) can run
+  // BEFORE the BM25 candidate pool is built. Both are required for the gate
+  // to fire; if either is missing the pool is built exactly as before (the
+  // backward-compat invariant tested in passage-retrieval.test.ts).
+  retrievalV2?: boolean;
+  issuerProfile?: IssuerProfile;
+}): Promise<{ text: string; model: string; reservedAnnualUrl?: string; corpusTopicWarning?: string; topicPrimaryDocUrls?: string[]; chunkSanityDiagnostics?: ChunkSanityResult }> {
+  const { companyName, companyId, documentTexts, documentUrls, documentTitles, topicDescription, framework, retrievalV2, issuerProfile } = opts;
 
   // Check summary cache. v3g: salt the cache key so the OLD header-lossy LLM
   // summaries (which dropped document URLs) are never reused; only the new
@@ -1013,7 +1020,31 @@ async function summarizeDocuments(opts: {
   // with BM25 and rebuild a corpus that RE-EMITS the document header (with URL)
   // whenever the source document changes — preserving provenance AND verbatim text.
   // The document-aware chunker carries docUrl/docTitle on every chunk.
-  const docChunks = chunkDocuments(combined);
+  let docChunks = chunkDocuments(combined);
+  let chunkSanityDiagnostics: ChunkSanityResult | null = null;
+
+  // ─── PR 1 · Change 1c: sanity gate ──────────────────────────────────────────
+  // Hard-filter chunks whose parent document is deep-vintage or a wrong-entity
+  // match BEFORE they enter the BM25 candidate pool. Only fires when BOTH the
+  // retrievalV2 flag is on AND an issuerProfile is available; otherwise
+  // `docChunks` is untouched (backward-compat invariant).
+  if (retrievalV2 && issuerProfile) {
+    const gate = applyChunkSanityGate(docChunks, {
+      issuerProfile,
+      currentYear: new Date().getUTCFullYear(),
+      preserveIfOnlySource: false,
+    });
+    if (gate.rejected.length > 0) {
+      const totalRejected = gate.rejected.reduce((a, r) => a + r.chunkCount, 0);
+      console.log(`[${companyName}] Change 1c gate: ${totalRejected} chunks rejected across ${gate.rejected.length} docs (${gate.rejected.map(r => `${r.reason}:${r.docTitle || r.docUrl}`).join(", ")})`);
+    }
+    if (gate.softFlagged.length > 0) {
+      console.log(`[${companyName}] Change 1c gate: ${gate.softFlagged.length} doc(s) soft-flagged (${gate.softFlagged.map(f => `${f.reason}:${f.docTitle || f.docUrl}`).join(", ")})`);
+    }
+    docChunks = gate.keep;
+    chunkSanityDiagnostics = gate;
+  }
+
   const bm25Index = buildBM25Index(docChunks.map((c) => c.text));
 
   const scoredChunks = docChunks.map((chunk, idx) => ({
@@ -1374,7 +1405,15 @@ async function summarizeDocuments(opts: {
     summarizerModel: "bm25-headers-v3l-topicaware",
   });
 
-  return { text: relevantText, model: "bm25-headers-v3l-topicaware", reservedAnnualUrl, corpusTopicWarning, topicPrimaryDocUrls };
+  return {
+    text: relevantText,
+    model: "bm25-headers-v3l-topicaware",
+    reservedAnnualUrl,
+    corpusTopicWarning,
+    topicPrimaryDocUrls,
+    // PR 1 · Change 1c: surface gate telemetry to the caller when it fired.
+    chunkSanityDiagnostics: chunkSanityDiagnostics || undefined,
+  };
 }
 
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
@@ -1391,8 +1430,13 @@ export async function analyzeCompanyMeasures(opts: {
   temporalContext?: { withdrawals: Array<{ type: string; description: string; affectedTopics: string[]; detectedDate: string | null; confidence: string }>; temporalWarning: string | null };
   // v3e (Section 4): per-run opt-out of the verdict cache for variability studies.
   freshScoring?: boolean;
+  // PR 1 · Change 1c: threaded from pipeline.ts (discoveryResult.issuerProfile) so
+  // the pre-BM25 chunk sanity gate inside summarizeDocuments can drop wrong-
+  // entity / deep-vintage doc chunks before they reach the candidate pool.
+  // Optional — gate is inert when absent.
+  issuerProfile?: IssuerProfile;
 }): Promise<AnalysisResult> {
-  const { workspaceId, companyName, companyId, documentTexts, documentUrls, documentTitles, framework, measures, temporalContext, freshScoring } = opts;
+  const { workspaceId, companyName, companyId, documentTexts, documentUrls, documentTitles, framework, measures, temporalContext, freshScoring, issuerProfile } = opts;
 
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
@@ -1534,11 +1578,27 @@ export async function analyzeCompanyMeasures(opts: {
       documentTitles,
       topicDescription: framework.topicDescription || framework.name,
       framework,
+      // PR 1 · Change 1c: enable the pre-BM25 sanity gate when both the retrieval
+      // feature flag is on and an issuerProfile is available. Backward-compat:
+      // when either is missing the gate is inert and docChunks is untouched.
+      retrievalV2: settings.retrievalV2,
+      issuerProfile,
     });
     combinedText = result.text;
     summarizerModel = result.model;
     reservedAnnualUrl = result.reservedAnnualUrl;
     topicPrimaryDocUrls = result.topicPrimaryDocUrls;
+    // PR 1 · Change 1c: log a per-company gate summary (or absence) alongside the
+    // existing summarizer log. Diagnostic-only; not persisted to a new column.
+    if (result.chunkSanityDiagnostics) {
+      const g = result.chunkSanityDiagnostics;
+      const rejectedChunks = g.rejected.reduce((a, r) => a + r.chunkCount, 0);
+      const softChunks = g.softFlagged.reduce((a, r) => a + r.chunkCount, 0);
+      const byReason: Record<string, number> = {};
+      for (const r of g.rejected) byReason[r.reason] = (byReason[r.reason] || 0) + r.chunkCount;
+      for (const r of g.softFlagged) byReason[r.reason] = (byReason[r.reason] || 0) + r.chunkCount;
+      console.log(`[${companyName}] Change 1c gate summary: rejected=${rejectedChunks} chunks / ${g.rejected.length} docs, softFlagged=${softChunks} chunks / ${g.softFlagged.length} docs, byReason=${JSON.stringify(byReason)}`);
+    }
     console.log(`[${companyName}] Summarized via ${summarizerModel} (${combinedText.length} chars)${reservedAnnualUrl ? ` reservedAnnual=${reservedAnnualUrl.slice(0,70)}` : ""} topicPrimary=${topicPrimaryDocUrls?.length ?? 0}`);
   }
 

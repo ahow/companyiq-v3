@@ -127,7 +127,7 @@ async function runFetchPhase(opts: {
   batchId?: number;
   cancelCheck?: () => boolean;
   batchFetchState?: BatchFetchState; // 42-F
-}): Promise<{ fetchedCount: number; totalAccepted: number }> {
+}): Promise<{ fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile }> {
   const { company, framework, workspaceId, batchId, cancelCheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
@@ -1124,7 +1124,10 @@ async function runFetchPhase(opts: {
   // Update status to fetched
   await storage.updateCompany(companyId, workspaceId, { analysisStatus: "fetched" });
 
-  return { fetchedCount: totalFetched, totalAccepted: totalFetched };
+  // PR 1 · Change 1c: return the resolved issuerProfile so runAnalysisPipeline
+  // can thread it into the analyze phase for the pre-BM25 sanity gate. Optional
+  // — discoveryResult.issuerProfile is itself optional and may be undefined.
+  return { fetchedCount: totalFetched, totalAccepted: totalFetched, issuerProfile: discoveryResult.issuerProfile };
 }
 
 // ─── Phase 2: Analyze Documents (Framework-Specific) ────────────────────────
@@ -1137,8 +1140,12 @@ async function runAnalyzePhase(opts: {
   batchId?: number;
   sourceBatchId?: number; // Corpus replay: read from source batch corpus
   cancelCheck?: () => boolean;
+  // PR 1 · Change 1c: threaded from runAnalysisPipeline (which captured it from
+  // runFetchPhase's discovery step). Optional — absent on replay / skip-fetch
+  // runs, in which case the analyzer's pre-BM25 sanity gate is inert.
+  issuerProfile?: import("./issuer-profile.js").IssuerProfile;
 }): Promise<AnalysisResult | null> {
-  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck } = opts;
+  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck, issuerProfile } = opts;
   const companyId = company.id;
   const companyName = company.name;
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
@@ -1315,6 +1322,11 @@ async function runAnalyzePhase(opts: {
     measures,
     temporalContext,
     freshScoring,
+    // PR 1 · Change 1c: threaded through from runAnalysisPipeline (which captured
+    // it from runFetchPhase's discovery step). Undefined when discovery had no
+    // profile to resolve OR when this is a replay/skip-fetch run; gate is inert
+    // in either case.
+    issuerProfile,
   });
 
   // ─── I49: PRESERVE PRE-ADJUSTMENT CONFIDENCE ────────────────────────────────
@@ -1847,7 +1859,9 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   const pipelinePromise = (async (): Promise<PipelineResult> => {
     try {
       // Phase 1: Fetch (unless skipping to reuse cached docs)
-      let fetchResult = { fetchedCount: 0, totalAccepted: 0 };
+      // PR 1 · Change 1c: type widened to carry the optional issuerProfile returned
+      // by runFetchPhase; used to thread the profile into the analyze phase.
+      let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile } = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
         fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck, batchFetchState: opts.batchFetchState });
         
@@ -1892,7 +1906,15 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       }
 
       // Phase 2: Analyze
-      const analysis = await runAnalyzePhase({ company, framework, measures, workspaceId, batchId, sourceBatchId: opts.sourceBatchId, cancelCheck });
+      // PR 1 · Change 1c: pass the resolved issuerProfile from Phase 1 into the
+      // analyze phase so the pre-BM25 chunk sanity gate can fire. Undefined when
+      // skipFetch=true (replay); gate is inert in that case.
+      const analysis = await runAnalyzePhase({
+        company, framework, measures, workspaceId, batchId,
+        sourceBatchId: opts.sourceBatchId,
+        cancelCheck,
+        issuerProfile: fetchResult.issuerProfile,
+      });
 
       if (!analysis) {
         return {
