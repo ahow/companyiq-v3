@@ -399,6 +399,22 @@ export async function getAcceptedDocuments(companyId: number) {
 }
 
 /**
+ * U17: Update a document's source_type after re-classification with full
+ * content. Used by the pipeline's corpus-build provenance filter to persist
+ * upgrades (title-only misclassified third_party → issuer once content shows
+ * an identity match) and downgrades (title-suggested issuer → third_party
+ * when full content reveals the doc doesn't actually reference the issuer).
+ */
+export async function updateDocumentSourceType(
+  docId: number,
+  sourceType: "first_party" | "third_party"
+): Promise<void> {
+  await db.execute(sql`
+    UPDATE documents SET source_type = ${sourceType} WHERE id = ${docId}
+  `);
+}
+
+/**
  * Document Pool: returns ALL ever-successfully-fetched documents for a company,
  * regardless of current fetch_status. This includes docs that were fetched in
  * prior runs (even under different frameworks) and may have been reset since.
@@ -411,6 +427,7 @@ export async function getAllFetchedDocumentsForCompany(companyId: number) {
   const rows = await db.execute(sql`
     SELECT d.id, d.company_id, d.url, d.title, d.type, d.gate_verdict,
            d.gate_reason, d.fetch_status, d.fetch_failures, d.fetched_at, d.created_at,
+           d.source_type,
            COALESCE(dc.content, d.content) AS content
     FROM documents d
     LEFT JOIN document_content dc ON dc.id = d.content_id
@@ -431,6 +448,7 @@ export async function getAllFetchedDocumentsForCompany(companyId: number) {
     fetch_failures: number;
     fetched_at: Date | null;
     created_at: Date;
+    source_type: string | null;
     content: string | null;
   }>;
 }

@@ -36,6 +36,8 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
+import { classifyProvenance, provenanceToSourceType } from "./provenance.js";
+import { deriveAliases } from "./issuer-resolver.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 // ─── Timeout Constants ──────────────────────────────────────────────────────
@@ -287,27 +289,43 @@ async function runFetchPhase(opts: {
   }
 
   // Step 3: Store discovered documents in DB (company-level, no frameworkId in uniqueness)
-  // Determine first-party vs third-party based on domain matching
+  // U17: Provenance classifier replaces the earlier hostname-only rule. This
+  // classifies regulator-hosted issuer filings (SEC EDGAR / SEDAR+ / MSA
+  // Register / etc.) as issuer content when the target company's ticker or
+  // distinctive name tokens appear in the title/content, and rejects
+  // third-party PDFs that merely mention the company (e.g. Proteus training
+  // material) as third_party. The pre-U17 hostname-only rule mis-tagged the
+  // former as third_party (under-scoring) and accepted the latter (crowd-out).
   const companyDomainLower = (company.domain || "").replace(/^www\./, "").toLowerCase();
+  const relatedDomainsLower = ((company as any).relatedDomains || (company as any).related_domains || [])
+    .map((d: string) => (d || "").replace(/^www\./, "").toLowerCase())
+    .filter(Boolean);
+  const companyAliases = deriveAliases((company as any).name || "", (company as any).ticker || null);
   for (const doc of discoveryResult.documents) {
     const type = inferDocumentType(doc.url);
-    // Tag source type: first_party if URL matches company domain, third_party otherwise
-    let sourceType: string = "third_party";
-    if (companyDomainLower) {
-      try {
-        const docHost = new URL(doc.url).hostname.replace(/^www\./, "").toLowerCase();
-        if (docHost === companyDomainLower || docHost.endsWith("." + companyDomainLower)) {
-          sourceType = "first_party";
-        }
-      } catch {}
-    }
+    // At discovery time we do not yet have the fetched content. Title alone is
+    // usually enough for regulator-host classification because filings carry
+    // the filer's name prominently. Full-content re-classification runs after
+    // fetch (below), which upgrades third_party → issuer if content shows a
+    // strong identity signal that title alone missed.
+    const prov = classifyProvenance({
+      url: doc.url,
+      title: doc.title,
+      content: null,
+      companyDomain: companyDomainLower,
+      relatedDomains: relatedDomainsLower,
+      companyName: (company as any).name || null,
+      companyTicker: (company as any).ticker || null,
+      companyAliases,
+    });
+    const sourceType = provenanceToSourceType(prov.provenance);
     await storage.upsertDocument({
       companyId,
       url: doc.url,
       title: doc.title,
       type,
       gateVerdict: "accept",
-      gateReason: `Priority: ${doc.priority}, Lane: ${doc.lane}`,
+      gateReason: `Priority: ${doc.priority}, Lane: ${doc.lane}; provenance=${prov.provenance} (${prov.reason})`,
       sourceType,
     });
   }
@@ -1279,15 +1297,77 @@ async function runAnalyzePhase(opts: {
   }
 
   // Build document texts (from stored content)
+  //
+  // U17 Fix A part 2: apply the provenance classifier with FULL content to
+  // upgrade documents whose title alone was ambiguous, and EXCLUDE third-
+  // party documents from the evidence pack entirely. Third-party content
+  // otherwise crowds out issuer content under the char budget cap and gets
+  // quoted as if it were the issuer's own disclosure (root cause of iter-12
+  // Newmont 1.4 and 2.4 mis-attributions).
+  //
+  // Guarded by U17_PROVENANCE_FILTER env var (default "true"). Off-switch:
+  // set to "false" to disable the exclusion and fall back to the old
+  // pre-U17 behaviour of loading every accepted document.
+  const provenanceFilterEnabled = process.env.U17_PROVENANCE_FILTER !== "false";
+  const companyDomainForCorpus = (company?.domain || "").replace(/^www\./, "").toLowerCase();
+  const relatedDomainsForCorpus = ((company as any)?.relatedDomains || (company as any)?.related_domains || [])
+    .map((d: string) => (d || "").replace(/^www\./, "").toLowerCase())
+    .filter(Boolean);
+  const companyAliasesForCorpus = deriveAliases((company as any)?.name || companyName, (company as any)?.ticker || null);
+
   const documentTexts: string[] = [];
   const documentUrls: string[] = [];
   const documentTitles: string[] = [];
+  let excludedThirdPartyCount = 0;
+  let upgradedToIssuerCount = 0;
   for (const doc of fetchedDocs) {
-    if (doc.content) {
-      documentTexts.push(doc.content);
-      documentUrls.push(doc.url);
-      documentTitles.push(doc.title || doc.url);
+    if (!doc.content) continue;
+    // Re-classify with full content; a document tagged third_party at
+    // discovery time (title-only) may reveal an identity match once fetched.
+    const prov = classifyProvenance({
+      url: doc.url,
+      title: doc.title,
+      content: doc.content,
+      companyDomain: companyDomainForCorpus,
+      relatedDomains: relatedDomainsForCorpus,
+      companyName: (company as any)?.name || companyName,
+      companyTicker: (company as any)?.ticker || null,
+      companyAliases: companyAliasesForCorpus,
+    });
+    const priorSourceType = (doc as any).source_type || (doc as any).sourceType || null;
+    if (prov.provenance === "issuer" && priorSourceType === "third_party") {
+      upgradedToIssuerCount++;
+      // Persist the correction so it's visible in downstream telemetry.
+      try {
+        await storage.updateDocumentSourceType(doc.id, "first_party");
+      } catch (e: any) {
+        console.warn(`[${companyName}] Failed to persist source_type upgrade for doc ${doc.id}: ${e.message}`);
+      }
     }
+    if (prov.provenance === "third_party" && provenanceFilterEnabled) {
+      excludedThirdPartyCount++;
+      // Persist the classification too, so a subsequent re-classification
+      // has consistent state. Silent no-op if column update fails.
+      if (priorSourceType !== "third_party") {
+        try {
+          await storage.updateDocumentSourceType(doc.id, "third_party");
+        } catch (e: any) {
+          console.warn(`[${companyName}] Failed to persist source_type downgrade for doc ${doc.id}: ${e.message}`);
+        }
+      }
+      // Excluded from the analyzer pack. Log at info level so it's traceable.
+      console.log(`[${companyName}] U17 excluded third-party doc ${doc.id}: ${doc.url} (${prov.reason})`);
+      continue;
+    }
+    documentTexts.push(doc.content);
+    documentUrls.push(doc.url);
+    documentTitles.push(doc.title || doc.url);
+  }
+  if (excludedThirdPartyCount > 0 || upgradedToIssuerCount > 0) {
+    console.log(
+      `[${companyName}] U17 provenance filter: excluded=${excludedThirdPartyCount}, ` +
+      `upgraded-to-issuer=${upgradedToIssuerCount}, kept=${documentTexts.length}`
+    );
   }
 
   // ─── Temporal Validation Step ──────────────────────────────────────────────
