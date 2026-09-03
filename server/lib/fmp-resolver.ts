@@ -89,6 +89,28 @@ function pickPrimaryFmpMatch(matches: Array<{ symbol?: string; name?: string; ma
 }
 
 /**
+ * Shape the /stable/profile response into our internal FmpProfile.
+ * Extracted so both ISIN-first and ticker-first resolvers share one mapper.
+ */
+function profileFromApiRow(p: any, fallbackSymbol: string | null): FmpProfile {
+  return {
+    symbol: p?.symbol ?? fallbackSymbol,
+    companyName: p?.companyName ?? null,
+    website: p?.website ?? null,
+    description: p?.description ?? null,
+    ceo: p?.ceo ?? null,
+    industry: p?.industry ?? null,
+    sector: p?.sector ?? null,
+    country: p?.country ?? null,
+    exchange: p?.exchange ?? null,
+    exchangeFullName: p?.exchangeFullName ?? null,
+    cik: p?.cik ? String(p.cik) : null,
+    isin: p?.isin ?? null,
+    cusip: p?.cusip ?? null,
+  };
+}
+
+/**
  * Resolve an issuer via FMP starting from ISIN.
  * Returns the picked-primary profile, or null when FMP has no match.
  * Network / auth errors bubble up as thrown exceptions so the caller can
@@ -109,23 +131,42 @@ export async function resolveViaFmp(isin: string): Promise<FmpProfile | null> {
   const profileResp = await fmpGet(`${FMP_BASE}/profile`, { symbol: primarySymbol });
   const arr = Array.isArray(profileResp) ? profileResp : [];
   if (arr.length === 0) return null;
-  const p = arr[0] || {};
 
-  return {
-    symbol: p.symbol ?? primarySymbol,
-    companyName: p.companyName ?? null,
-    website: p.website ?? null,
-    description: p.description ?? null,
-    ceo: p.ceo ?? null,
-    industry: p.industry ?? null,
-    sector: p.sector ?? null,
-    country: p.country ?? null,
-    exchange: p.exchange ?? null,
-    exchangeFullName: p.exchangeFullName ?? null,
-    cik: p.cik ? String(p.cik) : null,
-    isin: p.isin ?? null,
-    cusip: p.cusip ?? null,
-  };
+  return profileFromApiRow(arr[0], primarySymbol);
+}
+
+/**
+ * Resolve an issuer via FMP starting from a ticker/symbol.
+ *
+ * Used by the framework-builder test-drive ingest path, which historically
+ * had no ISIN to feed `resolveViaFmp` — companies arrive with a ticker only,
+ * so the ISIN → website chain never ran and downstream pipelines lost the
+ * FMP + OpenFIGI benefit. This variant skips the ISIN-search step and calls
+ * /stable/profile?symbol= directly. FMP returns the ISIN in the profile
+ * response, so the caller can then persist it and every subsequent pipeline
+ * call goes through the standard ISIN path unchanged.
+ *
+ * Ticker collision note: NYSE "PRU" is Prudential Financial; LSE "PRU" is
+ * Prudential plc. FMP's `symbol` field is exchange-suffixed for non-US
+ * listings (e.g. `HSBA.L`, `NESN.SW`), so callers should pass the
+ * exchange-qualified ticker where available. When the caller only has an
+ * unqualified US-style ticker, the FMP result will be the NYSE listing —
+ * this is by design and matches FMP's own primary-listing convention.
+ *
+ * Returns null when the ticker is empty, no FMP key is configured, or the
+ * profile endpoint returns no rows. Network / auth errors bubble up.
+ */
+export async function resolveViaFmpByTicker(ticker: string): Promise<FmpProfile | null> {
+  const key = getFmpKey();
+  if (!key) return null;
+  if (!ticker || !ticker.trim()) return null;
+
+  const symbol = ticker.trim().toUpperCase();
+  const profileResp = await fmpGet(`${FMP_BASE}/profile`, { symbol });
+  const arr = Array.isArray(profileResp) ? profileResp : [];
+  if (arr.length === 0) return null;
+
+  return profileFromApiRow(arr[0], symbol);
 }
 
 /** Normalise an FMP website URL into a registrable root domain. */

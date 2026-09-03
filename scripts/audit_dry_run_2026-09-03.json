@@ -1,0 +1,998 @@
+[
+  {
+    "id": 1,
+    "name": "Nestlé",
+    "proposals": [
+      {
+        "companyId": 1,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "CH0038863350",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "NESN.SW",
+              "companyName": "Nestlé S.A.",
+              "country": "CH",
+              "exchange": "SIX"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "NESTLE SA-REG",
+              "agrees": true,
+              "notes": "OpenFIGI: \"NESTLE SA-REG\" (overlap: nestle)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "NESN.SW => OK (Nestlé S.A., CH, isin=CH0038863350)",
+      "figi: OpenFIGI: \"NESTLE SA-REG\" (overlap: nestle) (agrees=true)",
+      "search: top=nestle.com (2/8)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 2,
+    "name": "Rio Tinto",
+    "proposals": [
+      {
+        "companyId": 2,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "GB0007188757",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "RIO.L",
+              "companyName": "Rio Tinto Group",
+              "country": "GB",
+              "exchange": "LSE"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "RIO TINTO PLC",
+              "agrees": true,
+              "notes": "OpenFIGI: \"RIO TINTO PLC\" (overlap: rio, tinto)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "RIO.L => OK (Rio Tinto Group, GB, isin=GB0007188757)",
+      "figi: OpenFIGI: \"RIO TINTO PLC\" (overlap: rio, tinto) (agrees=true)",
+      "search: top=riotinto.com (5/8)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 3,
+    "name": "L'Oréal",
+    "proposals": [
+      {
+        "companyId": 3,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "FR0000120321",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "OR.PA",
+              "companyName": "L'Oréal S.A.",
+              "country": "FR",
+              "exchange": "PAR"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "L'OREAL",
+              "agrees": true,
+              "notes": "OpenFIGI: \"L'OREAL\" (overlap: oreal)"
+            }
+          }
+        ],
+        "confidence": "medium",
+        "conflictNotes": null
+      },
+      {
+        "companyId": 3,
+        "proposalType": "domain",
+        "currentValue": null,
+        "proposedValue": "loreal.com",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "website": "https://www.loreal.com",
+              "derivedDomain": "loreal.com"
+            }
+          },
+          {
+            "signal": "search-plurality",
+            "evidence": {
+              "topHost": "loreal-finance.com",
+              "topHostCount": 4,
+              "totalNonAggregatorHits": 8,
+              "hostCounts": [
+                [
+                  "loreal-finance.com",
+                  4
+                ],
+                [
+                  "loreal.com",
+                  2
+                ],
+                [
+                  "e-loreal.com",
+                  1
+                ],
+                [
+                  "quartr.com",
+                  1
+                ]
+              ],
+              "error": null
+            }
+          }
+        ],
+        "confidence": "low",
+        "conflictNotes": "FMP-derived domain \"loreal.com\" disagrees with search-plurality top \"loreal-finance.com\" (4/8)"
+      },
+      {
+        "companyId": 3,
+        "proposalType": "related_domains",
+        "currentValue": [],
+        "proposedValue": [
+          "e-loreal.com",
+          "loreal-finance.com"
+        ],
+        "sources": [
+          {
+            "signal": "regional-search",
+            "evidence": {
+              "regions": [
+                "USA",
+                "China"
+              ],
+              "hitsByRegion": {
+                "USA": [
+                  "loreal-finance.com",
+                  "e-loreal.com"
+                ],
+                "China": [
+                  "loreal-finance.com"
+                ]
+              },
+              "error": null
+            }
+          }
+        ],
+        "confidence": "medium",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "OR.PA => OK (L'Oréal S.A., FR, isin=FR0000120321)",
+      "figi: OpenFIGI: \"L'OREAL\" (overlap: oreal) (agrees=true)",
+      "search: top=loreal-finance.com (4/8)",
+      "domain proposal: null → loreal.com (u17 net flip: 14)",
+      "related-search: candidates=e-loreal.com, loreal-finance.com",
+      "related_domains proposal: net flip=23, demoted=0, added=2"
+    ]
+  },
+  {
+    "id": 4,
+    "name": "Vale",
+    "proposals": [
+      {
+        "companyId": 4,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "BRVALEACNOR0",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "VALE3.SA",
+              "companyName": "Vale S.A.",
+              "country": "BR",
+              "exchange": "SAO"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "VALE SA",
+              "agrees": true,
+              "notes": "OpenFIGI: \"VALE SA\" (overlap: vale)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "VALE3.SA => OK (Vale S.A., BR, isin=BRVALEACNOR0)",
+      "figi: OpenFIGI: \"VALE SA\" (overlap: vale) (agrees=true)",
+      "search: top=vale.com (3/6)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 5,
+    "name": "Apple",
+    "proposals": [
+      {
+        "companyId": 5,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "US0378331005",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "AAPL",
+              "companyName": "Apple Inc.",
+              "country": "US",
+              "exchange": "NASDAQ"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "APPLE INC",
+              "agrees": true,
+              "notes": "OpenFIGI: \"APPLE INC\" (overlap: apple)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      },
+      {
+        "companyId": 5,
+        "proposalType": "related_domains",
+        "currentValue": [
+          "developer.apple.com",
+          "investor.apple.com",
+          "yahoo.com"
+        ],
+        "proposedValue": [
+          "developer.apple.com",
+          "investor.apple.com"
+        ],
+        "sources": [
+          {
+            "signal": "regional-search",
+            "evidence": {
+              "regions": [
+                "UK",
+                "Europe"
+              ],
+              "hitsByRegion": {
+                "UK": [],
+                "Europe": []
+              },
+              "error": null
+            }
+          }
+        ],
+        "confidence": "medium",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "AAPL => OK (Apple Inc., US, isin=US0378331005)",
+      "figi: OpenFIGI: \"APPLE INC\" (overlap: apple) (agrees=true)",
+      "search: top=apple.com (4/5)",
+      "related-search: candidates=(none)",
+      "related_domains proposal: net flip=-3, demoted=3, added=0"
+    ]
+  },
+  {
+    "id": 6,
+    "name": "Toyota Motor",
+    "proposals": [
+      {
+        "companyId": 6,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "JP3633400001",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "7203.T",
+              "companyName": "Toyota Motor Corp.",
+              "country": "JP",
+              "exchange": "JPX"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "TOYOTA MOTOR CORP",
+              "agrees": true,
+              "notes": "OpenFIGI: \"TOYOTA MOTOR CORP\" (overlap: toyota, motor)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "7203.T => OK (Toyota Motor Corp., JP, isin=JP3633400001)",
+      "figi: OpenFIGI: \"TOYOTA MOTOR CORP\" (overlap: toyota, motor) (agrees=true)",
+      "search: top=com.ph (1/3)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 7,
+    "name": "HSBC Holdings",
+    "proposals": [
+      {
+        "companyId": 7,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "GB0005405286",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "HSBA.L",
+              "companyName": "HSBC Holdings plc",
+              "country": "GB",
+              "exchange": "LSE"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "HSBC HOLDINGS PLC",
+              "agrees": true,
+              "notes": "OpenFIGI: \"HSBC HOLDINGS PLC\" (overlap: hsbc)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "HSBA.L => OK (HSBC Holdings plc, GB, isin=GB0005405286)",
+      "figi: OpenFIGI: \"HSBC HOLDINGS PLC\" (overlap: hsbc) (agrees=true)",
+      "search: top=hsbc.com (7/8)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 8,
+    "name": "NextEra Energy",
+    "proposals": [
+      {
+        "companyId": 8,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "US65339F1012",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "NEE",
+              "companyName": "NextEra Energy, Inc.",
+              "country": "US",
+              "exchange": "NYSE"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "NEXTERA ENERGY INC",
+              "agrees": true,
+              "notes": "OpenFIGI: \"NEXTERA ENERGY INC\" (overlap: nextera, energy)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      },
+      {
+        "companyId": 8,
+        "proposalType": "related_domains",
+        "currentValue": [
+          "investor.nexteraenergy.com",
+          "yahoo.com"
+        ],
+        "proposedValue": [
+          "investor.nexteraenergy.com"
+        ],
+        "sources": [
+          {
+            "signal": "regional-search",
+            "evidence": {
+              "regions": [
+                "UK",
+                "Europe"
+              ],
+              "hitsByRegion": {
+                "UK": [],
+                "Europe": []
+              },
+              "error": null
+            }
+          }
+        ],
+        "confidence": "medium",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "NEE => OK (NextEra Energy, Inc., US, isin=US65339F1012)",
+      "figi: OpenFIGI: \"NEXTERA ENERGY INC\" (overlap: nextera, energy) (agrees=true)",
+      "search: top=nexteraenergy.com (7/8)",
+      "related-search: candidates=(none)",
+      "related_domains proposal: net flip=-1, demoted=2, added=0"
+    ]
+  },
+  {
+    "id": 9,
+    "name": "Suncor Energy",
+    "proposals": [
+      {
+        "companyId": 9,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "CA8672241079",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "SU.TO",
+              "companyName": "Suncor Energy Inc.",
+              "country": "CA",
+              "exchange": "TSX"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "SUNCOR ENERGY INC",
+              "agrees": true,
+              "notes": "OpenFIGI: \"SUNCOR ENERGY INC\" (overlap: suncor, energy)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      },
+      {
+        "companyId": 9,
+        "proposalType": "related_domains",
+        "currentValue": [
+          "yahoo.com"
+        ],
+        "proposedValue": [],
+        "sources": [
+          {
+            "signal": "regional-search",
+            "evidence": {
+              "regions": [
+                "USA"
+              ],
+              "hitsByRegion": {
+                "USA": []
+              },
+              "error": null
+            }
+          }
+        ],
+        "confidence": "medium",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "SU.TO => OK (Suncor Energy Inc., CA, isin=CA8672241079)",
+      "figi: OpenFIGI: \"SUNCOR ENERGY INC\" (overlap: suncor, energy) (agrees=true)",
+      "search: top=suncor.com (5/8)",
+      "related-search: candidates=(none)",
+      "related_domains proposal: net flip=-2, demoted=3, added=0"
+    ]
+  },
+  {
+    "id": 10,
+    "name": "AstraZeneca",
+    "proposals": [
+      {
+        "companyId": 10,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "GB0009895292",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "AZN.L",
+              "companyName": "AstraZeneca PLC",
+              "country": "GB",
+              "exchange": "LSE"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "ASTRAZENECA PLC",
+              "agrees": true,
+              "notes": "OpenFIGI: \"ASTRAZENECA PLC\" (overlap: astrazeneca)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "AZN.L => OK (AstraZeneca PLC, GB, isin=GB0009895292)",
+      "figi: OpenFIGI: \"ASTRAZENECA PLC\" (overlap: astrazeneca) (agrees=true)",
+      "search: top=astrazeneca.com (2/8)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 11,
+    "name": "Unilever",
+    "proposals": [
+      {
+        "companyId": 11,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "US9047678035",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "UL",
+              "companyName": "Unilever PLC",
+              "country": "GB",
+              "exchange": "NYSE"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "UNILEVER PLC-SPONSORED ADR",
+              "agrees": true,
+              "notes": "OpenFIGI: \"UNILEVER PLC-SPONSORED ADR\" (overlap: unilever)"
+            }
+          }
+        ],
+        "confidence": "low",
+        "conflictNotes": "FMP-only source was a US ADR fallback (isin=US9047678035); primary local ISIN not resolved"
+      },
+      {
+        "companyId": 11,
+        "proposalType": "related_domains",
+        "currentValue": [],
+        "proposedValue": [
+          "unileverconsumercarebd.com",
+          "unilevernepal.com"
+        ],
+        "sources": [
+          {
+            "signal": "regional-search",
+            "evidence": {
+              "regions": [
+                "USA",
+                "India"
+              ],
+              "hitsByRegion": {
+                "USA": [
+                  "unileverconsumercarebd.com",
+                  "unilevernepal.com"
+                ],
+                "India": [
+                  "unilevernepal.com"
+                ]
+              },
+              "error": null
+            }
+          }
+        ],
+        "confidence": "medium",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "UL.L => null",
+      "UL => OK (Unilever PLC, GB, isin=US9047678035)",
+      "figi: OpenFIGI: \"UNILEVER PLC-SPONSORED ADR\" (overlap: unilever) (agrees=true)",
+      "search: top=unilever.com (6/8)",
+      "related-search: candidates=unileverconsumercarebd.com, unilevernepal.com",
+      "related_domains proposal: net flip=-10, demoted=13, added=2"
+    ]
+  },
+  {
+    "id": 12,
+    "name": "BHP Group",
+    "proposals": [
+      {
+        "companyId": 12,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "AU000000BHP4",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "BHP.AX",
+              "companyName": "BHP Group Limited",
+              "country": "AU",
+              "exchange": "ASX"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "BHP GROUP LTD",
+              "agrees": true,
+              "notes": "OpenFIGI: \"BHP GROUP LTD\" (overlap: bhp)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "BHP.AX => OK (BHP Group Limited, AU, isin=AU000000BHP4)",
+      "figi: OpenFIGI: \"BHP GROUP LTD\" (overlap: bhp) (agrees=true)",
+      "search: top=bhp.com (4/8)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 13,
+    "name": "Kering",
+    "proposals": [
+      {
+        "companyId": 13,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "FR0000121485",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "KER.PA",
+              "companyName": "Kering S.A.",
+              "country": "FR",
+              "exchange": "PAR"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "KERING",
+              "agrees": true,
+              "notes": "OpenFIGI: \"KERING\" (overlap: kering)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "KER.PA => OK (Kering S.A., FR, isin=FR0000121485)",
+      "figi: OpenFIGI: \"KERING\" (overlap: kering) (agrees=true)",
+      "search: top=kering.com (7/9)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 14,
+    "name": "Walmart",
+    "proposals": [
+      {
+        "companyId": 14,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "US9311421039",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "WMT",
+              "companyName": "Walmart Inc.",
+              "country": "US",
+              "exchange": "NASDAQ"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "WALMART INC",
+              "agrees": true,
+              "notes": "OpenFIGI: \"WALMART INC\" (overlap: walmart)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "WMT => OK (Walmart Inc., US, isin=US9311421039)",
+      "figi: OpenFIGI: \"WALMART INC\" (overlap: walmart) (agrees=true)",
+      "search: top=walmart.com (7/8)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 15,
+    "name": "Samsung Electronics",
+    "proposals": [
+      {
+        "companyId": 15,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "KR7005930003",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "005930.KS",
+              "companyName": "Samsung Electronics Co., Ltd.",
+              "country": "KR",
+              "exchange": "KSC"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "SAMSUNG ELECTRONICS CO LTD",
+              "agrees": true,
+              "notes": "OpenFIGI: \"SAMSUNG ELECTRONICS CO LTD\" (overlap: samsung, electronics)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "005930.KS => OK (Samsung Electronics Co., Ltd., KR, isin=KR7005930003)",
+      "figi: OpenFIGI: \"SAMSUNG ELECTRONICS CO LTD\" (overlap: samsung, electronics) (agrees=true)",
+      "search: top=samsung.com (8/9)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 16,
+    "name": "Banco Santander",
+    "proposals": [
+      {
+        "companyId": 16,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "ES0113900J37",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "SAN.MC",
+              "companyName": "Banco Santander, S.A.",
+              "country": "ES",
+              "exchange": "BME"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "BANCO SANTANDER SA",
+              "agrees": true,
+              "notes": "OpenFIGI: \"BANCO SANTANDER SA\" (overlap: banco, santander)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      },
+      {
+        "companyId": 16,
+        "proposalType": "related_domains",
+        "currentValue": [
+          "bancosantander.es",
+          "fundacionbancosantander.com",
+          "santander.co.uk",
+          "santanderus.com"
+        ],
+        "proposedValue": [
+          "bancosantander.es",
+          "fundacionbancosantander.com",
+          "santander.co.uk",
+          "santanderaccionistaseinversores.com",
+          "santandercib.com",
+          "santandermedia.com",
+          "santanderus.com"
+        ],
+        "sources": [
+          {
+            "signal": "regional-search",
+            "evidence": {
+              "regions": [
+                "Latin America",
+                "UK"
+              ],
+              "hitsByRegion": {
+                "Latin America": [
+                  "santanderus.com",
+                  "santandercib.com",
+                  "santanderaccionistaseinversores.com",
+                  "santandermedia.com"
+                ],
+                "UK": [
+                  "santanderaccionistaseinversores.com",
+                  "santandermedia.com"
+                ]
+              },
+              "error": null
+            }
+          }
+        ],
+        "confidence": "medium",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "SAN.MC => OK (Banco Santander, S.A., ES, isin=ES0113900J37)",
+      "figi: OpenFIGI: \"BANCO SANTANDER SA\" (overlap: banco, santander) (agrees=true)",
+      "search: top=santander.com (4/7)",
+      "related-search: candidates=santanderaccionistaseinversores.com, santandercib.com, santandermedia.com, santanderus.com",
+      "related_domains proposal: net flip=1, demoted=0, added=4"
+    ]
+  },
+  {
+    "id": 17,
+    "name": "Ambev",
+    "proposals": [
+      {
+        "companyId": 17,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "US02319V1035",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "ABEV",
+              "companyName": "Ambev S.A.",
+              "country": "BR",
+              "exchange": "NYSE"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "AMBEV SA-ADR",
+              "agrees": true,
+              "notes": "OpenFIGI: \"AMBEV SA-ADR\" (overlap: ambev)"
+            }
+          }
+        ],
+        "confidence": "low",
+        "conflictNotes": "FMP-only source was a US ADR fallback (isin=US02319V1035); primary local ISIN not resolved"
+      },
+      {
+        "companyId": 17,
+        "proposalType": "related_domains",
+        "currentValue": [
+          "publicnow.com",
+          "ri.ambev.com.br"
+        ],
+        "proposedValue": [
+          "ri.ambev.com.br"
+        ],
+        "sources": [
+          {
+            "signal": "regional-search",
+            "evidence": {
+              "regions": [
+                "USA"
+              ],
+              "hitsByRegion": {
+                "USA": []
+              },
+              "error": null
+            }
+          }
+        ],
+        "confidence": "medium",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "ABEV.SA => null",
+      "ABEV => OK (Ambev S.A., BR, isin=US02319V1035)",
+      "figi: OpenFIGI: \"AMBEV SA-ADR\" (overlap: ambev) (agrees=true)",
+      "search: top=ambev.com.br (1/4)",
+      "related-search: candidates=(none)",
+      "related_domains proposal: net flip=-9, demoted=9, added=0"
+    ]
+  },
+  {
+    "id": 18,
+    "name": "Newmont Corporation",
+    "proposals": [
+      {
+        "companyId": 18,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": "US6516391066",
+        "sources": [
+          {
+            "signal": "fmp",
+            "evidence": {
+              "symbol": "NEM",
+              "companyName": "Newmont Corporation",
+              "country": "US",
+              "exchange": "NYSE"
+            }
+          },
+          {
+            "signal": "openfigi",
+            "evidence": {
+              "name": "NEWMONT CORP",
+              "agrees": true,
+              "notes": "OpenFIGI: \"NEWMONT CORP\" (overlap: newmont)"
+            }
+          }
+        ],
+        "confidence": "high",
+        "conflictNotes": null
+      }
+    ],
+    "trace": [
+      "NEM => OK (Newmont Corporation, US, isin=US6516391066)",
+      "figi: OpenFIGI: \"NEWMONT CORP\" (overlap: newmont) (agrees=true)",
+      "search: top=newmont.com (8/8)",
+      "related-search: candidates=(none)"
+    ]
+  },
+  {
+    "id": 19,
+    "name": "Prudential plc",
+    "proposals": [
+      {
+        "companyId": 19,
+        "proposalType": "isin",
+        "currentValue": null,
+        "proposedValue": null,
+        "sources": [],
+        "confidence": "low",
+        "conflictNotes": "FMP could not resolve ticker=PRU, country=United Kingdom (guard=country-mismatch, trace: PRU.L => country-mismatch (fmp=HK, expected=United Kingdom); PRU => country-mismatch (fmp=US, expected=United Kingdom))"
+      }
+    ],
+    "trace": [
+      "PRU.L => country-mismatch (fmp=HK, expected=United Kingdom)",
+      "PRU => country-mismatch (fmp=US, expected=United Kingdom)",
+      "search: top=prudentialplc.com (7/10)"
+    ]
+  }
+]

@@ -106,6 +106,52 @@ export const companyListMembers = pgTable("company_list_members", {
   uniqueListMember: uniqueIndex("unique_list_member").on(table.listId, table.companyId),
 }));
 
+// ─── Company Identity Proposals (Audit Workstream) ────────────────────
+//
+// Proposed corrections to companies.isin / companies.domain /
+// companies.related_domains, produced by the domain-and-ISIN audit job.
+// The audit NEVER writes to companies directly — it writes proposals here
+// and a human (or a follow-up apply job) decides which to accept.
+//
+// A row is unique on (company_id, proposal_type, status='pending') so
+// re-running the audit does not create duplicate pending proposals for the
+// same field on the same company; instead, the existing pending row is
+// superseded via `status = 'superseded'` before the new one is inserted.
+export const companyDomainProposals = pgTable("company_domain_proposals", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").references(() => companies.id).notNull(),
+  // Which field this proposal targets.
+  proposalType: text("proposal_type").notNull(), // 'isin' | 'domain' | 'related_domains'
+  // Before/after values as JSON so the same table stores scalars (isin, domain)
+  // and arrays (related_domains) uniformly.
+  currentValue: jsonb("current_value"),
+  proposedValue: jsonb("proposed_value"),
+  // Which signal(s) supported the proposal, with per-signal evidence for
+  // review (e.g. FMP symbol used, top search hosts, OpenFIGI canonical name).
+  sources: jsonb("sources").$type<Array<{ signal: string; evidence: Record<string, unknown> }>>(),
+  confidence: text("confidence").notNull().default("medium"), // 'high' | 'medium' | 'low'
+  // Populated when signals disagree; e.g. "FMP country=US, caller country=GB —
+  // rejected as ADR" or "search-plurality winner riotinto.com disagrees with
+  // FMP-derived rio-tinto.com". Null means all signals agreed.
+  conflictNotes: text("conflict_notes"),
+  // For domain proposals: number of currently-third_party document rows that
+  // would flip to first_party under this proposal (i.e. hostname matches
+  // proposed_value or proposed related_domains). Helps prioritise review.
+  u17ImpactDocsFlipped: integer("u17_impact_docs_flipped"),
+  status: text("status").notNull().default("pending"), // 'pending' | 'accepted' | 'rejected' | 'superseded'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  appliedAt: timestamp("applied_at"),
+}, (table) => ({
+  companyIdx: index("cdp_company_idx").on(table.companyId),
+  statusIdx: index("cdp_status_idx").on(table.status),
+  // Only one pending proposal per (company, proposal_type). Older pending
+  // proposals must be marked superseded before a new one is inserted.
+  onePendingPerField: uniqueIndex("cdp_one_pending_per_field")
+    .on(table.companyId, table.proposalType)
+    .where(sql`status = 'pending'`),
+}));
+
 // ─── Frameworks (Workspace-Scoped) ─────────────────────────────────────────
 
 export const frameworks = pgTable("frameworks", {
