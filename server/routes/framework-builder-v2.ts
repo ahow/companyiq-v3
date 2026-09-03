@@ -19,6 +19,7 @@ import { buildImprovementChatSystemPrompt, extractActionsFromReply, type Improve
 import { batchTightenDefinitions, batchAppendExclusions, batchRegenerateExamples, groupProposalsByPatch, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
 import { resolveViaFmpByTicker, fmpWebsiteToDomain } from "../lib/fmp-resolver.js";
+import { validateIsin } from "../lib/isin-validator.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -915,7 +916,26 @@ router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Re
       }
 
       // Resolve via FMP by ticker when we have a ticker and no caller-supplied ISIN.
-      let resolvedIsin: string | null = (c.isin && c.isin.trim()) ? c.isin.trim().toUpperCase() : null;
+      //
+      // Caller-supplied ISINs are validated (length + charset + Luhn check
+      // digit) before we trust them. An invalid ISIN is logged and dropped
+      // so we fall through to the FMP-by-ticker branch — this catches the
+      // common typo/transposition failure at ingest without depending on any
+      // outbound API call. Note that a syntactically valid ISIN pointing at
+      // the wrong issuer (e.g. paste of Prudential Financial's ISIN when
+      // Prudential plc was intended) will still be accepted here; catching
+      // that class of error requires an FMP name/country cross-check, which
+      // is deliberately handled by the follow-up PR that covers both this
+      // endpoint and the CSV/XLSX upload endpoint.
+      let resolvedIsin: string | null = null;
+      if (c.isin && c.isin.trim()) {
+        const v = validateIsin(c.isin);
+        if (v.valid) {
+          resolvedIsin = v.canonical;
+        } else {
+          console.warn(`[test-drive/run] Caller-supplied ISIN rejected for ${c.name}: value=${JSON.stringify(c.isin)} reason=${v.reason} — falling through to ticker resolution`);
+        }
+      }
       let fmpSymbol: string | null = null;
       let fmpCompanyName: string | null = null;
       let fmpWebsite: string | null = null;
