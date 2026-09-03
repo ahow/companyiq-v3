@@ -51,6 +51,7 @@ interface Validation {
 
 interface TestDriveCandidate {
   name: string;
+  isin?: string;
   ticker?: string;
   sector?: string;
   country?: string;

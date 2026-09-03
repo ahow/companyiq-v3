@@ -92,7 +92,9 @@ ${modeInstruction}
 - Include ≥3 companies you know from research are likely to disclose on this topic (signal companies) — mark isKnownDiscloser: true
 - Include ≥2 companies where the topic is peripheral (edge cases) — mark isKnownDiscloser: false
 
-Return a JSON array of exactly 10 companies, each with: name, ticker (if known), sector, country, rationale (1 sentence), isKnownDiscloser (bool).`,
+Return a JSON array of exactly 10 companies, each with: name, isin (12-char ISO 6166 identifier if you are confident it corresponds to the specific primary listing, otherwise omit; do NOT guess), ticker (exchange-qualified where non-US e.g. "HSBA.L", "NESN.SW", "7203.T"), sector, country, rationale (1 sentence), isKnownDiscloser (bool).
+
+ISIN caution: if the same ticker is used on multiple exchanges (e.g. "PRU" → Prudential Financial US vs Prudential plc UK), it is safer to omit the ISIN and let downstream resolution disambiguate from the exchange-qualified ticker than to return a plausible-but-wrong ISIN.`,
     user: `Topic: ${req.topicTerm}
 Topic synonyms: ${req.topicSynonyms.join(", ")}
 Framework: ${req.frameworkName}
