@@ -869,6 +869,36 @@ export async function initializeDatabase(): Promise<void> {
     // Existing rows land at FALSE (they were treated as listed by convention).
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_unlisted BOOLEAN NOT NULL DEFAULT FALSE`);
 
+    // Domain / ISIN audit proposals. Idempotent: CREATE TABLE IF NOT EXISTS
+    // plus per-index IF NOT EXISTS statements so re-runs are no-ops.
+    // The uniqueness constraint on (company_id, proposal_type) filtered by
+    // status='pending' ensures the audit script can't create duplicate
+    // pending proposals for the same field on the same company.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS company_domain_proposals (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id),
+        proposal_type TEXT NOT NULL,
+        current_value JSONB,
+        proposed_value JSONB,
+        sources JSONB,
+        confidence TEXT NOT NULL DEFAULT 'medium',
+        conflict_notes TEXT,
+        u17_impact_docs_flipped INTEGER,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        applied_at TIMESTAMP
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS cdp_company_idx ON company_domain_proposals(company_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS cdp_status_idx ON company_domain_proposals(status)`);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS cdp_one_pending_per_field
+      ON company_domain_proposals(company_id, proposal_type)
+      WHERE status = 'pending'
+    `);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 
