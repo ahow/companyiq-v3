@@ -59,6 +59,14 @@ export const companies = pgTable("companies", {
   fmpSector: text("fmp_sector"),
   fmpResolvedAt: timestamp("fmp_resolved_at"),
   fmpPipelineVersion: text("fmp_pipeline_version"),
+  // Explicit flag for issuers with no ISIN by design (private/unlisted
+  // companies, sovereigns, non-securitised funds). When true, all identity
+  // resolution paths that key off an ISIN — FMP-by-ISIN, OpenFIGI mapping,
+  // FMP-at-ingest by ticker, and future audit/proposal jobs — MUST skip
+  // this row rather than fabricate an ISIN. Downstream discovery falls back
+  // to name+domain matching, which is already the pre-ISIN behaviour.
+  // Default false so existing rows and unflagged uploads behave unchanged.
+  isUnlisted: boolean("is_unlisted").notNull().default(false),
   analysisStatus: text("analysis_status").notNull().default("idle"), // idle | fetching | fetched | analyzing | completed | failed
   totalScore: real("total_score"),
   measuresMetCount: integer("measures_met_count"),

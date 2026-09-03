@@ -28,6 +28,14 @@ export interface TestDriveCandidateCompany {
   country?: string;
   rationale: string; // why this company was selected
   isKnownDiscloser: boolean; // true if Stage 1 research indicated this company discloses on the topic
+  /**
+   * True when the candidate has no ISIN by design — a private/unlisted
+   * company, sovereign issuer, non-securitised fund, etc. Downstream
+   * identity resolution skips FMP-by-ISIN and OpenFIGI for such rows,
+   * so callers must NOT fabricate an ISIN for them. Default: absent /
+   * false (treated as a listed company).
+   */
+  isUnlisted?: boolean;
 }
 
 export interface TestDriveSampleRequest {

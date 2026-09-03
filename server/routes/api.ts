@@ -13,6 +13,7 @@ import {
 import { getAvailableProviders, getProviderStatus } from "../lib/ai-providers.js";
 import { resetProvider as resetCreditBreaker, isProviderTripped, clearCreditAlert } from "../lib/credit-breaker.js";
 import { detectScoreAnomalies } from "../lib/anomaly-detection.js";
+import { parseBooleanFlag } from "../lib/parse-boolean-flag.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
 import { assertProductionFingerprint, computeRecoveryLabels, deploymentFingerprintFromEnvironment, isTerminalLifecycleState, type DeploymentFingerprint } from "../lib/reliability.js";
@@ -397,6 +398,12 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
       const sector = findCol(row, "LEVEL2 SECTOR NAME", "LEVEL3 SECTOR NAME", "sector", "Sector", "SECTOR", "Industry", "industry");
       const country = findCol(row, "GEOGRAPHIC DESCR.", "GEOGRAPHIC DESCR", "country", "Country", "COUNTRY", "Geography", "Region");
       const domain = findCol(row, "domain", "Domain", "DOMAIN", "website", "Website", "URL", "url");
+      // Optional unlisted flag. Accepts any of a handful of common column names
+      // and truthy string values. When true, downstream identity resolution
+      // (FMP-by-ISIN, OpenFIGI, FMP-at-ingest audit) MUST skip this row so we
+      // don't fabricate an ISIN for an issuer that has none by design.
+      const unlistedRaw = findCol(row, "is_unlisted", "unlisted", "private", "IsUnlisted", "Unlisted", "Private");
+      const isUnlisted = parseBooleanFlag(unlistedRaw);
 
       // Finding 1 fix: dedup on IDENTITY (normalized ISIN) first, then fall back to
       // exact-name match only when no ISIN is supplied. This prevents the same
@@ -415,6 +422,13 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
         if (country && country !== existing.country) patch.country = country;
         if (domain && domain !== existing.domain) patch.domain = domain;
         if (normIsin && normIsin !== (existing.isin || "")) patch.isin = normIsin;
+        // The unlisted flag is only patched when the upload explicitly supplied
+        // a value. Absence is NOT interpreted as "listed": an existing row that
+        // was previously marked unlisted stays unlisted unless the upload says
+        // otherwise.
+        if (isUnlisted !== null && isUnlisted !== (existing as any).isUnlisted) {
+          (patch as any).isUnlisted = isUnlisted;
+        }
         if (Object.keys(patch).length > 0) {
           try { existing = await storage.updateCompany(existing.id, workspaceId, patch); } catch { /* keep existing on patch failure */ }
         }
@@ -429,8 +443,10 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
         sector: sector || null,
         country: country || null,
         domain: domain || null,
+        // New rows default to false (listed) when the upload doesn't say.
+        isUnlisted: isUnlisted === true,
         workspaceId,
-      });
+      } as any);
       created.push(company);
     }
 
