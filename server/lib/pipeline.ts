@@ -27,7 +27,7 @@
  */
 
 import * as storage from "../storage.js";
-import { searchCompanyDocuments, runTargetedDisclosureQuery, type DiscoveryResult } from "./discovery.js";
+import { searchCompanyDocuments, runTargetedDisclosureQuery, resolveCikForCompany, type DiscoveryResult } from "./discovery.js";
 import {
   getRequirementsForJurisdiction,
   verifyLatestPrimaryDisclosure,
@@ -301,6 +301,19 @@ async function runFetchPhase(opts: {
     .map((d: string) => (d || "").replace(/^www\./, "").toLowerCase())
     .filter(Boolean);
   const companyAliases = deriveAliases((company as any).name || "", (company as any).ticker || null);
+  // R2 (2026-09-04): resolve SEC CIK once per company so the provenance
+  // classifier can perform CIK-path matches on Q4 Inc CDN URLs. Country/ISIN
+  // gate inside resolveCikForCompany prevents non-US issuers from resolving
+  // to a US-listed namesake (FM-4).
+  const companySecCik = await resolveCikForCompany({
+    companyName: (company as any).name || "",
+    ticker: (company as any).ticker || null,
+    country: (company as any).country || null,
+    isin: (company as any).isin || null,
+  });
+  if (companySecCik) {
+    console.log(`[${companyName}] SEC CIK resolved: ${companySecCik}`);
+  }
   for (const doc of discoveryResult.documents) {
     const type = inferDocumentType(doc.url);
     // At discovery time we do not yet have the fetched content. Title alone is
@@ -317,6 +330,8 @@ async function runFetchPhase(opts: {
       companyName: (company as any).name || null,
       companyTicker: (company as any).ticker || null,
       companyAliases,
+      companyIsin: (company as any).isin || null,
+      companySecCik,
     });
     const sourceType = provenanceToSourceType(prov.provenance);
     await storage.upsertDocument({
@@ -1314,6 +1329,15 @@ async function runAnalyzePhase(opts: {
     .map((d: string) => (d || "").replace(/^www\./, "").toLowerCase())
     .filter(Boolean);
   const companyAliasesForCorpus = deriveAliases((company as any)?.name || companyName, (company as any)?.ticker || null);
+  // R2: reuse the cached CIK resolution from the discovery step above so
+  // Q4 Inc CDN URLs can be re-classified via CIK path match if the title
+  // tier doesn't fire.
+  const companySecCikForCorpus = await resolveCikForCompany({
+    companyName: (company as any)?.name || companyName,
+    ticker: (company as any)?.ticker || null,
+    country: (company as any)?.country || null,
+    isin: (company as any)?.isin || null,
+  });
 
   const documentTexts: string[] = [];
   const documentUrls: string[] = [];
@@ -1333,6 +1357,8 @@ async function runAnalyzePhase(opts: {
       companyName: (company as any)?.name || companyName,
       companyTicker: (company as any)?.ticker || null,
       companyAliases: companyAliasesForCorpus,
+      companyIsin: (company as any)?.isin || null,
+      companySecCik: companySecCikForCorpus,
     });
     const priorSourceType = (doc as any).source_type || (doc as any).sourceType || null;
     if (prov.provenance === "issuer" && priorSourceType === "third_party") {

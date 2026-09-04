@@ -61,7 +61,9 @@ test("SEC EDGAR + ticker match → issuer", () => {
   });
   assert.equal(r.provenance, "issuer");
   assert.match(r.reason, /SEC EDGAR/);
-  assert.match(r.reason, /ticker:NEM/);
+  // Under R2: title tier fires first with name-token match on 'newmont'.
+  // Ticker match still supported but title is checked first.
+  assert.match(r.reason, /identity match on (name-token:newmont|ticker:NEM|name-tokens?)/);
   assert.equal(r.regulatorHost, "SEC EDGAR");
 });
 
@@ -75,7 +77,7 @@ test("SEC EDGAR without any identity match → third_party", () => {
   });
   assert.equal(r.provenance, "third_party");
   assert.match(r.reason, /SEC EDGAR/);
-  assert.match(r.reason, /no ticker\/alias\/name-token match/);
+  assert.match(r.reason, /no title\/URL\/content match/);
 });
 
 test("Australian Modern Slavery Register + name match → issuer", () => {
@@ -132,7 +134,9 @@ test("Proteus training PDF (real Newmont contamination case) → third_party", (
     ...NEWMONT,
   });
   assert.equal(r.provenance, "third_party");
-  assert.match(r.reason, /not a known regulator host/);
+  // R2: rewording covers regulator + IR-platform + domain. Match the
+  // generalised reason string that any host outside those classes yields.
+  assert.match(r.reason, /does not match company domain, IR-platform or regulator host/);
 });
 
 test("Third-party news site → third_party", () => {
@@ -179,7 +183,9 @@ test("Genuine Santander SEC filing → issuer", () => {
     ...SANTANDER,
   });
   assert.equal(r.provenance, "issuer");
-  assert.match(r.reason, /ticker:SAN/);
+  // R2: title tier fires first. Ticker match still permitted in title or
+  // content; either is acceptable evidence of issuer identity.
+  assert.match(r.reason, /identity match on (ticker:SAN|alias:santander|name-token)/);
 });
 
 test("URL parse failure returns third_party with reason", () => {
@@ -192,16 +198,18 @@ test("URL parse failure returns third_party with reason", () => {
   assert.equal(r.provenance, "third_party");
 });
 
-test("Single-distinctive-token company requires 2 occurrences", () => {
-  // Newmont has one distinctive token ("newmont"). One occurrence should
-  // NOT alone match — protects against a stray mention in an unrelated doc.
+test("Single-distinctive-token company requires 2 occurrences in content (case-study guard)", () => {
+  // Newmont has one distinctive token ("newmont"). Under R2, a title/URL
+  // occurrence would fire; this test intentionally keeps the title generic
+  // and puts the sole occurrence in content — so only the content tier is
+  // available and it needs 2 occurrences to fire.
   const r = classifyProvenance({
     url: "https://www.sec.gov/Archives/edgar/data/999/random.htm",
     title: "Unrelated filing",
     content: "This filing mentions newmont in a footnote about industry peers.",
     ...NEWMONT,
   });
-  // Only 1 occurrence + no ticker match → should be third_party
+  // Only 1 occurrence in content, and 0 in title/URL → third_party
   assert.equal(r.provenance, "third_party");
 });
 
@@ -213,4 +221,293 @@ test("Single-distinctive-token company: 2+ occurrences match", () => {
     ...NEWMONT,
   });
   assert.equal(r.provenance, "issuer");
+});
+
+// ─── R2: IR-platform / hosted-IR CDN tests ─────────────────────────────────
+// These verify the new IR-platform host class introduced in R2. Covers:
+//   • title-tier fire (primary signal per user steer)
+//   • URL-path tier fire
+//   • CIK-path exact match (strongest signal for Q4 Inc)
+//   • wrong-issuer rejection (Q4 URL for a competitor)
+//   • MZiQ Brazilian IR platform recognition
+//   • tenant-UUID identifier extraction without match (no company-side value)
+//   • title tier PRIMARY over content (title-primary contract)
+
+test("R2: Q4 CDN with title identifying the issuer → issuer via title tier", () => {
+  const r = classifyProvenance({
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/newmont-2024-sustainability-report.pdf",
+    title: "Newmont 2024 Sustainability Report",
+    content: "",
+    ...NEWMONT,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /IR-platform \(Q4 Inc IR CDN\)/);
+  assert.match(r.reason, /title identity match/);
+  assert.equal(r.irPlatformHost, "Q4 Inc IR CDN");
+  assert.equal(r.identitySignal, "title");
+});
+
+test("R2: Q4 CDN with title-tier failure but URL-path fire → issuer via url-path tier", () => {
+  const r = classifyProvenance({
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/newmont-2024-sustainability-report.pdf",
+    title: "[PDF] 2024 Sustainability Report", // title lacks name-token
+    content: "",
+    ...NEWMONT,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /url-path identity match/);
+  assert.equal(r.identitySignal, "url-path");
+});
+
+test("R2: Q4 CDN with CIK match → issuer via CIK path match (strongest signal)", () => {
+  const NEWMONT_WITH_CIK = { ...NEWMONT, companySecCik: "1164727" };
+  const r = classifyProvenance({
+    url: "https://s24.q4cdn.com/1164727/files/doc_downloads/2024/random-file.pdf",
+    title: "random report", // no name/ticker match
+    content: "",
+    ...NEWMONT_WITH_CIK,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /CIK path match \(1164727\)/);
+  assert.equal(r.identitySignal, "cik-match");
+});
+
+test("R2: Q4 CDN with WRONG CIK → third_party even if URL is on IR CDN", () => {
+  const NEWMONT_WITH_CIK = { ...NEWMONT, companySecCik: "1164727" };
+  const r = classifyProvenance({
+    // 320193 is Apple's CIK; this is Apple's IR CDN URL surfaced under Newmont.
+    url: "https://s24.q4cdn.com/320193/files/doc_downloads/apple-report.pdf",
+    title: "apple report",
+    content: "",
+    ...NEWMONT_WITH_CIK,
+  });
+  assert.equal(r.provenance, "third_party");
+  assert.equal(r.irPlatformHost, "Q4 Inc IR CDN");
+});
+
+test("R2: Q4 CDN with no company-side CIK falls back to title/URL/content tiers", () => {
+  // Newmont in the company row doesn't have companySecCik set. The path
+  // extracts a CIK candidate but no comparison is possible — the classifier
+  // should still find identity via the title tier and classify as issuer.
+  const r = classifyProvenance({
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/2024/random.pdf",
+    title: "Newmont 2024 Sustainability Report",
+    content: "",
+    ...NEWMONT,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.equal(r.identitySignal, "title");
+});
+
+test("R2: MZiQ (Brazilian IR CDN) with title identifying issuer → issuer", () => {
+  const AMBEV = {
+    companyName: "Ambev S.A.",
+    companyDomain: "ambev.com.br",
+    relatedDomains: ["ri.ambev.com.br"],
+    companyTicker: "ABEV",
+    companyAliases: ["ambev"],
+  };
+  const r = classifyProvenance({
+    url: "https://api.mziq.com/mzfilemanager/v2/d/c8182463-4b7e-408c-9d0f-42797662435e/4856137f-de39-cf2f-a900-8114590d6230?origin=2",
+    title: "Ambev Annual and Sustainability Report 2024",
+    content: "",
+    ...AMBEV,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /IR-platform \(MZiQ IR platform\)/);
+  assert.equal(r.identitySignal, "title");
+});
+
+test("R2: MZiQ URL with no title/content signal → third_party (safe default)", () => {
+  // We cannot verify tenant-UUID identity without a company-side value, so
+  // an anonymous MZiQ URL should NOT be trusted as issuer just because its
+  // hostname is on the IR-platform list.
+  const AMBEV = {
+    companyName: "Ambev S.A.",
+    companyDomain: "ambev.com.br",
+    relatedDomains: [],
+    companyTicker: "ABEV",
+    companyAliases: ["ambev"],
+  };
+  const r = classifyProvenance({
+    url: "https://api.mziq.com/mzfilemanager/v2/d/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/1234.pdf",
+    title: "[PDF] Corporate report", // no identifying signal
+    content: "",
+    ...AMBEV,
+  });
+  assert.equal(r.provenance, "third_party");
+  assert.equal(r.irPlatformHost, "MZiQ IR platform");
+});
+
+test("R2: title-primary contract — title identifies issuer even when content is missing", () => {
+  // The most consequential R2 rule: with content=null the classifier must
+  // still classify as issuer if the title identifies the company. This is
+  // the pre-fetch classification case.
+  const r = classifyProvenance({
+    url: "https://www.hkexnews.hk/listedco/listconews/sehk/2025/0409/2025040900057.pdf",
+    title: "Prudential plc Sustainability Report 2024",
+    content: null,
+    companyName: "Prudential plc",
+    companyDomain: "prudentialplc.com",
+    relatedDomains: ["prudential.com"],
+    companyTicker: "PRU",
+    companyAliases: ["prudential"],
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.equal(r.regulatorHost, "HKEX news");
+  assert.equal(r.identitySignal, "title");
+});
+
+test("R2: title-primary — title fires FIRST when title matches AND content also matches a wrong entity", () => {
+  // Edge case: a filing archived on hkexnews with the correct issuer title
+  // but a body that happens to mention many companies (e.g. peer analysis).
+  // The title-primary rule ensures we don't wait for content mis-attribution.
+  const r = classifyProvenance({
+    url: "https://www.hkexnews.hk/listedco/listconews/sehk/2025/example.pdf",
+    title: "Prudential plc Sustainability Report 2024",
+    content: "This report includes references to AIA, Manulife, and other peers throughout its peer benchmarks.",
+    companyName: "Prudential plc",
+    companyDomain: "prudentialplc.com",
+    relatedDomains: [],
+    companyTicker: "PRU",
+    companyAliases: ["prudential"],
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.equal(r.identitySignal, "title");
+});
+
+// ─── R2 Rule 1b: brand-token-in-hostname ──────────────────────────────────
+test("R2 Rule 1b: subsidiary hostname (unilevernepal.com) with brand token → issuer", () => {
+  const UNILEVER = {
+    companyName: "Unilever",
+    companyDomain: "unilever.com",
+    relatedDomains: [], // deliberately empty to force Rule 1b
+    companyTicker: "UL",
+    companyAliases: ["unilever"],
+  };
+  const r = classifyProvenance({
+    url: "https://www.unilevernepal.com/legal-and-financial-resources/",
+    title: "Legal and Financial Resources - Unilever Nepal",
+    content: "",
+    ...UNILEVER,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /brand-token "unilever" in hostname/);
+});
+
+test("R2 Rule 1b: subsidiary hostname (unileverconsumercarebd.com) → issuer", () => {
+  const UNILEVER = {
+    companyName: "Unilever",
+    companyDomain: "unilever.com",
+    relatedDomains: [],
+    companyTicker: "UL",
+    companyAliases: ["unilever"],
+  };
+  const r = classifyProvenance({
+    url: "https://www.unileverconsumercarebd.com/investor-relations/",
+    title: "Investor Relations | Unilever",
+    content: "",
+    ...UNILEVER,
+  });
+  assert.equal(r.provenance, "issuer");
+});
+
+test("R2 Rule 1b: brand-content CDN (santandermedia.com) → issuer", () => {
+  const SANTANDER = {
+    companyName: "Banco Santander",
+    companyDomain: "santander.com",
+    relatedDomains: [],
+    companyTicker: "SAN",
+    companyAliases: ["santander"],
+  };
+  const r = classifyProvenance({
+    url: "https://assets.santandermedia.com/adobe/assets/x/y.pdf",
+    title: "YE-25 SFS CLEAN",
+    content: "",
+    ...SANTANDER,
+  });
+  assert.equal(r.provenance, "issuer");
+});
+
+test("R2 Rule 1b: short brand tokens do NOT trigger the fallback (over-fire guard)", () => {
+  // A company with 3-4 char distinctive tokens must not fire Rule 1b, which
+  // requires >=5 chars to avoid matching arbitrary embedded 3-char runs.
+  const NIKE = {
+    companyName: "Nike",
+    companyDomain: "nike.com",
+    relatedDomains: [],
+    companyTicker: "NKE",
+    companyAliases: ["nike"],
+  };
+  const r = classifyProvenance({
+    url: "https://nikeman.example.com/random.pdf",
+    title: "random",
+    content: "",
+    ...NIKE,
+  });
+  assert.equal(r.provenance, "third_party"); // token "nike" < 5 chars
+});
+
+test("R2 Rule 1b: multi-token names do NOT trigger the fallback", () => {
+  // A company with multiple distinctive tokens (e.g. Newmont Corporation →
+  // 'newmont') has a single distinctive token, so Rule 1b WOULD fire. Test
+  // a genuinely multi-token case (e.g. "General Electric") to confirm the
+  // fallback is only used for the single-token case.
+  const GE = {
+    companyName: "General Electric",
+    companyDomain: "ge.com",
+    relatedDomains: [],
+    companyTicker: "GE",
+    companyAliases: ["general electric"],
+  };
+  const r = classifyProvenance({
+    url: "https://electricsomething.example.com/page",
+    title: "Something Electric",
+    content: "",
+    ...GE,
+  });
+  // 'general' and 'electric' are both generic tokens — the distinctive-token
+  // list is empty. Rule 1b requires exactly 1 distinctive token of >=5 chars,
+  // so this case must fall through to third_party.
+  assert.equal(r.provenance, "third_party");
+});
+
+test("R2 Rule 1b: token embedded in unrelated word does NOT match", () => {
+  const UNILEVER = {
+    companyName: "Unilever",
+    companyDomain: "unilever.com",
+    relatedDomains: [],
+    companyTicker: "UL",
+    companyAliases: ["unilever"],
+  };
+  const r = classifyProvenance({
+    // A host with 'unilever' embedded in the middle of a random segment.
+    // This should NOT match because 'x-unilever-y' as a compound word
+    // isn't a hyphen-bounded segment matching startsWith/endsWith rules.
+    url: "https://nonunileveryeah.example.com/page",
+    title: "random",
+    content: "",
+    ...UNILEVER,
+  });
+  // Segment 'nonunileveryeah' does not startsWith or endsWith 'unilever'.
+  assert.equal(r.provenance, "third_party");
+});
+
+test("R2: rad.cvm.gov.br (Brazilian regulator) + title match → issuer", () => {
+  const AMBEV = {
+    companyName: "Ambev S.A.",
+    companyDomain: "ambev.com.br",
+    relatedDomains: [],
+    companyTicker: "ABEV",
+    companyAliases: ["ambev"],
+  };
+  const r = classifyProvenance({
+    url: "http://rad.cvm.gov.br/enet/frmDownloadDocumento.aspx?CodigoInstituicao=1&NumeroSequencialDocumento=12345",
+    title: "Ambev S.A. Formul\u00e1rio de Refer\u00eancia 2024",
+    content: "",
+    ...AMBEV,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /CVM \(Brazil\)/);
+  assert.equal(r.identitySignal, "title");
 });

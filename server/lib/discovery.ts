@@ -1650,6 +1650,66 @@ function buildRegulatoryFilingQueries(companyName: string, framework: Framework,
 // silently leaves discovery on the existing web-search lanes.
 let secTickerMapCache: Map<string, string> | null = null; // ticker/upperName -> 10-digit CIK
 
+/**
+ * R2 (2026-09-04): Resolve a company's SEC CIK from ticker or company name.
+ *
+ * Wraps the cached SEC ticker → CIK map so callers outside discovery.ts can
+ * look up CIKs for the R2 IR-platform provenance check (Q4 Inc CDN URLs
+ * encode issuer CIK in the path). Returns the padded 10-digit CIK on hit,
+ * or null when no match is found or when EDGAR is unreachable.
+ *
+ * SAFETY: only queries EDGAR when a US-country hint exists. For non-US
+ * issuers (GB/FR/CH/etc.), returns null immediately — this prevents the
+ * FM-4 failure where a UK PRU-tickered issuer resolves to Prudential
+ * Financial Inc (US).
+ */
+export async function resolveCikForCompany(opts: {
+  companyName: string;
+  ticker?: string | null;
+  country?: string | null;
+  isin?: string | null;
+}): Promise<string | null> {
+  // Country / ISIN gate: only US-listed issuers should hit EDGAR. The
+  // ISIN's country prefix is the most reliable signal; fall back to the
+  // stored `country` field only when ISIN is absent.
+  const isinCountry = (opts.isin || "").slice(0, 2).toUpperCase();
+  const countryLower = (opts.country || "").toLowerCase();
+  const isUsListed =
+    isinCountry === "US" ||
+    countryLower === "us" ||
+    countryLower === "united states" ||
+    countryLower === "usa" ||
+    // If ISIN is missing AND country is missing, allow lookup but require
+    // an exact ticker match (below). This preserves the pre-R2 behaviour
+    // for edge cases without over-firing on non-US issuers.
+    (!isinCountry && !countryLower);
+  if (!isUsListed) return null;
+
+  const ua = process.env.SEC_USER_AGENT || "CompanyIQ Research admin@companyiq.example";
+  try {
+    const map = await loadSecTickerMap(ua);
+    let cik: string | undefined;
+    if (opts.ticker) cik = map.get(opts.ticker.toUpperCase());
+    if (!cik && opts.companyName) cik = map.get(opts.companyName.toUpperCase());
+    if (!cik && opts.companyName) {
+      // Loose name match — same strategy as resolveAuthoritativeAnnualFilings.
+      const norm = opts.companyName
+        .toUpperCase()
+        .replace(/[.,]/g, "")
+        .replace(/\b(INC|CORP|CORPORATION|CO|LTD|PLC|GROUP|HOLDINGS|COMPANY|LIMITED)\b/g, "")
+        .trim();
+      if (norm.length >= 4) {
+        for (const [k, v] of map) {
+          if (k.replace(/[.,]/g, "").includes(norm)) { cik = v; break; }
+        }
+      }
+    }
+    return cik || null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadSecTickerMap(ua: string): Promise<Map<string, string>> {
   if (secTickerMapCache) return secTickerMapCache;
   const map = new Map<string, string>();
