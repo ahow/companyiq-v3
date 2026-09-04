@@ -147,6 +147,122 @@ describe("verifyDomainCandidate", () => {
     const result = verifyDomainCandidate("randomsite.com", aliases, "Barclays PLC", "Barclays PLC");
     assert.equal(result.status, "rejected");
   });
+
+  // ─── R5e: ISIN-country gate on ticker-only matches ─────────────────────
+
+  test("R5e: rejects generic-TLD ticker-only match for non-US issuer", () => {
+    // Prudential plc scenario. ISIN GB..., ticker PRU. `prudential.com` is
+    // owned by Prudential Financial (US) and its only match against the
+    // Prudential-plc alias set is the ticker "pru". Pre-R5e: accepted.
+    // Post-R5e: rejected on generic TLD + non-US ISIN.
+    const aliases = generateIssuerAliases({
+      companyName: "Prudential plc",
+      figiName: "PRUDENTIAL PLC",
+      figiTicker: "PRU",
+      isin: "GB0007099541",
+      ticker: "PRU",
+      country: "United Kingdom",
+    });
+    // Without ISIN (pre-R5e behaviour): accepted via ticker match
+    const preR5e = verifyDomainCandidate("prudential.com", aliases, "Prudential plc", "PRUDENTIAL PLC");
+    assert.equal(preR5e.status, "accepted", "pre-R5e: ticker-only match accepts");
+    // With ISIN (R5e enabled): rejected
+    const postR5e = verifyDomainCandidate("prudential.com", aliases, "Prudential plc", "PRUDENTIAL PLC", "GB0007099541");
+    assert.equal(postR5e.status, "rejected", "R5e: ticker-only match on generic TLD + non-US ISIN rejects");
+    assert.match(postR5e.reason, /R5e/);
+  });
+
+  test("R5e: accepts country-TLD ticker match matching ISIN country", () => {
+    // `prudential.com.sg` for a GB-ISIN issuer: the TLD `.com.sg` maps to
+    // country SG, ISIN country is GB. Under a strict rule this would be
+    // rejected. But this domain would be accepted anyway via the "prudential"
+    // trading-name alias (not ticker), so R5e is not triggered. This test
+    // exercises the case where ticker IS the only match AND TLD matches.
+    const aliases = generateIssuerAliases({
+      companyName: "Test Co",
+      figiName: "TEST CO",
+      figiTicker: "XYZ",
+      isin: "GB0000000000",
+      ticker: "XYZ",
+      country: "United Kingdom",
+    });
+    // Domain contains ticker "xyz" AND has UK-matching TLD `.co.uk`.
+    const result = verifyDomainCandidate("xyz.co.uk", aliases, "Test Co", "TEST CO", "GB0000000000");
+    assert.equal(result.status, "accepted");
+    assert.match(result.reason, /Verified/);
+    // Evidence should include the R5e note.
+    assert(result.evidence.some(e => /R5e.*TLD country "GB"/i.test(e)));
+  });
+
+  test("R5e: accepts legal-name-word match on generic TLD regardless of ISIN country", () => {
+    // Unilever (NL/UK-registered) accepting `unilever.com` should NOT be
+    // affected by R5e because Check 2 (legal-name word) fires before
+    // ticker. The gate only fires when acceptingAliasType === "ticker".
+    const aliases = generateIssuerAliases({
+      companyName: "Unilever plc",
+      figiName: "UNILEVER PLC",
+      figiTicker: "ULVR",
+      isin: "GB00B10RZP78",
+      ticker: "ULVR",
+      country: "United Kingdom",
+    });
+    // "unilever" as a trading-name alias fires before ticker "ulvr".
+    // This should always be accepted regardless of R5e.
+    const result = verifyDomainCandidate("unilever.com", aliases, "Unilever plc", "UNILEVER PLC", "GB00B10RZP78");
+    assert.equal(result.status, "accepted");
+    assert.match(result.reason, /Verified/);
+    // Confirm the match is via legal-name/trading-name, not ticker.
+    assert(!result.evidence[0].includes("ticker"), "first evidence should not be ticker");
+  });
+
+  test("R5e: US-ISIN issuers still accept generic-TLD ticker-only match (pre-R5e behaviour preserved)", () => {
+    // For US issuers, generic `.com` is the canonical TLD. The gate is
+    // deliberately skipped when ISIN country is US to avoid regressing
+    // legitimate US-issuer domains that only match via ticker.
+    const aliases = generateIssuerAliases({
+      companyName: "Test US Co",
+      figiName: "TEST US CO",
+      figiTicker: "XYZ",
+      isin: "US0000000000",
+      ticker: "XYZ",
+      country: "United States",
+    });
+    const result = verifyDomainCandidate("xyzcorp.com", aliases, "Test US Co", "TEST US CO", "US0000000000");
+    assert.equal(result.status, "accepted");
+  });
+
+  test("R5e: without ISIN argument, pre-R5e behaviour preserved (backwards compatible)", () => {
+    // Callers that don't pass ISIN get the pre-R5e ticker-only acceptance.
+    // This is required so existing test coverage and any consumers that
+    // don't have ISIN available still work.
+    const aliases = generateIssuerAliases({
+      companyName: "Prudential plc",
+      figiName: "PRUDENTIAL PLC",
+      figiTicker: "PRU",
+      isin: "GB0007099541",
+      ticker: "PRU",
+      country: "United Kingdom",
+    });
+    // No ISIN arg passed — the pre-R5e ticker-only branch fires
+    const result = verifyDomainCandidate("prudential.com", aliases, "Prudential plc", "PRUDENTIAL PLC");
+    assert.equal(result.status, "accepted");
+  });
+
+  test("R5e: country-TLD mismatch rejects (e.g. .fr domain for GB issuer via ticker)", () => {
+    // Hypothetical case: ticker matches AND TLD is country-specific but
+    // wrong. Both signals should refuse to align → reject.
+    const aliases = generateIssuerAliases({
+      companyName: "Test Co",
+      figiName: "TEST CO",
+      figiTicker: "XYZ",
+      isin: "GB0000000000",
+      ticker: "XYZ",
+      country: "United Kingdom",
+    });
+    const result = verifyDomainCandidate("xyz.fr", aliases, "Test Co", "TEST CO", "GB0000000000");
+    assert.equal(result.status, "rejected");
+    assert.match(result.reason, /R5e.*TLD indicates country FR, issuer ISIN country is GB/);
+  });
 });
 
 // ─── Acronym Corroboration ──────────────────────────────────────────────────
