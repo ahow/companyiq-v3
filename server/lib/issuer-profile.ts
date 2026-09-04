@@ -260,11 +260,17 @@ export async function resolveIssuerProfile(opts: {
   if (opts.domain) identifiersAvailable.push("domain");
 
   // Step 1: Resolve FIGI canonical name
+  //
+  // isUnlisted guard: rows explicitly marked as having no ISIN by design
+  // skip the OpenFIGI branch even if an ISIN is present on the row. This
+  // mirrors the guard in discovery.ts (40-0) and prevents an accidentally-
+  // populated ISIN on an unlisted row from being sent to OpenFIGI, which
+  // could otherwise return a plausible-but-wrong identity.
   let figiName: string | null = null;
   let figiTicker: string | null = null;
 
   const row = opts.companyRow || {};
-  if (opts.isin) {
+  if (opts.isin && !row.isUnlisted) {
     const figiResult = await resolveCompanyFIGI({
       id: opts.companyId,
       isin: opts.isin,

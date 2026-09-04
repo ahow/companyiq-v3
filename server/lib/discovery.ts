@@ -3214,9 +3214,14 @@ async function searchCompanyDocumentsInner(opts: {
 
     // 40-0: Resolve canonical name via OpenFIGI (if ISIN available)
     // P3: resolveCompanyFIGI now returns cached values when fresh, so we always call it.
+    // isUnlisted guard: rows explicitly marked as having no ISIN by design
+    // (private, unlisted, sovereign, non-securitised) skip both OpenFIGI and
+    // the FMP-by-ISIN branch below, even if an ISIN happens to be present on
+    // the row (e.g. legacy data or manual override). Downstream discovery
+    // falls through to name+domain matching, which is the pre-ISIN path.
     let figiName = companyRow.figiName || null;
     let figiTicker = companyRow.figiTicker || null;
-    if (companyRow.isin) {
+    if (companyRow.isin && !(companyRow as any).isUnlisted) {
       const figiResult = await resolveCompanyFIGI({
         id: companyRow.id || 0,
         isin: companyRow.isin,
@@ -3268,7 +3273,7 @@ async function searchCompanyDocumentsInner(opts: {
     // For FMP-sourced domains we ALSO consider tokens derived from FMP's
     // canonical companyName which more often matches the brand.
     let fmpResolvedDomain: string | null = null;
-    if (companyRow.isin && (companyRow.fmpPipelineVersion !== PIPELINE_VERSION || !companyRow.fmpResolvedAt)) {
+    if (companyRow.isin && !(companyRow as any).isUnlisted && (companyRow.fmpPipelineVersion !== PIPELINE_VERSION || !companyRow.fmpResolvedAt)) {
       try {
         const fmpProfile = await resolveViaFmp(companyRow.isin);
         if (fmpProfile) {

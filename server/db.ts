@@ -863,6 +863,12 @@ export async function initializeDatabase(): Promise<void> {
     // Add metadata column to system_alerts for structured pause state
     await db.execute(sql`ALTER TABLE system_alerts ADD COLUMN IF NOT EXISTS metadata JSONB`);
 
+    // Explicit is_unlisted flag on companies. Nullable-with-default form used
+    // for idempotence: ADD COLUMN IF NOT EXISTS with a non-null default so the
+    // column is added on old databases without a separate backfill step.
+    // Existing rows land at FALSE (they were treated as listed by convention).
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_unlisted BOOLEAN NOT NULL DEFAULT FALSE`);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 

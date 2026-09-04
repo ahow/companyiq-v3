@@ -451,7 +451,7 @@ export default function ListsPage() {
                 <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
                   <p className="font-medium mb-1">Supported formats:</p>
                   <ul className="list-disc list-inside space-y-0.5">
-                    <li>CSV with headers: name, isin, sector, country, domain</li>
+                    <li>CSV with headers: name, isin, sector, country, domain, is_unlisted (optional)</li>
                     <li>Excel (.xlsx) with a header row in the first sheet</li>
                     <li>MSCI-style exports (LEVEL2 SECTOR NAME, GEOGRAPHIC DESCR., etc.)</li>
                   </ul>
@@ -478,7 +478,8 @@ export default function ListsPage() {
                   <p className="font-medium mb-1">Accepted formats:</p>
                   <ul className="list-disc list-inside space-y-0.5">
                     <li><strong>Plain list:</strong> One company name per line</li>
-                    <li><strong>CSV data:</strong> Comma-separated with optional headers (name, isin, sector, country, domain)</li>
+                    <li><strong>CSV data:</strong> Comma-separated with optional headers (name, isin, sector, country, domain, is_unlisted)</li>
+                    <li className="text-xs text-gray-500 mt-1"><strong>is_unlisted</strong> accepts true/false, yes/no, 1/0. Set to true for private issuers with no ISIN so the app doesn't try to resolve one.</li>
                   </ul>
                   <p className="mt-2 text-gray-500">Existing companies will be skipped (no duplicates) but still added to the list.</p>
                 </div>

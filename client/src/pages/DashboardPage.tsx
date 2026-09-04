@@ -40,7 +40,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const [selectedList, setSelectedList] = useState<number | null>(null);
   const [selectedFramework, setSelectedFramework] = useState<number | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newCompany, setNewCompany] = useState({ name: "", isin: "", sector: "", country: "", domain: "" });
+  const [newCompany, setNewCompany] = useState({ name: "", isin: "", sector: "", country: "", domain: "", isUnlisted: false });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [reviewExpanded, setReviewExpanded] = useState(false);
   const [anomalyExpanded, setAnomalyExpanded] = useState(false);
@@ -227,7 +227,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["companies"] });
       setShowAddModal(false);
-      setNewCompany({ name: "", isin: "", sector: "", country: "", domain: "" });
+      setNewCompany({ name: "", isin: "", sector: "", country: "", domain: "", isUnlisted: false });
     },
   });
 
@@ -1020,6 +1020,18 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                   className="w-full px-3 py-2 border rounded-lg text-sm"
                 />
               </div>
+              <label className="flex items-start gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={newCompany.isUnlisted}
+                  onChange={(e) => setNewCompany({ ...newCompany, isUnlisted: e.target.checked, isin: e.target.checked ? "" : newCompany.isin })}
+                  className="mt-0.5"
+                />
+                <span>
+                  Unlisted / private issuer (no ISIN)
+                  <span className="block text-xs text-gray-500">Skips ISIN, FMP and OpenFIGI resolution; discovery uses name + domain only.</span>
+                </span>
+              </label>
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
