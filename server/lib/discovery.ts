@@ -1047,35 +1047,29 @@ function buildGeneralQueries(companyName: string, framework: Framework, companyD
   // LAYER 3: ADDITIVE metadata-driven queries from requiredDocTypes.
   // These AUGMENT the above layers. Deduplication via the seen set.
   //
-  // I61: Also emit queries against the top ALIASES derived from the canonical
-  // company name (e.g. SMFG for 'Sumitomo Mitsui Financial Group', MUFG for
-  // 'Mitsubishi UFJ Financial Group', BSCH for 'Banco Santander Central Hispano').
-  // Rationale: Layer 3 previously used only the full canonical name. For
-  // acronym-branded issuers whose PARENT-BRAND documents are indexed under the
-  // short form (e.g. 'SMFG Group Sustainability Report', 'MUFG Human Rights
-  // Report'), a full-name-only search finds subsidiary docs first (e.g. 'Sumitomo
-  // Mitsui Banking Corporation Slavery Statement') while missing the umbrella
-  // parent-group doc. Adding alias variants of each requiredDocType query keeps
-  // discovery framework-agnostic (all queries flow from framework.requiredDocTypes
-  // and framework-agnostic alias derivation) while surfacing parent-brand docs.
+  // R1 (2026-09-04): the query patterns for this layer were moved to a
+  // separate helper `buildDisclosureVehicleQueries` so the same query
+  // construction can be reused by other lanes (domain, multi-doc) and by
+  // unit tests. The old three-pattern set (quoted / filetype:pdf /
+  // unquoted+year) survives as the default, plus the caller passes in the
+  // requiredDocTypes list unchanged.
   //
-  // Bounded: at most 2 aliases (top by deriveAliases order — typically the
-  // initialism first, then the concatenated form); at most 5 requiredDocTypes;
-  // dedupe by string via the shared `seen` set so no query is issued twice.
+  // I61: also emits queries against derived aliases (initialism, concatenated
+  // form) so parent-brand documents surface under acronym-branded issuers
+  // (e.g. SMFG / MUFG / BSCH). Alias generation happens inside
+  // buildDisclosureVehicleQueries.
   const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
   if (requiredDocTypes && requiredDocTypes.length > 0) {
-    const domain = companyDomain || "";
     const aliases = deriveAliases(companyName, null)
       .filter((a) => a && a.length >= 2 && a.toLowerCase() !== companyName.toLowerCase())
       .slice(0, 2);
-    const nameVariants = [companyName, ...aliases];
-    for (const docType of requiredDocTypes.slice(0, 5)) {
-      for (const variant of nameVariants) {
-        addQuery(`"${variant}" "${docType}" ${currentYear} OR ${lastYear}`);
-        addQuery(`"${variant}" ${docType} filetype:pdf`);
-        addQuery(`${variant} ${docType} ${currentYear}`);
-      }
-      if (domain) {
+    const vehicleQueries = buildDisclosureVehicleQueries(companyName, framework, aliases, { maxVehicles: 8 });
+    for (const q of vehicleQueries) addQuery(q);
+    // Retain the site: query — buildDisclosureVehicleQueries deliberately
+    // omits site: patterns because those belong to buildDomainQueries.
+    const domain = companyDomain || "";
+    if (domain) {
+      for (const docType of requiredDocTypes.slice(0, 5)) {
         addQuery(`site:${domain} ${docType}`);
       }
     }
@@ -1083,6 +1077,84 @@ function buildGeneralQueries(companyName: string, framework: Framework, companyD
 
   const metadataCount = allQueries.length - legacyEnd;
   return { queries: allQueries, templateCount: templateEnd, legacyCount, metadataCount };
+}
+
+/**
+ * R1 (2026-09-04) — Disclosure-vehicle discovery queries.
+ *
+ * Generates queries whose PATTERNS target the titles / filenames of typical
+ * disclosure documents (e.g. "sustainability report", "annual report",
+ * "TNFD report") rather than the contents of those documents. Framework-
+ * agnostic — reads from `framework.requiredDocTypes`, which is populated
+ * from the aggregated per-measure disclosureVehicles list.
+ *
+ * The pre-R1 discovery pipeline had a subtle failure mode where
+ * `evidence_keywords` (biodiversity impact, cross-functional team, stress
+ * testing) shaped both scoring AND retrieval. Those keywords appear INSIDE
+ * disclosures, not in their titles, so `"Newmont" biodiversity impact 2025`
+ * failed to surface the actual Sustainability Report. This function fills
+ * the gap by explicitly querying for the vehicle types.
+ *
+ * Rationale for the multi-pattern approach:
+ *   - `"{company}" {vehicleType} filetype:pdf` — forces the actual PDF
+ *   - `"{company}" {vehicleType} {yearRange}` — recency-constrained variant
+ *   - `site:{domain} {vehicleType}` — IR-site-scoped variant (handled by
+ *     buildDomainQueries, not here)
+ *   - unquoted `{company} {vehicleType} filetype:pdf` — fuzzy fallback for
+ *     companies whose full name doesn't appear verbatim in PDF titles
+ *
+ * @param companyName company display name
+ * @param framework   framework record with requiredDocTypes populated
+ * @param aliases     optional derived aliases (initialism, concatenated form)
+ * @param opts.maxVehicles cap on vehicle types consumed (default 10)
+ */
+export function buildDisclosureVehicleQueries(
+  companyName: string,
+  framework: Framework,
+  aliases: string[] = [],
+  opts: { maxVehicles?: number } = {},
+): string[] {
+  const maxVehicles = opts.maxVehicles ?? 10;
+  const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
+  if (!requiredDocTypes || requiredDocTypes.length === 0) return [];
+
+  const currentYear = new Date().getFullYear();
+  const lastYear = currentYear - 1;
+  const nameVariants = [companyName, ...aliases.filter(a => a && a.length >= 2 && a.toLowerCase() !== companyName.toLowerCase())].slice(0, 3);
+
+  const queries: string[] = [];
+  const seen = new Set<string>();
+  const addQuery = (q: string) => {
+    const key = q.toLowerCase().trim();
+    if (!seen.has(key)) { seen.add(key); queries.push(q); }
+  };
+
+  const vehicles = requiredDocTypes.slice(0, maxVehicles);
+  for (const vehicle of vehicles) {
+    const v = vehicle.trim();
+    if (!v) continue;
+    for (const nameVariant of nameVariants) {
+      // Pattern A — quoted name + vehicle + filetype (forces the PDF)
+      addQuery(`"${nameVariant}" ${v} filetype:pdf`);
+      // Pattern B — quoted name + vehicle + year range (recency-constrained,
+      // no filetype:pdf so web-hosted disclosures like HTML ESG-report chapters
+      // are also surfaced, e.g. corporate.walmart.com/purpose/esgreport/…
+      // regeneration-of-natural-resources or filings.xbrl.org ESEF XHTML).
+      addQuery(`"${nameVariant}" ${v} ${currentYear} OR ${lastYear}`);
+    }
+    // Pattern C — unquoted, filetype:pdf. Fuzzy fallback; some CDN-hosted
+    // PDFs carry only the short company name or the ticker, not the full
+    // legal name, so unquoted queries can outperform quoted ones there.
+    addQuery(`${nameVariants[0]} ${v} filetype:pdf`);
+    // Pattern D (R1 refinement) — unquoted, no filetype. Surfaces web-hosted
+    // disclosures (ESG report chapters on corporate.<company>.com, XBRL ESEF
+    // XHTML on filings.xbrl.org) that would be missed by any filetype:pdf
+    // filter. Only for the primary name variant — alias variants would add
+    // more noise than signal.
+    addQuery(`${nameVariants[0]} ${v} ${currentYear}`);
+  }
+
+  return queries;
 }
 
 /**
@@ -1128,6 +1200,11 @@ function buildMultiDocumentQueries(companyName: string, framework: Framework): s
 function buildDomainQueries(companyName: string, domain: string, framework: Framework, topicPhrases?: string[]): string[] {
   // Instruction 21b: Fully data-driven domain queries. No hardcoded topic branches.
   // Uses topicPhrases (derived from framework's topic lexicon) + requiredDocTypes.
+  //
+  // R1 (2026-09-04): raised the requiredDocTypes consumption cap from 5 to 10
+  // to match the aggregated framework.requiredDocTypes size after the R1
+  // backfill. Also added a filetype:pdf variant per vehicle type for
+  // subdomains that only surface PDFs (e.g. investors.newmont.com).
   const baseQueries = [
     `site:${domain} annual report`,
     `site:${domain} governance`,
@@ -1135,12 +1212,14 @@ function buildDomainQueries(companyName: string, domain: string, framework: Fram
     `site:${domain} investor relations`,
   ];
 
-  // Add requiredDocTypes as domain queries
+  // Add requiredDocTypes as domain queries (both plain and filetype:pdf)
   const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
   if (requiredDocTypes && requiredDocTypes.length > 0) {
-    for (const docType of requiredDocTypes.slice(0, 5)) {
-      const q = `site:${domain} ${docType}`;
-      if (!baseQueries.includes(q)) baseQueries.push(q);
+    for (const docType of requiredDocTypes.slice(0, 10)) {
+      const q1 = `site:${domain} ${docType}`;
+      const q2 = `site:${domain} ${docType} filetype:pdf`;
+      if (!baseQueries.includes(q1)) baseQueries.push(q1);
+      if (!baseQueries.includes(q2)) baseQueries.push(q2);
     }
   }
 
