@@ -13,6 +13,7 @@ import { generateDocumentHash } from "./processor.js";
 import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
+import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { createHash } from "crypto";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
 
@@ -2211,7 +2212,7 @@ export async function analyzeCompanyMeasures(opts: {
           // matching fingerprint and the prior verdict being reused, so silent
           // cross-entity reuse is impossible to miss in production.
           console.log(`[${companyName}] CACHE-HIT ${measure.measureId}: fingerprint=${fp.slice(0, 12)} reusing prior verdict="${prior.verdict}" (priorScore=${prior.score})`);
-          return {
+          const cachedResult: MeasureResult = {
             ...measureResult,
             score: typeof prior.score === "number" ? prior.score : measureResult.score,
             verdict: (prior.verdict as MeasureResult["verdict"]) || measureResult.verdict,
@@ -2221,13 +2222,35 @@ export async function analyzeCompanyMeasures(opts: {
             // I58: preserve retrieval diagnostic even on cache hits.
             passageDiagnostics: (measureResult as MeasureResult).passageDiagnostics,
           };
+          // U17 Fix B (T1.2): apply scoring-time provenance gate on cache hits
+          // too. A cached verdict may have been produced when the flag was off;
+          // running the gate here makes flag toggles retroactive without
+          // requiring a full re-score. No-op when flag is off.
+          return runProvenanceGate(cachedResult);
         } else if (prior && fp && prior.evidenceFingerprint && prior.evidenceFingerprint !== fp) {
           console.log(`[${companyName}] EVIDENCE-DRIFT ${measure.measureId}: fingerprint changed ${prior.evidenceFingerprint.slice(0, 8)} -> ${fp.slice(0, 8)} (re-scored)`);
         }
       }
 
-      return measureResult;
+      // U17 Fix B (T1.2): scoring-time provenance gate. Downgrades Yes/Partial
+      // to No when every supporting quote is third-party. Skipped for unlisted
+      // companies and gated by the U17_SCORING_TIME_GATE flag (default off).
+      // No-op when flag is off, so the diff is zero for existing runs until
+      // the flag is turned on for measurement.
+      return runProvenanceGate(measureResult);
     };
+
+    // Helper closure that captures the company context and applies the U17
+    // Fix B gate. Kept as a closure over the outer analyzeCompanyMeasures
+    // scope so we don't have to thread the company row through every return.
+    function runProvenanceGate(mr: MeasureResult): MeasureResult {
+      if (!isScoringTimeGateEnabled()) return mr;
+      const outcome = applyProvenanceGate(mr, company ?? null);
+      if (outcome.action === "downgraded") {
+        console.log(`[${companyName}] U17-FIX-B DOWNGRADE ${mr.measureId}: ${mr.verdict} → No (all ${outcome.decisions.length} quotes third-party)`);
+      }
+      return outcome.result;
+    }
 
     // Process measures in concurrent batches
     for (let i = 0; i < categoryMeasures.length; i += MEASURE_CONCURRENCY) {
