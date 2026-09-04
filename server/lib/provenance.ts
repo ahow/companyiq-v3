@@ -65,33 +65,6 @@ export interface ProvenanceInput {
   // back to name/ticker/alias identity when these are absent.
   companyIsin?: string | null;
   companySecCik?: string | null; // SEC EDGAR CIK, unpadded string of digits
-  // R5c (2026-09-04): first-touch IR-platform tenant propagation. Callers
-  // maintain a per-batch mutable map keyed by `<platform-label>:<tenant-id>`
-  // with values that describe what confirmed the tenant. When the classifier
-  // confirms a tenant via title/URL/content identity, it INSERTS an entry
-  // into this map; subsequent sibling URLs on the same tenant match via a
-  // cheap map lookup rather than needing their own identity signal.
-  //
-  // This closes the Newmont s24.q4cdn.com/382246808 recall gap identified in
-  // the iter-14 investigation: R2 correctly recognised q4cdn.com as an IR
-  // platform, but the Q4 tenant identifier (382246808) is a Q4-internal id
-  // rather than a SEC CIK (Newmont's real CIK is 1164727), so the pre-R5c
-  // `irPlatformPathIdentityMatch` returned false and the URL fell through to
-  // third_party. With R5c, the FIRST Newmont Q4 URL that ALSO has a title
-  // identity match (e.g. "Newmont 2024 Sustainability Report") writes
-  // `q4:382246808 -> Newmont` into the map, and every later Q4 URL under
-  // that tenant matches for free.
-  //
-  // The map is optional so callers that don't yet maintain one (tests, ad
-  // hoc lookups) still get the pre-R5c behaviour. Stateless callers pass
-  // undefined; batch-context callers pass a shared Map.
-  knownIrTenants?: Map<string, IrTenantBinding>;
-}
-
-export interface IrTenantBinding {
-  companyName: string; // canonical company name at the moment of binding
-  companyIdentifier?: string | null; // any stable identifier available at binding time
-  confirmedBy: "title" | "url-path" | "content"; // which identity tier confirmed the binding
 }
 
 export interface ProvenanceResult {
@@ -100,10 +73,6 @@ export interface ProvenanceResult {
   regulatorHost: string | null; // if the URL lives on a regulator host, its label
   irPlatformHost?: string | null; // if the URL lives on an IR-platform CDN, its label
   identitySignal?: "title" | "url-path" | "content" | "cik-match" | "tenant-match" | "none";
-  // R5c: when this classifier call added a new (platform, tenant) binding
-  // to the shared map, we surface it in the result so the caller can log
-  // the propagation for audit. Undefined when no binding was written.
-  boundIrTenant?: { platform: string; tenantId: string; confirmedBy: "title" | "url-path" | "content" };
 }
 
 // ─── Regulator / registry host patterns ─────────────────────────────────────
@@ -209,41 +178,25 @@ export interface IrPlatformSpec {
   // Extract an issuer identifier from the URL path/subdomain, if the platform
   // encodes one in a predictable way. Return null if this URL doesn't carry
   // one (e.g. a landing page or a shared marketing asset).
-  //
-  // R5c (2026-09-04): expanded identifier kinds to distinguish Q4's tenant
-  // ID (an internal Q4 integer that identifies a Q4 customer) from a SEC
-  // CIK. Prior to R5c the Q4 rule returned `kind: "cik"` for Q4 tenant IDs,
-  // which caused a false mismatch when the tenant ID happened not to equal
-  // the company's actual SEC CIK (e.g. Newmont: Q4 tenant=382246808, real
-  // CIK=1164727). Q4 tenant IDs are now labeled `q4_tenant_id` and are only
-  // trusted when the tenant appears in `knownIrTenants` (populated by a
-  // prior title/URL/content identity match).
-  extractIdentifier: (url: string) => { kind: "cik" | "q4_tenant_id" | "tenant" | "path-token"; value: string } | null;
+  extractIdentifier: (url: string) => { kind: "cik" | "tenant" | "path-token"; value: string } | null;
 }
 
 // Q4 Inc — hosts investor relations for hundreds of US-listed issuers on
-// subdomains like `s{n}.q4cdn.com/{tenant-id}/files/...`. The digit run in
-// the path is a Q4-internal tenant ID (verified across cohort: Newmont
-// tenant=382246808 vs SEC CIK=1164727; Corning tenant=24741 whose CIK is
-// 24741 — illustrating that a coincidental match is unreliable evidence).
-//
-// R5c (2026-09-04): the extractor previously labeled this identifier as
-// `kind: "cik"`, which caused mismatches whenever the Q4 tenant ID differed
-// from the SEC CIK (the common case). The identifier is now labeled
-// `q4_tenant_id`. Downstream identity is established via one of:
-//   (a) three-tier identity check (title/URL/content) on this URL; or
-//   (b) `knownIrTenants` cache hit from a prior URL that established (a).
+// subdomains like `s{n}.q4cdn.com/{cik}/files/...`. The digit run in the path
+// is the issuer's SEC CIK (verified via manual audit of 20+ q4cdn URLs across
+// the cohort — Newmont=382246808, Corning=24741, etc.).
 const Q4_CDN_HOSTS: IrPlatformSpec = {
   hostRegex: /(^|\.)q4cdn\.com$/i,
   label: "Q4 Inc IR CDN",
   extractIdentifier: (url: string) => {
     const path = pathOf(url);
-    // Path form: /<tenant-digits>/files/...  OR  /<tenant-digits>/download/...
-    // Tenant IDs are 1-10 digits historically; Q4 stores the shortest unique
-    // form. Match 4-10 digits at the first path segment.
+    // Path form: /<cik-digits>/files/...  OR  /<cik-digits>/download/...
+    // CIKs are 1-10 digits historically; SEC pads to 10 in their APIs but
+    // Q4 typically stores the shortest unique form. Match 4-10 digits at the
+    // first path segment.
     const m = path.match(/^\/(\d{4,10})(?:\/|$)/);
     if (!m) return null;
-    return { kind: "q4_tenant_id", value: m[1] };
+    return { kind: "cik", value: m[1] };
   },
 };
 
@@ -533,60 +486,14 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
   // Rule 2: IR-platform / hosted-IR CDN. Title-primary identity check.
   const irPlatform = matchIrPlatform(input.url);
   if (irPlatform) {
-    // R5c: check the propagated-tenant cache FIRST. If a prior URL on the
-    // same IR platform has been confirmed for this issuer via title/URL/
-    // content match, this URL is accepted for free provided its extracted
-    // tenant identifier matches the cached one. This closes the sibling-URL
-    // coverage gap: e.g. once we've seen `s24.q4cdn.com/382246808/…/
-    // Newmont-2024-Sustainability-report-1.pdf` (title match), we accept
-    // every other `s24.q4cdn.com/382246808/…` URL as Newmont without
-    // requiring each to re-establish identity.
-    if (input.knownIrTenants && input.knownIrTenants.size > 0) {
-      const extracted = irPlatform.spec.extractIdentifier(input.url);
-      if (extracted) {
-        const key = tenantCacheKey(irPlatform.label, extracted.value);
-        const bound = input.knownIrTenants.get(key);
-        if (bound && companyMatchesBinding(input, bound)) {
-          return {
-            provenance: "issuer",
-            reason: `IR-platform (${irPlatform.label}) + tenant-cache hit ${extracted.value} (first-touch via ${bound.confirmedBy})`,
-            regulatorHost: null,
-            irPlatformHost: irPlatform.label,
-            identitySignal: "tenant-match",
-          };
-        }
-      }
-    }
-
     const identity = threeTierIdentityCheck(input);
     if (identity.matched) {
-      // R5c: write-through to the tenant cache so future sibling URLs on
-      // the same tenant are accepted without re-running the identity check.
-      // Only writes when the caller provided a mutable map AND the URL
-      // carries an extractable tenant identifier (i.e. it's a Q4/MZiQ/etc
-      // path with a stable per-issuer segment).
-      let boundIrTenant: ProvenanceResult["boundIrTenant"] = undefined;
-      if (input.knownIrTenants) {
-        const extracted = irPlatform.spec.extractIdentifier(input.url);
-        if (extracted && identity.tier) {
-          const key = tenantCacheKey(irPlatform.label, extracted.value);
-          if (!input.knownIrTenants.has(key)) {
-            input.knownIrTenants.set(key, {
-              companyName: input.companyName || "",
-              companyIdentifier: input.companySecCik || input.companyIsin || input.companyTicker || null,
-              confirmedBy: identity.tier,
-            });
-            boundIrTenant = { platform: irPlatform.label, tenantId: extracted.value, confirmedBy: identity.tier };
-          }
-        }
-      }
       return {
         provenance: "issuer",
         reason: `IR-platform (${irPlatform.label}) + ${identity.tier} identity match on ${identity.matchedOn}`,
         regulatorHost: null,
         irPlatformHost: irPlatform.label,
         identitySignal: identity.signal,
-        boundIrTenant,
       };
     }
     // IR-platform host but no identity signal from title/URL/content. Try
@@ -606,7 +513,7 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
     // third_party — could be a competitor's filing surfaced by mistake.
     return {
       provenance: "third_party",
-      reason: `IR-platform (${irPlatform.label}) but no title/URL/content/CIK/tenant-cache match for issuer`,
+      reason: `IR-platform (${irPlatform.label}) but no title/URL/content/CIK match for issuer`,
       regulatorHost: null,
       irPlatformHost: irPlatform.label,
       identitySignal: "none",
@@ -713,44 +620,12 @@ function irPlatformPathIdentityMatch(
     return { matched: false, reason: `CIK path mismatch (url=${urlCik}, company=${knownCik})`, signal: "none" };
   }
 
-  // For q4_tenant_id / tenant / path-token identifiers we have no company-side
-  // value to compare against directly. Identity is established either via the
-  // three-tier title/URL/content check (already tried by the caller) or via
-  // the `knownIrTenants` cache (checked before we get here in the R5c flow).
-  // R5c note (2026-09-04): pre-R5c, Q4 tenant IDs were labeled `cik` and
-  // compared against `companySecCik` here, which produced false mismatches
-  // that dropped legitimate first-party Q4 URLs (Newmont's Sustainability
-  // Report). See `Q4_CDN_HOSTS` for the fix.
+  // For tenant / path-token identifiers we have no company-side value to
+  // compare against yet, so we cannot confirm identity. Return false; the
+  // caller has already tried the title/URL/content check and will fall
+  // through to third_party. A future enhancement is to cache per-issuer
+  // tenant UUIDs the first time we see one confirmed by another route.
   return { matched: false, reason: `${extracted.kind} identifier present but no company-side value to compare`, signal: "none" };
-}
-
-// R5c: shared helpers for the tenant propagation cache. Exported so the
-// pipeline caller can construct/inspect keys consistently (e.g. for logging
-// or for cross-batch persistence in a future enhancement).
-export function tenantCacheKey(platformLabel: string, tenantId: string): string {
-  return `${platformLabel.toLowerCase()}:${tenantId.toLowerCase()}`;
-}
-
-/**
- * Guard the tenant-cache hit against cross-company reuse. A cached binding is
- * only valid for a URL when the input's declared company matches the company
- * that originally bound the tenant. Without this guard, two companies in the
- * same batch that happen to hit the same Q4/MZiQ tenant would be mis-classified.
- *
- * Match rule is lenient because binding is per-batch and per-issuer: exact
- * name match OR at least one shared stable identifier (SEC CIK / ISIN /
- * ticker). Returns true only when we have positive corroboration.
- */
-function companyMatchesBinding(input: ProvenanceInput, bound: IrTenantBinding): boolean {
-  const inName = (input.companyName || "").trim().toLowerCase();
-  const boundName = (bound.companyName || "").trim().toLowerCase();
-  if (inName && boundName && inName === boundName) return true;
-  const inIds = [input.companySecCik, input.companyIsin, input.companyTicker]
-    .filter((v): v is string => !!v)
-    .map(v => v.toLowerCase());
-  const boundId = (bound.companyIdentifier || "").toLowerCase();
-  if (boundId && inIds.includes(boundId)) return true;
-  return false;
 }
 
 // Exported for use by pipeline.ts (existing string field) — encodes the

@@ -36,7 +36,7 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
-import { classifyProvenance, provenanceToSourceType, type IrTenantBinding } from "./provenance.js";
+import { classifyProvenance, provenanceToSourceType } from "./provenance.js";
 import { deriveAliases } from "./issuer-resolver.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
@@ -314,29 +314,14 @@ async function runFetchPhase(opts: {
   if (companySecCik) {
     console.log(`[${companyName}] SEC CIK resolved: ${companySecCik}`);
   }
-  // R5c (2026-09-04): per-company IR-platform tenant propagation cache.
-  // Shared between the discovery-time and after-fetch classifier calls
-  // below so that a title-identity match on ONE Q4/MZiQ URL propagates the
-  // (platform, tenant) binding to sibling URLs seen later in the same run.
-  //
-  // Two-pass sweep to make tenant propagation order-independent:
-  //   Pass 1 classifies every URL; a title match on an IR-platform URL adds
-  //   the tenant to the cache. Pass 2 reclassifies only URLs that landed as
-  //   third_party on IR-platform hosts, giving them a chance to hit the cache
-  //   now that all sibling tenants are known. This closes the specific gap
-  //   observed in iter-14 where the pipeline's discovery-order surfaced a
-  //   non-titled URL before the titled one, so the first-pass tenant match
-  //   hadn't fired yet.
-  //
-  // See provenance.ts::classifyProvenance R5c comment for the full rationale.
-  const irTenantCache = new Map<string, IrTenantBinding>();
-  type FirstPassEntry = {
-    doc: typeof discoveryResult.documents[number];
-    firstProv: ReturnType<typeof classifyProvenance>;
-  };
-  const firstPass: FirstPassEntry[] = [];
   for (const doc of discoveryResult.documents) {
-    const firstProv = classifyProvenance({
+    const type = inferDocumentType(doc.url);
+    // At discovery time we do not yet have the fetched content. Title alone is
+    // usually enough for regulator-host classification because filings carry
+    // the filer's name prominently. Full-content re-classification runs after
+    // fetch (below), which upgrades third_party → issuer if content shows a
+    // strong identity signal that title alone missed.
+    const prov = classifyProvenance({
       url: doc.url,
       title: doc.title,
       content: null,
@@ -347,44 +332,7 @@ async function runFetchPhase(opts: {
       companyAliases,
       companyIsin: (company as any).isin || null,
       companySecCik,
-      knownIrTenants: irTenantCache,
     });
-    if (firstProv.boundIrTenant) {
-      console.log(`[${companyName}] R5c: bound IR tenant ${firstProv.boundIrTenant.platform}:${firstProv.boundIrTenant.tenantId} via ${firstProv.boundIrTenant.confirmedBy}`);
-    }
-    firstPass.push({ doc, firstProv });
-  }
-
-  let r5cPass2Upgrades = 0;
-  for (const entry of firstPass) {
-    const { doc, firstProv } = entry;
-    let prov = firstProv;
-    // R5c pass-2 reclassification. Only reclassify third_party URLs that live
-    // on an IR-platform host — no other class is affected by the tenant cache.
-    if (
-      firstProv.provenance === "third_party" &&
-      firstProv.irPlatformHost &&
-      irTenantCache.size > 0
-    ) {
-      const second = classifyProvenance({
-        url: doc.url,
-        title: doc.title,
-        content: null,
-        companyDomain: companyDomainLower,
-        relatedDomains: relatedDomainsLower,
-        companyName: (company as any).name || null,
-        companyTicker: (company as any).ticker || null,
-        companyAliases,
-        companyIsin: (company as any).isin || null,
-        companySecCik,
-        knownIrTenants: irTenantCache,
-      });
-      if (second.provenance === "issuer") {
-        r5cPass2Upgrades++;
-        prov = second;
-      }
-    }
-    const type = inferDocumentType(doc.url);
     const sourceType = provenanceToSourceType(prov.provenance);
     await storage.upsertDocument({
       companyId,
@@ -395,9 +343,6 @@ async function runFetchPhase(opts: {
       gateReason: `Priority: ${doc.priority}, Lane: ${doc.lane}; provenance=${prov.provenance} (${prov.reason})`,
       sourceType,
     });
-  }
-  if (r5cPass2Upgrades > 0) {
-    console.log(`[${companyName}] R5c: pass-2 tenant-cache reclassification upgraded ${r5cPass2Upgrades} URLs from third_party to issuer`);
   }
 
   // Step 3b: Cross-workspace document reuse — if content already exists in
@@ -1399,15 +1344,6 @@ async function runAnalyzePhase(opts: {
   const documentTitles: string[] = [];
   let excludedThirdPartyCount = 0;
   let upgradedToIssuerCount = 0;
-  // R5c: content-time classifier uses a FRESH tenant cache. This is the
-  // after-fetch stage; fetched-content identity match on any Q4/MZiQ URL
-  // propagates to its siblings within this loop. First-pass writes bindings;
-  // second pass would reclassify third_party siblings. For simplicity we
-  // rely on the two-pass discovery-time sweep having already picked up most
-  // sibling upgrades; here we run a single pass because content-tier match
-  // is stronger than title-tier and rarely leaves winnable third_party
-  // URLs unbound after the whole fetched-corpus is walked.
-  const irTenantCacheContent = new Map<string, IrTenantBinding>();
   for (const doc of fetchedDocs) {
     if (!doc.content) continue;
     // Re-classify with full content; a document tagged third_party at
@@ -1423,7 +1359,6 @@ async function runAnalyzePhase(opts: {
       companyAliases: companyAliasesForCorpus,
       companyIsin: (company as any)?.isin || null,
       companySecCik: companySecCikForCorpus,
-      knownIrTenants: irTenantCacheContent,
     });
     const priorSourceType = (doc as any).source_type || (doc as any).sourceType || null;
     if (prov.provenance === "issuer" && priorSourceType === "third_party") {
