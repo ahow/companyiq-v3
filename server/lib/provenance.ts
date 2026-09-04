@@ -15,16 +15,35 @@
 //       the corpus and their bullets quoted as if they were the issuer's own
 //       disclosure. This produced false-positive Yes verdicts.
 //
+// R2 (2026-09-04) extended the classifier to a THIRD host class:
+//   (c) Investor-relations CDNs and hosted-IR platforms (q4cdn.com, mziq.com,
+//       precisionir.com, cloudfront-based IR distributions). These are shared
+//       by many issuers but always encode the issuer's identity in the URL
+//       path or filename. A Q4 Inc URL like `s24.q4cdn.com/382246808/files/...`
+//       encodes the SEC CIK; an MZiQ URL like `api.mziq.com/mzfilemanager/v2/d/
+//       c8182463-4b7e-408c-9d0f-42797662435e/...` carries the issuer's tenant
+//       ID. Both are first-party equivalents. The pre-R2 classifier tagged
+//       these as third_party because their hostname doesn't match the issuer's
+//       corporate domain, which caused systematic recall loss on US-listed
+//       (Q4 Inc) and Brazilian (MZiQ) issuers.
+//
+// Under the R2 rule set, per user steer (2026-09-04):
+//   - Title + URL path is the PRIMARY signal for issuer identity.
+//   - Content (if available) is the SECONDARY signal, used to corroborate
+//     or as fallback when title/URL yields no signal.
+//   - CDN + IR-platform hosts are treated as a distinct "ir_platform" class
+//     that resolves to `issuer` when identity is confirmed and `third_party`
+//     when it is not.
+//
 // The classifier here:
 //   1. Recognises regulator/registry hosting patterns (SEC EDGAR, ASIC,
 //      HKEX, SEDAR+, Australian Modern Slavery Register, LSE RNS, etc.).
-//   2. For those hosts, applies an identity check: does the target company's
-//      ticker or a distinctive alias appear in the document title/content?
-//      This is a heuristic (a CIK lookup would be exact) but sufficient in
-//      practice because regulator filings always name the filer prominently.
-//   3. For non-regulator hosts, retains the existing hostname match against
-//      company.domain (and its related_domains) to identify first-party.
-//   4. Everything else is third_party.
+//   2. Recognises IR-platform / hosted-IR CDN patterns (Q4 Inc, MZiQ, etc.).
+//   3. For those hosts, applies an identity check that PREFERS title + URL
+//      path signals over content.
+//   4. For non-regulator, non-IR-platform hosts, retains the existing
+//      hostname match against company.domain (and its related_domains).
+//   5. Everything else is third_party.
 //
 // This module has no external dependencies beyond string parsing so it can
 // be called from pipeline.ts (discovery-time tagging) and from analyzer.ts
@@ -41,12 +60,19 @@ export interface ProvenanceInput {
   companyName?: string | null;
   companyTicker?: string | null;
   companyAliases?: string[] | null; // distinctive tokens from deriveAliases()
+  // R2 (2026-09-04): stable identifiers used to verify IR-platform / regulator
+  // URLs whose paths encode issuer identity. All optional; classifier falls
+  // back to name/ticker/alias identity when these are absent.
+  companyIsin?: string | null;
+  companySecCik?: string | null; // SEC EDGAR CIK, unpadded string of digits
 }
 
 export interface ProvenanceResult {
   provenance: ProvenanceClass;
   reason: string; // one-line explanation for logging / audit
   regulatorHost: string | null; // if the URL lives on a regulator host, its label
+  irPlatformHost?: string | null; // if the URL lives on an IR-platform CDN, its label
+  identitySignal?: "title" | "url-path" | "content" | "cik-match" | "tenant-match" | "none";
 }
 
 // ─── Regulator / registry host patterns ─────────────────────────────────────
@@ -114,11 +140,119 @@ function hostOf(url: string): string {
   }
 }
 
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 function matchRegulatorHost(url: string): string | null {
   const host = hostOf(url);
   if (!host) return null;
   for (const [re, label] of REGULATOR_HOSTS) {
     if (re.test(host)) return label;
+  }
+  return null;
+}
+
+// ─── IR-platform / hosted-IR CDN patterns (R2) ───────────────────────────────
+//
+// These are shared platforms that host issuer-authored documents (annual
+// reports, sustainability reports, proxy statements, factsheets). Each
+// platform encodes the issuer's identity in the URL path so we can attribute
+// a given URL to the correct issuer even though the hostname is generic.
+//
+// Each entry: hostname pattern → human label + optional path extractor. The
+// path extractor returns a stable identifier we can compare against the
+// company's known identifiers (SEC CIK, ISIN, ticker) when available.
+//
+// Coverage is intentionally conservative — only well-known IR platforms with
+// stable path conventions are listed here. Company-owned CDNs (a company's
+// own `assets.<company>.com` or `media.<company>.com`) are matched by the
+// standard domain rule (Rule 1) via related_domains, not here.
+export interface IrPlatformSpec {
+  hostRegex: RegExp;
+  label: string;
+  // Extract an issuer identifier from the URL path/subdomain, if the platform
+  // encodes one in a predictable way. Return null if this URL doesn't carry
+  // one (e.g. a landing page or a shared marketing asset).
+  extractIdentifier: (url: string) => { kind: "cik" | "tenant" | "path-token"; value: string } | null;
+}
+
+// Q4 Inc — hosts investor relations for hundreds of US-listed issuers on
+// subdomains like `s{n}.q4cdn.com/{cik}/files/...`. The digit run in the path
+// is the issuer's SEC CIK (verified via manual audit of 20+ q4cdn URLs across
+// the cohort — Newmont=382246808, Corning=24741, etc.).
+const Q4_CDN_HOSTS: IrPlatformSpec = {
+  hostRegex: /(^|\.)q4cdn\.com$/i,
+  label: "Q4 Inc IR CDN",
+  extractIdentifier: (url: string) => {
+    const path = pathOf(url);
+    // Path form: /<cik-digits>/files/...  OR  /<cik-digits>/download/...
+    // CIKs are 1-10 digits historically; SEC pads to 10 in their APIs but
+    // Q4 typically stores the shortest unique form. Match 4-10 digits at the
+    // first path segment.
+    const m = path.match(/^\/(\d{4,10})(?:\/|$)/);
+    if (!m) return null;
+    return { kind: "cik", value: m[1] };
+  },
+};
+
+// MZiQ — Brazilian IR platform. Path form:
+//   api.mziq.com/mzfilemanager/v2/d/<tenant-uuid>/<file-uuid>?origin=<n>
+// Or:
+//   ri.<company>.com.br (usually cnamed to mziq.com; matched by domain rule)
+const MZIQ_CDN: IrPlatformSpec = {
+  hostRegex: /(^|\.)mziq\.com$/i,
+  label: "MZiQ IR platform",
+  extractIdentifier: (url: string) => {
+    const path = pathOf(url);
+    // Match the tenant UUID as the first UUID-shaped segment of the path.
+    const m = path.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
+    if (!m) return null;
+    return { kind: "tenant", value: m[1] };
+  },
+};
+
+// PrecisionIR — another shared IR CDN used by non-US issuers.
+const PRECISION_IR: IrPlatformSpec = {
+  hostRegex: /(^|\.)precisionir\.com$/i,
+  label: "PrecisionIR",
+  extractIdentifier: (url: string) => {
+    // Precision IR URLs typically include a ticker or ISIN as a path segment.
+    // Return the first alphanumeric token that looks like a ticker or ISIN.
+    const path = pathOf(url);
+    const m = path.match(/\/([A-Za-z]{2}[A-Za-z0-9]{9}[0-9]|[A-Za-z]{1,6})(?:\/|$)/);
+    if (!m) return null;
+    return { kind: "path-token", value: m[1] };
+  },
+};
+
+// Q4 legacy "corporate-solutions" URLs
+const Q4_CORPORATE: IrPlatformSpec = {
+  hostRegex: /(^|\.)q4inc\.com$/i,
+  label: "Q4 Inc corporate",
+  extractIdentifier: () => null,
+};
+
+// s3.amazonaws.com / cloudfront.net are too generic to trust on hostname
+// alone; a company-owned CloudFront distribution should be listed in that
+// company's `related_domains`. Do NOT add these to the IR platform list.
+
+const IR_PLATFORMS: IrPlatformSpec[] = [
+  Q4_CDN_HOSTS,
+  MZIQ_CDN,
+  PRECISION_IR,
+  Q4_CORPORATE,
+];
+
+function matchIrPlatform(url: string): { spec: IrPlatformSpec; label: string } | null {
+  const host = hostOf(url);
+  if (!host) return null;
+  for (const spec of IR_PLATFORMS) {
+    if (spec.hostRegex.test(host)) return { spec, label: spec.label };
   }
   return null;
 }
@@ -153,6 +287,12 @@ const GENERIC_TOKENS = new Set([
   "insurance", "asset", "management", "trust", "australia", "america",
   "american", "national", "japan", "china", "korea", "india", "canada",
   "canadian", "british", "german", "french",
+  // R2: extend generic list. These words appear in many company names but
+  // are not by themselves identifying enough to justify a hostname match.
+  "general", "electric", "electronics", "foods", "food", "beverage", "beverages",
+  "health", "healthcare", "medical", "gold", "silver", "mining", "metals",
+  "platinum", "petroleum", "petrochemicals", "telecom", "telecommunications",
+  "retail", "stores", "consumer", "cosmetics", "pharma", "biotech",
 ]);
 
 function distinctiveNameTokens(name: string | null | undefined): string[] {
@@ -163,13 +303,23 @@ function distinctiveNameTokens(name: string | null | undefined): string[] {
     .filter(w => w.length >= 4 && !GENERIC_TOKENS.has(w));
 }
 
-// True if the target company can be identified in the document based on its
-// name tokens, ticker, or provided aliases appearing in title+content head.
-// This is the "filer identity match" check for regulator-hosted docs.
-function documentReferencesIssuer(
+// Identity match against a single text field (title, URL path, or content).
+// Applies the same ticker / alias / name-token rules as documentReferencesIssuer
+// but on ONE field so the caller can control which signal fires and record
+// which one it was. Returns the specific matcher label for diagnostics.
+//
+// The occurrence thresholds are calibrated for the input length:
+//   • Titles (typically < 200 chars) fire on 1 occurrence — titles are almost
+//     never long enough to spuriously match twice.
+//   • URL paths (typically < 200 chars) fire on 1 occurrence for the same reason.
+//   • Content (up to 8KB) fires on 2 occurrences to avoid case-study-footnote
+//     false positives.
+function identityMatch(
   input: ProvenanceInput,
-  content: string
+  text: string,
+  minOccurrences: number,
 ): { matched: boolean; matchedOn: string | null } {
+  if (!text) return { matched: false, matchedOn: null };
   const nameTokens = distinctiveNameTokens(input.companyName);
   const nameTokenSet = new Set(nameTokens);
   const aliases = (input.companyAliases || [])
@@ -177,51 +327,70 @@ function documentReferencesIssuer(
     .filter(a => a.length >= 3);
   const ticker = normalise(input.companyTicker);
 
-  // Ticker match must be word-bounded to avoid substring collisions
-  // (e.g. "NEM" inside "problem" — unlikely, but strict is safer).
+  // Ticker: word-bounded match. In a URL path or title, ONE occurrence is
+  // enough; in body content we require the caller-supplied threshold.
   if (ticker && ticker.length >= 2) {
-    const re = new RegExp(`(^|[^a-z0-9])${ticker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i");
-    if (re.test(content)) return { matched: true, matchedOn: `ticker:${input.companyTicker}` };
+    const re = new RegExp(`(^|[^a-z0-9])${ticker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "gi");
+    const matches = text.match(re) || [];
+    if (matches.length >= 1) {
+      // Single occurrence of a ticker in a title/URL is a strong signal; single
+      // occurrence in body content is weak (case studies, comparison tables).
+      // Callers pass minOccurrences=1 for title/URL, 2 for body.
+      if (matches.length >= minOccurrences || minOccurrences === 1) {
+        return { matched: true, matchedOn: `ticker:${input.companyTicker}` };
+      }
+    }
   }
 
-  // Alias whole-string match. Multi-word aliases (>= 2 space-separated words)
-  // are strong signals and match on any occurrence. Single-word aliases that
-  // are also the company's sole distinctive name token defer to the name-token
-  // 2-occurrence rule below, because one occurrence of "newmont" in a footnote
-  // isn't identity.
+  // Alias whole-string match. Multi-word aliases are strong signals; single-word
+  // aliases that duplicate the sole distinctive name token defer to the name-token
+  // occurrence rule below.
   for (const a of aliases) {
     if (a.length < 3) continue;
     const isMultiWord = /\s/.test(a);
     const isSoleDistinctiveToken = nameTokens.length === 1 && nameTokenSet.has(a);
-    if (!isMultiWord && isSoleDistinctiveToken) {
-      // Skip — will be handled by the name-token rule with occurrence counting.
-      continue;
-    }
-    if (content.includes(a)) return { matched: true, matchedOn: `alias:${a}` };
+    if (!isMultiWord && isSoleDistinctiveToken) continue;
+    if (text.includes(a)) return { matched: true, matchedOn: `alias:${a}` };
   }
 
-  // Distinctive name-token match — require ≥ 2 distinct tokens to appear so
-  // a document that just mentions "kering" once in a footnote doesn't count.
-  // For single-distinctive-token companies (e.g. "Newmont" has one), require
-  // ≥ 2 occurrences of that token instead.
+  // Distinctive name-token match.
   if (nameTokens.length >= 2) {
-    const hits = nameTokens.filter(t => content.includes(t));
+    const hits = nameTokens.filter(t => text.includes(t));
     if (hits.length >= 2) return { matched: true, matchedOn: `name-tokens:${hits.slice(0,2).join(",")}` };
+    // Fallback: at least one name-token in a title/URL is a match under
+    // low-threshold mode (minOccurrences=1). Body content still requires 2.
+    if (hits.length >= 1 && minOccurrences === 1) {
+      return { matched: true, matchedOn: `name-token:${hits[0]}` };
+    }
   } else if (nameTokens.length === 1) {
     const t = nameTokens[0];
-    // Count occurrences (bounded scan)
     let count = 0;
     let idx = 0;
-    while (count < 2) {
-      const found = content.indexOf(t, idx);
+    while (count < minOccurrences) {
+      const found = text.indexOf(t, idx);
       if (found < 0) break;
       count++;
       idx = found + t.length;
     }
-    if (count >= 2) return { matched: true, matchedOn: `name-token:${t}(x2)` };
+    if (count >= minOccurrences) {
+      return { matched: true, matchedOn: minOccurrences === 1 ? `name-token:${t}` : `name-token:${t}(x2)` };
+    }
   }
 
   return { matched: false, matchedOn: null };
+}
+
+// True if the target company can be identified in the document based on its
+// name tokens, ticker, or provided aliases appearing in title+content head.
+// This is the "filer identity match" check for regulator-hosted docs.
+//
+// Preserved for backwards compatibility with the pre-R2 API. New code should
+// prefer identityMatch() with an explicit occurrence threshold.
+function documentReferencesIssuer(
+  input: ProvenanceInput,
+  content: string
+): { matched: boolean; matchedOn: string | null } {
+  return identityMatch(input, content, 2);
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────
@@ -231,13 +400,25 @@ function documentReferencesIssuer(
  *
  * Rules (in order):
  *   1. If hostname matches company.domain or any related_domain → issuer.
- *   2. If hostname is a known regulator/registry host AND the document
- *      references the issuer by ticker, alias, or distinctive name tokens
- *      → issuer (filed-by-issuer).
- *   3. If hostname is a known regulator/registry host but the document does
- *      NOT reference the issuer → third_party. This catches "wrong company's
- *      filing surfaced under this issuer".
+ *   2. If hostname is a known IR-platform / hosted-IR CDN (Q4 Inc, MZiQ,
+ *      PrecisionIR) AND the URL path encodes the issuer's identifier
+ *      (CIK for Q4, tenant UUID we've seen before), OR the title / URL
+ *      path / content confirms issuer identity → issuer.
+ *      (Title + URL are checked FIRST per the R2 title-primary rule.)
+ *   3. If hostname is a known regulator/registry host, apply the same
+ *      title-primary → URL-path → content identity check. If issuer
+ *      identified → issuer, otherwise → third_party.
  *   4. Otherwise → third_party.
+ *
+ * The R2 title-primary rule: for regulator and IR-platform hosts, the
+ * identity check runs in three tiers, and the first positive tier wins:
+ *   a. Title — fires on a single occurrence of ticker/alias/name-token.
+ *   b. URL path — fires on a single occurrence (or exact CIK/tenant match).
+ *   c. Content — fires on 2 occurrences to guard against case-study reuse.
+ * The rationale is that titles are curated by the platform to identify the
+ * filer, so they are the most reliable single-signal source. Content is
+ * corroborative but weakest because case-study PDFs often mention the target
+ * company by name without being authored by them.
  */
 export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
   const host = hostOf(input.url);
@@ -251,43 +432,200 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
   if (host) {
     for (const d of allIssuerDomains) {
       if (host === d || host.endsWith("." + d)) {
-        return { provenance: "issuer", reason: `hostname matches company domain (${d})`, regulatorHost: null };
+        return {
+          provenance: "issuer",
+          reason: `hostname matches company domain (${d})`,
+          regulatorHost: null,
+          irPlatformHost: null,
+          identitySignal: "url-path",
+        };
       }
     }
   }
 
-  // Rule 2 + 3: regulator host with identity check.
-  const regulatorLabel = matchRegulatorHost(input.url);
-  if (regulatorLabel) {
-    // Combine title + first ~8KB of content for the identity scan. If we have
-    // no content (e.g. classifying before fetch), fall back to title only —
-    // regulator filings usually carry the filer's name/ticker in the title.
-    const scanText = normalise([input.title || "", (input.content || "").slice(0, 8192)].join(" "));
-    if (scanText) {
-      const check = documentReferencesIssuer(input, scanText);
-      if (check.matched) {
-        return {
-          provenance: "issuer",
-          reason: `regulator-hosted (${regulatorLabel}) + identity match on ${check.matchedOn}`,
-          regulatorHost: regulatorLabel,
-        };
+  // Rule 1b (R2): brand-token-in-hostname fallback. Catches subsidiary and
+  // regional-brand sites that weren't captured in related_domains but carry
+  // the parent's distinctive brand token in the host label (e.g.
+  // unilevernepal.com, unileverconsumercarebd.com, santandermedia.com).
+  //
+  // Only fires when:
+  //  - the company has 1 or 2 distinctive brand tokens (companies with 3+
+  //    distinctive tokens are typically compound names where any single token
+  //    is not identifying — e.g. "American Water Works"), AND
+  //  - at least one such token has >= 5 chars (short tokens like "nike" or
+  //    "bp" would over-fire), AND
+  //  - that token appears word-bounded in the hostname's registrable-domain
+  //    segments (a segment either equals the token, starts with it, or
+  //    ends with it — caught by segments split on '.', '-', '_').
+  //
+  // This preserves the pre-R2 permissive behaviour on regional subsidiaries
+  // without accepting arbitrary third-party mentions. The alternative — the
+  // old pre-U17 fuzzy hostname-in-hostname check — accepted too much (e.g.
+  // any host containing the string "kering" including news aggregators);
+  // the word-bounded check is stricter but still catches genuine subsidiaries.
+  if (host) {
+    const nameTokens = distinctiveNameTokens(input.companyName);
+    const brandCandidates = nameTokens.filter(t => t.length >= 5);
+    if (brandCandidates.length >= 1 && nameTokens.length <= 2) {
+      const registrable = host.replace(/^www\./i, "");
+      const segments = registrable.split(/[.\-_]/);
+      for (const token of brandCandidates) {
+        if (segments.some(seg => seg === token || seg.startsWith(token) || seg.endsWith(token))) {
+          return {
+            provenance: "issuer",
+            reason: `brand-token "${token}" in hostname segment (subsidiary/regional site)`,
+            regulatorHost: null,
+            irPlatformHost: null,
+            identitySignal: "url-path",
+          };
+        }
       }
     }
-    // Regulator host but no identity signal — treat as third-party (this is
-    // likely another issuer's filing that was surfaced by mistake).
+  }
+
+  // Rule 2: IR-platform / hosted-IR CDN. Title-primary identity check.
+  const irPlatform = matchIrPlatform(input.url);
+  if (irPlatform) {
+    const identity = threeTierIdentityCheck(input);
+    if (identity.matched) {
+      return {
+        provenance: "issuer",
+        reason: `IR-platform (${irPlatform.label}) + ${identity.tier} identity match on ${identity.matchedOn}`,
+        regulatorHost: null,
+        irPlatformHost: irPlatform.label,
+        identitySignal: identity.signal,
+      };
+    }
+    // IR-platform host but no identity signal from title/URL/content. Try
+    // the stronger path-identifier check (Q4 CIK, MZiQ tenant UUID) if the
+    // caller supplied the corresponding company identifier.
+    const pathIdentity = irPlatformPathIdentityMatch(input, irPlatform.spec);
+    if (pathIdentity.matched) {
+      return {
+        provenance: "issuer",
+        reason: `IR-platform (${irPlatform.label}) + ${pathIdentity.reason}`,
+        regulatorHost: null,
+        irPlatformHost: irPlatform.label,
+        identitySignal: pathIdentity.signal,
+      };
+    }
+    // IR-platform but no issuer identity confirmed. Fall through to
+    // third_party — could be a competitor's filing surfaced by mistake.
     return {
       provenance: "third_party",
-      reason: `regulator-hosted (${regulatorLabel}) but no ticker/alias/name-token match found`,
+      reason: `IR-platform (${irPlatform.label}) but no title/URL/content/CIK match for issuer`,
+      regulatorHost: null,
+      irPlatformHost: irPlatform.label,
+      identitySignal: "none",
+    };
+  }
+
+  // Rule 3: regulator host with identity check. Same title-primary sequence.
+  const regulatorLabel = matchRegulatorHost(input.url);
+  if (regulatorLabel) {
+    const identity = threeTierIdentityCheck(input);
+    if (identity.matched) {
+      return {
+        provenance: "issuer",
+        reason: `regulator-hosted (${regulatorLabel}) + ${identity.tier} identity match on ${identity.matchedOn}`,
+        regulatorHost: regulatorLabel,
+        irPlatformHost: null,
+        identitySignal: identity.signal,
+      };
+    }
+    // Regulator host but no identity signal — likely another issuer's filing
+    // that was surfaced under this issuer by search-side entity confusion.
+    return {
+      provenance: "third_party",
+      reason: `regulator-hosted (${regulatorLabel}) but no title/URL/content match for issuer`,
       regulatorHost: regulatorLabel,
+      irPlatformHost: null,
+      identitySignal: "none",
     };
   }
 
   // Rule 4: default.
   return {
     provenance: "third_party",
-    reason: host ? `hostname ${host} does not match company domain and is not a known regulator host` : "invalid URL",
+    reason: host
+      ? `hostname ${host} does not match company domain, IR-platform or regulator host`
+      : "invalid URL",
     regulatorHost: null,
+    irPlatformHost: null,
+    identitySignal: "none",
   };
+}
+
+// R2: three-tier identity check for regulator + IR-platform hosts. Runs
+// title → URL path → content and returns the first positive result. Encoded
+// as a named helper so both callers (regulator + IR platform) apply the
+// identical rule and record which tier fired for diagnostics.
+function threeTierIdentityCheck(input: ProvenanceInput): {
+  matched: boolean;
+  matchedOn: string | null;
+  tier: "title" | "url-path" | "content" | null;
+  signal: "title" | "url-path" | "content" | "none";
+} {
+  // Tier 1: title. Normalised to lowercase; single occurrence sufficient.
+  const title = normalise(input.title || "");
+  if (title) {
+    const t = identityMatch(input, title, 1);
+    if (t.matched) return { matched: true, matchedOn: t.matchedOn, tier: "title", signal: "title" };
+  }
+
+  // Tier 2: URL path. Percent-decoded and lowercased; single occurrence.
+  // We compare against the path only (not host), because host is what put
+  // us in this branch in the first place — it carries no additional signal.
+  let urlPath = "";
+  try {
+    urlPath = decodeURIComponent(pathOf(input.url)).replace(/[-_/\\.]+/g, " ").toLowerCase();
+  } catch {
+    urlPath = pathOf(input.url).replace(/[-_/\\.]+/g, " ").toLowerCase();
+  }
+  if (urlPath) {
+    const u = identityMatch(input, urlPath, 1);
+    if (u.matched) return { matched: true, matchedOn: u.matchedOn, tier: "url-path", signal: "url-path" };
+  }
+
+  // Tier 3: content (fallback). Requires 2 occurrences to guard against
+  // case-study PDFs that mention the target company once in a bulleted list.
+  const content = normalise((input.content || "").slice(0, 8192));
+  if (content) {
+    const c = identityMatch(input, content, 2);
+    if (c.matched) return { matched: true, matchedOn: c.matchedOn, tier: "content", signal: "content" };
+  }
+
+  return { matched: false, matchedOn: null, tier: null, signal: "none" };
+}
+
+// R2: IR-platform path-identifier match (Q4 CIK, MZiQ tenant UUID).
+// Runs only when the caller supplied the corresponding company identifier
+// (companySecCik for Q4, no analogue for MZiQ yet). This is the strongest
+// possible signal for platforms that encode issuer identity in the URL,
+// because it's an exact platform-verified match rather than a text heuristic.
+function irPlatformPathIdentityMatch(
+  input: ProvenanceInput,
+  spec: IrPlatformSpec,
+): { matched: boolean; reason: string; signal: "cik-match" | "tenant-match" | "none" } {
+  const extracted = spec.extractIdentifier(input.url);
+  if (!extracted) return { matched: false, reason: "no identifier in URL path", signal: "none" };
+
+  if (extracted.kind === "cik" && input.companySecCik) {
+    // Normalise both sides to unpadded digits.
+    const urlCik = extracted.value.replace(/^0+/, "") || "0";
+    const knownCik = input.companySecCik.replace(/^0+/, "") || "0";
+    if (urlCik === knownCik) {
+      return { matched: true, reason: `CIK path match (${urlCik})`, signal: "cik-match" };
+    }
+    return { matched: false, reason: `CIK path mismatch (url=${urlCik}, company=${knownCik})`, signal: "none" };
+  }
+
+  // For tenant / path-token identifiers we have no company-side value to
+  // compare against yet, so we cannot confirm identity. Return false; the
+  // caller has already tried the title/URL/content check and will fall
+  // through to third_party. A future enhancement is to cache per-issuer
+  // tenant UUIDs the first time we see one confirmed by another route.
+  return { matched: false, reason: `${extracted.kind} identifier present but no company-side value to compare`, signal: "none" };
 }
 
 // Exported for use by pipeline.ts (existing string field) — encodes the
