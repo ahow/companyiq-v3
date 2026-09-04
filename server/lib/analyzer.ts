@@ -2584,11 +2584,21 @@ async function scoreSingleMeasurePass(opts: {
   const seed = companyId != null ? deterministicSeed(measure.measureId, companyId, providerIndex ?? 0) : undefined;
 
   try {
+    // Explicit temperature=0 on the scoring call. Providers already default to
+    // 0 in ai-providers.ts, but declaring it here is a defensive lock so that
+    // future refactors of the provider layer cannot silently reintroduce a
+    // stochastic default. Combined with the per-cell deterministic seed above
+    // this makes the seed-supporting scoring providers (deepseek, glm-4.6,
+    // claude-arbiter, openai) fully reproducible across runs. Mistral-family
+    // providers reject the seed parameter (server/lib/ai-providers.ts:418,527)
+    // so they remain the residual source of scoring non-determinism when they
+    // are on the cascade path — tracked in follow-up work, not in this commit.
     const { text, provider: gradedBy } = await completeScoring(provider, {
       system,
       prompt,
       json: true,
       maxTokens: 2000,
+      temperature: 0,
       seed,
     });
 
