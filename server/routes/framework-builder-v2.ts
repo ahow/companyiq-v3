@@ -18,12 +18,42 @@ import { diagnoseRootCauses, type CompanyCorpusStats } from "../lib/framework-v2
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import { batchTightenDefinitions, batchAppendExclusions, batchRegenerateExamples, groupProposalsByPatch, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
+import { resolveViaFmpByTicker, fmpWebsiteToDomain } from "../lib/fmp-resolver.js";
+import { validateIsin } from "../lib/isin-validator.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 const router = Router();
+
+// Country-code normaliser used by the FMP ingest cross-check below. FMP returns
+// ISO 3166-1 alpha-2 codes; callers (LLM, uploads) may pass long names. Not
+// exhaustive — additions are welcome as more markets come through. Unknown
+// long-form names fall through to a case-insensitive equality check, so a
+// caller passing "US" or "United States" both work with FMP's "US".
+const COUNTRY_NAME_TO_ISO2: Record<string, string> = {
+  "UNITED STATES": "US", "USA": "US", "U.S.": "US", "U.S.A.": "US",
+  "UNITED KINGDOM": "GB", "UK": "GB", "GREAT BRITAIN": "GB", "ENGLAND": "GB",
+  "FRANCE": "FR", "GERMANY": "DE", "SWITZERLAND": "CH", "NETHERLANDS": "NL",
+  "ITALY": "IT", "SPAIN": "ES", "SWEDEN": "SE", "NORWAY": "NO", "DENMARK": "DK",
+  "FINLAND": "FI", "BELGIUM": "BE", "AUSTRIA": "AT", "IRELAND": "IE",
+  "PORTUGAL": "PT", "GREECE": "GR", "POLAND": "PL", "CZECH REPUBLIC": "CZ",
+  "JAPAN": "JP", "CHINA": "CN", "HONG KONG": "HK", "TAIWAN": "TW",
+  "SOUTH KOREA": "KR", "KOREA": "KR", "SINGAPORE": "SG", "INDIA": "IN",
+  "AUSTRALIA": "AU", "NEW ZEALAND": "NZ",
+  "CANADA": "CA", "MEXICO": "MX", "BRAZIL": "BR", "ARGENTINA": "AR",
+  "CHILE": "CL", "COLOMBIA": "CO", "PERU": "PE",
+  "SOUTH AFRICA": "ZA", "ISRAEL": "IL", "TURKEY": "TR",
+  "UNITED ARAB EMIRATES": "AE", "SAUDI ARABIA": "SA",
+};
+function normaliseCountry(x: string): string {
+  const t = x.trim().toUpperCase();
+  return COUNTRY_NAME_TO_ISO2[t] ?? t;
+}
+function countriesLooselyMatch(a: string, b: string): boolean {
+  return normaliseCountry(a) === normaliseCountry(b);
+}
 
 // ─── POST /v2/chat — intake conversation ─────────────────────────────────
 // Runs one turn of the v2 intake conversation. The client passes the
@@ -848,7 +878,10 @@ router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Re
     const { frameworkId, companies, frameworkName } = req.body as {
       frameworkId: number;
       frameworkName?: string;
-      companies: Array<{ name: string; ticker?: string; sector?: string; country?: string; isKnownDiscloser?: boolean }>;
+      // isin: accepted from callers that supply it directly (uploads, API clients).
+      // The LLM sample-selection prompt does not currently request an ISIN, but
+      // when the caller does pass one we prefer it over FMP resolution.
+      companies: Array<{ name: string; isin?: string; ticker?: string; sector?: string; country?: string; isKnownDiscloser?: boolean }>;
     };
     if (!frameworkId || !Array.isArray(companies) || companies.length === 0) {
       return res.status(400).json({ error: "frameworkId and companies[] required" });
@@ -859,6 +892,16 @@ router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Re
     // 1. For each proposed company, either find existing (by exact name match)
     //    or create. Company creation is idempotent-ish: duplicate names are OK,
     //    the test-drive just uses whichever record exists first.
+    //
+    // FMP-at-ingest resolution: when a company is being CREATED and no ISIN
+    // is supplied by the caller, resolve it via FMP profile-by-ticker (falling
+    // back to profile-by-name-inferred-symbol is not attempted here — no
+    // ticker → no FMP call). Persisting the ISIN at insert time lets the
+    // existing ISIN-first FMP + OpenFIGI resolvers in the discovery pipeline
+    // run on the very first analysis, rather than only after a subsequent
+    // audit or manual patch. FMP failures are non-fatal: the company is still
+    // created without ISIN / FMP metadata and the pipeline degrades to its
+    // pre-existing behaviour.
     const companyIds: number[] = [];
     for (const c of companies) {
       const existing = await db.execute(sql`
@@ -871,12 +914,137 @@ router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Re
         companyIds.push(existingRow.id);
         continue;
       }
+
+      // Resolve via FMP by ticker when we have a ticker and no caller-supplied ISIN.
+      //
+      // Caller-supplied ISINs are validated (length + charset + Luhn check
+      // digit) before we trust them. An invalid ISIN is logged and dropped
+      // so we fall through to the FMP-by-ticker branch — this catches the
+      // common typo/transposition failure at ingest without depending on any
+      // outbound API call. Note that a syntactically valid ISIN pointing at
+      // the wrong issuer (e.g. paste of Prudential Financial's ISIN when
+      // Prudential plc was intended) will still be accepted here; catching
+      // that class of error requires an FMP name/country cross-check, which
+      // is deliberately handled by the follow-up PR that covers both this
+      // endpoint and the CSV/XLSX upload endpoint.
+      let resolvedIsin: string | null = null;
+      if (c.isin && c.isin.trim()) {
+        const v = validateIsin(c.isin);
+        if (v.valid) {
+          resolvedIsin = v.canonical;
+        } else {
+          console.warn(`[test-drive/run] Caller-supplied ISIN rejected for ${c.name}: value=${JSON.stringify(c.isin)} reason=${v.reason} — falling through to ticker resolution`);
+        }
+      }
+      let fmpSymbol: string | null = null;
+      let fmpCompanyName: string | null = null;
+      let fmpWebsite: string | null = null;
+      let fmpCountry: string | null = null;
+      let fmpIndustry: string | null = null;
+      let fmpSector: string | null = null;
+      let fmpDescription: string | null = null;
+      let derivedDomain: string | null = null;
+
+      if (!resolvedIsin && c.ticker && c.ticker.trim()) {
+        // Ticker collision guard: same ticker string can point to different
+        // issuers on different exchanges (e.g. "PRU" is Prudential Financial
+        // on NYSE, Prudential plc on LSE). When the caller supplied a country
+        // hint and the ticker is not exchange-qualified, retry with common
+        // exchange suffixes for that country before accepting the FMP hit.
+        const tickerAttempts: string[] = [c.ticker.trim().toUpperCase()];
+        const already = new Set(tickerAttempts);
+        const isUnqualified = !/[.]/.test(tickerAttempts[0]);
+        if (isUnqualified && c.country) {
+          const suffixMap: Record<string, string[]> = {
+            "United Kingdom": [".L"], "UK": [".L"], "GB": [".L"],
+            "France": [".PA"], "FR": [".PA"],
+            "Germany": [".DE"], "DE": [".DE"],
+            "Switzerland": [".SW"], "CH": [".SW"],
+            "Japan": [".T"], "JP": [".T"],
+            "Hong Kong": [".HK"], "HK": [".HK"],
+            "Australia": [".AX"], "AU": [".AX"],
+            "Canada": [".TO"], "CA": [".TO"],
+            "South Korea": [".KS"], "KR": [".KS"],
+            "Brazil": [".SA"], "BR": [".SA"],
+            "Netherlands": [".AS"], "NL": [".AS"],
+            "Italy": [".MI"], "IT": [".MI"],
+            "Spain": [".MC"], "ES": [".MC"],
+            "Sweden": [".ST"], "SE": [".ST"],
+            "India": [".NS", ".BO"], "IN": [".NS", ".BO"],
+          };
+          const suffixes = suffixMap[c.country] ?? [];
+          for (const suf of suffixes) {
+            const q = `${tickerAttempts[0]}${suf}`;
+            if (!already.has(q)) { tickerAttempts.unshift(q); already.add(q); }
+          }
+        }
+
+        for (const symbolTry of tickerAttempts) {
+          try {
+            const fmp = await resolveViaFmpByTicker(symbolTry);
+            if (!fmp) continue;
+            // Country cross-check: if the caller supplied a country and FMP's
+            // country disagrees, we're almost certainly on the wrong listing.
+            // Skip this candidate and try the next suffix; only persist a
+            // country-mismatched result if it's the last remaining candidate
+            // AND no country hint was supplied.
+            if (c.country && fmp.country && !countriesLooselyMatch(c.country, fmp.country)) {
+              console.warn(`[test-drive/run] FMP country mismatch for ${c.name}: caller=${c.country} vs fmp=${fmp.country} (symbol=${symbolTry}) — trying next candidate`);
+              continue;
+            }
+            // ADR guard: if the caller supplied a non-US country and the FMP
+            // result's ISIN starts with "US" (i.e. the resolved security is a
+            // US-listed ADR rather than the primary local-market security),
+            // skip when there are further candidates to try. This catches the
+            // Unilever "UL" / Ambev "ABEV" pattern where FMP tags the ADR
+            // with the parent's country ("GB", "BR") but the ISIN is the US
+            // ADR ISIN, not the primary listing's ISIN. We do NOT skip when
+            // this is the last candidate — an ADR is still better than
+            // nothing, and the caller retains the fallback of an audit later.
+            const isAdrCandidate = fmp.isin != null
+              && /^US/i.test(fmp.isin)
+              && c.country != null
+              && normaliseCountry(c.country) !== "US";
+            const hasMoreCandidates = tickerAttempts.indexOf(symbolTry) < tickerAttempts.length - 1;
+            if (isAdrCandidate && hasMoreCandidates) {
+              console.warn(`[test-drive/run] FMP returned US-ADR ISIN ${fmp.isin} for non-US company ${c.name} (symbol=${symbolTry}) — trying next candidate`);
+              continue;
+            }
+            resolvedIsin = fmp.isin || null;
+            fmpSymbol = fmp.symbol;
+            fmpCompanyName = fmp.companyName;
+            fmpWebsite = fmp.website;
+            fmpCountry = fmp.country;
+            fmpIndustry = fmp.industry;
+            fmpSector = fmp.sector;
+            fmpDescription = fmp.description;
+            derivedDomain = fmpWebsiteToDomain(fmp.website);
+            break;
+          } catch (fmpErr: any) {
+            console.warn(`[test-drive/run] FMP resolution failed for ${c.name} (symbol=${symbolTry}): ${fmpErr?.message || fmpErr}`);
+          }
+        }
+      }
+
       const created = await storage.createCompany({
         workspaceId: ctx.workspaceId,
         name: c.name,
+        isin: resolvedIsin,
         ticker: c.ticker || null,
         sector: c.sector || null,
         country: c.country || null,
+        // Only set domain when we have no caller-supplied value. Callers may
+        // eventually pass `c.domain`; today they don't, so FMP-derived is the
+        // only source. Downstream classifier still owns the final decision.
+        domain: derivedDomain,
+        fmpSymbol,
+        fmpCompanyName,
+        fmpWebsite,
+        fmpDescription,
+        fmpCountry,
+        fmpIndustry,
+        fmpSector,
+        fmpResolvedAt: fmpSymbol ? new Date() : null,
       } as any);
       companyIds.push((created as any).id);
     }
