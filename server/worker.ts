@@ -412,9 +412,22 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
           console.log(`${prefix} score=${totalScore} fw=${frameworkId} docs=${allDocs.length} fetched=${okDocs.length} ratio=${diagData.fetchRatio}`);
           console.log(`${prefix} pinned=${pinnedDocs.length} pinnedOk=${pinnedOk} hasDataDoc=${diagData.hasRequiredDataDoc} warning=${diagData.corpusValidityWarning || "none"}`);
           console.log(`${prefix} deadByReason=${JSON.stringify(deadByReason)}`);
-          // DB dual-write: persist to discoveryDiagnostics so it's accessible via API
+          // DB dual-write: persist to discoveryDiagnostics so it's accessible via API.
+          //
+          // BUGFIX: the outer `company` variable was captured at the START of the
+          // worker function (line 279), BEFORE the pipeline ran and wrote its own
+          // discovery diagnostics (lanes, retrievalDiagnostics, filteringPipeline,
+          // domainSearch, coverage, etc). Reading `company.discoveryDiagnostics`
+          // here returned that stale snapshot — which for a freshly-reset company
+          // is `{}`. We then wrote back `{lastZeroScoreDiag: diagData}` and
+          // silently overwrote the pipeline's diagnostics, so zero-score companies
+          // (Ambev, Prudential, Walmart on nature framework in iter-15..17) ended
+          // up with only `{lastZeroScoreDiag: ...}` in their discoveryDiagnostics.
+          // Fix: re-read the row from the DB so the merge preserves whatever the
+          // pipeline just persisted.
           try {
-            const existingDiag = (company as any).discoveryDiagnostics || {};
+            const freshCompany = await storage.getCompanyById(companyId, workspaceId);
+            const existingDiag = (freshCompany as any)?.discoveryDiagnostics || {};
             existingDiag.lastZeroScoreDiag = diagData;
             await storage.updateCompany(companyId, workspaceId, { discoveryDiagnostics: existingDiag } as any);
           } catch (dbErr: any) {
