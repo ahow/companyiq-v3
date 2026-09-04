@@ -37,14 +37,31 @@ const SECTION_QUALIFIER_RE = /\s*\(.*?\)\s*$/;
 // anchors. These are still part of the source list but omitted from the
 // per-framework searchable set. Kept as a regex list so new patterns can be
 // added easily.
+//
+// R5d (2026-09-04): narrowed the REJECT set. Several previously rejected
+// labels ARE legitimate standalone vehicles for other frameworks / other
+// topics (see docs/R5-Design-Note-2026-09-04.md for the analysis):
+//   - "environmental statement" — dropped: Kering publishes an
+//     "Environmental Policy 2024-2025" PDF that IS its primary
+//     environmental-management vehicle; the earlier reject blocked queries
+//     that would surface it.
+//   - "principal risks disclosure" — dropped: for human-rights /
+//     modern-slavery frameworks, a "principal risks disclosure" is a
+//     legitimate top-level document (UK section-172 statements etc.).
+//   - "board committee reports" — dropped: governance frameworks in
+//     particular list committee reports as substantive disclosures.
+//   - "management structure or organizational chart" — dropped: some
+//     governance / audit-committee frameworks reference "organizational
+//     chart" as a discoverable disclosure.
+//   - "strategic resilience assessment" — dropped: climate/nature
+//     frameworks (esp. TCFD-style) publish this as a named vehicle.
+//
+// Only labels that are truly vague or sub-section names are still rejected.
 const REJECT_PATTERNS: RegExp[] = [
   // Section names inside a larger doc — not standalone vehicles
   /^strategy section$/i,
   /^risk disclosure$/i,
   /^business model description$/i,
-  /^board committee reports$/i,
-  /^principal risks disclosure$/i,
-  /^management structure or organizational chart$/i,
   /^entity website( |$).*/i, // "Entity website (governance pages)" — too vague
   // Assessment/analysis nouns without a proper report noun
   /^materiality assessment$/i,
@@ -54,12 +71,31 @@ const REJECT_PATTERNS: RegExp[] = [
   /^strategic plan$/i,
   /^value chain assessment$/i,
   /^geographic footprint disclosure$/i,
-  /^strategic resilience assessment$/i,
-  /^environmental statement$/i,
 ];
 
 // A ranking hint — vehicles matching earlier patterns rank higher when we
 // have to cap the list. Kept small and generic so it works for any topic.
+//
+// R5d (2026-09-04): policy-family boost. The Kering FN investigation
+// (docs/Investigation-Prudential-Kering-2026-09-04.md) surfaced that:
+//   - Kering's "Environmental Policy 2024-2025" doc contained the truth
+//     evidence for measure 1.2-management-responsibility, but the policy-
+//     vehicle-lane queries didn't survive the priority cut with the pre-
+//     R5d weight of 50.
+// The fix generalises across frameworks and topics: policy documents,
+// standards, principles, commitments, charters, and guidelines are
+// often substantive first-party disclosures with specific coverage
+// details that don't appear in the flagship sustainability/annual
+// report. Boosting them from 50 -> 78 places them above ESG report (72)
+// and roughly on par with the URD (78). This matches how analysts
+// treat these documents in practice (a company's environmental policy
+// is usually the AUTHORITATIVE source for its environmental commitments,
+// even when the annual report describes the same commitments in prose).
+//
+// The boost also broadens the pattern to include several policy-family
+// noun forms (standards, principles, commitment, charter, guideline)
+// so topic-agnostic vehicles for governance, human rights, AI, tax,
+// biodiversity policies etc. all rank consistently.
 const RANK_BOOSTS: Array<{ re: RegExp; weight: number }> = [
   { re: /sustainability\s+report/i, weight: 100 },
   { re: /annual\s+report/i, weight: 95 },
@@ -71,6 +107,10 @@ const RANK_BOOSTS: Array<{ re: RegExp; weight: number }> = [
   { re: /20-?f\b/i, weight: 82 },
   { re: /proxy statement/i, weight: 80 },
   { re: /universal registration document|urd\b/i, weight: 78 },
+  // R5d: policy-family vehicles — boosted from 50 to 78. Broadened to
+  // catch standards, principles, commitments, charters, guidelines so the
+  // ranking is topic-agnostic (works for ESG, AI, human rights, tax, etc).
+  { re: /policy|framework|standards|principles|commitment|charter|guideline/i, weight: 78 },
   { re: /corporate governance/i, weight: 75 },
   { re: /esg report/i, weight: 72 },
   { re: /biodiversity|nature/i, weight: 70 },
@@ -78,7 +118,6 @@ const RANK_BOOSTS: Array<{ re: RegExp; weight: number }> = [
   { re: /climate transition/i, weight: 65 },
   { re: /supply chain report/i, weight: 60 },
   { re: /investor presentation/i, weight: 55 },
-  { re: /policy|framework/i, weight: 50 },
 ];
 
 function normaliseLabel(raw: string): string {
