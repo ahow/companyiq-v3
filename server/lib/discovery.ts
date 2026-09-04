@@ -3993,52 +3993,12 @@ async function searchCompanyDocumentsInner(opts: {
   // Protected lanes (authoritative registry search, pinned, and filing submissions) bypass
   // the cap — these are structured-source high-confidence documents that should
   // never be pre-gate-rejected on a candidate-count budget.
-  //
-  // R5d (2026-09-04): reserve up to POLICY_RESERVED_SLOTS pre-gate slots for
-  // policy-family documents (any URL/title whose text matches
-  // POLICY_VEHICLE_TEST). Motivation: the Kering iter-14 FN diagnosis showed
-  // that legitimate policy-vehicle URLs (e.g. `Environmental_Policy_2024_2025.pdf`)
-  // were among the 180 pre-gate-filtered candidates because the higher-
-  // priority lanes (sustainability report, annual report, ...) exhausted the
-  // pre-gate slot budget before the policy queries' results could enter it.
-  //
-  // Reserved slots come off the top of the same 180 budget: the first N slots
-  // are given to the top-priority policy-family docs, and the remaining
-  // (180 - N) slots are filled from the general unprotected sort. Reserved
-  // slots don't grow the total budget, so the LLM-cost bound is unchanged.
   const PROTECTED_LANES = ["registry-search", "pinned", "edgar-submissions"];
-  const POLICY_RESERVED_SLOTS = 10;
-  // R5d policy-family detector — keep aligned with disclosure-document-types.ts
-  // RANK_BOOSTS policy-family pattern. Matches on URL or title text so the
-  // rule catches both explicit filename hints (`environmental-policy.pdf`)
-  // and title-only cues (`Kering Environmental Policy 2024-2025`).
-  const POLICY_VEHICLE_TEST = /\b(policy|framework|standards|principles|commitment|charter|guideline)s?\b/i;
-  const isPolicyVehicle = (c: DiscoveryCandidate): boolean => {
-    const url = (c.url || "").toLowerCase();
-    const title = (c.title || "").toLowerCase();
-    return POLICY_VEHICLE_TEST.test(url) || POLICY_VEHICLE_TEST.test(title);
-  };
-
   const protectedDocs = preCapCandidates.filter(c => PROTECTED_LANES.includes((c as any).lane || ""));
   const unprotectedDocs = preCapCandidates.filter(c => !PROTECTED_LANES.includes((c as any).lane || ""));
-  const sortedUnprotected = unprotectedDocs.sort((a, b) => a.priority - b.priority);
-  // R5d reserved carve-out. Take up to POLICY_RESERVED_SLOTS policy-family
-  // docs by priority order; the rest go into a fill-list from which we
-  // consume the remaining pre-gate budget.
-  const policyDocs: DiscoveryCandidate[] = [];
-  const nonPolicyDocs: DiscoveryCandidate[] = [];
-  for (const c of sortedUnprotected) {
-    if (isPolicyVehicle(c) && policyDocs.length < POLICY_RESERVED_SLOTS) {
-      policyDocs.push(c);
-    } else {
-      nonPolicyDocs.push(c);
-    }
-  }
-  const remainingSlots = Math.max(0, PRE_GATE_CAP - policyDocs.length);
-  const cappedUnprotected = [...policyDocs, ...nonPolicyDocs.slice(0, remainingSlots)];
-  if (policyDocs.length > 0) {
-    console.log(`[${companyName}] R5d: reserved ${policyDocs.length}/${POLICY_RESERVED_SLOTS} policy-family slot(s) before pre-gate cap (${remainingSlots} slots left for non-policy docs)`);
-  }
+  const cappedUnprotected = unprotectedDocs
+    .sort((a, b) => a.priority - b.priority)
+    .slice(0, PRE_GATE_CAP);
   const preGateCandidates = [...protectedDocs, ...cappedUnprotected];
 
   // Run relevance gate
