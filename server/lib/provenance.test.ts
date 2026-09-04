@@ -259,25 +259,31 @@ test("R2: Q4 CDN with title-tier failure but URL-path fire → issuer via url-pa
   assert.equal(r.identitySignal, "url-path");
 });
 
-test("R2: Q4 CDN with CIK match → issuer via CIK path match (strongest signal)", () => {
+test("R5c: Q4 CDN with title-identity match → issuer via title tier (Q4 tenant ID not treated as CIK)", () => {
+  // Pre-R5c, this URL would have been rejected because 382246808 (Newmont's
+  // Q4 tenant ID) doesn't equal Newmont's SEC CIK (1164727). R5c relabels
+  // Q4 identifiers as `q4_tenant_id`, so the CIK-comparison branch is
+  // skipped and identity is established via the title tier instead.
   const NEWMONT_WITH_CIK = { ...NEWMONT, companySecCik: "1164727" };
   const r = classifyProvenance({
-    url: "https://s24.q4cdn.com/1164727/files/doc_downloads/2024/random-file.pdf",
-    title: "random report", // no name/ticker match
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/Newmont-2024-Sustainability-report-1.pdf",
+    title: "Newmont 2024 Sustainability Report",
     content: "",
     ...NEWMONT_WITH_CIK,
   });
   assert.equal(r.provenance, "issuer");
-  assert.match(r.reason, /CIK path match \(1164727\)/);
-  assert.equal(r.identitySignal, "cik-match");
+  assert.equal(r.identitySignal, "title");
+  assert.match(r.reason, /IR-platform \(Q4 Inc IR CDN\) \+ title identity match/);
 });
 
-test("R2: Q4 CDN with WRONG CIK → third_party even if URL is on IR CDN", () => {
+test("R5c: Q4 CDN with WRONG title identity → third_party (sibling issuer URL surfaced by mistake)", () => {
+  // Newmont-cohort search returns an Apple Q4 URL. Even though 382246808 is
+  // a valid Q4 tenant ID for SOMEONE, the title clearly names another
+  // company, so no identity tier matches Newmont → third_party.
   const NEWMONT_WITH_CIK = { ...NEWMONT, companySecCik: "1164727" };
   const r = classifyProvenance({
-    // 320193 is Apple's CIK; this is Apple's IR CDN URL surfaced under Newmont.
     url: "https://s24.q4cdn.com/320193/files/doc_downloads/apple-report.pdf",
-    title: "apple report",
+    title: "Apple 2024 Annual Report", // strong Apple identity signal
     content: "",
     ...NEWMONT_WITH_CIK,
   });
@@ -510,4 +516,110 @@ test("R2: rad.cvm.gov.br (Brazilian regulator) + title match → issuer", () => 
   assert.equal(r.provenance, "issuer");
   assert.match(r.reason, /CVM \(Brazil\)/);
   assert.equal(r.identitySignal, "title");
+});
+
+// ─── R5c: IR-platform tenant propagation ─────────────────────────────────────
+
+test("R5c: sibling Q4 URL is accepted via tenant cache after first-touch title match", () => {
+  // Newmont's Sustainability Report has "Newmont" in the title, but the
+  // biodiversity-approach paper doesn't (only in the filename). Pre-R5c the
+  // biodiversity paper would land as third_party. With R5c, the tenant cache
+  // populated by the SR's title match lets the biodiversity paper propagate.
+  const cp = classifyProvenance;
+  const knownIrTenants = new Map();
+  // First URL: title contains "Newmont" → title-tier identity match, binds tenant
+  const r1 = cp({
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/Newmont-2024-Sustainability-report-1.pdf",
+    title: "Newmont 2024 Sustainability Report",
+    content: "",
+    ...NEWMONT,
+    knownIrTenants,
+  });
+  assert.equal(r1.provenance, "issuer");
+  assert.equal(r1.identitySignal, "title");
+  assert.equal(r1.boundIrTenant?.platform, "Q4 Inc IR CDN");
+  assert.equal(r1.boundIrTenant?.tenantId, "382246808");
+  assert.equal(knownIrTenants.size, 1);
+
+  // Second URL on same tenant with NO title identity signal — accepted via cache
+  const r2 = cp({
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/priority-topics/2025/biodiversity-approach.pdf",
+    title: "priority topics biodiversity",
+    content: "",
+    ...NEWMONT,
+    knownIrTenants,
+  });
+  assert.equal(r2.provenance, "issuer");
+  assert.equal(r2.identitySignal, "tenant-match");
+  assert.match(r2.reason, /tenant-cache hit 382246808/);
+  // No new binding since one already exists
+  assert.equal(r2.boundIrTenant, undefined);
+});
+
+test("R5c: tenant cache is per-company — a different company cannot borrow another's binding", () => {
+  const cp = classifyProvenance;
+  const knownIrTenants = new Map();
+  // Newmont writes the binding
+  cp({
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/Newmont-2024-Sustainability-report-1.pdf",
+    title: "Newmont 2024 Sustainability Report",
+    content: "",
+    ...NEWMONT,
+    knownIrTenants,
+  });
+  assert.equal(knownIrTenants.size, 1);
+
+  // Kering happens to have a URL on the SAME Q4 tenant (this doesn't happen
+  // in practice, but the guard is what makes cross-company reuse impossible).
+  const r = cp({
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/kering-policy.pdf",
+    title: "Kering environmental policy",
+    content: "",
+    ...KERING,
+    knownIrTenants,
+  });
+  // Kering's URL has its OWN title identity match to "Kering", so it lands
+  // as issuer via title — NOT via the Newmont tenant cache. This proves the
+  // company-match guard in `companyMatchesBinding` correctly rejects the
+  // cross-company cache hit before falling through to fresh identity check.
+  assert.equal(r.provenance, "issuer");
+  assert.equal(r.identitySignal, "title");
+});
+
+test("R5c: no cache provided → old behaviour preserved (Q4 tenant without identity → third_party)", () => {
+  const cp = classifyProvenance;
+  const r = cp({
+    url: "https://s24.q4cdn.com/382246808/files/doc_downloads/anonymous.pdf",
+    title: "random report",
+    content: "",
+    ...NEWMONT,
+    // knownIrTenants intentionally omitted
+  });
+  assert.equal(r.provenance, "third_party");
+  assert.equal(r.irPlatformHost, "Q4 Inc IR CDN");
+});
+
+test("R5c: tenant cache with wrong tenant ID does not match", () => {
+  const cp = classifyProvenance;
+  const knownIrTenants = new Map();
+  // Bind Newmont's real tenant
+  cp({
+    url: "https://s24.q4cdn.com/382246808/files/newmont.pdf",
+    title: "Newmont 2024 Report",
+    content: "",
+    ...NEWMONT,
+    knownIrTenants,
+  });
+  // A DIFFERENT tenant on same Q4 platform → no cache hit, no title/URL/
+  // content signal (title says "Newmont" — actually it would match... let's
+  // use a title that DOESN'T match to isolate the cache-key mismatch check)
+  const r = cp({
+    url: "https://s24.q4cdn.com/999999/files/random.pdf",
+    title: "random",
+    content: "",
+    ...NEWMONT,
+    knownIrTenants,
+  });
+  assert.equal(r.provenance, "third_party");
+  assert.equal(r.identitySignal, "none");
 });
