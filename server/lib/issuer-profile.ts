@@ -165,16 +165,40 @@ export function corroborateAcronyms(
 /**
  * Verify a candidate domain against issuer metadata.
  * Returns accepted/rejected with reason and evidence.
+ *
+ * R5e (2026-09-04): added ISIN-country jurisdictional gate on ticker-only
+ * matches. When the only accepting signal is a `ticker` alias (2-5 letter
+ * exchange code, medium confidence) AND the issuer's ISIN indicates a non-
+ * US country, the domain must ALSO carry an ISIN-country-consistent TLD to
+ * be accepted. Otherwise the ticker match alone is not sufficient evidence
+ * of jurisdictional alignment.
+ *
+ * Motivation: Prudential plc (ISIN GB0007099541, ticker PRU) was accepting
+ * `prudential.com` as its own domain because `prudential.com` "contains"
+ * the ticker `pru`. But `prudential.com` belongs to Prudential Financial
+ * Inc. (unrelated US company also trading as PRU on NYSE). The correct
+ * Prudential-plc domains are `prudentialplc.com` and `prudential.com.sg`,
+ * both of which pass R5e (legal-name match, `.com.sg` for Singapore).
+ *
+ * Scope: this only affects domains whose Check-1 accept was a `ticker`
+ * alias. Legal-name-word matches (Check 2) and FIGI-name matches (Check 3)
+ * remain unchanged — those provide stronger evidence than a 3-letter
+ * exchange code. So Unilever accepting `unilever.com` regardless of ISIN
+ * country is unaffected (it passes Check 2 on the word "unilever").
  */
 export function verifyDomainCandidate(
   domain: string,
   issuerAliases: IssuerAlias[],
   legalName: string,
   figiName: string | null,
+  /** Optional: ISIN of the issuer for the R5e country gate. If omitted, R5e is skipped. */
+  isin?: string | null,
 ): DomainCandidate {
   const dl = domain.toLowerCase();
   const evidence: string[] = [];
   let accepted = false;
+  let acceptingAliasType: IssuerAlias["type"] | null = null;
+  let acceptingAliasValue: string | null = null;
 
   // Check 1: Does the domain contain any high/medium-confidence alias?
   const significantAliases = issuerAliases.filter(a =>
@@ -184,6 +208,8 @@ export function verifyDomainCandidate(
     if (dl.includes(alias.value)) {
       evidence.push(`domain contains alias "${alias.value}" (${alias.type}, ${alias.confidence})`);
       accepted = true;
+      acceptingAliasType = alias.type;
+      acceptingAliasValue = alias.value;
       break;
     }
   }
@@ -219,6 +245,50 @@ export function verifyDomainCandidate(
     }
   }
 
+  // R5e (2026-09-04): ISIN-country gate on ticker-only matches.
+  // Applies only when the acceptance signal is a `ticker` alias AND the
+  // ISIN indicates a non-US country. In that case, the domain must carry
+  // a TLD consistent with the ISIN's country prefix to be accepted.
+  //
+  // Design rationale: legal-name and FIGI-name matches (Checks 2 and 3) are
+  // strong enough that we don't apply the gate to them. Only the weaker
+  // ticker-alone match needs the additional jurisdictional constraint.
+  if (accepted && acceptingAliasType === "ticker" && isin && isin.length >= 2) {
+    const isinCountry = isin.slice(0, 2).toUpperCase();
+    // US issuers use `.com` as the default TLD, so a ticker match on a
+    // US-country ISIN doesn't need the country gate (`.com` is the
+    // canonical US-issuer TLD and doesn't rule out any US jurisdiction).
+    if (isinCountry !== "US") {
+      const tldCountry = tldCountryCode(dl);
+      if (tldCountry === null) {
+        // Generic TLD (`.com`, `.net`, `.org`, ...) with a non-US ISIN and
+        // ticker-only match. Reject: the ticker alone is not sufficient
+        // evidence that this generic-TLD domain belongs to the non-US
+        // issuer rather than a same-ticker issuer in a different country.
+        return {
+          domain,
+          type: "corporate",
+          status: "rejected",
+          reason: `Rejected (R5e): ticker-only alias match "${acceptingAliasValue}" against generic-TLD domain "${domain}" but issuer ISIN country is ${isinCountry}, not US. Legal-name-word or FIGI-name evidence needed.`,
+          evidence,
+        };
+      }
+      if (tldCountry !== isinCountry && !isCountryAlias(tldCountry, isinCountry)) {
+        // Country-specific TLD but wrong country. Reject: `.co.uk` for a
+        // French issuer, `.com.br` for a Danish issuer, etc.
+        return {
+          domain,
+          type: "corporate",
+          status: "rejected",
+          reason: `Rejected (R5e): ticker-only alias match "${acceptingAliasValue}" but domain TLD indicates country ${tldCountry}, issuer ISIN country is ${isinCountry}.`,
+          evidence,
+        };
+      }
+      // TLD country matches ISIN country — append to evidence for audit.
+      evidence.push(`R5e: TLD country "${tldCountry}" matches ISIN country "${isinCountry}"`);
+    }
+  }
+
   const reason = accepted
     ? `Verified: ${evidence[0]}`
     : `Rejected: no issuer-identity match in domain "${domain}"`;
@@ -230,6 +300,106 @@ export function verifyDomainCandidate(
     reason,
     evidence,
   };
+}
+
+// R5e: TLD → ISO 3166 country code mapping.
+//
+// Returns the ISO 3166 alpha-2 country code implied by the domain's TLD
+// (`.co.uk` → GB, `.com.sg` → SG, `.de` → DE). Returns null for generic
+// TLDs (`.com`, `.net`, `.org`, `.info`, `.biz`) which carry no country
+// signal. Used by the R5e gate to compare against ISIN country.
+//
+// Kept as a compact static table because the set of country-specific TLDs
+// changes rarely and correctness matters more than coverage completeness
+// (a missing country falls through to `null` → rejected via the generic
+// branch, which is the correct conservative default).
+const COUNTRY_TLDS: Record<string, string> = {
+  // United Kingdom
+  "co.uk": "GB", "org.uk": "GB", "ac.uk": "GB", "gov.uk": "GB", "uk": "GB",
+  // Singapore
+  "com.sg": "SG", "sg": "SG",
+  // Hong Kong
+  "com.hk": "HK", "hk": "HK",
+  // Japan
+  "co.jp": "JP", "jp": "JP", "ne.jp": "JP",
+  // Australia
+  "com.au": "AU", "au": "AU", "org.au": "AU",
+  // Canada
+  "ca": "CA",
+  // Germany
+  "de": "DE",
+  // France
+  "fr": "FR",
+  // Italy
+  "it": "IT",
+  // Spain
+  "es": "ES",
+  // Netherlands
+  "nl": "NL",
+  // Switzerland
+  "ch": "CH",
+  // Sweden
+  "se": "SE",
+  // Norway
+  "no": "NO",
+  // Denmark
+  "dk": "DK",
+  // Finland
+  "fi": "FI",
+  // Belgium
+  "be": "BE",
+  // Austria
+  "at": "AT",
+  // Ireland
+  "ie": "IE",
+  // Israel
+  "co.il": "IL", "il": "IL",
+  // Turkey
+  "com.tr": "TR", "tr": "TR",
+  // Brazil
+  "com.br": "BR", "br": "BR",
+  // Mexico
+  "com.mx": "MX", "mx": "MX",
+  // South Africa
+  "co.za": "ZA", "za": "ZA",
+  // South Korea
+  "co.kr": "KR", "kr": "KR",
+  // Taiwan
+  "com.tw": "TW", "tw": "TW",
+  // India
+  "co.in": "IN", "in": "IN",
+  // China
+  "com.cn": "CN", "cn": "CN",
+  // United Arab Emirates
+  "ae": "AE",
+};
+
+function tldCountryCode(domain: string): string | null {
+  const dl = domain.toLowerCase().replace(/^www\./, "");
+  // Try two-part TLDs first (e.g. `co.uk` before `uk`).
+  const parts = dl.split(".");
+  if (parts.length >= 3) {
+    const twoPart = parts.slice(-2).join(".");
+    if (COUNTRY_TLDS[twoPart]) return COUNTRY_TLDS[twoPart];
+  }
+  if (parts.length >= 2) {
+    const onePart = parts[parts.length - 1];
+    if (COUNTRY_TLDS[onePart]) return COUNTRY_TLDS[onePart];
+  }
+  return null;
+}
+
+// R5e: some ISO country codes map to related jurisdictional TLDs. For
+// example, an ISIN registered in Hong Kong (HK) might use a `.com.hk` TLD,
+// but a `.hk` company might also have a related Chinese entity with a
+// `.cn` presence. Currently only exact matches are trusted; this hook is
+// for future expansion (e.g. EU-wide domains for European issuers, etc.).
+function isCountryAlias(tldCountry: string, isinCountry: string): boolean {
+  // Placeholder for future country-family logic. For now, no aliases:
+  // exact match required.
+  void tldCountry;
+  void isinCountry;
+  return false;
 }
 
 // ─── Full Profile Resolution ────────────────────────────────────────────────
@@ -298,7 +468,11 @@ export async function resolveIssuerProfile(opts: {
   const verifiedDomains: string[] = [];
 
   if (opts.domain) {
-    const verification = verifyDomainCandidate(opts.domain, aliases, opts.companyName, figiName);
+    // R5e (2026-09-04): pass ISIN so the ticker-only-acceptance branch is
+    // gated by the ISIN's country prefix. Fixes Prudential plc / Prudential
+    // Financial ambiguous-ticker collision (see verifyDomainCandidate
+    // doc comment for full rationale).
+    const verification = verifyDomainCandidate(opts.domain, aliases, opts.companyName, figiName, opts.isin);
     domainCandidates.push(verification);
     if (verification.status === "accepted") {
       verifiedDomains.push(opts.domain);
