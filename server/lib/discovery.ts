@@ -3199,7 +3199,24 @@ async function searchCompanyDocumentsInner(opts: {
 
   function addCandidate(result: SearchResult, lane: string) {
     const normUrl = normaliseUrl(result.link);
-    if (seenUrls.has(normUrl)) return;
+    if (seenUrls.has(normUrl)) {
+      // 2026-09-05: if this URL was already added by a non-protected lane but
+      // a subsequent PROTECTED_LANES caller is emitting it, upgrade the
+      // existing candidate's lane. Without this the PROTECTED_LANES filter
+      // (bypass LLM gate, exempt from EDGAR cap) misses URLs whose first
+      // discovery was by Google/domain search rather than the authoritative API.
+      // Bug found via BHP iter-29: rich topic lexicon caused general lane to
+      // find 2024 20-F first, R7c later reached it and correctly returned it
+      // — but R7c's protected lane label was lost and the URL got LLM-gated.
+      if (PROTECTED_LANES.includes(lane)) {
+        const existing = allCandidates.find(c => c.url === normUrl);
+        if (existing && !PROTECTED_LANES.includes((existing as any).lane || "")) {
+          (existing as any).lane = lane;
+          existing.priority = Math.min(existing.priority, -50);
+        }
+      }
+      return;
+    }
     // Hard deny-list filter: block noise URLs before they enter the candidate pool
     if (isUrlDenied(normUrl.toLowerCase())) {
       laneCounts["denied"] = (laneCounts["denied"] || 0) + 1;
@@ -3897,7 +3914,20 @@ async function searchCompanyDocumentsInner(opts: {
       extendedForms: true,
     });
     for (const f of annual) {
-      if (!seenUrls.has(f.url)) {
+      // 2026-09-05 fix: if a general-lane search already discovered this URL,
+      // upgrade its lane to "edgar-submissions" so the PROTECTED_LANES filter
+      // catches it. Previously R7c only added truly-new URLs, so any EDGAR URL
+      // Google had already returned kept its "general"/"domain" lane and got
+      // filtered by the non-US EDGAR cap or the LLM relevance gate. Rich topic
+      // lexicons return more EDGAR URLs via Google, which triggered this bug.
+      if (seenUrls.has(f.url)) {
+        const existing = allCandidates.find(c => c.url === f.url);
+        if (existing) {
+          (existing as any).lane = "edgar-submissions";
+          existing.priority = Math.min(existing.priority, -60);
+          // Don't double-count in laneCounts; the URL was already counted under its original lane.
+        }
+      } else {
         seenUrls.add(f.url);
         allCandidates.push({
           url: f.url,
