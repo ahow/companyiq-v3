@@ -28,6 +28,7 @@ import {
   extractLandingPageLinks,
   buildSubpageEnumerationQueries,
   enumerateRegulatorFilings,
+  parseSitemapForSubpaths,
 } from "./r6-discovery.js";
 import { expandQueries, type QueryExpansionResult } from "./query-expansion.js";
 import {
@@ -1840,10 +1841,43 @@ async function loadSecTickerMap(ua: string): Promise<Map<string, string>> {
   return map;
 }
 
+/**
+ * R7c: default per-form limits for the multi-form EDGAR enumerator.
+ *
+ * These bound the maximum number of filings pulled per form type from a
+ * single issuer's EDGAR submissions. The choice reflects sustainability
+ * disclosure patterns:
+ *   - 10-K / 20-F / 40-F: 3 recent annual filings (last 3 fiscal years).
+ *     Multiple years let recency gate pick the correct one for the report period.
+ *   - DEF 14A / DEFA14A / PRE 14A: 3 recent proxies (governance disclosures).
+ *   - 6-K: 8 recent material-event filings from foreign private issuers.
+ *     FPIs disclose sustainability updates via 6-K rather than 10-Q.
+ *   - 10-Q: 4 recent quarterly filings.
+ *   - 8-K: 6 recent current-report filings.
+ *
+ * Total worst-case per US-listed issuer: ~24 pinned filings. Bounded and
+ * predictable.
+ */
+const EDGAR_FORM_LIMITS: Array<{ pattern: RegExp; cap: number; label: string }> = [
+  { pattern: /^(10-?K|20-?F|40-?F)$/i, cap: 3, label: "annual" },
+  { pattern: /^(DEF|DEFA|PRE)\s?14A$/i, cap: 3, label: "proxy" },
+  { pattern: /^6-?K$/i, cap: 8, label: "6-K" },
+  { pattern: /^10-?Q$/i, cap: 4, label: "quarterly" },
+  { pattern: /^8-?K$/i, cap: 6, label: "8-K" },
+];
+
 async function resolveAuthoritativeAnnualFilings(opts: {
   companyName: string;
   ticker?: string | null;
+  /** Legacy: max total annual filings. Applies only to 10-K/20-F/40-F caps. */
   maxFilings?: number;
+  /**
+   * R7c: extend the enumerator to pull other form types too. When true, the
+   * function returns up to EDGAR_FORM_LIMITS[form].cap filings per form type
+   * (annual + proxy + 6-K + 10-Q + 8-K). When false (legacy default), only
+   * annual filings are returned and only up to `maxFilings`.
+   */
+  extendedForms?: boolean;
 }): Promise<Array<{ url: string; form: string; date: string }>> {
   const ua = process.env.SEC_USER_AGENT || "CompanyIQ Research admin@companyiq.example";
   const out: Array<{ url: string; form: string; date: string }> = [];
@@ -1874,21 +1908,38 @@ async function resolveAuthoritativeAnnualFilings(opts: {
     const primaryDocs: string[] = recent.primaryDocument || [];
     const dates: string[] = recent.filingDate || [];
     const cikNum = String(parseInt(cik, 10));
-    const maxFilings = opts.maxFilings ?? 2;
-    const wantForm = (f: string) => /^(10-?K|20-?F|40-?F)$/i.test(f.replace(/\s+/g, "")) && !/\/A$/i.test(f);
+
+    // R7c: choose which form-type caps apply
+    const legacyMax = opts.maxFilings ?? 2;
+    const perFormCaps = opts.extendedForms
+      ? EDGAR_FORM_LIMITS.map(f => ({ ...f, cap: f.label === "annual" ? Math.max(legacyMax, f.cap) : f.cap }))
+      : [{ pattern: /^(10-?K|20-?F|40-?F)$/i, cap: legacyMax, label: "annual" }];
+    const perFormSeen: Record<string, number> = {};
+
     // recent arrays are sorted newest-first by EDGAR.
-    for (let i = 0; i < forms.length && out.length < maxFilings; i++) {
-      if (!wantForm(forms[i])) continue;
+    for (let i = 0; i < forms.length; i++) {
+      const rawForm = (forms[i] || "").trim();
+      if (!rawForm || /\/A$/i.test(rawForm)) continue; // skip amendments
+      // Find the first cap that matches this form
+      const cap = perFormCaps.find(c => c.pattern.test(rawForm.replace(/\s+/g, "")));
+      if (!cap) continue;
+      const seenKey = cap.label;
+      const seenCount = perFormSeen[seenKey] || 0;
+      if (seenCount >= cap.cap) continue;
+
       const acc18 = (accessions[i] || "").replace(/-/g, "");
       const file = primaryDocs[i];
       if (!acc18 || !file) continue;
       const url = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${acc18}/${file}`;
-      out.push({ url, form: forms[i], date: dates[i] || "" });
-      // Pre-seed the authoritative form/year caches so the recency gate and
-      // force-include classify this primary document correctly straight away.
-      edgarFormByAccession.set(acc18, normalizeEdgarForm(forms[i]));
-      if (dates[i] && /^\d{4}/.test(dates[i])) edgarFilingYearByAccession.set(acc18, parseInt(dates[i].slice(0, 4), 10));
-      console.log(`[${opts.companyName}] EDGAR authoritative annual filing: ${forms[i]} ${dates[i]} -> ${url}`);
+      out.push({ url, form: rawForm, date: dates[i] || "" });
+      perFormSeen[seenKey] = seenCount + 1;
+      // Pre-seed authoritative form/year caches (only for annual filings — the
+      // recency gate uses this to detect stale 10-Ks; not needed for 6-K/8-K).
+      if (cap.label === "annual") {
+        edgarFormByAccession.set(acc18, normalizeEdgarForm(rawForm));
+        if (dates[i] && /^\d{4}/.test(dates[i])) edgarFilingYearByAccession.set(acc18, parseInt(dates[i].slice(0, 4), 10));
+      }
+      console.log(`[${opts.companyName}] EDGAR ${cap.label} filing: ${rawForm} ${dates[i]} -> ${url}`);
     }
   } catch (e: any) {
     console.warn(`[${opts.companyName}] EDGAR submissions seed failed: ${e?.message}`);
@@ -3761,7 +3812,15 @@ async function searchCompanyDocumentsInner(opts: {
   // submissions JSON to PIN the canonical primary-document URL(s) for the newest
   // annual filing(s). Deterministic, issuer-agnostic, additive.
   try {
-    const annual = await resolveAuthoritativeAnnualFilings({ companyName, ticker: opts.ticker, maxFilings: 2 });
+    // R7c: enable extendedForms so we also pin recent proxies, 6-K, 10-Q, 8-K filings.
+    // Foreign private issuers (Ambev, BHP) publish sustainability updates via 6-K,
+    // not annual reports, and were previously missed.
+    const annual = await resolveAuthoritativeAnnualFilings({
+      companyName,
+      ticker: opts.ticker,
+      maxFilings: 3,
+      extendedForms: true,
+    });
     for (const f of annual) {
       if (!seenUrls.has(f.url)) {
         seenUrls.add(f.url);
@@ -4069,6 +4128,64 @@ async function searchCompanyDocumentsInner(opts: {
     }
   } catch (e: any) {
     console.warn(`[${companyName}] R6f sub-page enum lane failed: ${e?.message}`);
+  }
+
+  // R7e — Sitemap.xml traversal on discovered landing pages.
+  // Complements R6f (Serper site: inurl: queries) with deterministic sitemap-
+  // based enumeration. Many corporate ESG sites publish a full sitemap.xml
+  // that lists every subpage; parsing it lets us find sub-pages that Serper's
+  // index doesn't return. Best-effort — many issuers block sitemap access.
+  try {
+    const landingCandidates = allCandidates
+      .filter(c => isEsgLandingPage(c.url))
+      .slice(0, 3);
+    for (const lc of landingCandidates) {
+      const controller = new AbortController();
+      const to = setTimeout(() => controller.abort(), 5000);
+      try {
+        const u = new URL(lc.url);
+        // Try common sitemap locations in order
+        const sitemapUrls = [
+          `${u.origin}/sitemap.xml`,
+          `${u.origin}/sitemap_index.xml`,
+          `${u.origin}/sitemap-index.xml`,
+        ];
+        // Landing parent path (e.g. /purpose/esgreport for /purpose/esgreport/)
+        const parentPath = u.pathname.replace(/\/$/, "") || u.pathname;
+        let extracted: string[] = [];
+        for (const sm of sitemapUrls) {
+          try {
+            const resp = await fetch(sm, {
+              signal: controller.signal,
+              headers: { Accept: "application/xml,*/*", "User-Agent": "CompanyIQ-Discovery/1.0" },
+            });
+            if (!resp.ok) continue;
+            const xml = await resp.text();
+            if (!xml || xml.length < 50) continue;
+            const subs = parseSitemapForSubpaths(xml, parentPath);
+            if (subs.length > 0) {
+              extracted = subs.slice(0, 60);  // cap per issuer
+              break;  // first successful sitemap wins
+            }
+          } catch { /* try next sitemap URL */ }
+        }
+        clearTimeout(to);
+        for (const sub of extracted) {
+          addCandidate({
+            link: sub,
+            title: `[sitemap sub-page from ${lc.url}]`,
+            snippet: `Extracted from sitemap.xml under ${parentPath}`,
+          } as any, "r7e-sitemap");
+        }
+        if (extracted.length > 0) {
+          console.log(`[${companyName}] R7e sitemap enumerated ${extracted.length} sub-pages of ${lc.url}`);
+        }
+      } catch {
+        clearTimeout(to);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R7e sitemap lane failed: ${e?.message}`);
   }
 
   // Persist newly-discovered IR-platform tenants for next-run bootstrap (R6a)
