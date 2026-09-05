@@ -236,8 +236,16 @@ describe("R6c v2 — enumerateRegulatorFilings (ESEF)", () => {
     expect(filings.some(f => f.url.endsWith(".zip"))).toBe(true);
   });
 
-  it("returns empty when non-EU issuer or no LEI", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 200 }));
+  it("returns empty when non-EU issuer with no LEI, even if GLEIF resolves", async () => {
+    // GLEIF might return a LEI for a US ISIN, but the ESEF path requires
+    // the issuer to also be EU-domiciled (country or ISIN prefix in EU-27).
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any) => {
+      const url = typeof input === "string" ? input : input?.toString();
+      if (url?.includes("api.gleif.org")) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      return new Response("", { status: 200 });
+    });
     const filings = await enumerateRegulatorFilings({
       companyName: "US Company",
       lei: null,
@@ -245,7 +253,10 @@ describe("R6c v2 — enumerateRegulatorFilings (ESEF)", () => {
       isin: "US0000000000",
     });
     expect(filings).toEqual([]);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // GLEIF was called (since we had an ISIN) but no ESEF/HKEX call ran.
+    const urls = fetchSpy.mock.calls.map(c => c[0] as string);
+    expect(urls.some(u => u.includes("filings.xbrl.org"))).toBe(false);
+    expect(urls.some(u => u.includes("hkexnews.hk"))).toBe(false);
   });
 });
 
@@ -275,7 +286,8 @@ describe("R6c v2 — enumerateRegulatorFilings (HKEX)", () => {
       isin: "GB0007099541",
     });
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    // GLEIF (1) + HKEX prefix.do (2) + HKEX titleSearchServlet.do (3) = 3 fetches
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(filings.some(f => f.url === "https://www.hkexnews.hk/listedco/listconews/sehk/2025/0409/2025040900057.pdf" && f.source === "r6c-hkex-api")).toBe(true);
     expect(filings.some(f => f.title.includes("Sustainability Report 2024"))).toBe(true);
   });
