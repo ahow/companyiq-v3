@@ -118,6 +118,19 @@ RULES:
 - Prefer multi-word phrases where a single word would be ambiguous.
 - Return ONLY a JSON object: {"terms": ["...", "..."]}. Max ${MAX_TERMS} entries. Lowercase. No duplicates.`;
 
+  // 2026-09-05 fix: previously any LLM failure (network, JSON parse, empty response)
+  // silently fell through to the generic-token fallback, which then persisted a
+  // useless lexicon (e.g. Framework 3's cache was "examine, strength, plans, strategy,
+  // management, actions, performance, oversight, nature, biodiversity, business" —
+  // 8 generic verbs plus 2 topic terms buried at positions 9-10). Result: every
+  // domain-anchored `site:X <topic>` query was firing on generic verbs, not nature
+  // terminology. Now we:
+  //   (a) log LLM response details to distinguish empty-vs-bad-JSON,
+  //   (b) ORDER topic-specific LLM terms FIRST so slice(0, N) always includes
+  //       nature/biodiversity even at small N,
+  //   (c) return { source: "llm" } only when the LLM actually contributed terms
+  //       so downstream can distinguish real vs fallback lexicons.
+  let llmTerms: string[] = [];
   try {
     const { text } = await completeWithFallback(LEXICON_MODEL, {
       system: "You generate precise topic-retrieval lexicons. Return only valid JSON.",
@@ -126,28 +139,36 @@ RULES:
       maxTokens: 1200,
       temperature: 0,
     });
-    const parsed = JSON.parse(text);
-    let terms: string[] = Array.isArray(parsed?.terms) ? parsed.terms : [];
-    terms = [...new Set(
-      terms
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch (parseErr: any) {
+      console.warn(`[topic-lexicon] LLM returned unparseable JSON for framework ${frameworkId}: ${(text || "").slice(0, 200)}`);
+    }
+    const rawTerms: string[] = Array.isArray(parsed?.terms) ? parsed.terms : [];
+    llmTerms = [...new Set(
+      rawTerms
         .filter((t: unknown): t is string => typeof t === "string")
         .map((t) => t.trim().toLowerCase())
         .filter((t) => t.length >= 2 && t.length <= 60),
     )].slice(0, MAX_TERMS);
-
-    // Always union the deterministic fallback so we never lose the literal topic
-    // tokens even if the model omits them.
-    const merged = [...new Set([...terms, ...fallback])].slice(0, MAX_TERMS);
-    if (merged.length > 0) {
-      await persist(workspaceId, settingKey, merged);
-      return { terms: merged, source: "llm" };
+    if (llmTerms.length === 0) {
+      console.warn(`[topic-lexicon] LLM returned zero usable terms for framework ${frameworkId} — falling back to generic tokens`);
+    } else {
+      console.log(`[topic-lexicon] LLM produced ${llmTerms.length} terms for framework ${frameworkId}; first-5: ${llmTerms.slice(0, 5).join(", ")}`);
     }
   } catch (error: any) {
     console.warn(`[topic-lexicon] LLM expansion failed for framework ${frameworkId}: ${error?.message || error}`);
   }
 
-  // 3) Fallback.
-  if (fallback.length > 0) await persist(workspaceId, settingKey, fallback);
+  // ORDER MATTERS: topic-specific LLM terms first, then deterministic fallback
+  // tokens (framework title/description tokens like "examine", "strength", ...).
+  // Every downstream slice(0, N) assumes top-of-list = topic-specific.
+  const merged = [...new Set([...llmTerms, ...fallback])].slice(0, MAX_TERMS);
+  if (merged.length > 0) {
+    await persist(workspaceId, settingKey, merged);
+    return { terms: merged, source: llmTerms.length > 0 ? "llm" : "fallback" };
+  }
   return { terms: fallback, source: "fallback" };
 }
 
