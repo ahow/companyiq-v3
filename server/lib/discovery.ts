@@ -4204,7 +4204,14 @@ async function searchCompanyDocumentsInner(opts: {
   // are given to the top-priority policy-family docs, and the remaining
   // (180 - N) slots are filled from the general unprotected sort. Reserved
   // slots don't grow the total budget, so the LLM-cost bound is unchanged.
-  const PROTECTED_LANES = ["registry-search", "pinned", "edgar-submissions"];
+  // Regulator-API-derived candidates from R6c v2 (ESEF, HKEX) are authoritative
+  // and should never be trimmed by the pre-gate cap. Same for pinned URLs, EDGAR
+  // submissions (already deterministic API-sourced), and registry-search.
+  const PROTECTED_LANES = [
+    "registry-search", "pinned", "edgar-submissions",
+    "r6c-esef-api", "r6c-hkex-api",
+    "a-share-cninfo-api",  // parallel to r6c-*: China regulator API
+  ];
   const POLICY_RESERVED_SLOTS = 10;
   // R5d policy-family detector — keep aligned with disclosure-document-types.ts
   // RANK_BOOSTS policy-family pattern. Matches on URL or title text so the

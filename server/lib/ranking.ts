@@ -42,6 +42,7 @@ const STATUTORY_REGISTRY_HOSTS = [
   "find-and-update.company-information.service.gov.uk", "data.fca.org.uk",
   "fca.org.uk", "unternehmensregister.de", "handelsregister.de",
   "registers.esma.europa.eu", "esap.europa.eu", "info-financiere.fr",
+  "filings.xbrl.org",  // R6c v2: ESMA ESEF filings — statutory EU issuer disclosures
   "cnmv.es", "1info.it", "registroimprese.it", "afm.nl", "kvk.nl",
   "bolagsverket.se", "brreg.no", "datacvr.virk.dk", "zefix.ch", "core.cro.ie",
   "disclosure2.edinet-fsa.go.jp", "release.tdnet.info", "kind.krx.co.kr",
