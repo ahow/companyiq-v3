@@ -93,6 +93,12 @@ export interface RetrievalDiagnostics {
   /** Low/zero score root cause (populated post-scoring) */
   lowScoreClassification: LowScoreReason | null;
 
+  /** R6a: IR-platform tenants discovered/persisted for this issuer */
+  irPlatformTenants?: { platform: string; tenant: string }[];
+
+  /** Per-lane candidate counts (populated by discovery pipeline) */
+  lanes?: Record<string, number>;
+
   /** Timestamp */
   generatedAt: string;
 }
@@ -229,6 +235,16 @@ export class RetrievalDiagnosticsBuilder {
 
   setLowScoreClassification(reason: LowScoreReason): this {
     this.data.lowScoreClassification = reason;
+    return this;
+  }
+
+  setIrPlatformTenants(tenants: { platform: string; tenant: string }[]): this {
+    this.data.irPlatformTenants = tenants;
+    return this;
+  }
+
+  setLanes(lanes: Record<string, number>): this {
+    this.data.lanes = lanes;
     return this;
   }
 
