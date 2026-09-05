@@ -39,6 +39,8 @@ export const IR_PLATFORMS: {
   hostSuffix: string;              // matched as URL host endsWith
   tenantFromUrl: RegExp;           // capture-group 1 = tenant id
   seedSiteSearch: (tenant: string) => string;  // returns site: query fragment
+  /** Optional: directory-index base for R7a enumeration (append the tenant path segment). */
+  directoryIndexBase?: (tenant: string) => string[];
 }[] = [
   {
     name: "q4inc",
@@ -46,11 +48,23 @@ export const IR_PLATFORMS: {
     // e.g. https://s24.q4cdn.com/382246808/files/doc_downloads/... → tenant = 382246808
     tenantFromUrl: /q4cdn\.com\/(\d{6,12})\//i,
     seedSiteSearch: (tenant) => `site:q4cdn.com/${tenant}/ filetype:pdf`,
+    // Q4Inc CDN uses a set of conventional sub-directories per tenant.
+    // R7a enumerates each; each returns an Apache directory index we parse.
+    directoryIndexBase: (tenant) => [
+      `https://s24.q4cdn.com/${tenant}/files/doc_downloads/`,
+      `https://s24.q4cdn.com/${tenant}/files/doc_downloads/sustainability/`,
+      `https://s24.q4cdn.com/${tenant}/files/doc_downloads/priority-topics/`,
+      `https://s24.q4cdn.com/${tenant}/files/doc_downloads/policies/`,
+      `https://s24.q4cdn.com/${tenant}/files/doc_financials/`,
+      `https://s24.q4cdn.com/${tenant}/files/doc_presentations/`,
+      `https://s24.q4cdn.com/${tenant}/files/doc_earnings/`,
+      `https://s24.q4cdn.com/${tenant}/files/doc_news/`,
+      `https://s24.q4cdn.com/${tenant}/files/doc_governance/`,
+    ],
   },
   {
     name: "investis-cloudfront",
     hostSuffix: "investisdigital.com",
-    // e.g. https://<tenant>.investisdigital.com/... → tenant = subdomain
     tenantFromUrl: /https?:\/\/([a-z0-9-]+)\.investisdigital\.com\//i,
     seedSiteSearch: (tenant) => `site:${tenant}.investisdigital.com filetype:pdf`,
   },
@@ -72,6 +86,50 @@ export const IR_PLATFORMS: {
     hostSuffix: "euroland.com",
     tenantFromUrl: /euroland\.com\/tools\/([a-z0-9-]+)\//i,
     seedSiteSearch: (tenant) => `site:euroland.com/tools/${tenant}/ filetype:pdf`,
+  },
+  // R7b additions:
+  {
+    name: "mziq",
+    hostSuffix: "mziq.com",
+    // e.g. https://api.mziq.com/mzfilemanager/v2/d/<UUID>/<file-uuid>?origin=2
+    // MZIQ (SelfWealth) is the dominant IR-platform for Brazilian large caps
+    // (Ambev, Vale, Petrobras, Itaú, B3). Tenant = first UUID after /d/.
+    tenantFromUrl: /api\.mziq\.com\/mzfilemanager\/v\d+\/d\/([0-9a-f-]{20,})\//i,
+    seedSiteSearch: (tenant) => `site:mziq.com "${tenant}"`,
+  },
+  {
+    name: "euroland-blob",
+    hostSuffix: "euroland.com",
+    // Euroland Azure blob storage: northeurope.blob.euroland.com/<tenant>/
+    // Distinct from westhoughton-euroland above which uses /tools/<tenant>/ paths.
+    tenantFromUrl: /(?:northeurope|westeurope)\.blob\.euroland\.com\/([a-z0-9._-]+)\//i,
+    seedSiteSearch: (tenant) => `site:blob.euroland.com/${tenant}/ filetype:pdf`,
+  },
+  {
+    name: "precision-ir",
+    hostSuffix: "precisionir.com",
+    tenantFromUrl: /precisionir\.com\/(?:companyfiles|documents)\/([a-z0-9-]+)\//i,
+    seedSiteSearch: (tenant) => `site:precisionir.com ${tenant} filetype:pdf`,
+  },
+  {
+    name: "contentstack",
+    hostSuffix: "contentstack.io",
+    // assets.contentstack.io/v3/assets/<stack-id>/<asset-id>/...
+    tenantFromUrl: /assets\.contentstack\.io\/v\d+\/assets\/([a-z0-9]{10,})\//i,
+    seedSiteSearch: (tenant) => `site:assets.contentstack.io ${tenant} filetype:pdf`,
+  },
+  {
+    name: "wilddog-digital",
+    hostSuffix: "wilddogdigital.com",
+    tenantFromUrl: /wilddogdigital\.com\/([a-z0-9-]+)\//i,
+    seedSiteSearch: (tenant) => `site:wilddogdigital.com/${tenant}/ filetype:pdf`,
+  },
+  {
+    name: "asx-cdn",
+    hostSuffix: "listcorp.com",
+    // Australian issuers use listcorp.com as an ASX filings aggregator with ASX code path.
+    tenantFromUrl: /listcorp\.com\/asx\/([a-z]{2,4})\//i,
+    seedSiteSearch: (tenant) => `site:listcorp.com/asx/${tenant}/ ${tenant}`,
   },
 ];
 

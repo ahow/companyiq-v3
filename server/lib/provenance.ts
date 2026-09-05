@@ -121,6 +121,8 @@ const REGULATOR_HOSTS: Array<[RegExp, string]> = [
   [/(^|\.)asx\.com\.au$/i, "ASX"],
   [/(^|\.)hkexnews\.hk$/i, "HKEX news"],
   [/(^|\.)hkex\.com\.hk$/i, "HKEX"],
+  // R7g: ESMA ESEF filings repository — primary EU regulated-issuer filings
+  [/(^|\.)filings\.xbrl\.org$/i, "ESMA ESEF filings"],
   [/(^|\.)modernslaveryregister\.gov\.au$/i, "Australian Modern Slavery Register"],
   [/(^|\.)find-and-update\.company-information\.service\.gov\.uk$/i, "UK Companies House"],
   [/(^|\.)data\.fca\.org\.uk$/i, "UK FCA"],

@@ -260,6 +260,34 @@ describe("R6c v2 — enumerateRegulatorFilings (ESEF)", () => {
   });
 });
 
+describe("R7b — IR-platform registry extensions", () => {
+  it("extracts MZIQ tenant from Ambev-style URL", () => {
+    const tenants = extractIRPlatformTenants([
+      "https://api.mziq.com/mzfilemanager/v2/d/c8182463-4b7e-408c-9d0f-42797662435e/4856137f-de39-cf2f-a900-8114590d6230?origin=2",
+    ]);
+    expect(tenants.some(t => t.platform === "mziq" && t.tenant === "c8182463-4b7e-408c-9d0f-42797662435e")).toBe(true);
+  });
+
+  it("extracts Euroland blob tenant", () => {
+    const tenants = extractIRPlatformTenants([
+      "http://northeurope.blob.euroland.com/press-releases-attachments./3955542/HKEX-EPS.pdf",
+    ]);
+    expect(tenants.some(t => t.platform === "euroland-blob" && t.tenant === "press-releases-attachments.")).toBe(true);
+  });
+
+  it("extracts listcorp ASX ticker", () => {
+    const tenants = extractIRPlatformTenants([
+      "https://www.listcorp.com/asx/bhp/bhp-group-limited/news/2026-us-annual-report-form-20-f-3391451.html",
+    ]);
+    expect(tenants.some(t => t.platform === "asx-cdn" && t.tenant === "bhp")).toBe(true);
+  });
+
+  it("bootstraps queries for MZIQ platform even without persisted tenant", () => {
+    const queries = buildIRPlatformSeedQueries("Ambev", [], ["biodiversity"]);
+    expect(queries.some(q => q.includes("site:mziq.com") && q.includes('"Ambev"'))).toBe(true);
+  });
+});
+
 describe("R6c v2 — enumerateRegulatorFilings (HKEX)", () => {
   afterEach(() => vi.restoreAllMocks());
 
