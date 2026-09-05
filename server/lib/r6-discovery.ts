@@ -213,6 +213,14 @@ export function buildLocaleTopicQueries(
  * its known identifiers (LEI for EU ESEF, CIK for SEC — already covered
  * elsewhere, HK legal name for HKEX).
  *
+ * R6c v1 emitted directory/search URLs — those got rejected by the corpus gate
+ * because they aren't fetchable primary documents. R6c v2 (below in
+ * `enumerateRegulatorFilings`) calls the regulator APIs directly to enumerate
+ * the concrete filing URLs.
+ *
+ * This function is kept for backwards compatibility and as a low-priority
+ * fallback for regulators whose APIs we haven't wrapped yet.
+ *
  * These are DIRECT URL candidates emitted with high priority so they don't
  * need to survive Serper ranking. The gate will still verify them.
  */
@@ -511,6 +519,180 @@ export function buildSubpageEnumerationQueries(
     queries.push(`site:${domain} inurl:${parent} ${phrase}`);
   }
   return queries;
+}
+
+/**
+ * R6c v2 — Regulator-API filing enumeration
+ *
+ * Directly calls regulator repository APIs (ESMA ESEF filings.xbrl.org and
+ * HKEX title-search) to return concrete filing URLs for an issuer. This
+ * replaces R6c v1's approach of emitting directory URLs (which the gate
+ * rejected as unfetchable).
+ *
+ * Best-effort: each API call is time-bounded to ~5-8s and errors are
+ * swallowed. Returns an empty array when the issuer has no relevant
+ * identifier or the API is unreachable.
+ */
+export type RegulatorFilingRecord = { url: string; title: string; snippet: string; source: string };
+
+export async function enumerateRegulatorFilings(opts: {
+  companyName: string;
+  lei?: string | null;
+  country?: string | null;
+  isin?: string | null;
+  hkStockCode?: string | null;
+  fetchTimeoutMs?: number;
+}): Promise<RegulatorFilingRecord[]> {
+  const timeout = opts.fetchTimeoutMs ?? 8000;
+  const results: RegulatorFilingRecord[] = [];
+
+  const country = (opts.country ?? "").trim().toLowerCase();
+  const isinCountry = opts.isin && opts.isin.length >= 2 ? opts.isin.slice(0, 2).toUpperCase() : "";
+
+  // ── ESMA ESEF filings via filings.xbrl.org JSON:API ──────────────────────
+  const EU_COUNTRIES = new Set([
+    "at","be","bg","hr","cy","cz","dk","ee","fi","fr","de","gr","hu","ie","it",
+    "lv","lt","lu","mt","nl","pl","pt","ro","sk","si","es","se","gb","uk","no",
+    "is","li","austria","belgium","bulgaria","croatia","cyprus","czech republic",
+    "denmark","estonia","finland","france","germany","greece","hungary","ireland",
+    "italy","latvia","lithuania","luxembourg","malta","netherlands","poland",
+    "portugal","romania","slovakia","slovenia","spain","sweden","united kingdom",
+    "norway","iceland","liechtenstein",
+  ]);
+  const EU_ISIN_COUNTRIES = new Set(["AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR",
+    "DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI",
+    "ES","SE","GB","NO","IS","LI"]);
+  const inEu = EU_COUNTRIES.has(country) || EU_ISIN_COUNTRIES.has(isinCountry);
+
+  if (opts.lei && inEu) {
+    try {
+      const filter = encodeURIComponent(JSON.stringify([
+        { name: "entity.identifier", op: "eq", val: opts.lei },
+      ]));
+      const apiUrl = `https://filings.xbrl.org/api/filings?filter=${filter}&page[size]=25`;
+      const controller = new AbortController();
+      const to = setTimeout(() => controller.abort(), timeout);
+      const resp = await fetch(apiUrl, {
+        signal: controller.signal,
+        headers: { Accept: "application/vnd.api+json", "User-Agent": "CompanyIQ-Discovery/1.0" },
+      });
+      clearTimeout(to);
+      if (resp.ok) {
+        const data = await resp.json() as any;
+        const rows: any[] = Array.isArray(data?.data) ? data.data : [];
+        for (const row of rows) {
+          const attrs = row?.attributes ?? {};
+          const period = attrs.period_end ?? "unknown";
+          const country_code = attrs.country ?? "";
+          const reportRel = attrs.report_url as string | undefined;
+          const packageRel = attrs.package_url as string | undefined;
+          if (reportRel) {
+            results.push({
+              url: `https://filings.xbrl.org${reportRel}`,
+              title: `${opts.companyName} ESEF filing ${period} (${country_code})`,
+              snippet: `ESMA ESEF primary iXBRL report for ${opts.companyName} (LEI ${opts.lei}) period-end ${period}`,
+              source: "r6c-esef-api",
+            });
+          }
+          if (packageRel) {
+            results.push({
+              url: `https://filings.xbrl.org${packageRel}`,
+              title: `${opts.companyName} ESEF package ${period} (${country_code})`,
+              snippet: `ESMA ESEF filing package (zip) for ${opts.companyName} period-end ${period}`,
+              source: "r6c-esef-api",
+            });
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  // ── HKEX filings via www1.hkexnews.hk title-search ──────────────────────
+  const isHkListed =
+    country === "hk" || country === "hong kong" || isinCountry === "HK";
+  const isPrudentialPlcPattern = /prudential\s+p?l?c/i.test(opts.companyName);
+  const explicitHkStock = opts.hkStockCode;
+
+  if (isHkListed || isPrudentialPlcPattern || explicitHkStock) {
+    try {
+      // Step 1 — resolve stock code if not provided.
+      // HKEX prefix.do returns JSONP: callback({"more":"1","stockInfo":[{stockId,code,name}]});
+      let stockId = explicitHkStock ? null : null;  // stockId is numeric, distinct from ticker code
+      let stockCode = explicitHkStock ?? null;
+
+      if (!explicitHkStock) {
+        const controller = new AbortController();
+        const to = setTimeout(() => controller.abort(), timeout);
+        const prefixUrl = `https://www1.hkexnews.hk/search/prefix.do?callback=cb&lang=EN&type=A&name=${encodeURIComponent(opts.companyName)}`;
+        const resp = await fetch(prefixUrl, {
+          signal: controller.signal,
+          headers: { "User-Agent": "CompanyIQ-Discovery/1.0" },
+        });
+        clearTimeout(to);
+        if (resp.ok) {
+          const text = await resp.text();
+          const jsonBody = text.replace(/^cb\(/, "").replace(/\);?\s*$/, "");
+          try {
+            const parsed = JSON.parse(jsonBody) as any;
+            const stocks: any[] = Array.isArray(parsed?.stockInfo) ? parsed.stockInfo : [];
+            if (stocks.length > 0) {
+              stockId = stocks[0].stockId ?? null;
+              stockCode = stocks[0].code ?? null;
+            }
+          } catch { /* jsonp parse failed */ }
+        }
+      }
+
+      // Step 2 — pull annual + sustainability reports for the last 2 fiscal years
+      if (stockId) {
+        const currentYear = new Date().getFullYear();
+        const fromDate = `${currentYear - 2}0101`;
+        const toDate = `${currentYear}1231`;
+        const params = new URLSearchParams({
+          sortDir: "0",
+          sortByOptions: "DateTime",
+          category: "0",
+          market: "SEHK",
+          stockId: String(stockId),
+          documentType: "-1",
+          fromDate,
+          toDate,
+          t1code: "40000", // Financial statements / ESG information
+          lang: "EN",
+        });
+        const searchUrl = `https://www1.hkexnews.hk/search/titleSearchServlet.do?${params.toString()}`;
+        const controller = new AbortController();
+        const to = setTimeout(() => controller.abort(), timeout);
+        const resp = await fetch(searchUrl, {
+          signal: controller.signal,
+          headers: { Accept: "application/json", "User-Agent": "CompanyIQ-Discovery/1.0" },
+        });
+        clearTimeout(to);
+        if (resp.ok) {
+          const text = await resp.text();
+          try {
+            const parsed = JSON.parse(text) as any;
+            const rowsStr = parsed?.result ?? "[]";
+            const rows: any[] = JSON.parse(rowsStr);
+            for (const row of rows) {
+              const link = row?.FILE_LINK;
+              if (!link || typeof link !== "string") continue;
+              const title = row?.TITLE ?? "";
+              const dateTime = row?.DATE_TIME ?? "";
+              results.push({
+                url: `https://www.hkexnews.hk${link.startsWith("/") ? link : "/" + link}`,
+                title: `${opts.companyName} ${title} (HKEX ${stockCode})`,
+                snippet: `Hong Kong Exchange primary filing: ${title}, filed ${dateTime}`,
+                source: "r6c-hkex-api",
+              });
+            }
+          } catch { /* json parse failed */ }
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  return results;
 }
 
 /**
