@@ -125,8 +125,16 @@ export function classifyDocumentTier(
 // the filing year and keep only the most recent instances within a validity
 // window (the framework's stated "evidence from the past N years").
 
+// Recency-gate window: keep every periodic filing whose year is >= (now - windowYears + 1).
+// Default 4 years → window covers current year plus 3 back, so a truth doc from 2024 stays
+// alongside 2025 and 2026 disclosures for analyst-cited-evidence evaluation.
 const RECENCY_WINDOW_YEARS = parseInt(process.env.DISCOVERY_RECENCY_WINDOW_YEARS || "4", 10);
-const MAX_PER_PERIODIC_TYPE = parseInt(process.env.DISCOVERY_MAX_PER_PERIODIC_TYPE || "2", 10);
+// Cap only applies to filings OUTSIDE the recency window: we keep the newest
+// OUT_OF_WINDOW_SOFT_CAP historical instances per type as context (previously the cap
+// applied to all filings including in-window ones, which was silently dropping analyst-cited docs).
+const OUT_OF_WINDOW_SOFT_CAP = parseInt(process.env.DISCOVERY_OUT_OF_WINDOW_SOFT_CAP || "2", 10);
+// Legacy env var kept for backwards-compatibility (unused for in-window filings now).
+const MAX_PER_PERIODIC_TYPE = parseInt(process.env.DISCOVERY_MAX_PER_PERIODIC_TYPE || "999", 10);
 
 // Patterns that identify a periodic filing and a normalized "type key" so we can
 // keep the newest N of each type rather than the newest N overall.
@@ -407,16 +415,19 @@ export async function enrichEdgarFilingDates(urls: string[]): Promise<void> {
  */
 export function applyRecencyGate<T extends { url: string; title: string; priority: number }>(
   documents: T[],
-  opts?: { windowYears?: number; maxPerType?: number; nowYear?: number }
+  opts?: { windowYears?: number; maxPerType?: number; outOfWindowSoftCap?: number; nowYear?: number }
 ): { kept: T[]; dropped: T[] } {
   const windowYears = opts?.windowYears ?? RECENCY_WINDOW_YEARS;
-  const maxPerType = opts?.maxPerType ?? MAX_PER_PERIODIC_TYPE;
+  // maxPerType kept for backward-compat but only used as an absolute ceiling; the
+  // primary behaviour is to keep ALL in-window filings + at most `outOfWindowSoftCap`
+  // historical instances per type.
+  const absoluteMaxPerType = opts?.maxPerType ?? MAX_PER_PERIODIC_TYPE;
+  const outOfWindowSoftCap = opts?.outOfWindowSoftCap ?? OUT_OF_WINDOW_SOFT_CAP;
   const nowYear = opts?.nowYear ?? new Date().getFullYear();
   const minYear = nowYear - windowYears + 1; // inclusive lower bound
 
   const kept: T[] = [];
   const dropped: T[] = [];
-  // Group periodic filings by type to keep newest-N-per-type.
   const periodicByType = new Map<string, Array<{ doc: T; year: number | null }>>();
 
   for (const doc of documents) {
@@ -430,23 +441,47 @@ export function applyRecencyGate<T extends { url: string; title: string; priorit
   for (const [ptype, entries] of periodicByType) {
     // Sort newest-first; unknown years sink to the bottom (treated as oldest).
     entries.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+
+    // Split into in-window and out-of-window buckets.
+    const inWindow: Array<{ doc: T; year: number | null }> = [];
+    const outOfWindow: Array<{ doc: T; year: number | null }> = [];
+    for (const entry of entries) {
+      // Unknown year fails open into the in-window bucket (existing behaviour).
+      const withinWindow = entry.year === null || entry.year >= minYear;
+      (withinWindow ? inWindow : outOfWindow).push(entry);
+    }
+
+    // Keep ALL in-window filings up to the absolute ceiling. The ceiling exists
+    // only to prevent runaway corpus growth on issuers with dozens of near-duplicate
+    // filings; it should rarely trigger with default settings.
     let keptOfType = 0;
-    for (const { doc, year } of entries) {
-      const withinWindow = year === null ? true : year >= minYear;
-      if (keptOfType < maxPerType && withinWindow) {
+    for (const { doc, year } of inWindow) {
+      if (keptOfType < absoluteMaxPerType) {
         kept.push(doc);
         keptOfType++;
       } else {
         dropped.push(doc);
-        // v3g (Bug 3): make every recency-gate drop explicit and auditable so a
-        // stale filing that survives (or a fresh one that is wrongly dropped) is
-        // visible in logs rather than silent.
-        const reason = !withinWindow ? `older than window (year=${year ?? "?"} < ${minYear})` : `exceeds max ${maxPerType} per ${ptype}`;
-        console.log(`[recency] DROP ${ptype} (year=${year ?? "?"}): ${reason} — ${doc.url}`);
+        console.log(`[recency] DROP ${ptype} (year=${year ?? "?"}): exceeds absolute cap ${absoluteMaxPerType} per type — ${doc.url}`);
       }
     }
-    if (keptOfType > 0) {
-      console.log(`[recency] kept ${keptOfType}/${entries.length} of type ${ptype} (window>=${minYear}, max ${maxPerType})`);
+
+    // Historical context: keep the newest OUT_OF_WINDOW_SOFT_CAP filings older than the window.
+    // Prevents complete loss of historical context (e.g. 5-year trend analysis) while
+    // still preventing the corpus being dominated by ancient filings.
+    let historicalKept = 0;
+    for (const { doc, year } of outOfWindow) {
+      if (historicalKept < outOfWindowSoftCap) {
+        kept.push(doc);
+        historicalKept++;
+        console.log(`[recency] keep-historical ${ptype} (year=${year ?? "?"}): within soft cap ${outOfWindowSoftCap} — ${doc.url}`);
+      } else {
+        dropped.push(doc);
+        console.log(`[recency] DROP ${ptype} (year=${year ?? "?"}): older than window (< ${minYear}) and beyond soft cap ${outOfWindowSoftCap} — ${doc.url}`);
+      }
+    }
+
+    if (keptOfType + historicalKept > 0) {
+      console.log(`[recency] kept ${keptOfType} in-window + ${historicalKept} historical of type ${ptype} (window>=${minYear})`);
     }
   }
 
@@ -1256,8 +1291,17 @@ function buildDomainQueries(companyName: string, domain: string, framework: Fram
   }
 
   // Topic-lexicon-driven queries (topic-agnostic, works for any framework)
+  // 2026-09-05: raised the slice from 8 to 20 after the topic-lexicon
+  // ordering fix. Previously slice(0, 8) commonly cut off before reaching
+  // the topic-specific terms (Framework 3's cache had "nature" at position 9
+  // and "biodiversity" at position 10, so no nature/biodiversity queries
+  // were being issued for any of the 10 companies). With ordering fixed to
+  // put LLM-derived topic terms first, slice(0, 20) captures the full
+  // topic-specific vocabulary while still bounded on the number of Serper
+  // calls per domain.
+  const LEXICON_SLICE_CAP = 20;
   if (topicPhrases && topicPhrases.length > 0) {
-    const lexiconQueries = topicPhrases.slice(0, 8).map(term => `site:${domain} ${term}`);
+    const lexiconQueries = topicPhrases.slice(0, LEXICON_SLICE_CAP).map(term => `site:${domain} ${term}`);
     for (const q of lexiconQueries) {
       if (!baseQueries.includes(q)) baseQueries.push(q);
     }
@@ -4572,14 +4616,18 @@ async function searchCompanyDocumentsInner(opts: {
         const year = detectFilingYear(d.url, d.title);
         if (year && (bestYear === null || year > bestYear)) bestYear = year;
       }
-      const isCurrent = bestYear !== null && bestYear >= lastYear;
-      // Instruction 16: trigger re-search whenever NOT current (even if no matches)
+      // User preference (2026-09-05): trigger a fresher-version search whenever the
+      // best year is NOT the current year, i.e. even when the newest doc is only 1 year old.
+      // Rationale: for scoring-vs-analyst-cited-evidence evaluation we want to be sure we
+      // haven't missed the year's latest disclosure. The backfill AUGMENTS the corpus —
+      // it never displaces older filings, so this is safe to run aggressively.
+      const isCurrent = bestYear !== null && bestYear >= currentYear;
       if (isCurrent) {
         recencyStatus[docType] = { status: "current", bestYear, researchAttempted: false };
         continue;
       }
-      // Stale or not found: trigger targeted re-search for current year
-      console.log(`[${companyName}] RECENCY-CHECK: "${docType}" bestYear=${bestYear ?? "none"}, searching for ${currentYear}/${lastYear}`);
+      // Not current (missing OR older than currentYear): trigger targeted re-search.
+      console.log(`[${companyName}] RECENCY-CHECK: "${docType}" bestYear=${bestYear ?? "none"} < ${currentYear}, searching for fresher version`);
       recencyStatus[docType] = { status: "stale", bestYear, researchAttempted: true };
       try {
         const reSearchQueries = [
