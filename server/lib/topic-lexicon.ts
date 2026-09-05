@@ -124,41 +124,51 @@ RULES:
   // management, actions, performance, oversight, nature, biodiversity, business" —
   // 8 generic verbs plus 2 topic terms buried at positions 9-10). Result: every
   // domain-anchored `site:X <topic>` query was firing on generic verbs, not nature
-  // terminology. Now we:
-  //   (a) log LLM response details to distinguish empty-vs-bad-JSON,
-  //   (b) ORDER topic-specific LLM terms FIRST so slice(0, N) always includes
-  //       nature/biodiversity even at small N,
-  //   (c) return { source: "llm" } only when the LLM actually contributed terms
-  //       so downstream can distinguish real vs fallback lexicons.
-  let llmTerms: string[] = [];
-  try {
-    const { text } = await completeWithFallback(LEXICON_MODEL, {
-      system: "You generate precise topic-retrieval lexicons. Return only valid JSON.",
-      prompt,
-      json: true,
-      maxTokens: 1200,
-      temperature: 0,
-    });
-    let parsed: any = null;
+  // terminology.
+  //
+  // 2026-09-05 (b): also try openai (gpt-4o-mini) as an explicit second attempt if
+  // deepseek returns zero terms — we've seen DeepSeek silently return empty content
+  // for this exact prompt shape when the framework description is short, and the
+  // completeWithFallback chain doesn't distinguish "returned empty" from "returned
+  // usable output".
+  const attemptLlm = async (providerName: string): Promise<string[]> => {
     try {
-      parsed = JSON.parse(text);
-    } catch (parseErr: any) {
-      console.warn(`[topic-lexicon] LLM returned unparseable JSON for framework ${frameworkId}: ${(text || "").slice(0, 200)}`);
+      const { text } = await completeWithFallback(providerName, {
+        system: "You generate precise topic-retrieval lexicons. Return only valid JSON.",
+        prompt,
+        json: true,
+        maxTokens: 1200,
+        temperature: 0,
+      });
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        console.warn(`[topic-lexicon] ${providerName} returned unparseable JSON for framework ${frameworkId}: ${(text || "").slice(0, 200)}`);
+      }
+      const rawTerms: string[] = Array.isArray(parsed?.terms) ? parsed.terms : [];
+      const cleaned = [...new Set(
+        rawTerms
+          .filter((t: unknown): t is string => typeof t === "string")
+          .map((t) => t.trim().toLowerCase())
+          .filter((t) => t.length >= 2 && t.length <= 60),
+      )].slice(0, MAX_TERMS);
+      if (cleaned.length === 0) {
+        console.warn(`[topic-lexicon] ${providerName} returned zero usable terms for framework ${frameworkId} (raw text len=${(text || "").length})`);
+      } else {
+        console.log(`[topic-lexicon] ${providerName} produced ${cleaned.length} terms for framework ${frameworkId}; first-5: ${cleaned.slice(0, 5).join(", ")}`);
+      }
+      return cleaned;
+    } catch (error: any) {
+      console.warn(`[topic-lexicon] ${providerName} expansion failed for framework ${frameworkId}: ${error?.message || error}`);
+      return [];
     }
-    const rawTerms: string[] = Array.isArray(parsed?.terms) ? parsed.terms : [];
-    llmTerms = [...new Set(
-      rawTerms
-        .filter((t: unknown): t is string => typeof t === "string")
-        .map((t) => t.trim().toLowerCase())
-        .filter((t) => t.length >= 2 && t.length <= 60),
-    )].slice(0, MAX_TERMS);
-    if (llmTerms.length === 0) {
-      console.warn(`[topic-lexicon] LLM returned zero usable terms for framework ${frameworkId} — falling back to generic tokens`);
-    } else {
-      console.log(`[topic-lexicon] LLM produced ${llmTerms.length} terms for framework ${frameworkId}; first-5: ${llmTerms.slice(0, 5).join(", ")}`);
-    }
-  } catch (error: any) {
-    console.warn(`[topic-lexicon] LLM expansion failed for framework ${frameworkId}: ${error?.message || error}`);
+  };
+
+  let llmTerms = await attemptLlm(LEXICON_MODEL);
+  if (llmTerms.length === 0) {
+    console.log(`[topic-lexicon] retrying with openai for framework ${frameworkId}`);
+    llmTerms = await attemptLlm("openai");
   }
 
   // ORDER MATTERS: topic-specific LLM terms first, then deterministic fallback
