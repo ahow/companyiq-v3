@@ -29,6 +29,9 @@ import {
   buildSubpageEnumerationQueries,
   enumerateRegulatorFilings,
   parseSitemapForSubpaths,
+  enumerateTenantDirectory,
+  probeLandingPages,
+  fetchWithGzipFallback,
 } from "./r6-discovery.js";
 import { expandQueries, type QueryExpansionResult } from "./query-expansion.js";
 import {
@@ -3984,6 +3987,69 @@ async function searchCompanyDocumentsInner(opts: {
     }
   } catch (e: any) {
     console.warn(`[${companyName}] R6a IR-platform lane failed: ${e?.message}`);
+  }
+
+  // R7a — Directory-index enumeration for known IR-platform tenants.
+  // For any persisted tenant on a platform that publishes an Apache-style
+  // directory index (currently Q4Inc s24.q4cdn.com), fetch each configured
+  // directoryIndexBase URL and emit any PDF/xhtml files it lists as
+  // candidates. Complementary to R6a (which uses Serper site: queries) —
+  // directory enumeration finds files Google hasn't indexed yet.
+  try {
+    const priorDiag = (opts.companyRow?.discoveryDiagnostics ?? {}) as any;
+    const persistedTenants = Array.isArray(priorDiag.irPlatformTenants)
+      ? priorDiag.irPlatformTenants as { platform: string; tenant: string }[]
+      : [];
+    for (const t of persistedTenants.slice(0, 3)) {
+      try {
+        const urls = await enumerateTenantDirectory({
+          platform: t.platform,
+          tenant: t.tenant,
+          fetchTimeoutMs: 5000,
+          maxUrlsPerBase: 30,
+        });
+        if (urls.length > 0) {
+          console.log(`[${companyName}] R7a directory-enumeration found ${urls.length} files for ${t.platform}:${t.tenant}`);
+          for (const url of urls) {
+            addCandidate({
+              link: url,
+              title: `[${t.platform}-directory-index] ${new URL(url).pathname.split("/").pop() || url}`,
+              snippet: `Enumerated from ${t.platform} directory index for tenant ${t.tenant}`,
+            } as any, "r7a-cdn-directory");
+          }
+        }
+      } catch { /* best-effort per tenant */ }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R7a CDN directory lane failed: ${e?.message}`);
+  }
+
+  // R7d — Corporate landing-page seeding.
+  // Before running the search-heavy lanes, HEAD-probe conventional ESG landing
+  // URL patterns (/sustainability, /esg, /purpose, /global/sustainability, etc)
+  // on the effective domain. Any URL returning 200 with substantive HTML is
+  // emitted as a candidate so R6e link-farming can walk its links.
+  // Bounded: max 5 hits per issuer, 3-second per-fetch timeout.
+  if (effectiveDomain) {
+    try {
+      const hits = await probeLandingPages({
+        effectiveDomain,
+        fetchTimeoutMs: 3000,
+        maxHits: 5,
+      });
+      if (hits.length > 0) {
+        console.log(`[${companyName}] R7d landing-page seeding found ${hits.length} landing pages on ${effectiveDomain}`);
+        for (const h of hits) {
+          addCandidate({
+            link: h.url,
+            title: `[corporate-landing] ${new URL(h.url).pathname}`,
+            snippet: `Landing page probed directly on ${effectiveDomain}`,
+          } as any, "r7d-landing-seed");
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[${companyName}] R7d landing-seed lane failed: ${e?.message}`);
+    }
   }
 
   // R6b — Locale-aware topic-term variants (Spanish sostenibilidad, French durabilité, etc)

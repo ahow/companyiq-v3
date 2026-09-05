@@ -10,6 +10,8 @@ import {
   buildSubpageEnumerationQueries,
   parseSitemapForSubpaths,
   enumerateRegulatorFilings,
+  parseDirectoryIndex,
+  LANDING_PATH_PATTERNS,
 } from "./r6-discovery.js";
 
 describe("R6a — IR-platform tenant extraction", () => {
@@ -318,5 +320,63 @@ describe("R6c v2 — enumerateRegulatorFilings (HKEX)", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(filings.some(f => f.url === "https://www.hkexnews.hk/listedco/listconews/sehk/2025/0409/2025040900057.pdf" && f.source === "r6c-hkex-api")).toBe(true);
     expect(filings.some(f => f.title.includes("Sustainability Report 2024"))).toBe(true);
+  });
+});
+
+describe("R7a — Apache directory-index parsing", () => {
+  it("extracts .pdf leaf files from a standard Apache index", () => {
+    const html = `
+      <html><body>
+        <h1>Index of /382246808/files/doc_downloads/sustainability/2025/</h1>
+        <hr>
+        <pre>
+        <a href="?C=N;O=D">Name</a>  <a href="?C=M;O=A">Modified</a>
+        <a href="/382246808/files/doc_downloads/sustainability/">Parent Directory</a>
+        <a href="newmont-2024-sustainability-report.pdf">newmont-2024-sustainability-report.pdf</a>  05-Feb-2025 09:15
+        <a href="climate-strategy-annex.pdf">climate-strategy-annex.pdf</a>            05-Feb-2025 09:16
+        <a href="tailings-2024/">tailings-2024/</a>                                            05-Feb-2025 09:20
+        </pre>
+      </body></html>`;
+    const base = "https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/";
+    const urls = parseDirectoryIndex(base, html);
+    expect(urls).toContain("https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/newmont-2024-sustainability-report.pdf");
+    expect(urls).toContain("https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/climate-strategy-annex.pdf");
+    expect(urls).toContain("https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/2025/tailings-2024/");
+    // Must skip parent-directory link (path above base)
+    expect(urls).not.toContain("https://s24.q4cdn.com/382246808/files/doc_downloads/sustainability/");
+    // Must skip Apache sort links (start with '?')
+  });
+
+  it("returns [] for empty or malformed HTML", () => {
+    expect(parseDirectoryIndex("https://x.com/", "")).toEqual([]);
+    expect(parseDirectoryIndex("https://x.com/", "<html>garbage</html>")).toEqual([]);
+    expect(parseDirectoryIndex("not-a-url", "<a href=x.pdf>x</a>")).toEqual([]);
+  });
+
+  it("dedupes when the same href appears twice", () => {
+    const html = `<a href="a.pdf">1</a> <a href="./a.pdf">2</a> <a href="/base/a.pdf">3</a>`;
+    const urls = parseDirectoryIndex("https://x.com/base/", html);
+    expect(urls.filter(u => u.endsWith("a.pdf"))).toHaveLength(1);
+  });
+});
+
+describe("R7d — Landing-path patterns", () => {
+  it("includes common corporate ESG landings", () => {
+    expect(LANDING_PATH_PATTERNS).toContain("/sustainability");
+    expect(LANDING_PATH_PATTERNS).toContain("/esg");
+    expect(LANDING_PATH_PATTERNS).toContain("/purpose");
+    expect(LANDING_PATH_PATTERNS).toContain("/global/sustainability");
+    expect(LANDING_PATH_PATTERNS).toContain("/en/sustainability");
+  });
+
+  it("all paths start with /", () => {
+    for (const p of LANDING_PATH_PATTERNS) {
+      expect(p.startsWith("/")).toBe(true);
+    }
+  });
+
+  it("has a bounded size (avoid runaway fetch cost per issuer)", () => {
+    // Cap at ~30; if we exceed, per-issuer probe cost balloons.
+    expect(LANDING_PATH_PATTERNS.length).toBeLessThanOrEqual(35);
   });
 });
