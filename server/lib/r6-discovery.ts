@@ -535,6 +535,36 @@ export function buildSubpageEnumerationQueries(
  */
 export type RegulatorFilingRecord = { url: string; title: string; snippet: string; source: string };
 
+/**
+ * Resolve LEI (Legal Entity Identifier) from ISIN via GLEIF's public API.
+ * Returns null on failure. Time-bounded, error-swallowed.
+ *
+ * GLEIF LEI records include ISIN mappings, so this is a deterministic lookup
+ * with no ranking or NLP involved. Free service, no auth required.
+ */
+export async function resolveLeiFromIsin(isin: string, fetchTimeoutMs = 6000): Promise<string | null> {
+  if (!isin || isin.length < 6) return null;
+  try {
+    const controller = new AbortController();
+    const to = setTimeout(() => controller.abort(), fetchTimeoutMs);
+    // filter[isin]=<ISIN> — URL-encode the brackets
+    const url = `https://api.gleif.org/api/v1/lei-records?filter%5Bisin%5D=${encodeURIComponent(isin)}`;
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: "application/vnd.api+json", "User-Agent": "CompanyIQ-Discovery/1.0" },
+    });
+    clearTimeout(to);
+    if (!resp.ok) return null;
+    const data = await resp.json() as any;
+    const rows: any[] = Array.isArray(data?.data) ? data.data : [];
+    if (rows.length === 0) return null;
+    const lei = rows[0]?.id;
+    return typeof lei === "string" && lei.length === 20 ? lei : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function enumerateRegulatorFilings(opts: {
   companyName: string;
   lei?: string | null;
@@ -548,6 +578,12 @@ export async function enumerateRegulatorFilings(opts: {
 
   const country = (opts.country ?? "").trim().toLowerCase();
   const isinCountry = opts.isin && opts.isin.length >= 2 ? opts.isin.slice(0, 2).toUpperCase() : "";
+
+  // If LEI missing but ISIN available, try GLEIF resolution first.
+  let effectiveLei = opts.lei ?? null;
+  if (!effectiveLei && opts.isin) {
+    effectiveLei = await resolveLeiFromIsin(opts.isin, timeout);
+  }
 
   // ── ESMA ESEF filings via filings.xbrl.org JSON:API ──────────────────────
   const EU_COUNTRIES = new Set([
@@ -564,12 +600,14 @@ export async function enumerateRegulatorFilings(opts: {
     "ES","SE","GB","NO","IS","LI"]);
   const inEu = EU_COUNTRIES.has(country) || EU_ISIN_COUNTRIES.has(isinCountry);
 
-  if (opts.lei && inEu) {
+  if (effectiveLei && inEu) {
     try {
+      console.log(`[R6c-v2] ESEF fetch for ${opts.companyName} LEI=${effectiveLei}`);
       const filter = encodeURIComponent(JSON.stringify([
-        { name: "entity.identifier", op: "eq", val: opts.lei },
+        { name: "entity.identifier", op: "eq", val: effectiveLei },
       ]));
-      const apiUrl = `https://filings.xbrl.org/api/filings?filter=${filter}&page[size]=25`;
+      // page[size] must be URL-encoded (%5B/%5D) or Node's fetch parser rejects the brackets
+      const apiUrl = `https://filings.xbrl.org/api/filings?filter=${filter}&page%5Bsize%5D=25`;
       const controller = new AbortController();
       const to = setTimeout(() => controller.abort(), timeout);
       const resp = await fetch(apiUrl, {
@@ -577,9 +615,13 @@ export async function enumerateRegulatorFilings(opts: {
         headers: { Accept: "application/vnd.api+json", "User-Agent": "CompanyIQ-Discovery/1.0" },
       });
       clearTimeout(to);
+      if (!resp.ok) {
+        console.log(`[R6c-v2] ESEF fetch non-OK status=${resp.status} for ${opts.companyName}`);
+      }
       if (resp.ok) {
         const data = await resp.json() as any;
         const rows: any[] = Array.isArray(data?.data) ? data.data : [];
+        console.log(`[R6c-v2] ESEF returned ${rows.length} filings for ${opts.companyName}`);
         for (const row of rows) {
           const attrs = row?.attributes ?? {};
           const period = attrs.period_end ?? "unknown";
@@ -590,7 +632,7 @@ export async function enumerateRegulatorFilings(opts: {
             results.push({
               url: `https://filings.xbrl.org${reportRel}`,
               title: `${opts.companyName} ESEF filing ${period} (${country_code})`,
-              snippet: `ESMA ESEF primary iXBRL report for ${opts.companyName} (LEI ${opts.lei}) period-end ${period}`,
+              snippet: `ESMA ESEF primary iXBRL report for ${opts.companyName} (LEI ${effectiveLei}) period-end ${period}`,
               source: "r6c-esef-api",
             });
           }
@@ -598,13 +640,13 @@ export async function enumerateRegulatorFilings(opts: {
             results.push({
               url: `https://filings.xbrl.org${packageRel}`,
               title: `${opts.companyName} ESEF package ${period} (${country_code})`,
-              snippet: `ESMA ESEF filing package (zip) for ${opts.companyName} period-end ${period}`,
+              snippet: `ESMA ESEF filing package (zip) for ${opts.companyName} (LEI ${effectiveLei}) period-end ${period}`,
               source: "r6c-esef-api",
             });
           }
         }
       }
-    } catch { /* best-effort */ }
+    } catch (e: any) { console.warn(`[R6c-v2] ESEF fetch failed for ${opts.companyName}: ${e?.message}`); }
   }
 
   // ── HKEX filings via www1.hkexnews.hk title-search ──────────────────────
@@ -615,6 +657,7 @@ export async function enumerateRegulatorFilings(opts: {
 
   if (isHkListed || isPrudentialPlcPattern || explicitHkStock) {
     try {
+      console.log(`[R6c-v2] HKEX enumeration for ${opts.companyName} (isHkListed=${isHkListed}, plcPattern=${isPrudentialPlcPattern}, explicit=${explicitHkStock})`);
       // Step 1 — resolve stock code if not provided.
       // HKEX prefix.do returns JSONP: callback({"more":"1","stockInfo":[{stockId,code,name}]});
       let stockId = explicitHkStock ? null : null;  // stockId is numeric, distinct from ticker code
@@ -631,7 +674,10 @@ export async function enumerateRegulatorFilings(opts: {
         clearTimeout(to);
         if (resp.ok) {
           const text = await resp.text();
-          const jsonBody = text.replace(/^cb\(/, "").replace(/\);?\s*$/, "");
+          // HKEX prefix.do returns JSONP like `callback({...});` regardless of the
+          // callback= param passed. Strip any identifier + '(' at start and trailing
+          // ');' / whitespace at end.
+          const jsonBody = text.replace(/^\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\(/, "").replace(/\)\s*;?\s*$/, "");
           try {
             const parsed = JSON.parse(jsonBody) as any;
             const stocks: any[] = Array.isArray(parsed?.stockInfo) ? parsed.stockInfo : [];
@@ -689,9 +735,12 @@ export async function enumerateRegulatorFilings(opts: {
           } catch { /* json parse failed */ }
         }
       }
-    } catch { /* best-effort */ }
+    } catch (e: any) { console.warn(`[R6c-v2] HKEX fetch failed for ${opts.companyName}: ${e?.message}`); }
   }
 
+  if (results.length > 0) {
+    console.log(`[R6c-v2] enumerateRegulatorFilings returning ${results.length} URLs for ${opts.companyName}`);
+  }
   return results;
 }
 

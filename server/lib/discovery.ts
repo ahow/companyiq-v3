@@ -3932,6 +3932,7 @@ async function searchCompanyDocumentsInner(opts: {
   // regulator APIs (filings.xbrl.org, HKEX titleSearchServlet) to return
   // concrete filing URLs. Best-effort, time-bounded, error-swallowed.
   try {
+    console.log(`[${companyName}] R6c v2 invoking enumerator (lei=${issuerProfile?.lei ?? 'null'}, country=${opts.country ?? 'null'}, isin=${opts.isin ?? 'null'})`);
     const regFilings = await enumerateRegulatorFilings({
       companyName,
       lei: issuerProfile?.lei ?? (opts.companyRow?.lei as string | null) ?? null,
@@ -3939,6 +3940,7 @@ async function searchCompanyDocumentsInner(opts: {
       isin: opts.isin ?? null,
       fetchTimeoutMs: 8000,
     });
+    console.log(`[${companyName}] R6c v2 enumerator returned ${regFilings.length} filings`);
     if (regFilings.length > 0) {
       console.log(`[${companyName}] R6c v2 Enumerated ${regFilings.length} regulator filings (${regFilings.map(r => r.source).join(", ")})`);
       for (const r of regFilings) {
