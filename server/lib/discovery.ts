@@ -3104,15 +3104,33 @@ async function searchCompanyDocumentsInner(opts: {
   // TOPIC-AGNOSTIC: derive (cached) framework topic phrases once so the
   // regulatory/IR/CJK query builders can target the framework's own vocabulary
   // and its synonyms, instead of a hard-coded AI term list.
+  //
+  // 2026-09-05 fix: pass measureTitles so the LLM has enough context to
+  // generate a topic-specific lexicon. Previously discovery.ts called
+  // deriveTopicLexicon without measures, and the LLM (given only the
+  // framework name + description — which for Framework 3 is "Examine the
+  // strength of companies' plans, strategy, management actions, ...")
+  // silently returned zero terms. That triggered the fallback path which
+  // just tokenised the description — producing a useless lexicon of
+  // generic verbs.
   let topicPhrases: string[] = [];
   try {
+    let measureTitles: string[] | undefined;
+    try {
+      const measures = await storage.getFrameworkMeasures(framework.id);
+      measureTitles = measures.map((m: any) => `${m.title}${m.definition ? " \u2014 " + m.definition : ""}`);
+    } catch (mErr: any) {
+      console.warn(`[${companyName}] Failed to load framework measures for lexicon derivation: ${mErr?.message}`);
+    }
     const lex = await deriveTopicLexicon({
       frameworkId: framework.id,
       workspaceId: framework.workspaceId,
       topicDescription: framework.topicDescription,
       frameworkName: framework.name,
+      measureTitles,
     });
     topicPhrases = lex.terms;
+    console.log(`[${companyName}] Topic lexicon (source=${lex.source}): ${topicPhrases.length} terms; first-5: ${topicPhrases.slice(0, 5).join(", ")}`);
   } catch (lexErr: any) {
     console.warn(`[${companyName}] Discovery topic lexicon failed: ${lexErr?.message}`);
   }
@@ -4490,16 +4508,25 @@ async function searchCompanyDocumentsInner(opts: {
   }
   const preGateCandidates = [...protectedDocs, ...cappedUnprotected];
 
-  // Run relevance gate
-  console.log(`[${companyName}] Running relevance gate on ${preGateCandidates.length} candidates`);
-  const accepted = await runRelevanceGate(preGateCandidates, framework, companyName, {
+  // 2026-09-05: bypass the LLM relevance gate for PROTECTED_LANES candidates.
+  // These come from deterministic authoritative APIs (EDGAR submissions, ESEF,
+  // HKEX, cninfo, registry search, pinned) and their titles/URLs often lack
+  // topic vocabulary (e.g. a 20-F filename is `bhp-20240630.htm`), causing the
+  // LLM classifier to reject them for topic irrelevance. The recency gate
+  // still runs on them so historical bloat is still trimmed; and the ranker
+  // still applies. Result: R7c's pinned annual filings survive to the corpus.
+  const gateUnprotected = preGateCandidates.filter(c => !PROTECTED_LANES.includes((c as any).lane || ""));
+  const gateProtected = preGateCandidates.filter(c => PROTECTED_LANES.includes((c as any).lane || ""));
+  console.log(`[${companyName}] Running relevance gate on ${gateUnprotected.length} unprotected candidates (${gateProtected.length} protected bypass gate)`);
+  const gateAcceptedUnprotected = await runRelevanceGate(gateUnprotected, framework, companyName, {
     sector: opts.sector,
     country: opts.country,
     isin: opts.isin,
     domain: effectiveDomain || companyDomain,
   });
+  const accepted = [...gateProtected, ...gateAcceptedUnprotected];
 
-  console.log(`[${companyName}] Gate accepted ${accepted.length} documents`);
+  console.log(`[${companyName}] Gate accepted ${accepted.length} documents (${gateProtected.length} protected + ${gateAcceptedUnprotected.length} unprotected)`);
 
   // Layer A — Recency gate: trim the historical-filing flood so stale, topic-free
   // periodic filings don't dilute the corpus. Keeps newest-N-per-type within the
