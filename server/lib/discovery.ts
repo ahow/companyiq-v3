@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import * as storage from "../storage.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
-import { traceKeep, traceDrop, traceInfo, traceSessionHeader, traceMatches, TRACE_ENABLED } from "./discovery-tracer.js";
+import { traceKeep, traceDrop, traceInfo, traceSessionHeader, traceMatches, TRACE_ENABLED, flushTraceBuffer } from "./discovery-tracer.js";
 import {
   computeRankSignals,
   compareSignals,
@@ -4861,6 +4861,13 @@ async function searchCompanyDocumentsInner(opts: {
     registrySearchSummary: registrySummary.registriesSearched.length > 0 ? registrySummary : undefined,
     queryExpansionResult: queryExpansionResult || undefined,
   };
+
+  // TRACE: flush buffered events to the discovery_trace_events table.
+  // Idempotent-creates the table on first use. Only fires when TRACE_ENABLED.
+  // Best-effort; failure logged but never blocks discovery return.
+  if (TRACE_ENABLED) {
+    await flushTraceBuffer(`${companyName}::${framework.name || framework.id}::${new Date().toISOString().slice(0, 19)}`);
+  }
 
   return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected, issuerProfile };
 }

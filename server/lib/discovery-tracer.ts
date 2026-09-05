@@ -23,6 +23,22 @@ const TRACE_SUBSTRINGS: string[] = rawList
 
 export const TRACE_ENABLED = TRACE_SUBSTRINGS.length > 0;
 
+// In-memory buffer of trace events. Flushed to the discovery_trace_events
+// table at the end of each discovery run (via flushTraceBuffer()).
+// Written to DB so the trace survives across the Railway log-rotation window
+// and is queryable without shell access. Bounded to prevent runaway memory.
+interface TraceRow { ts: number; company: string; stage: string; verdict: string; detail: string; url: string; }
+const traceBuffer: TraceRow[] = [];
+const TRACE_BUFFER_MAX = 10000;
+
+export function getTraceBuffer(): TraceRow[] {
+  return traceBuffer;
+}
+
+export function clearTraceBuffer(): void {
+  traceBuffer.length = 0;
+}
+
 export function traceMatches(url: string): boolean {
   if (!TRACE_ENABLED) return false;
   const lower = (url || "").toLowerCase();
@@ -36,6 +52,9 @@ export function traceEvent(company: string, stage: string, verdict: "KEEP" | "DR
   const tag = verdict === "DROP" ? "\u274c" : verdict === "KEEP" ? "\u2705" : "\u2139\ufe0f";
   // Keep the format machine-parseable so downstream scripts can slice by stage.
   console.log(`[TRACE] ${tag} ${company} | STAGE:${stage} | ${verdict}: ${detail} | ${url}`);
+  if (traceBuffer.length < TRACE_BUFFER_MAX) {
+    traceBuffer.push({ ts: Date.now(), company, stage, verdict, detail, url });
+  }
 }
 
 // Convenience wrappers for common patterns.
@@ -55,4 +74,12 @@ export function traceSessionHeader(company: string, framework: string): void {
   if (!TRACE_ENABLED) return;
   console.log(`[TRACE] ================= ${company} \u00d7 ${framework} =================`);
   console.log(`[TRACE] Tracing ${TRACE_SUBSTRINGS.length} URL substrings: ${TRACE_SUBSTRINGS.join(", ")}`);
+}
+
+// No-op stub kept for the discovery.ts call-site: with the Postgres sink
+// deliberately excluded (per user), the trace lives entirely in the
+// Railway console.log stream. Downstream analysis: pipe the Railway log
+// through /tmp/analyze_trace.mjs.
+export async function flushTraceBuffer(_runLabel: string): Promise<void> {
+  // intentionally empty
 }
