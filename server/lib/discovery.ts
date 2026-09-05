@@ -18,6 +18,16 @@ import { deriveAliases, resolveCompanyFIGI } from "./issuer-resolver.js";
 import { resolveViaFmp, fmpWebsiteToDomain } from "./fmp-resolver.js";
 import { PIPELINE_VERSION } from "./pipeline-version.js";
 import { resolveIssuerProfile, scoreEntityMatch, type IssuerProfile } from "./issuer-profile.js";
+import {
+  extractIRPlatformTenants,
+  buildIRPlatformSeedQueries,
+  buildLocaleTopicQueries,
+  buildRegulatorRepositoryUrls,
+  buildJurisdictionDocTypeQueries,
+  isEsgLandingPage,
+  extractLandingPageLinks,
+  buildSubpageEnumerationQueries,
+} from "./r6-discovery.js";
 import { expandQueries, type QueryExpansionResult } from "./query-expansion.js";
 import {
   buildRegistrySearchTerms,
@@ -3866,6 +3876,171 @@ async function searchCompanyDocumentsInner(opts: {
         for (const r of results) addCandidate(r, "evidence-expansion");
       } catch { /* best-effort */ }
     }
+  }
+
+  // ── R6 Discovery Rules ─────────────────────────────────────────────────────
+  // Six generalised rules to close known false-negative discovery gaps.
+  // See docs/R6-Discovery-Rules-Design-2026-09-05.md for full rationale.
+  // Each rule is framework-agnostic and only ADDS candidates; the existing
+  // pre-gate, provenance filter, and ranking code paths are unchanged.
+
+  // R6a — IR-platform tenant enumeration (Q4Inc s24.q4cdn.com, Investis, ...)
+  // On first run: bootstrap query per known platform to seed tenant discovery.
+  // On subsequent runs: read persisted tenants from discoveryDiagnostics.irPlatformTenants
+  // and issue direct site:cdn/<tenant>/ queries.
+  try {
+    const priorDiag = (opts.companyRow?.discoveryDiagnostics ?? {}) as any;
+    const persistedTenants = Array.isArray(priorDiag.irPlatformTenants)
+      ? priorDiag.irPlatformTenants as { platform: string; tenant: string }[]
+      : [];
+    const irQueries = buildIRPlatformSeedQueries(companyName, persistedTenants, topicPhrases);
+    if (irQueries.length > 0) {
+      console.log(`[${companyName}] R6a Running IR-platform tenant lane (${irQueries.length} queries, ${persistedTenants.length} persisted tenants)`);
+      for (const q of irQueries.slice(0, 12)) {
+        try {
+          const results = await webSearch(q, { num: Math.min(searchDepth, 10) });
+          for (const r of results) addCandidate(r, "r6a-ir-platform");
+        } catch { /* best-effort */ }
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R6a IR-platform lane failed: ${e?.message}`);
+  }
+
+  // R6b — Locale-aware topic-term variants (Spanish sostenibilidad, French durabilité, etc)
+  // Extends the existing localized-topic lane with topic-native ESG vocabulary.
+  try {
+    const localeQueries = buildLocaleTopicQueries(companyName, opts.country, effectiveDomain);
+    if (localeQueries.length > 0) {
+      console.log(`[${companyName}] R6b Running locale-topic lane (${localeQueries.length} queries)`);
+      for (const q of localeQueries.slice(0, 10)) {
+        try {
+          const gl = localeProfile?.gl;
+          const hl = localeProfile?.hl;
+          const results = await webSearch(q, { num: Math.min(searchDepth, 10), ...(gl ? { gl } : {}), ...(hl ? { hl } : {}) });
+          for (const r of results) addCandidate(r, "r6b-locale-topic");
+        } catch { /* best-effort */ }
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R6b locale-topic lane failed: ${e?.message}`);
+  }
+
+  // R6c — Regulator-repository targeting (ESMA ESEF, HKEX, TSX, ASX)
+  // Uses issuer's LEI / country / ISIN to emit direct regulator-URL candidates.
+  try {
+    const regUrls = buildRegulatorRepositoryUrls({
+      companyName,
+      lei: issuerProfile?.lei ?? (opts.companyRow?.lei as string | null) ?? null,
+      country: opts.country ?? null,
+      isin: opts.isin ?? null,
+    });
+    if (regUrls.length > 0) {
+      console.log(`[${companyName}] R6c Adding ${regUrls.length} regulator-repository candidates`);
+      for (const r of regUrls) {
+        addCandidate({ link: r.url, title: r.title, snippet: r.snippet } as any, "r6c-regulator-repo");
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R6c regulator-repo lane failed: ${e?.message}`);
+  }
+
+  // R6d — Jurisdiction-aware framework document types
+  // Adds queries with jurisdiction-specific doc types (CSRD sustainability statement,
+  // UK section 172 statement, US 10-K, JP 有価証券報告書, etc).
+  try {
+    const jurQueries = buildJurisdictionDocTypeQueries({
+      companyName,
+      effectiveDomain,
+      country: opts.country ?? null,
+      isin: opts.isin ?? null,
+    });
+    if (jurQueries.length > 0) {
+      console.log(`[${companyName}] R6d Running jurisdiction doc-type lane (${jurQueries.length} queries)`);
+      for (const q of jurQueries.slice(0, 10)) {
+        try {
+          const results = await webSearch(q, { num: Math.min(searchDepth, 10) });
+          for (const r of results) addCandidate(r, "r6d-jurisdiction-doctype");
+        } catch { /* best-effort */ }
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R6d jurisdiction-doctype lane failed: ${e?.message}`);
+  }
+
+  // R6e — Link-farming from ESG landing pages
+  // For any candidate that looks like an ESG landing page, fetch it and extract
+  // same-origin PDF and DAM links. Bounded to 3 landing pages per company.
+  try {
+    const landingCandidates = allCandidates
+      .filter(c => isEsgLandingPage(c.url))
+      .slice(0, 3);
+    if (landingCandidates.length > 0) {
+      console.log(`[${companyName}] R6e Link-farming ${landingCandidates.length} ESG landing pages`);
+      const R6E_TIMEOUT_MS = 5000;
+      for (const lc of landingCandidates) {
+        try {
+          const controller = new AbortController();
+          const to = setTimeout(() => controller.abort(), R6E_TIMEOUT_MS);
+          const resp = await fetch(lc.url, {
+            signal: controller.signal,
+            headers: { Accept: "text/html,*/*", "User-Agent": "CompanyIQ Discovery/1.0" },
+            redirect: "follow",
+          });
+          clearTimeout(to);
+          if (!resp.ok) continue;
+          const html = await resp.text();
+          if (!html || html.length < 100) continue;
+          const extracted = extractLandingPageLinks({
+            landingUrl: lc.url,
+            html,
+            maxLinks: 40,
+            topicPhrases,
+          });
+          for (const ex of extracted) {
+            addCandidate({ link: ex.url, title: `[link-farm from ${lc.url}] ${ex.hint}`, snippet: `Extracted from ESG landing page ${lc.url}` } as any, "r6e-link-farm");
+          }
+        } catch { /* best-effort */ }
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R6e link-farm lane failed: ${e?.message}`);
+  }
+
+  // R6f — Sub-page enumeration on ESG report URL trees
+  // For any landing page URL, issue `site:<host> inurl:<parent-path> <topic>`
+  // Serper queries so we surface sub-pages that the landing page does NOT link
+  // to explicitly.
+  try {
+    const landingCandidates = allCandidates
+      .filter(c => isEsgLandingPage(c.url))
+      .slice(0, 2);
+    for (const lc of landingCandidates) {
+      const enumQueries = buildSubpageEnumerationQueries(lc.url, topicPhrases);
+      if (enumQueries.length > 0) {
+        console.log(`[${companyName}] R6f Sub-page enumeration for ${lc.url} (${enumQueries.length} queries)`);
+        for (const q of enumQueries.slice(0, 4)) {
+          try {
+            const results = await webSearch(q, { num: Math.min(searchDepth, 10) });
+            for (const r of results) addCandidate(r, "r6f-subpage-enum");
+          } catch { /* best-effort */ }
+        }
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R6f sub-page enum lane failed: ${e?.message}`);
+  }
+
+  // Persist newly-discovered IR-platform tenants for next-run bootstrap (R6a)
+  try {
+    const tenants = extractIRPlatformTenants(allCandidates.map(c => c.url));
+    if (tenants.length > 0) {
+      // Merge into diagBuilder for later persistence into discoveryDiagnostics
+      diagBuilder.setIrPlatformTenants(tenants);
+      console.log(`[${companyName}] R6a persisted IR-platform tenants: ${tenants.map(t => `${t.platform}:${t.tenant}`).join(", ")}`);
+    }
+  } catch (e: any) {
+    console.warn(`[${companyName}] R6a tenant extraction failed: ${e?.message}`);
   }
 
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);

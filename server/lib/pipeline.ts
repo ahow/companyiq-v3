@@ -499,6 +499,18 @@ async function runFetchPhase(opts: {
     // from. This makes future gate reports self-describing.
     if ((discoveryResult as any).retrievalDiagnostics) {
       merged.retrievalDiagnostics = (discoveryResult as any).retrievalDiagnostics;
+      // R6a: also copy IR-platform tenants to top level of discoveryDiagnostics
+      // so buildIRPlatformSeedQueries can read `companyRow.discoveryDiagnostics.irPlatformTenants`
+      // without having to descend into retrievalDiagnostics.
+      const rd = (discoveryResult as any).retrievalDiagnostics;
+      if (rd?.irPlatformTenants && Array.isArray(rd.irPlatformTenants)) {
+        // Union with any previously-persisted tenants so we accumulate across runs.
+        const prior: any[] = Array.isArray(priorDiag.irPlatformTenants) ? priorDiag.irPlatformTenants : [];
+        const merged_tenants = new Map<string, any>();
+        for (const t of prior) if (t?.platform && t?.tenant) merged_tenants.set(`${t.platform}:${t.tenant}`, t);
+        for (const t of rd.irPlatformTenants) if (t?.platform && t?.tenant) merged_tenants.set(`${t.platform}:${t.tenant}`, t);
+        merged.irPlatformTenants = Array.from(merged_tenants.values());
+      }
     }
     if ((discoveryResult as any).issuerProfile) {
       // Only summary fields — do not persist the full profile (large).
