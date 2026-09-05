@@ -129,6 +129,16 @@ export function classifyDocumentTier(
 // Default 4 years → window covers current year plus 3 back, so a truth doc from 2024 stays
 // alongside 2025 and 2026 disclosures for analyst-cited-evidence evaluation.
 const RECENCY_WINDOW_YEARS = parseInt(process.env.DISCOVERY_RECENCY_WINDOW_YEARS || "4", 10);
+
+// Protected lanes: candidates emitted by these deterministic authoritative sources
+// bypass the pre-gate cap, the LLM relevance gate, and the non-US EDGAR cap.
+// They still pass through the recency gate (still trimmed if outside window) and
+// the ranker. Lifted to module scope so pre-gate filters can reference it too.
+const PROTECTED_LANES: readonly string[] = [
+  "registry-search", "pinned", "edgar-submissions",
+  "r6c-esef-api", "r6c-hkex-api",
+  "a-share-cninfo-api",  // parallel to r6c-*: China regulator API
+];
 // Cap only applies to filings OUTSIDE the recency window: we keep the newest
 // OUT_OF_WINDOW_SOFT_CAP historical instances per type as context (previously the cap
 // applied to all filings including in-window ones, which was silently dropping analyst-cited docs).
@@ -4434,18 +4444,29 @@ async function searchCompanyDocumentsInner(opts: {
   // climate/sustainability reports. The 20-F and 1-2 key filings are kept (they have
   // the best priority scores), but the dozens of 6-Ks, FWPs, and prospectus supplements
   // that Google discovers are trimmed. US companies keep all their EDGAR filings.
+  //
+  // 2026-09-05: cap only trims non-protected-lane EDGAR URLs (i.e. Google-discovered
+  // ones); R7c-emitted edgar-submissions candidates are authoritative and must
+  // pass through untrimmed. Otherwise a non-US foreign private issuer like BHP
+  // can lose analyst-cited older 20-Fs (2024) because the cap prefers 6-Ks and
+  // newer filings by priority score.
   const isNonUS = opts.country && !/united states|usa|u\.s\./i.test(opts.country);
   let preCapCandidates = filteredCandidates;
   if (isNonUS) {
     const MAX_EDGAR_FOR_FOREIGN = 5;
-    const edgarCandidates = filteredCandidates.filter(c => /sec\.gov/i.test(c.url));
-    if (edgarCandidates.length > MAX_EDGAR_FOR_FOREIGN) {
-      // Keep only the top-priority EDGAR URLs (by priority score, lower = better)
-      const sortedEdgar = edgarCandidates.sort((a, b) => a.priority - b.priority);
-      const keptEdgar = new Set(sortedEdgar.slice(0, MAX_EDGAR_FOR_FOREIGN).map(c => c.url));
-      const removed = edgarCandidates.length - MAX_EDGAR_FOR_FOREIGN;
-      preCapCandidates = filteredCandidates.filter(c => !/sec\.gov/i.test(c.url) || keptEdgar.has(c.url));
-      console.log(`[${companyName}] EDGAR cap for non-US issuer: kept ${MAX_EDGAR_FOR_FOREIGN} of ${edgarCandidates.length} SEC URLs (removed ${removed})`);
+    const protectedEdgar = filteredCandidates.filter(c => /sec\.gov/i.test(c.url) && PROTECTED_LANES.includes((c as any).lane || ""));
+    const unprotectedEdgar = filteredCandidates.filter(c => /sec\.gov/i.test(c.url) && !PROTECTED_LANES.includes((c as any).lane || ""));
+    if (unprotectedEdgar.length > MAX_EDGAR_FOR_FOREIGN) {
+      const sortedEdgar = unprotectedEdgar.sort((a, b) => a.priority - b.priority);
+      const keptUnprotectedEdgar = new Set(sortedEdgar.slice(0, MAX_EDGAR_FOR_FOREIGN).map(c => c.url));
+      const removed = unprotectedEdgar.length - MAX_EDGAR_FOR_FOREIGN;
+      // Keep: every non-SEC candidate + every protected SEC candidate + the top-N unprotected SEC candidates
+      preCapCandidates = filteredCandidates.filter(c =>
+        !/sec\.gov/i.test(c.url) ||
+        PROTECTED_LANES.includes((c as any).lane || "") ||
+        keptUnprotectedEdgar.has(c.url)
+      );
+      console.log(`[${companyName}] EDGAR cap for non-US issuer: kept ${protectedEdgar.length} protected + ${MAX_EDGAR_FOR_FOREIGN}/${unprotectedEdgar.length} unprotected SEC URLs (removed ${removed})`);
     }
   }
 
@@ -4469,11 +4490,7 @@ async function searchCompanyDocumentsInner(opts: {
   // Regulator-API-derived candidates from R6c v2 (ESEF, HKEX) are authoritative
   // and should never be trimmed by the pre-gate cap. Same for pinned URLs, EDGAR
   // submissions (already deterministic API-sourced), and registry-search.
-  const PROTECTED_LANES = [
-    "registry-search", "pinned", "edgar-submissions",
-    "r6c-esef-api", "r6c-hkex-api",
-    "a-share-cninfo-api",  // parallel to r6c-*: China regulator API
-  ];
+  // (PROTECTED_LANES itself is declared at module scope.)
   const POLICY_RESERVED_SLOTS = 10;
   // R5d policy-family detector — keep aligned with disclosure-document-types.ts
   // RANK_BOOSTS policy-family pattern. Matches on URL or title text so the
