@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import * as storage from "../storage.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
+import { traceKeep, traceDrop, traceInfo, traceSessionHeader, traceMatches, TRACE_ENABLED, flushTraceBuffer } from "./discovery-tracer.js";
 import {
   computeRankSignals,
   compareSignals,
@@ -892,6 +893,7 @@ async function webSearch(
   const cKey = searchCacheKey(query, opts);
   const cached = searchCache.get(cKey);
   if (cached && (Date.now() - cached.ts) < SEARCH_CACHE_TTL_MS) {
+    if (TRACE_ENABLED) traceOnHits(cached.results, query, "[cache]");
     return cached.results;
   }
 
@@ -899,6 +901,7 @@ async function webSearch(
   await acquireSearchToken();
   try {
     const results = await webSearchInner(query, opts);
+    if (TRACE_ENABLED) traceOnHits(results, query, "[live]");
     // Store in cache
     searchCache.set(cKey, { results, ts: Date.now() });
     // Evict stale entries periodically (keep cache bounded)
@@ -911,6 +914,19 @@ async function webSearch(
     return results;
   } finally {
     releaseSearchToken();
+  }
+}
+
+// TRACE helper: called for every search result set; logs any traced URLs
+// with their rank + originating query so we can see which Serper query
+// surfaced them (or whether Serper never surfaced them at all).
+function traceOnHits(results: SearchResult[], query: string, provenance: string): void {
+  if (!TRACE_ENABLED) return;
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (traceMatches(r.link)) {
+      traceInfo("[serper]", `S00.serperHit${provenance}`, r.link, `rank=${i + 1} query="${query}"`);
+    }
   }
 }
 
@@ -3199,14 +3215,19 @@ async function searchCompanyDocumentsInner(opts: {
 
   function addCandidate(result: SearchResult, lane: string) {
     const normUrl = normaliseUrl(result.link);
-    if (seenUrls.has(normUrl)) return;
+    if (seenUrls.has(normUrl)) {
+      traceInfo(companyName, "addCandidate.duplicate", normUrl, `already added; ignoring lane=${lane}`);
+      return;
+    }
     // Hard deny-list filter: block noise URLs before they enter the candidate pool
     if (isUrlDenied(normUrl.toLowerCase())) {
       laneCounts["denied"] = (laneCounts["denied"] || 0) + 1;
+      traceDrop(companyName, "addCandidate.denyList", normUrl, `matched DENY_LIST_DOMAINS`);
       return;
     }
     seenUrls.add(normUrl);
     result.link = normUrl;
+    traceKeep(companyName, "addCandidate.enter", normUrl, `lane=${lane}, title="${(result.title || "").slice(0, 60)}"`);
     const priority = calculatePriority(result.link, result.title, companyDomain || null, framework, topicPhrases);
     allCandidates.push({
       url: result.link,
@@ -4360,6 +4381,9 @@ async function searchCompanyDocumentsInner(opts: {
   // guaranteed to fail fetch — index pages, bare accession-folder URLs, XBRL viewers,
   // and non-primary exhibits (schedule 13G, form 4, etc.).
   const preEdgarFilterCount = allCandidates.length;
+  // TRACE session header once we know which company/framework we're processing
+  traceSessionHeader(companyName, framework.name || `framework:${framework.id}`);
+
   const edgarFiltered = allCandidates.filter(c => {
     const u = c.url.toLowerCase();
     if (!/sec\.gov/.test(u)) return true; // Only filter SEC URLs
@@ -4380,6 +4404,11 @@ async function searchCompanyDocumentsInner(opts: {
   });
   if (edgarFiltered.length < preEdgarFilterCount) {
     console.log(`[${companyName}] EDGAR quality filter removed ${preEdgarFilterCount - edgarFiltered.length} low-quality SEC URLs`);
+  }
+  if (TRACE_ENABLED) {
+    const dropped = allCandidates.filter(c => !edgarFiltered.includes(c));
+    for (const d of dropped) traceDrop(companyName, "S02.edgarQualityFilter", d.url, `low-quality EDGAR shape (index page / bare accession / XBRL viewer / non-primary exhibit / untitled)`);
+    for (const k of edgarFiltered) if (traceMatches(k.url)) traceKeep(companyName, "S02.edgarQualityFilter", k.url, `passed`);
   }
 
   // Fix 4 (Dead-fetch diagnosis): Drop URLs from known-blocked third-party
@@ -4402,6 +4431,11 @@ async function searchCompanyDocumentsInner(opts: {
   });
   if (aggregatorFiltered.length < preAggregatorCount) {
     console.log(`[${companyName}] Aggregator filter removed ${preAggregatorCount - aggregatorFiltered.length} blocked third-party URLs`);
+  }
+  if (TRACE_ENABLED) {
+    const dropped = edgarFiltered.filter(c => !aggregatorFiltered.includes(c));
+    for (const d of dropped) traceDrop(companyName, "S03.aggregatorFilter", d.url, `blocked-aggregator domain`);
+    for (const k of aggregatorFiltered) if (traceMatches(k.url)) traceKeep(companyName, "S03.aggregatorFilter", k.url, `passed`);
   }
 
   const filteredCandidates = aggregatorFiltered.filter(c => {
@@ -4438,6 +4472,11 @@ async function searchCompanyDocumentsInner(opts: {
   if (filteredCandidates.length < allCandidates.length) {
     console.log(`[${companyName}] Pre-gate heuristic removed ${allCandidates.length - filteredCandidates.length} candidates mentioning other companies`);
   }
+  if (TRACE_ENABLED) {
+    const dropped = aggregatorFiltered.filter(c => !filteredCandidates.includes(c));
+    for (const d of dropped) traceDrop(companyName, "S04-05.wrongEntityHeuristic", d.url, `title mentions OTHER company or excluded disambiguation entity`);
+    for (const k of filteredCandidates) if (traceMatches(k.url)) traceKeep(companyName, "S04-05.wrongEntityHeuristic", k.url, `passed`);
+  }
 
   // Fix 2 (Financed Emissions robustness): For non-US companies, cap SEC EDGAR
   // URLs to prevent the dense EDGAR filing set from crowding out the company's own
@@ -4467,6 +4506,16 @@ async function searchCompanyDocumentsInner(opts: {
         keptUnprotectedEdgar.has(c.url)
       );
       console.log(`[${companyName}] EDGAR cap for non-US issuer: kept ${protectedEdgar.length} protected + ${MAX_EDGAR_FOR_FOREIGN}/${unprotectedEdgar.length} unprotected SEC URLs (removed ${removed})`);
+      if (TRACE_ENABLED) {
+        for (const c of unprotectedEdgar) {
+          if (!traceMatches(c.url)) continue;
+          if (keptUnprotectedEdgar.has(c.url)) traceKeep(companyName, "S06.nonUsEdgarCap", c.url, `top-${MAX_EDGAR_FOR_FOREIGN} unprotected by priority=${c.priority}`);
+          else traceDrop(companyName, "S06.nonUsEdgarCap", c.url, `unprotected SEC URL dropped (over cap of ${MAX_EDGAR_FOR_FOREIGN}, priority=${c.priority})`);
+        }
+        for (const c of protectedEdgar) if (traceMatches(c.url)) traceKeep(companyName, "S06.nonUsEdgarCap", c.url, `protected (lane=${(c as any).lane}), exempt from cap`);
+      }
+    } else if (TRACE_ENABLED) {
+      for (const c of filteredCandidates) if (/sec\.gov/i.test(c.url) && traceMatches(c.url)) traceKeep(companyName, "S06.nonUsEdgarCap", c.url, `not applied (under cap threshold)`);
     }
   }
 
@@ -4524,6 +4573,18 @@ async function searchCompanyDocumentsInner(opts: {
     console.log(`[${companyName}] R5d: reserved ${policyDocs.length}/${POLICY_RESERVED_SLOTS} policy-family slot(s) before pre-gate cap (${remainingSlots} slots left for non-policy docs)`);
   }
   const preGateCandidates = [...protectedDocs, ...cappedUnprotected];
+  if (TRACE_ENABLED) {
+    const preGateSet = new Set(preGateCandidates.map(c => c.url));
+    for (const c of preCapCandidates) {
+      if (!traceMatches(c.url)) continue;
+      if (preGateSet.has(c.url)) {
+        const isProt = PROTECTED_LANES.includes((c as any).lane || "");
+        traceKeep(companyName, "S07.preGateCap", c.url, isProt ? `protected (lane=${(c as any).lane}), exempt from cap` : `passed unprotected cap (priority=${c.priority})`);
+      } else {
+        traceDrop(companyName, "S07.preGateCap", c.url, `over PRE_GATE_CAP=${PRE_GATE_CAP} for unprotected lane=${(c as any).lane}, priority=${c.priority}`);
+      }
+    }
+  }
 
   // 2026-09-05: bypass the LLM relevance gate for PROTECTED_LANES candidates.
   // These come from deterministic authoritative APIs (EDGAR submissions, ESEF,
@@ -4542,6 +4603,15 @@ async function searchCompanyDocumentsInner(opts: {
     domain: effectiveDomain || companyDomain,
   });
   const accepted = [...gateProtected, ...gateAcceptedUnprotected];
+  if (TRACE_ENABLED) {
+    for (const c of gateProtected) if (traceMatches(c.url)) traceKeep(companyName, "S08.llmGate", c.url, `protected (lane=${(c as any).lane}), bypass gate`);
+    const acceptedSet = new Set(gateAcceptedUnprotected.map(c => c.url));
+    for (const c of gateUnprotected) {
+      if (!traceMatches(c.url)) continue;
+      if (acceptedSet.has(c.url)) traceKeep(companyName, "S08.llmGate", c.url, `LLM accepted`);
+      else traceDrop(companyName, "S08.llmGate", c.url, `LLM rejected as topic-irrelevant`);
+    }
+  }
 
   console.log(`[${companyName}] Gate accepted ${accepted.length} documents (${gateProtected.length} protected + ${gateAcceptedUnprotected.length} unprotected)`);
 
@@ -4562,6 +4632,14 @@ async function searchCompanyDocumentsInner(opts: {
     console.log(`[${companyName}] Recency gate dropped ${recencyDropped.length} stale/duplicate periodic filings (kept ${recencyKept.length})`);
   }
   const recencyFiltered = recencyKept;
+  if (TRACE_ENABLED) {
+    const keptSet = new Set(recencyKept.map(c => c.url));
+    for (const c of accepted) {
+      if (!traceMatches(c.url)) continue;
+      if (keptSet.has(c.url)) traceKeep(companyName, "S09.recencyGate", c.url, `in window or historical soft-cap`);
+      else traceDrop(companyName, "S09.recencyGate", c.url, `older than window OR exceeded historical soft cap`);
+    }
+  }
 
   // ── v3l RANKING (CORPUS_DRIFT_REDESIGN_V3) ──────────────────────────────────
   // Replaces the old integer tier-boost + `.sort((a,b)=>a.priority-b.priority)`
@@ -4593,6 +4671,14 @@ async function searchCompanyDocumentsInner(opts: {
   if (collapse.collapsedGroups > 0) {
     console.log(`[${companyName}] Near-dup collapse: removed ${collapse.removed.length} docs across ${collapse.collapsedGroups} groups`);
   }
+  if (TRACE_ENABLED) {
+    const keptSet = new Set(collapse.kept.map(c => c.url));
+    for (const c of recencyFiltered) {
+      if (!traceMatches(c.url)) continue;
+      if (keptSet.has(c.url)) traceKeep(companyName, "S10.nearDupCollapse", c.url, `winner of its collapse group (or standalone)`);
+      else traceDrop(companyName, "S10.nearDupCollapse", c.url, `collapsed as near-duplicate; another doc in same (form,year,titleStem) group won by (authorityClass, fineScore, urlHash)`);
+    }
+  }
 
   // Caution C: best-effort, bounded HEAD size probe — ONLY on the post-collapse
   // set (never the pre-gate 180), tight timeout, 0-byte fallback. Off by default
@@ -4621,6 +4707,14 @@ async function searchCompanyDocumentsInner(opts: {
   const rankerDiagnostics = computeRankerDiagnostics(rankedKept);
 
   const finalDocs = rankedKept.slice(0, MAX_DOCS_RETURNED).map((r) => r.doc);
+  if (TRACE_ENABLED) {
+    const finalSet = new Set(finalDocs.map(d => d.url));
+    for (const { doc, signals } of rankedKept) {
+      if (!traceMatches(doc.url)) continue;
+      if (finalSet.has(doc.url)) traceKeep(companyName, "S11.rankerCap", doc.url, `in top-${MAX_DOCS_RETURNED} (authorityClass=${(signals as any).authorityClass ?? "?"}, fineScore=${((signals as any).fineScore ?? 0).toFixed(2)})`);
+      else traceDrop(companyName, "S11.rankerCap", doc.url, `outside top-${MAX_DOCS_RETURNED} (authorityClass=${(signals as any).authorityClass ?? "?"}, fineScore=${((signals as any).fineScore ?? 0).toFixed(2)})`);
+    }
+  }
 
   // Compute coverage metric
   const coverageSignals = {
@@ -4767,6 +4861,13 @@ async function searchCompanyDocumentsInner(opts: {
     registrySearchSummary: registrySummary.registriesSearched.length > 0 ? registrySummary : undefined,
     queryExpansionResult: queryExpansionResult || undefined,
   };
+
+  // TRACE: flush buffered events to the discovery_trace_events table.
+  // Idempotent-creates the table on first use. Only fires when TRACE_ENABLED.
+  // Best-effort; failure logged but never blocks discovery return.
+  if (TRACE_ENABLED) {
+    await flushTraceBuffer(`${companyName}::${framework.name || framework.id}::${new Date().toISOString().slice(0, 19)}`);
+  }
 
   return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected, issuerProfile };
 }

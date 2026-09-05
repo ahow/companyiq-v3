@@ -1,0 +1,1415 @@
+{
+  "11": {
+    "per_measure": {
+      "2.3-nature-risks": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "No",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "2.2-nature-impacts": {
+        "yesCount": 8,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Yes",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.1-board-oversight": {
+        "yesCount": 3,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "3.4-integration-erm": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "3.6-scenario-analysis": {
+        "yesCount": 1,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "No",
+          "13": "No",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.5-priority-locations": {
+        "yesCount": 3,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Partial",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.7-strategic-response": {
+        "yesCount": 6,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Partial",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Partial",
+          "15": "Yes",
+          "16": "Partial",
+          "17": "No",
+          "18": "Yes",
+          "19": "Yes"
+        }
+      },
+      "2.1-nature-dependencies": {
+        "yesCount": 7,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Partial",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.3-governance-processes": {
+        "yesCount": 3,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "No",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "1.4-integration-strategy": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Partial",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Partial",
+          "19": "Partial"
+        }
+      },
+      "1.6-remuneration-linkage": {
+        "yesCount": 1,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "No",
+          "13": "Yes",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.4-nature-opportunities": {
+        "yesCount": 6,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "No",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Partial",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "Yes"
+        }
+      },
+      "3.5-mitigation-hierarchy": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.3-tnfd-leap-application": {
+        "yesCount": 3,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "No",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.5-stakeholder-engagement": {
+        "yesCount": 0,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "Partial",
+          "13": "Partial",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.8-value-chain-assessment": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Partial",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "Partial",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.1-identification-process": {
+        "yesCount": 7,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Partial",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.2-prioritization-approach": {
+        "yesCount": 6,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.2-management-responsibility": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "No",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.6-business-model-resilience": {
+        "yesCount": 1,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "No",
+          "13": "No",
+          "14": "Partial",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "Partial",
+          "19": "No"
+        }
+      }
+    },
+    "per_company": [
+      {
+        "total": 20,
+        "noCount": 12,
+        "yesRate": 0.4,
+        "yesCount": 8,
+        "companyId": 1,
+        "companyName": "Nestl\u00e9",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 6,
+        "yesRate": 0.6,
+        "yesCount": 12,
+        "companyId": 11,
+        "companyName": "Unilever",
+        "partialCount": 2
+      },
+      {
+        "total": 20,
+        "noCount": 4,
+        "yesRate": 0.65,
+        "yesCount": 13,
+        "companyId": 12,
+        "companyName": "BHP Group",
+        "partialCount": 3
+      },
+      {
+        "total": 20,
+        "noCount": 5,
+        "yesRate": 0.7,
+        "yesCount": 14,
+        "companyId": 13,
+        "companyName": "Kering",
+        "partialCount": 1
+      },
+      {
+        "total": 20,
+        "noCount": 7,
+        "yesRate": 0.5,
+        "yesCount": 10,
+        "companyId": 14,
+        "companyName": "Walmart",
+        "partialCount": 3
+      },
+      {
+        "total": 20,
+        "noCount": 9,
+        "yesRate": 0.55,
+        "yesCount": 11,
+        "companyId": 15,
+        "companyName": "Samsung Electronics",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 15,
+        "yesRate": 0.05,
+        "yesCount": 1,
+        "companyId": 16,
+        "companyName": "Banco Santander",
+        "partialCount": 4
+      },
+      {
+        "total": 20,
+        "noCount": 20,
+        "yesRate": 0,
+        "yesCount": 0,
+        "companyId": 17,
+        "companyName": "Ambev",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 8,
+        "yesRate": 0.5,
+        "yesCount": 10,
+        "companyId": 18,
+        "companyName": "Newmont Corporation",
+        "partialCount": 2
+      },
+      {
+        "total": 20,
+        "noCount": 17,
+        "yesRate": 0.1,
+        "yesCount": 2,
+        "companyId": 19,
+        "companyName": "Prudential plc",
+        "partialCount": 1
+      }
+    ],
+    "robustness": {
+      "criteria": [
+        {
+          "id": "discrimination",
+          "label": "Discrimination",
+          "detail": "The framework should score known disclosers materially higher than peripheral companies. A small gap means the measures are firing on noise rather than substantive disclosure.",
+          "passed": true,
+          "observed": "signal 60% vs edge 21% = 39pp gap",
+          "threshold": "\u2265 25pp gap"
+        },
+        {
+          "id": "no-dead-measures",
+          "label": "No dead measures",
+          "detail": "Measures that never fire waste budget and often signal over-narrow criteria. A handful is expected (peripheral topics for peripheral companies), but many indicate the framework is mis-tuned.",
+          "passed": true,
+          "observed": "1/20 = 5%",
+          "threshold": "< 20% of measures"
+        },
+        {
+          "id": "no-universal-measures",
+          "label": "No universal measures",
+          "detail": "Measures that fire on every company (including peripheral ones) are too broad. They match adjacent-topic noise and destroy signal-vs-edge discrimination.",
+          "passed": true,
+          "observed": "0/20 = 0%",
+          "threshold": "< 10% of measures"
+        },
+        {
+          "id": "calibration",
+          "label": "Calibration",
+          "detail": "Observed Yes rates should be broadly consistent with the framework author's expectations. Large deviations suggest either the measure is mis-phrased or the expected_yes_rate needs recalibrating.",
+          "passed": false,
+          "observed": "4/7 = 57%",
+          "threshold": "\u2265 75% of measures within 2\u00d7 of expected"
+        },
+        {
+          "id": "no-contamination",
+          "label": "No contamination cluster",
+          "detail": "Yes verdicts drawn from adjacent-topic sections or flipped by context expansion are unreliable signals. A high rate indicates measures are matching topic-adjacent noise.",
+          "passed": true,
+          "observed": "0/81 = 0.0%",
+          "threshold": "< 10% of Yes verdicts flagged"
+        },
+        {
+          "id": "distribution-shape",
+          "label": "Distribution shape",
+          "detail": "A well-calibrated framework separates leaders from laggards. Everyone scoring in the middle means the framework is not discriminating; everyone at the same extreme means the framework is uniformly too strict or too lenient.",
+          "passed": true,
+          "observed": "6 company(ies) \u2265 50%, 3 company(ies) \u2264 15%",
+          "threshold": "\u2265 1 company each at both ends"
+        }
+      ],
+      "allPassed": false,
+      "totalCount": 6,
+      "passedCount": 5
+    }
+  },
+  "12": {
+    "per_measure": {
+      "2.3-nature-risks": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "No",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Partial",
+          "19": "Partial"
+        }
+      },
+      "2.2-nature-impacts": {
+        "yesCount": 8,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Yes",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.1-board-oversight": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "3.4-integration-erm": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "3.6-scenario-analysis": {
+        "yesCount": 1,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "No",
+          "13": "No",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.5-priority-locations": {
+        "yesCount": 3,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "No",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.7-strategic-response": {
+        "yesCount": 9,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Yes",
+          "17": "No",
+          "18": "Yes",
+          "19": "Yes"
+        }
+      },
+      "2.1-nature-dependencies": {
+        "yesCount": 8,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Yes",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.3-governance-processes": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "1.4-integration-strategy": {
+        "yesCount": 6,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Yes",
+          "17": "No",
+          "18": "No",
+          "19": "Partial"
+        }
+      },
+      "1.6-remuneration-linkage": {
+        "yesCount": 1,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "No",
+          "13": "Yes",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.4-nature-opportunities": {
+        "yesCount": 6,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "No",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "Yes",
+          "17": "No",
+          "18": "No",
+          "19": "Yes"
+        }
+      },
+      "3.5-mitigation-hierarchy": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.3-tnfd-leap-application": {
+        "yesCount": 2,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "No",
+          "13": "No",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.5-stakeholder-engagement": {
+        "yesCount": 1,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "Partial",
+          "13": "Yes",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.8-value-chain-assessment": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Partial",
+          "13": "Yes",
+          "14": "Partial",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.1-identification-process": {
+        "yesCount": 8,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Yes",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.2-prioritization-approach": {
+        "yesCount": 6,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.2-management-responsibility": {
+        "yesCount": 3,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "No",
+          "14": "Yes",
+          "15": "Partial",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.6-business-model-resilience": {
+        "yesCount": 2,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "No",
+          "13": "No",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      }
+    },
+    "per_company": [
+      {
+        "total": 20,
+        "noCount": 12,
+        "yesRate": 0.4,
+        "yesCount": 8,
+        "companyId": 1,
+        "companyName": "Nestl\u00e9",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 5,
+        "yesRate": 0.75,
+        "yesCount": 15,
+        "companyId": 11,
+        "companyName": "Unilever",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 5,
+        "yesRate": 0.65,
+        "yesCount": 13,
+        "companyId": 12,
+        "companyName": "BHP Group",
+        "partialCount": 2
+      },
+      {
+        "total": 20,
+        "noCount": 5,
+        "yesRate": 0.75,
+        "yesCount": 15,
+        "companyId": 13,
+        "companyName": "Kering",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 7,
+        "yesRate": 0.6,
+        "yesCount": 12,
+        "companyId": 14,
+        "companyName": "Walmart",
+        "partialCount": 1
+      },
+      {
+        "total": 20,
+        "noCount": 8,
+        "yesRate": 0.55,
+        "yesCount": 11,
+        "companyId": 15,
+        "companyName": "Samsung Electronics",
+        "partialCount": 1
+      },
+      {
+        "total": 20,
+        "noCount": 14,
+        "yesRate": 0.3,
+        "yesCount": 6,
+        "companyId": 16,
+        "companyName": "Banco Santander",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 20,
+        "yesRate": 0,
+        "yesCount": 0,
+        "companyId": 17,
+        "companyName": "Ambev",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 11,
+        "yesRate": 0.4,
+        "yesCount": 8,
+        "companyId": 18,
+        "companyName": "Newmont Corporation",
+        "partialCount": 1
+      },
+      {
+        "total": 20,
+        "noCount": 16,
+        "yesRate": 0.1,
+        "yesCount": 2,
+        "companyId": 19,
+        "companyName": "Prudential plc",
+        "partialCount": 2
+      }
+    ],
+    "robustness": {
+      "criteria": [
+        {
+          "id": "discrimination",
+          "label": "Discrimination",
+          "detail": "The framework should score known disclosers materially higher than peripheral companies. A small gap means the measures are firing on noise rather than substantive disclosure.",
+          "passed": true,
+          "observed": "signal 66% vs edge 24% = 42pp gap",
+          "threshold": "\u2265 25pp gap"
+        },
+        {
+          "id": "no-dead-measures",
+          "label": "No dead measures",
+          "detail": "Measures that never fire waste budget and often signal over-narrow criteria. A handful is expected (peripheral topics for peripheral companies), but many indicate the framework is mis-tuned.",
+          "passed": true,
+          "observed": "0/20 = 0%",
+          "threshold": "< 20% of measures"
+        },
+        {
+          "id": "no-universal-measures",
+          "label": "No universal measures",
+          "detail": "Measures that fire on every company (including peripheral ones) are too broad. They match adjacent-topic noise and destroy signal-vs-edge discrimination.",
+          "passed": true,
+          "observed": "0/20 = 0%",
+          "threshold": "< 10% of measures"
+        },
+        {
+          "id": "calibration",
+          "label": "Calibration",
+          "detail": "Observed Yes rates should be broadly consistent with the framework author's expectations. Large deviations suggest either the measure is mis-phrased or the expected_yes_rate needs recalibrating.",
+          "passed": false,
+          "observed": "2/7 = 29%",
+          "threshold": "\u2265 75% of measures within 2\u00d7 of expected"
+        },
+        {
+          "id": "no-contamination",
+          "label": "No contamination cluster",
+          "detail": "Yes verdicts drawn from adjacent-topic sections or flipped by context expansion are unreliable signals. A high rate indicates measures are matching topic-adjacent noise.",
+          "passed": true,
+          "observed": "0/90 = 0.0%",
+          "threshold": "< 10% of Yes verdicts flagged"
+        },
+        {
+          "id": "distribution-shape",
+          "label": "Distribution shape",
+          "detail": "A well-calibrated framework separates leaders from laggards. Everyone scoring in the middle means the framework is not discriminating; everyone at the same extreme means the framework is uniformly too strict or too lenient.",
+          "passed": true,
+          "observed": "5 company(ies) \u2265 50%, 2 company(ies) \u2264 15%",
+          "threshold": "\u2265 1 company each at both ends"
+        }
+      ],
+      "allPassed": false,
+      "totalCount": 6,
+      "passedCount": 5
+    }
+  },
+  "13": {
+    "per_measure": {
+      "2.3-nature-risks": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "No",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Partial",
+          "19": "No"
+        }
+      },
+      "2.2-nature-impacts": {
+        "yesCount": 8,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Yes",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.1-board-oversight": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "3.4-integration-erm": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "3.6-scenario-analysis": {
+        "yesCount": 1,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "No",
+          "13": "No",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.5-priority-locations": {
+        "yesCount": 3,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Partial",
+          "11": "Yes",
+          "12": "No",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.7-strategic-response": {
+        "yesCount": 8,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "Yes"
+        }
+      },
+      "2.1-nature-dependencies": {
+        "yesCount": 7,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.3-governance-processes": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Partial",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "1.4-integration-strategy": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "1.6-remuneration-linkage": {
+        "yesCount": 2,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "No",
+          "13": "Yes",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.4-nature-opportunities": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "Yes"
+        }
+      },
+      "3.5-mitigation-hierarchy": {
+        "yesCount": 4,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.3-tnfd-leap-application": {
+        "yesCount": 2,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "No",
+          "13": "No",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.5-stakeholder-engagement": {
+        "yesCount": 0,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "No",
+          "12": "No",
+          "13": "No",
+          "14": "No",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.8-value-chain-assessment": {
+        "yesCount": 5,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "No",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.1-identification-process": {
+        "yesCount": 8,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "Yes",
+          "15": "Yes",
+          "16": "Yes",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "3.2-prioritization-approach": {
+        "yesCount": 6,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Yes",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "Yes",
+          "14": "No",
+          "15": "Yes",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      },
+      "1.2-management-responsibility": {
+        "yesCount": 3,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "No",
+          "11": "Yes",
+          "12": "Yes",
+          "13": "No",
+          "14": "Yes",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "No",
+          "19": "No"
+        }
+      },
+      "2.6-business-model-resilience": {
+        "yesCount": 2,
+        "totalCount": 10,
+        "verdictsByCompany": {
+          "1": "Partial",
+          "11": "Yes",
+          "12": "No",
+          "13": "No",
+          "14": "Partial",
+          "15": "No",
+          "16": "No",
+          "17": "No",
+          "18": "Yes",
+          "19": "No"
+        }
+      }
+    },
+    "per_company": [
+      {
+        "total": 20,
+        "noCount": 10,
+        "yesRate": 0.35,
+        "yesCount": 7,
+        "companyId": 1,
+        "companyName": "Nestl\u00e9",
+        "partialCount": 3
+      },
+      {
+        "total": 20,
+        "noCount": 4,
+        "yesRate": 0.8,
+        "yesCount": 16,
+        "companyId": 11,
+        "companyName": "Unilever",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 7,
+        "yesRate": 0.65,
+        "yesCount": 13,
+        "companyId": 12,
+        "companyName": "BHP Group",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 6,
+        "yesRate": 0.7,
+        "yesCount": 14,
+        "companyId": 13,
+        "companyName": "Kering",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 8,
+        "yesRate": 0.55,
+        "yesCount": 11,
+        "companyId": 14,
+        "companyName": "Walmart",
+        "partialCount": 1
+      },
+      {
+        "total": 20,
+        "noCount": 8,
+        "yesRate": 0.6,
+        "yesCount": 12,
+        "companyId": 15,
+        "companyName": "Samsung Electronics",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 18,
+        "yesRate": 0.1,
+        "yesCount": 2,
+        "companyId": 16,
+        "companyName": "Banco Santander",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 20,
+        "yesRate": 0,
+        "yesCount": 0,
+        "companyId": 17,
+        "companyName": "Ambev",
+        "partialCount": 0
+      },
+      {
+        "total": 20,
+        "noCount": 9,
+        "yesRate": 0.5,
+        "yesCount": 10,
+        "companyId": 18,
+        "companyName": "Newmont Corporation",
+        "partialCount": 1
+      },
+      {
+        "total": 20,
+        "noCount": 18,
+        "yesRate": 0.1,
+        "yesCount": 2,
+        "companyId": 19,
+        "companyName": "Prudential plc",
+        "partialCount": 0
+      }
+    ],
+    "robustness": {
+      "criteria": [
+        {
+          "id": "discrimination",
+          "label": "Discrimination",
+          "detail": "The framework should score known disclosers materially higher than peripheral companies. A small gap means the measures are firing on noise rather than substantive disclosure.",
+          "passed": true,
+          "observed": "signal 66% vs edge 21% = 45pp gap",
+          "threshold": "\u2265 25pp gap"
+        },
+        {
+          "id": "no-dead-measures",
+          "label": "No dead measures",
+          "detail": "Measures that never fire waste budget and often signal over-narrow criteria. A handful is expected (peripheral topics for peripheral companies), but many indicate the framework is mis-tuned.",
+          "passed": true,
+          "observed": "1/20 = 5%",
+          "threshold": "< 20% of measures"
+        },
+        {
+          "id": "no-universal-measures",
+          "label": "No universal measures",
+          "detail": "Measures that fire on every company (including peripheral ones) are too broad. They match adjacent-topic noise and destroy signal-vs-edge discrimination.",
+          "passed": true,
+          "observed": "0/20 = 0%",
+          "threshold": "< 10% of measures"
+        },
+        {
+          "id": "calibration",
+          "label": "Calibration",
+          "detail": "Observed Yes rates should be broadly consistent with the framework author's expectations. Large deviations suggest either the measure is mis-phrased or the expected_yes_rate needs recalibrating.",
+          "passed": false,
+          "observed": "3/7 = 43%",
+          "threshold": "\u2265 75% of measures within 2\u00d7 of expected"
+        },
+        {
+          "id": "no-contamination",
+          "label": "No contamination cluster",
+          "detail": "Yes verdicts drawn from adjacent-topic sections or flipped by context expansion are unreliable signals. A high rate indicates measures are matching topic-adjacent noise.",
+          "passed": true,
+          "observed": "0/87 = 0.0%",
+          "threshold": "< 10% of Yes verdicts flagged"
+        },
+        {
+          "id": "distribution-shape",
+          "label": "Distribution shape",
+          "detail": "A well-calibrated framework separates leaders from laggards. Everyone scoring in the middle means the framework is not discriminating; everyone at the same extreme means the framework is uniformly too strict or too lenient.",
+          "passed": true,
+          "observed": "6 company(ies) \u2265 50%, 3 company(ies) \u2264 15%",
+          "threshold": "\u2265 1 company each at both ends"
+        }
+      ],
+      "allPassed": false,
+      "totalCount": 6,
+      "passedCount": 5
+    }
+  }
+}

@@ -37,6 +37,7 @@ import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type Analysi
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
 import { classifyProvenance, provenanceToSourceType, type IrTenantBinding } from "./provenance.js";
+import { traceKeep, traceDrop, traceInfo, traceMatches, TRACE_ENABLED } from "./discovery-tracer.js";
 import { deriveAliases } from "./issuer-resolver.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
@@ -1460,8 +1461,10 @@ async function runAnalyzePhase(opts: {
       }
       // Excluded from the analyzer pack. Log at info level so it's traceable.
       console.log(`[${companyName}] U17 excluded third-party doc ${doc.id}: ${doc.url} (${prov.reason})`);
+      if (TRACE_ENABLED && traceMatches(doc.url)) traceDrop(companyName, "S14.u17ProvenanceFilter", doc.url, `content-time classifier flagged third_party: ${prov.reason}`);
       continue;
     }
+    if (TRACE_ENABLED && traceMatches(doc.url)) traceKeep(companyName, "S14.u17ProvenanceFilter", doc.url, `provenance=${prov.provenance}, kept for evidence pack`);
     documentTexts.push(doc.content);
     documentUrls.push(doc.url);
     documentTitles.push(doc.title || doc.url);
