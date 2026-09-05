@@ -2604,7 +2604,9 @@ function calculatePriority(
     "tietopalvelu.ytj.fi", "zefix.ch", "core.cro.ie", "kbopub.economie.fgov.be",
     "registradores.org", "registroimprese.it", "kvk.nl", "handelsregister.de",
     "e-justice.europa.eu", "sedarplus.ca", "connectonline.asic.gov.au",
-    "asx.com.au", "www1.hkexnews.hk", "disclosure2.edinet-fsa.go.jp",
+    "asx.com.au", "www1.hkexnews.hk", "www.hkexnews.hk", "hkexnews.hk",
+    "filings.xbrl.org",  // R6c v2: ESMA ESEF filings repository
+    "disclosure2.edinet-fsa.go.jp",
     "release.tdnet.info", "kind.krx.co.kr", "mops.twse.com.tw",
     "sgx.com", "bseindia.com", "nseindia.com", "sebi.gov.in",
     "cninfo.com.cn", "sse.com.cn", "gsxt.gov.cn", "maya.tase.co.il",
