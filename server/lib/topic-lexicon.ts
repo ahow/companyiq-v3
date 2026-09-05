@@ -75,6 +75,14 @@ export async function deriveTopicLexicon(opts: {
   const { frameworkId, workspaceId, topicDescription, frameworkName, measureTitles } = opts;
   const settingKey = `${LEXICON_SETTING_PREFIX}${frameworkId}`;
 
+  // Compute the deterministic fallback tokens up-front so we can compare
+  // against a cached lexicon (see cache staleness check below).
+  const topic = (topicDescription || "").trim();
+  const name = (frameworkName || "").trim();
+  const measuresBlock = (measureTitles || []).slice(0, 40).join("\n- ");
+  const fallback = [...new Set([...fallbackTokens(topic), ...fallbackTokens(name)])].slice(0, MAX_TERMS);
+  const fallbackSet = new Set(fallback);
+
   // 1) Cache check (workspace_settings).
   try {
     const settings = await storage.getSettings(workspaceId);
@@ -82,17 +90,24 @@ export async function deriveTopicLexicon(opts: {
     if (cachedRaw) {
       const parsed = JSON.parse(cachedRaw);
       if (Array.isArray(parsed?.terms) && parsed.terms.length > 0) {
-        return { terms: parsed.terms, source: "cache" };
+        // 2026-09-05 fix: detect fallback-only caches (cases where the LLM had
+        // failed on the previous call so the cache is just the framework's
+        // description tokens — generic verbs like "examine", "strength", ...).
+        // Force a re-derivation to try the LLM again. Definition: the cached
+        // term set is a subset (or equal) of the deterministic fallback tokens.
+        const cachedTerms: string[] = parsed.terms.map((t: string) => (typeof t === "string" ? t.toLowerCase() : ""));
+        const allFallback = cachedTerms.every((t) => fallbackSet.has(t));
+        if (allFallback && fallback.length > 0) {
+          console.log(`[topic-lexicon] Cache for framework ${frameworkId} is fallback-only (${cachedTerms.length} terms, all in fallback set) — re-deriving`);
+          // fall through to LLM derivation
+        } else {
+          return { terms: parsed.terms, source: "cache" };
+        }
       }
     }
   } catch {
     // ignore cache read errors and fall through to derivation
   }
-
-  const topic = (topicDescription || "").trim();
-  const name = (frameworkName || "").trim();
-  const measuresBlock = (measureTitles || []).slice(0, 40).join("\n- ");
-  const fallback = [...new Set([...fallbackTokens(topic), ...fallbackTokens(name)])].slice(0, MAX_TERMS);
 
   // No topic signal at all → deterministic fallback only.
   if (!topic && !name) {
@@ -175,11 +190,20 @@ RULES:
   // tokens (framework title/description tokens like "examine", "strength", ...).
   // Every downstream slice(0, N) assumes top-of-list = topic-specific.
   const merged = [...new Set([...llmTerms, ...fallback])].slice(0, MAX_TERMS);
-  if (merged.length > 0) {
+
+  // 2026-09-05 fix: DO NOT persist fallback-only results.
+  // Previously the fallback lexicon (mostly generic tokens like "examine",
+  // "strength", ...) was cached for weeks, blocking every subsequent caller
+  // (analyzer.ts, discovery.ts on later frameworks) from re-deriving with a
+  // healthier LLM response. If the LLM produced nothing usable this run,
+  // return the fallback for immediate use but don't poison the cache — the
+  // next call gets a fresh LLM attempt.
+  if (llmTerms.length > 0 && merged.length > 0) {
     await persist(workspaceId, settingKey, merged);
-    return { terms: merged, source: llmTerms.length > 0 ? "llm" : "fallback" };
+    return { terms: merged, source: "llm" };
   }
-  return { terms: fallback, source: "fallback" };
+  console.warn(`[topic-lexicon] Not persisting fallback-only lexicon for framework ${frameworkId} — caller will retry next run`);
+  return { terms: merged.length > 0 ? merged : fallback, source: "fallback" };
 }
 
 async function persist(workspaceId: number, key: string, terms: string[]): Promise<void> {
