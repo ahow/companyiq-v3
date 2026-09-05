@@ -274,6 +274,23 @@ async function fetchWithRetry(
     }
   }
 
+  // R7g — Last-resort fallback: for .xhtml (ESEF filings on filings.xbrl.org
+  // and mirror sites), retry with Accept-Encoding: identity and manually
+  // gunzip the response if it starts with the gzip magic bytes. This handles
+  // Apache indexes that serve gzipped content without the correct
+  // Content-Encoding header, defeating Node's auto-decompression.
+  const urlLower = url.toLowerCase();
+  if (opts.responseType !== "arraybuffer" && (urlLower.endsWith(".xhtml") || urlLower.endsWith(".xml") || urlLower.includes("filings.xbrl.org"))) {
+    try {
+      const { fetchWithGzipFallback } = await import("./r6-discovery.js");
+      const res = await fetchWithGzipFallback(url, FETCH_TIMEOUT);
+      if (res.ok && res.content) {
+        console.log(`[fetch] R7g gzip-fallback recovered ${url} (${res.content.length} chars)`);
+        return { data: res.content, contentType: "application/xhtml+xml" };
+      }
+    } catch { /* fall through to lastError */ }
+  }
+
   throw lastError || new Error(`Failed to fetch ${url}`);
 }
 
