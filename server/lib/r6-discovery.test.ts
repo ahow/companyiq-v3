@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   extractIRPlatformTenants,
   buildIRPlatformSeedQueries,
@@ -9,6 +9,7 @@ import {
   extractLandingPageLinks,
   buildSubpageEnumerationQueries,
   parseSitemapForSubpaths,
+  enumerateRegulatorFilings,
 } from "./r6-discovery.js";
 
 describe("R6a — IR-platform tenant extraction", () => {
@@ -198,5 +199,84 @@ describe("R6f — Sitemap parsing", () => {
     const urls = parseSitemapForSubpaths(sitemap, "/purpose/esgreport");
     expect(urls).toHaveLength(2);
     expect(urls.every(u => u.includes("esgreport"))).toBe(true);
+  });
+});
+
+describe("R6c v2 — enumerateRegulatorFilings (ESEF)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("returns ESEF report/package URLs from filings.xbrl.org API for EU LEI-known issuer", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any) => {
+      const url = typeof input === "string" ? input : input?.toString();
+      if (url?.includes("filings.xbrl.org/api/filings")) {
+        return new Response(JSON.stringify({
+          data: [{
+            id: "12780",
+            attributes: {
+              report_url: "/549300VGEJKB7SVUZR78/2023-12-31/ESEF/FR/0/kering-2023-12-31-fr/reports/kering-2023-12-31-fr.xhtml",
+              package_url: "/549300VGEJKB7SVUZR78/2023-12-31/ESEF/FR/0/kering-2023-12-31-fr.zip",
+              period_end: "2023-12-31",
+              country: "FR",
+            },
+          }],
+        }), { status: 200, headers: { "Content-Type": "application/vnd.api+json" } });
+      }
+      return new Response("[]", { status: 200 });
+    });
+
+    const filings = await enumerateRegulatorFilings({
+      companyName: "Kering",
+      lei: "549300VGEJKB7SVUZR78",
+      country: "France",
+      isin: "FR0000121485",
+    });
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(filings.some(f => f.url.includes("kering-2023-12-31-fr.xhtml") && f.source === "r6c-esef-api")).toBe(true);
+    expect(filings.some(f => f.url.endsWith(".zip"))).toBe(true);
+  });
+
+  it("returns empty when non-EU issuer or no LEI", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 200 }));
+    const filings = await enumerateRegulatorFilings({
+      companyName: "US Company",
+      lei: null,
+      country: "US",
+      isin: "US0000000000",
+    });
+    expect(filings).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("R6c v2 — enumerateRegulatorFilings (HKEX)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("resolves stock code via prefix.do then returns filings via titleSearchServlet", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any) => {
+      const url = typeof input === "string" ? input : input?.toString();
+      if (url?.includes("prefix.do")) {
+        return new Response('cb({"more":"1","stockInfo":[{"stockId":48380,"code":"02378","name":"PRU"}]});', { status: 200 });
+      }
+      if (url?.includes("titleSearchServlet.do")) {
+        const rowsInner = JSON.stringify([
+          { TITLE: "Sustainability Report 2024", FILE_LINK: "/listedco/listconews/sehk/2025/0409/2025040900057.pdf", DATE_TIME: "09/04/2025 07:45" },
+          { TITLE: "Annual Report 2024", FILE_LINK: "/listedco/listconews/sehk/2025/0409/2025040900053.pdf", DATE_TIME: "09/04/2025 07:41" },
+        ]);
+        return new Response(JSON.stringify({ result: rowsInner }), { status: 200 });
+      }
+      return new Response("", { status: 200 });
+    });
+
+    const filings = await enumerateRegulatorFilings({
+      companyName: "Prudential plc",
+      lei: null,
+      country: "GB",
+      isin: "GB0007099541",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(filings.some(f => f.url === "https://www.hkexnews.hk/listedco/listconews/sehk/2025/0409/2025040900057.pdf" && f.source === "r6c-hkex-api")).toBe(true);
+    expect(filings.some(f => f.title.includes("Sustainability Report 2024"))).toBe(true);
   });
 });

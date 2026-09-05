@@ -27,6 +27,7 @@ import {
   isEsgLandingPage,
   extractLandingPageLinks,
   buildSubpageEnumerationQueries,
+  enumerateRegulatorFilings,
 } from "./r6-discovery.js";
 import { expandQueries, type QueryExpansionResult } from "./query-expansion.js";
 import {
@@ -3926,18 +3927,36 @@ async function searchCompanyDocumentsInner(opts: {
     console.warn(`[${companyName}] R6b locale-topic lane failed: ${e?.message}`);
   }
 
-  // R6c — Regulator-repository targeting (ESMA ESEF, HKEX, TSX, ASX)
-  // Uses issuer's LEI / country / ISIN to emit direct regulator-URL candidates.
+  // R6c v2 — Regulator-repository API enumeration
+  // v1 emitted directory URLs which the gate rejected as unfetchable. v2 calls
+  // regulator APIs (filings.xbrl.org, HKEX titleSearchServlet) to return
+  // concrete filing URLs. Best-effort, time-bounded, error-swallowed.
   try {
+    const regFilings = await enumerateRegulatorFilings({
+      companyName,
+      lei: issuerProfile?.lei ?? (opts.companyRow?.lei as string | null) ?? null,
+      country: opts.country ?? null,
+      isin: opts.isin ?? null,
+      fetchTimeoutMs: 8000,
+    });
+    if (regFilings.length > 0) {
+      console.log(`[${companyName}] R6c v2 Enumerated ${regFilings.length} regulator filings (${regFilings.map(r => r.source).join(", ")})`);
+      for (const r of regFilings) {
+        addCandidate({ link: r.url, title: r.title, snippet: r.snippet } as any, r.source);
+      }
+    }
+    // Fallback: also emit v1 directory URLs (very low volume, harmless) so we
+    // can still see the directory-URL patterns in diagnostics for regulators
+    // whose APIs we haven't wrapped yet (TSX, ASX).
     const regUrls = buildRegulatorRepositoryUrls({
       companyName,
       lei: issuerProfile?.lei ?? (opts.companyRow?.lei as string | null) ?? null,
       country: opts.country ?? null,
       isin: opts.isin ?? null,
     });
-    if (regUrls.length > 0) {
-      console.log(`[${companyName}] R6c Adding ${regUrls.length} regulator-repository candidates`);
-      for (const r of regUrls) {
+    // Only emit the v1 URLs the v2 didn't cover (TSX/ASX today)
+    for (const r of regUrls) {
+      if (r.url.includes("sedarplus.ca") || r.url.includes("asx.com.au")) {
         addCandidate({ link: r.url, title: r.title, snippet: r.snippet } as any, "r6c-regulator-repo");
       }
     }
