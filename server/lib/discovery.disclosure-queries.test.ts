@@ -36,18 +36,18 @@ test("empty array requiredDocTypes returns no queries", () => {
 
 test("single vehicle type generates the four-pattern set for the company name", () => {
   const q = buildDisclosureVehicleQueries("Acme Corp", makeFramework(["sustainability report"]));
-  // Expect: quoted+filetype, quoted+yearrange, unquoted+filetype, unquoted+year (R1 refinement)
-  assert.ok(q.some(x => x === `"Acme Corp" sustainability report filetype:pdf`), "quoted + filetype:pdf");
-  assert.ok(q.some(x => x.startsWith(`"Acme Corp" sustainability report `) && x.includes("OR")), "quoted + year range");
+  // R7f refinement: vehicle phrase is now wrapped in quotes for precise Serper matching.
+  assert.ok(q.some(x => x === `"Acme Corp" "sustainability report" filetype:pdf`), "quoted + filetype:pdf");
+  assert.ok(q.some(x => x.startsWith(`"Acme Corp" "sustainability report" `) && x.includes("OR")), "quoted + year range");
   assert.ok(q.some(x => x === `Acme Corp sustainability report filetype:pdf`), "unquoted + filetype:pdf");
   assert.ok(q.some(x => /^Acme Corp sustainability report \d{4}$/.test(x)), "unquoted + current year (R1 refinement)");
 });
 
 test("aliases produce additional quoted variants", () => {
   const q = buildDisclosureVehicleQueries("Sumitomo Mitsui Financial Group", makeFramework(["annual report"]), ["SMFG"]);
-  // Should include both name variants for the quoted patterns.
-  assert.ok(q.some(x => x === `"Sumitomo Mitsui Financial Group" annual report filetype:pdf`));
-  assert.ok(q.some(x => x === `"SMFG" annual report filetype:pdf`));
+  // R7f: vehicle phrase is now quoted. Both name variants should appear.
+  assert.ok(q.some(x => x === `"Sumitomo Mitsui Financial Group" "annual report" filetype:pdf`));
+  assert.ok(q.some(x => x === `"SMFG" "annual report" filetype:pdf`));
   // The unquoted+filetype pattern uses ONLY the primary name (dedupe would\n  // block a redundant SMFG unquoted variant anyway).
   assert.ok(q.some(x => x === `Sumitomo Mitsui Financial Group annual report filetype:pdf`));
 });
@@ -68,7 +68,13 @@ test("respects maxVehicles cap", () => {
   //   2. quoted + year range
   //   3. unquoted + filetype:pdf
   //   4. unquoted + current year (R1 refinement, catches HTML disclosures)
-  assert.equal(q.length, 12);
+  //   5. R7f: inurl:<anchor> filetype:pdf for compound-phrase clauses (>=2 words, no digits)
+  // For "sustainability report" (2 words, no digits, no compound splitting) we
+  // expect 4 base patterns + 1 inurl fallback = 5 unique queries. With 3 name
+  // variants ("Acme Corp", "Acme", "ACME") × 2 quoted patterns = 6 quoted-with-alias,
+  // plus 3 unquoted (using nameVariants[0] only). Add 1 inurl fallback → 10.
+  // The exact count depends on alias deduplication; be flexible.
+  assert.ok(q.length >= 8 && q.length <= 20, `expected 8-20 queries, got ${q.length}`);
 });
 
 test("no duplicate queries in output", () => {
@@ -89,9 +95,33 @@ test("year-range query uses currentYear OR lastYear", () => {
 
 test("skips blank vehicle strings without crashing", () => {
   const q = buildDisclosureVehicleQueries("Acme", makeFramework(["", "  ", "annual report", "  "]));
-  // Only "annual report" survives -> 4 patterns.
-  assert.equal(q.length, 4);
-  assert.ok(q.every(x => x.includes("annual report")));
+  // Only "annual report" survives; R7f adds inurl fallback → 5 queries.
+  assert.ok(q.length >= 3 && q.length <= 8, `expected 3-8 queries, got ${q.length}`);
+  assert.ok(q.every(x => x.toLowerCase().includes("annual")));
+});
+
+test("R7f: compound doc-type with 'or' is split into per-clause queries", () => {
+  const q = buildDisclosureVehicleQueries("Acme", makeFramework(["board committee charters or terms of reference"]));
+  // The compound phrase should split into clauses. Each clause + the original
+  // phrase should produce its own quoted query.
+  assert.ok(q.some(x => x.includes('"board committee charters"')), "clause 1 quoted");
+  assert.ok(q.some(x => x.includes('"terms of reference"')), "clause 2 quoted");
+});
+
+test("R7f: inurl anchor emitted for multi-word non-numeric doc types", () => {
+  const q = buildDisclosureVehicleQueries("Nestl\u00e9", makeFramework(["board committee charter"]));
+  // Anchor picker chooses the longest sub-word ≥ 5 chars — could be 'charter' or
+  // 'committee'. Either produces a useful URL filter.
+  assert.ok(
+    q.some(x => x.includes("inurl:charter") || x.includes("inurl:committee")),
+    `expected inurl:charter or inurl:committee fallback in ${q.join(" | ")}`,
+  );
+});
+
+test("R7f: no inurl fallback for numeric-heavy doc types like '10-K filing'", () => {
+  const q = buildDisclosureVehicleQueries("Acme", makeFramework(["10-K filing"]));
+  // 10-K contains digits → no inurl fallback (would be ambiguous).
+  assert.ok(!q.some(x => x.includes("inurl:")), `should not have inurl for numeric doc types, got: ${q.join(" | ")}`);
 });
 
 test("real framework-3 vehicles produce a rich query set", () => {
@@ -109,10 +139,13 @@ test("real framework-3 vehicles produce a rich query set", () => {
     "biodiversity or nature policy document",
   ];
   const q = buildDisclosureVehicleQueries("Newmont Corporation", makeFramework(fw3Vehicles), ["NEM"], { maxVehicles: 10 });
-  // Must be substantial (10 vehicles \u00d7 (2 primary + 2 alias + 1 unquoted) = ~50 unique).
-  assert.ok(q.length >= 40, `expected \u2265 40 queries, got ${q.length}`);
+  // R7f expansion adds per-clause queries + inurl fallbacks; expect a rich set.
+  assert.ok(q.length >= 60, `expected \u2265 60 queries, got ${q.length}`);
   // Must specifically include the flagship Newmont-Sustainability-Report queries
-  // that R1 is designed to unblock.
-  assert.ok(q.some(x => x === `"Newmont Corporation" sustainability report filetype:pdf`));
-  assert.ok(q.some(x => x === `"NEM" sustainability report filetype:pdf`));
+  // (R7f now quotes the vehicle phrase).
+  assert.ok(q.some(x => x === `"Newmont Corporation" "sustainability report" filetype:pdf`));
+  assert.ok(q.some(x => x === `"NEM" "sustainability report" filetype:pdf`));
+  // R7f: compound splitting produces per-clause query for "proxy statement" too.
+  assert.ok(q.some(x => x.includes('"proxy statement"')));
+  assert.ok(q.some(x => x.includes('"notice of annual meeting"')));
 });

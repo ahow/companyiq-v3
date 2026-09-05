@@ -1144,25 +1144,42 @@ export function buildDisclosureVehicleQueries(
   for (const vehicle of vehicles) {
     const v = vehicle.trim();
     if (!v) continue;
-    for (const nameVariant of nameVariants) {
-      // Pattern A — quoted name + vehicle + filetype (forces the PDF)
-      addQuery(`"${nameVariant}" ${v} filetype:pdf`);
-      // Pattern B — quoted name + vehicle + year range (recency-constrained,
-      // no filetype:pdf so web-hosted disclosures like HTML ESG-report chapters
-      // are also surfaced, e.g. corporate.walmart.com/purpose/esgreport/…
-      // regeneration-of-natural-resources or filings.xbrl.org ESEF XHTML).
-      addQuery(`"${nameVariant}" ${v} ${currentYear} OR ${lastYear}`);
+
+    // R7f: compound doc-type splitting. Some frameworks declare doc types as
+    // compound phrases like "board committee charters or terms of reference".
+    // Serper matches the full quoted phrase poorly. Split on " or " / ", " / " and " / " & "
+    // and generate per-clause queries so each clause gets its own precise match.
+    const clauses = v
+      .split(/\s+(?:or|and|&)\s+|,\s+|\s*\/\s*/i)
+      .map(s => s.trim())
+      .filter(s => s.length >= 4);
+    // Always include the original phrase too (some doc types read as a phrase, e.g. "10-K filing")
+    const allVehicleForms = Array.from(new Set([v, ...clauses]));
+
+    for (const vf of allVehicleForms) {
+      for (const nameVariant of nameVariants) {
+        // Pattern A — quoted name + vehicle + filetype (forces the PDF)
+        addQuery(`"${nameVariant}" "${vf}" filetype:pdf`);
+        // Pattern B — quoted name + vehicle + year range (recency-constrained)
+        addQuery(`"${nameVariant}" "${vf}" ${currentYear} OR ${lastYear}`);
+      }
+      // Pattern C — unquoted, filetype:pdf. Fuzzy fallback.
+      addQuery(`${nameVariants[0]} ${vf} filetype:pdf`);
+      // Pattern D — unquoted, no filetype.
+      addQuery(`${nameVariants[0]} ${vf} ${currentYear}`);
+
+      // Pattern E (R7f) — inurl: fallback for compound-phrase clauses that
+      // often appear as URL slugs but not in titles. E.g. "terms of reference"
+      // → inurl:terms-of-reference; "committee charter" → inurl:charter.
+      // Skip Pattern E for single-word or numeric-heavy vehicles (10-K etc)
+      // where the inurl pattern is either uninformative or ambiguous.
+      if (vf.split(/\s+/).length >= 2 && !/\d/.test(vf)) {
+        const slug = vf.toLowerCase().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
+        // Use the strongest single word of the phrase as inurl anchor + full phrase in quotes
+        const anchor = slug.split("-").filter(w => w.length >= 5).sort((a, b) => b.length - a.length)[0] || slug;
+        addQuery(`"${nameVariants[0]}" inurl:${anchor} filetype:pdf`);
+      }
     }
-    // Pattern C — unquoted, filetype:pdf. Fuzzy fallback; some CDN-hosted
-    // PDFs carry only the short company name or the ticker, not the full
-    // legal name, so unquoted queries can outperform quoted ones there.
-    addQuery(`${nameVariants[0]} ${v} filetype:pdf`);
-    // Pattern D (R1 refinement) — unquoted, no filetype. Surfaces web-hosted
-    // disclosures (ESG report chapters on corporate.<company>.com, XBRL ESEF
-    // XHTML on filings.xbrl.org) that would be missed by any filetype:pdf
-    // filter. Only for the primary name variant — alias variants would add
-    // more noise than signal.
-    addQuery(`${nameVariants[0]} ${v} ${currentYear}`);
   }
 
   return queries;
