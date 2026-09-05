@@ -802,6 +802,244 @@ export async function enumerateRegulatorFilings(opts: {
   return results;
 }
 
+// ───────────────────────────────────────────────────────────────────────
+// R7a — Directory-index enumeration for IR-platform tenants
+// ───────────────────────────────────────────────────────────────────────
+
+/**
+ * Parse an Apache/nginx HTML directory listing and return the absolute URLs
+ * of every file (typically .pdf but also .htm, .xhtml, .zip, .xlsx) linked
+ * within it. Skips parent-directory links and non-file hrefs.
+ */
+export function parseDirectoryIndex(baseUrl: string, html: string): string[] {
+  const results: string[] = [];
+  const seen = new Set<string>();
+  let base: URL;
+  try { base = new URL(baseUrl); } catch { return results; }
+  const hrefRe = /href\s*=\s*["']([^"']+)["']/gi;
+  let match: RegExpExecArray | null;
+  while ((match = hrefRe.exec(html))) {
+    const raw = match[1].trim();
+    if (!raw || raw.startsWith("?")) continue;   // Apache sort links
+    if (raw === "/" || raw === "../" || raw === "..") continue;
+    let full: URL;
+    try { full = new URL(raw, baseUrl); } catch { continue; }
+    // Must be under the base path (Apache index shows PARENTDIR too)
+    if (!full.pathname.startsWith(base.pathname)) continue;
+    if (full.pathname === base.pathname) continue;
+    // Only real files (leaf paths ending in a known document extension) or
+    // sub-directories (path ending in '/'). Sub-directories will be recursed
+    // by the caller if desired.
+    const path = full.pathname.toLowerCase();
+    const isFile = /\.(pdf|xhtml|html?|xlsx|xls|zip|docx?|json)($|\?)/.test(path);
+    const isDir = path.endsWith("/");
+    if (!isFile && !isDir) continue;
+    const url = full.toString();
+    if (seen.has(url)) continue;
+    seen.add(url);
+    results.push(url);
+  }
+  return results;
+}
+
+/**
+ * Enumerate documents in an IR-platform tenant's directory indexes.
+ *
+ * For each configured `directoryIndexBase` URL, fetch the Apache/nginx
+ * directory listing and extract all document URLs. Best-effort:
+ * time-bounded per fetch, errors swallowed. Deduplicates across bases.
+ */
+export async function enumerateTenantDirectory(opts: {
+  platform: string;
+  tenant: string;
+  fetchTimeoutMs?: number;
+  maxUrlsPerBase?: number;
+}): Promise<string[]> {
+  const timeout = opts.fetchTimeoutMs ?? 5000;
+  const capPerBase = opts.maxUrlsPerBase ?? 40;
+  const spec = IR_PLATFORMS.find(p => p.name === opts.platform);
+  if (!spec?.directoryIndexBase) return [];
+
+  const bases = spec.directoryIndexBase(opts.tenant);
+  const all = new Set<string>();
+  for (const base of bases) {
+    try {
+      const controller = new AbortController();
+      const to = setTimeout(() => controller.abort(), timeout);
+      const resp = await fetch(base, {
+        signal: controller.signal,
+        headers: { Accept: "text/html,*/*", "User-Agent": "CompanyIQ-Discovery/1.0" },
+      });
+      clearTimeout(to);
+      if (!resp.ok) continue;
+      const html = await resp.text();
+      if (!html) continue;
+      const parsed = parseDirectoryIndex(base, html);
+      // Prefer .pdf leaf files first, then .xhtml, then directories (which
+      // caller may recurse into if desired). Emit only file leaves; skip
+      // subdirectories in this pass to bound total volume.
+      const files = parsed.filter(u => /\.(pdf|xhtml|html?|xlsx|zip|docx?)($|\?)/i.test(new URL(u).pathname));
+      for (const u of files.slice(0, capPerBase)) all.add(u);
+    } catch { /* best-effort per base */ }
+  }
+  return Array.from(all);
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// R7d — Corporate landing-page seeding
+// ───────────────────────────────────────────────────────────────────────
+
+/**
+ * Common corporate ESG / sustainability landing-page URL suffixes.
+ *
+ * These are appended to the effective corporate domain and probed via a
+ * plain fetch. Any URL returning 200 with a substantive HTML body is
+ * emitted as a first-class candidate for downstream R6e link-farming.
+ *
+ * Ordering roughly follows frequency; the first N successful hits are
+ * emitted to bound per-issuer cost.
+ */
+export const LANDING_PATH_PATTERNS: string[] = [
+  "/sustainability",
+  "/esg",
+  "/responsibility",
+  "/purpose",
+  "/environment",
+  "/climate",
+  "/planet",
+  "/nature",
+  "/impact",
+  "/csr",
+  "/investors",
+  "/investor-relations",
+  "/en/sustainability",
+  "/en/esg",
+  "/en/investors",
+  "/global/sustainability",     // Samsung, Panasonic, Hitachi
+  "/global/esg",
+  "/en-us/sustainability",
+  "/en-gb/sustainability",
+  "/uk/sustainability",
+  "/us/sustainability",
+  "/corporate/sustainability",
+  "/corporate/esg",
+  "/company/sustainability",
+  "/about/sustainability",
+  "/about-us/sustainability",
+  "/who-we-are/sustainability",
+];
+
+/**
+ * Attempt to fetch the corporate landing-page URLs for an issuer.
+ * Returns any URL that returns 200 with a substantive HTML body.
+ *
+ * Best-effort: time-bounded per fetch, errors swallowed. Bounded to a
+ * configurable maximum successful hits (default 5) so a single issuer
+ * cannot dominate the discovery budget.
+ */
+export async function probeLandingPages(opts: {
+  effectiveDomain: string;
+  fetchTimeoutMs?: number;
+  maxHits?: number;
+}): Promise<{ url: string; html: string }[]> {
+  const timeout = opts.fetchTimeoutMs ?? 3000;
+  const maxHits = opts.maxHits ?? 5;
+  const hits: { url: string; html: string }[] = [];
+  const scheme = "https://";
+  const domain = opts.effectiveDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  if (!domain || /\s/.test(domain)) return hits;
+
+  for (const path of LANDING_PATH_PATTERNS) {
+    if (hits.length >= maxHits) break;
+    const url = `${scheme}${domain}${path}`;
+    try {
+      const controller = new AbortController();
+      const to = setTimeout(() => controller.abort(), timeout);
+      // HEAD first to check status cheaply
+      const headResp = await fetch(url, {
+        signal: controller.signal,
+        method: "HEAD",
+        redirect: "follow",
+        headers: { "User-Agent": "CompanyIQ-Discovery/1.0" },
+      });
+      if (!headResp.ok || headResp.status >= 400) {
+        clearTimeout(to);
+        continue;
+      }
+      // GET to obtain HTML for downstream link-farming
+      const resp = await fetch(url, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers: { Accept: "text/html,*/*", "User-Agent": "CompanyIQ-Discovery/1.0" },
+      });
+      clearTimeout(to);
+      if (!resp.ok) continue;
+      const contentType = resp.headers.get("content-type") || "";
+      if (!/text\/html/i.test(contentType)) continue;
+      const html = await resp.text();
+      if (!html || html.length < 500) continue;  // avoid stubs / redirects
+      hits.push({ url, html });
+    } catch { /* best-effort per path */ }
+  }
+  return hits;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// R7g — Fetch fallback for gzipped Apache-served .xhtml/.xml
+// ───────────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch a URL that may be served as .xhtml.gz or .xml.gz by an Apache index
+ * (as filings.xbrl.org does for ESEF reports). Node's fetch normally handles
+ * gzip automatically, but some Apache configs serve gzip-encoded content
+ * without the correct `Content-Encoding: gzip` header, so Node returns raw
+ * gzip bytes and downstream parsers fail.
+ *
+ * This helper retries with `Accept-Encoding: identity`, then manually
+ * decompresses the response if it starts with the gzip magic bytes (1f 8b).
+ */
+export async function fetchWithGzipFallback(url: string, fetchTimeoutMs = 8000): Promise<{ ok: boolean; content: string | null; status: number }> {
+  const controller = new AbortController();
+  const to = setTimeout(() => controller.abort(), fetchTimeoutMs);
+  try {
+    // First try: standard fetch (Node auto-decompresses via Accept-Encoding: gzip)
+    let resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: "application/xhtml+xml,text/html,*/*", "User-Agent": "CompanyIQ-Discovery/1.0" },
+      redirect: "follow",
+    });
+    if (!resp.ok) {
+      // Retry with identity encoding (bypass automatic decompression)
+      resp = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          Accept: "application/xhtml+xml,text/html,*/*",
+          "Accept-Encoding": "identity",
+          "User-Agent": "CompanyIQ-Discovery/1.0",
+        },
+        redirect: "follow",
+      });
+    }
+    clearTimeout(to);
+
+    if (!resp.ok) return { ok: false, content: null, status: resp.status };
+
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length === 0) return { ok: false, content: null, status: resp.status };
+
+    // Detect raw gzip bytes: 1f 8b magic
+    if (buf[0] === 0x1f && buf[1] === 0x8b) {
+      const zlib = await import("node:zlib");
+      const inflated = zlib.gunzipSync(buf);
+      return { ok: true, content: inflated.toString("utf-8"), status: resp.status };
+    }
+    return { ok: true, content: buf.toString("utf-8"), status: resp.status };
+  } catch {
+    clearTimeout(to);
+    return { ok: false, content: null, status: 0 };
+  }
+}
+
 /**
  * Attempt to fetch and parse a site's sitemap.xml, returning any URLs whose
  * path is under `parentPath`. Used as a complement to R6f when a full sitemap
