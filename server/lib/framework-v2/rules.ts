@@ -685,12 +685,12 @@ export function validateC10(fw: FrameworkDraft): ValidationResult {
     });
   }
   const syn = fw.topicSynonyms || [];
-  if (syn.length < 2 || syn.length > 10) {
+  if (syn.length < 2 || syn.length > 20) {
     violations.push({
       rule: "C10",
       severity: "error",
-      message: `topicSynonyms must have 2–10 entries (found ${syn.length})`,
-      suggestion: "Provide 2–10 substantively-equivalent alternative phrasings. Be conservative; do not include adjacent terms.",
+      message: `topicSynonyms must have 2–20 entries (found ${syn.length})`,
+      suggestion: "Provide 2–20 substantively-equivalent alternative phrasings. Be conservative; do not include adjacent terms.",
     });
   }
   return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };

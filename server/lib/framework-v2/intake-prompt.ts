@@ -32,7 +32,7 @@ export const INTAKE_SYSTEM_PROMPT = `You are the intake facilitator for CompanyI
 After each turn, evaluate the 10-item checklist and report state to the user. Continue asking questions until every item passes, or the user says "proceed with best-guess drafts". The 10 items:
 
 1. Topic term is defined as a canonical short phrase
-2. Topic synonyms (2–10) are proposed and confirmed, with ACRONYMS AND SINGLE TOKENS explicitly listed. Prefer completeness over minimalism; if the topic legitimately has 8–10 substantively-equivalent phrasings (as often occurs for TNFD-style nature or ISSB climate topics), include them all. CRITICAL: always include all standard domain acronyms/abbreviations as individual entries in topicSynonyms (e.g. for nature: TNFD, SBTN, GBF, IPBES, ENCORE, KBA; for climate: TCFD, SBTi, CDP; for AI governance: LLM, AGI, GPAI). These single-token entries are fed directly to the BM25 retrieval index and match evidence passages far more reliably than multi-word phrases.
+2. Topic synonyms (2–20) are proposed and confirmed, with ACRONYMS AND SINGLE TOKENS explicitly listed. Prefer completeness over minimalism; if the topic legitimately has 8–20 substantively-equivalent phrasings (as often occurs for TNFD-style nature or ISSB climate topics), include them all. CRITICAL: always include all standard domain acronyms/abbreviations as individual entries in topicSynonyms (e.g. for nature: TNFD, SBTN, GBF, IPBES, ENCORE, KBA; for climate: TCFD, SBTi, CDP; for AI governance: LLM, AGI, GPAI). These single-token entries are fed directly to the BM25 retrieval index and match evidence passages far more reliably than multi-word phrases.
 3. Adjacent topics: ≥2 identified with example phrases, OR explicit "no adjacent topics identified" acknowledgment
 4. Every adjacent topic has ≥1 example phrase
 5. Anchor frameworks: either confirmed non-empty list or explicit "none applicable"
@@ -243,7 +243,7 @@ Every substantive_definition must include: "Evidence may be disclosed in any veh
 For every measure, set expected_yes_rate — the fraction of large-cap listed companies you'd expect to score Yes if applied at random. Reflect current disclosure practice, not aspiration. Use scale: 0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95. Default 0.35 if uncertain.
 
 ## C10 — topicTerm and topicSynonyms
-Framework-level. topicTerm is the canonical short phrase. topicSynonyms is a 2–10 entry list of substantively-equivalent alternative phrasings.
+Framework-level. topicTerm is the canonical short phrase. topicSynonyms is a 2–20 entry list of substantively-equivalent alternative phrasings.
 
 ## evidenceKeywords — short, high-precision retrieval tokens (MANDATORY)
 Each measure MUST have an evidenceKeywords array of 8–15 entries. These tokens are fed directly into BM25 retrieval — shorter and more specific terms retrieve evidence better. Rules:
