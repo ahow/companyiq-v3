@@ -1570,8 +1570,9 @@ router.post("/v2/state/save", requireWorkspace, async (req: Request, res: Respon
   try {
     const ctx = getSessionContext(req);
     if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
-    const { frameworkId, stage, testDriveListId, testDriveListName } = req.body as {
+    const { frameworkId, stage, testDriveListId, testDriveListName, draft, validation } = req.body as {
       frameworkId: number; stage: string; testDriveListId?: number; testDriveListName?: string;
+      draft?: any; validation?: any;
     };
     if (!frameworkId || !stage) return res.status(400).json({ error: "frameworkId and stage required" });
 
@@ -1594,6 +1595,10 @@ router.post("/v2/state/save", requireWorkspace, async (req: Request, res: Respon
         stage: existingStage,
         testDriveListId: testDriveListId ?? existing?.testDriveListId ?? null,
         testDriveListName: testDriveListName ?? existing?.testDriveListName ?? null,
+        // Persist draft + validation for resumability. If not provided in this
+        // call, preserve any existing stored value.
+        ...(draft !== undefined ? { draft } : existing?.draft !== undefined ? { draft: existing.draft } : {}),
+        ...(validation !== undefined ? { validation } : existing?.validation !== undefined ? { validation: existing.validation } : {}),
         lastUpdated: new Date().toISOString(),
       };
       await db.execute(sql`
@@ -1603,7 +1608,16 @@ router.post("/v2/state/save", requireWorkspace, async (req: Request, res: Respon
       return res.json({ ok: true, state: merged, note: "stage regression rejected; existing stage preserved" });
     }
 
-    const state = { stage, testDriveListId: testDriveListId ?? existing?.testDriveListId ?? null, testDriveListName: testDriveListName ?? existing?.testDriveListName ?? null, lastUpdated: new Date().toISOString() };
+    const state = {
+      stage,
+      testDriveListId: testDriveListId ?? existing?.testDriveListId ?? null,
+      testDriveListName: testDriveListName ?? existing?.testDriveListName ?? null,
+      // Persist draft + validation for resumability. draft can be ~100KB; stored once
+      // at save time. If not provided in this call, preserve any existing stored value.
+      ...(draft !== undefined ? { draft } : existing?.draft !== undefined ? { draft: existing.draft } : {}),
+      ...(validation !== undefined ? { validation } : existing?.validation !== undefined ? { validation: existing.validation } : {}),
+      lastUpdated: new Date().toISOString(),
+    };
     await db.execute(sql`
       UPDATE frameworks SET v2_state = ${JSON.stringify(state)}::jsonb
       WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}

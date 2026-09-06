@@ -127,7 +127,7 @@ export default function App() {
           {page === "results" && <ResultsPage />}
           {page === "settings" && <SettingsPage />}
           {page === "ai-builder" && <AIBuilderPage />}
-          {page === "framework-builder-v2" && <FrameworkBuilderV2Page />}
+          {page === "framework-builder-v2" && <FrameworkBuilderV2Page onGoToFrameworks={() => navigate("framework")} />}
           {page === "diagnostics" && <DiagnosticsPage />}
           {page === "domains" && <DomainsPage />}
           {page === "guide" && <GuidePage />}

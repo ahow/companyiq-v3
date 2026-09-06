@@ -58,7 +58,7 @@ interface TestDriveCandidate {
   isKnownDiscloser: boolean;
 }
 
-export default function FrameworkBuilderV2Page() {
+export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFrameworks?: () => void }) {
   const [stage, setStage] = useState<Stage>("intake");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -205,11 +205,18 @@ export default function FrameworkBuilderV2Page() {
       try {
         await api.request("/framework-builder/v2/state/save", {
           method: "POST",
-          body: JSON.stringify({ frameworkId: savedFrameworkId, stage, testDriveListId, testDriveListName }),
+          body: JSON.stringify({
+            frameworkId: savedFrameworkId,
+            stage,
+            testDriveListId,
+            testDriveListName,
+            draft: draft ?? undefined,          // only include when non-null
+            validation: validation ?? undefined,
+          }),
         });
       } catch (e) { /* non-fatal; localStorage still works */ }
     })();
-  }, [savedFrameworkId, stage, testDriveListId, testDriveListName, hasHydrated]);
+  }, [savedFrameworkId, stage, testDriveListId, testDriveListName, draft, validation, hasHydrated]);
 
   // On mount: check URL params for ?frameworkId= (deep-link from Framework page's
   // 'Continue in v2 builder' action). If present, load server-side state.
@@ -230,8 +237,18 @@ export default function FrameworkBuilderV2Page() {
           if (r.state) {
             if (r.state.testDriveListId) setTestDriveListId(r.state.testDriveListId);
             if (r.state.testDriveListName) setTestDriveListName(r.state.testDriveListName);
-            if (r.state.stage) setStage(r.state.stage as any);
-            else setStage("saved");
+            if (r.state.draft) {
+              setDraft(r.state.draft);
+              if (r.state.validation) setValidation(r.state.validation);
+              // Resume at review stage so the user lands back in the review panel
+              // (can see their draft, re-draft with corrections, or run test-drive)
+              // instead of the dead-end 'Framework saved' card.
+              setStage("review");
+            } else if (r.state.stage) {
+              setStage(r.state.stage as any);
+            } else {
+              setStage("saved");
+            }
           } else {
             setStage("saved");
           }
@@ -679,6 +696,14 @@ export default function FrameworkBuilderV2Page() {
                 <TestDriveResultsPanel frameworkId={savedFrameworkId} listId={testDriveListId} listName={testDriveListName} />
               )}
               <div className="mt-4 flex gap-2">
+                {onGoToFrameworks && (
+                  <button
+                    onClick={onGoToFrameworks}
+                    className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  >
+                    ← Back to Frameworks
+                  </button>
+                )}
                 <button onClick={reset} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg">
                   Build another
                 </button>
