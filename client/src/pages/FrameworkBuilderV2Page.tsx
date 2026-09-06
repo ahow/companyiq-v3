@@ -76,7 +76,9 @@ export default function FrameworkBuilderV2Page() {
     } catch { return null; }
   });
   const [lastFailedUserMessage, setLastFailedUserMessage] = useState<string | null>(null);
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -135,6 +137,9 @@ export default function FrameworkBuilderV2Page() {
       setMessages([...nextMessages, { role: "assistant", content: res.assistantMessage }]);
       if (res.intake) setIntake(res.intake);
       if (res.robustnessGate) setRobustnessGate(res.robustnessGate);
+      // Always reset on a new LLM turn: if the user accepted warnings and then kept
+      // chatting, re-show the (updated) warnings card if the gate is still not ready.
+      setWarningsAcknowledged(false);
     } catch (err: any) {
       setError(err?.message || String(err));
       setLastFailedUserMessage(text);
@@ -546,12 +551,57 @@ export default function FrameworkBuilderV2Page() {
                 {loading && stage === "drafting" && (
                   <DraftingProgress startTime={draftJobStartTime} jobId={draftJobId} />
                 )}
+                {intake?.confirmed && robustnessGate && !robustnessGate.ready && !warningsAcknowledged && !loading && (() => {
+                  const unresolved = robustnessGate.items.filter((i) => !i.passed);
+                  return (
+                    <div className="border border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg p-4">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0" />
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-yellow-800 dark:text-yellow-200">
+                            {unresolved.length} intake item{unresolved.length === 1 ? "" : "s"} not fully resolved
+                          </h3>
+                          <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
+                            The framework will still be drafted, but the following items were not addressed
+                            during intake. Please review and choose how to proceed:
+                          </p>
+                          <ul className="mt-2 space-y-1 text-sm text-yellow-800 dark:text-yellow-200 list-disc list-inside">
+                            {unresolved.map((item) => (
+                              <li key={item.id}>
+                                <span className="font-medium">{item.label}</span>
+                                {item.detail ? <span className="text-yellow-700 dark:text-yellow-300"> ({item.detail})</span> : null}
+                              </li>
+                            ))}
+                          </ul>
+                          <div className="mt-4 flex justify-end gap-2">
+                            <button
+                              onClick={() => {
+                                setWarningsAcknowledged(false);
+                                textareaRef.current?.focus();
+                              }}
+                              className="px-3 py-2 border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm"
+                            >
+                              Make changes
+                            </button>
+                            <button
+                              onClick={() => setWarningsAcknowledged(true)}
+                              className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm flex items-center gap-1"
+                            >
+                              <CheckCircle2 className="w-4 h-4" /> Accept and proceed
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div ref={messagesEndRef} />
               </div>
               {stage === "intake" && (
                 <div className="p-4 border-t dark:border-gray-700">
                   <div className="flex gap-2">
                     <textarea
+                      ref={textareaRef}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -573,7 +623,7 @@ export default function FrameworkBuilderV2Page() {
                       <Send className="w-4 h-4" /> Send
                     </button>
                   </div>
-                  {robustnessGate?.ready && (
+                  {(robustnessGate?.ready || warningsAcknowledged) && (
                     <div className="mt-3 flex justify-end">
                       <button
                         onClick={draftFramework}
@@ -581,18 +631,6 @@ export default function FrameworkBuilderV2Page() {
                         className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-1"
                       >
                         <Play className="w-4 h-4" /> Draft framework
-                      </button>
-                    </div>
-                  )}
-                  {!robustnessGate?.ready && robustnessGate && robustnessGate.passedItems >= 6 && (
-                    <div className="mt-3 flex justify-end">
-                      <button
-                        onClick={draftFramework}
-                        disabled={loading}
-                        className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg flex items-center gap-1"
-                        title="Proceed with residual warnings"
-                      >
-                        <AlertTriangle className="w-4 h-4" /> Proceed with warnings
                       </button>
                     </div>
                   )}
