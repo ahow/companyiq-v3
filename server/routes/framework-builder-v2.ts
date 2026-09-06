@@ -8,6 +8,7 @@
 import { Router, Request, Response } from "express";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { validateAll, summariseViolations, type FrameworkDraft } from "../lib/framework-v2/rules.js";
+import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evidence-keyword-distinctiveness.js";
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
@@ -377,6 +378,45 @@ function countMeasures(draft: any): number {
   return draft.categories.reduce((sum: number, c: any) => sum + (Array.isArray(c?.measures) ? c.measures.length : 0), 0);
 }
 
+/**
+ * Append evidenceKeyword-distinctiveness warnings to a validation result.
+ *
+ * evidenceKeywords are fed to BM25 as a bag of tokens; a list can read as
+ * measure-specific to a human yet tokenise almost entirely into generic topic
+ * vocabulary shared by every measure (observed on the Nature framework's 2.4
+ * nature-opportunities). Such a measure is retrieved by topic density, not by
+ * what makes it distinct — the root cause behind the 2.4 recall miss. This is a
+ * NON-BLOCKING (severity "warning") signal so the operator can sharpen the list;
+ * it never rewrites or drops the LLM's keywords. Kept in the route (not rules.ts)
+ * because the analyzer imports the retrieval tokenizer, which rules.test.ts must
+ * not pull in.
+ */
+function appendEvidenceKeywordWarnings(validation: any, fwDraft: FrameworkDraft): any {
+  try {
+    const ek = analyzeEvidenceKeywordDistinctiveness(
+      (fwDraft.measures as any[]) || [],
+      fwDraft.topicSynonyms || [],
+    );
+    for (const d of ek.perMeasure) {
+      if (!d.warning) continue;
+      validation.violations.push({
+        measureId: d.measureId,
+        rule: "evidence-keyword-distinctiveness",
+        severity: "warning" as const,
+        message: d.warning,
+        suggestion:
+          `Distinctive tokens so far: [${d.distinctiveTokens.join(", ") || "none"}]. ` +
+          `Replace generic topic words with measure-specific single-token terms ` +
+          `(mechanisms, instruments, named methods) that do NOT appear in the topic ` +
+          `lexicon or in other measures.`,
+      });
+    }
+  } catch (e: any) {
+    console.error("[framework-builder v2] evidenceKeyword distinctiveness check failed:", e);
+  }
+  return validation;
+}
+
 async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean } | { error: string; raw?: string }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
@@ -386,7 +426,7 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
   const validate = (d: any) => {
     const fwDraft = buildFrameworkDraft(d, intake);
     try {
-      return validateAll(fwDraft);
+      return appendEvidenceKeywordWarnings(validateAll(fwDraft), fwDraft);
     } catch (e: any) {
       console.error("[framework-builder v2 /draft] validator crashed:", e);
       return {
@@ -487,7 +527,7 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
         // Simplest: use callDraftingLLM with priorAttempt = { draft, violations }.
         const fwDraft = buildFrameworkDraft(draft, intake);
         let currentValidation: any;
-        try { currentValidation = validateAll(fwDraft); }
+        try { currentValidation = appendEvidenceKeywordWarnings(validateAll(fwDraft), fwDraft); }
         catch (e: any) { currentValidation = { passed: false, violations: [{ rule: "internal", severity: "error", message: e?.message }] }; }
         const errorsFound = (currentValidation.violations || []).filter((v: any) => v.severity === "error" || v.severity === "warning").slice(0, 30);
         if (errorsFound.length === 0) {
@@ -513,7 +553,7 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
         const refinedDraft = repairCall.draft;
         const refinedFwDraft = buildFrameworkDraft(refinedDraft, intake);
         let refinedValidation: any;
-        try { refinedValidation = validateAll(refinedFwDraft); }
+        try { refinedValidation = appendEvidenceKeywordWarnings(validateAll(refinedFwDraft), refinedFwDraft); }
         catch (e: any) { refinedValidation = { passed: false, violations: [{ rule: "internal", severity: "error", message: e?.message }] }; }
         const result = {
           draft: refinedDraft,
@@ -652,7 +692,7 @@ router.post("/v2/validate", async (req: Request, res: Response) => {
       sensitivityPreference: draft.framework?.sensitivityPreference,
       measures,
     };
-    const validation = validateAll(fwDraft);
+    const validation = appendEvidenceKeywordWarnings(validateAll(fwDraft), fwDraft);
     return res.json({
       validation,
       summary: summariseViolations(validation.violations),
@@ -691,7 +731,7 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
     const measures = fwDraft.measures;
     let validation: any;
     try {
-      validation = validateAll(fwDraft);
+      validation = appendEvidenceKeywordWarnings(validateAll(fwDraft), fwDraft);
     } catch (e: any) {
       validation = { passed: false, violations: [{ rule: "internal", severity: "error", message: `Validator threw: ${e?.message || e}` }] };
     }

@@ -32,7 +32,7 @@ export const INTAKE_SYSTEM_PROMPT = `You are the intake facilitator for CompanyI
 After each turn, evaluate the 10-item checklist and report state to the user. Continue asking questions until every item passes, or the user says "proceed with best-guess drafts". The 10 items:
 
 1. Topic term is defined as a canonical short phrase
-2. Topic synonyms (2–10) are proposed and confirmed. Prefer completeness over minimalism; if the topic legitimately has 8–10 substantively-equivalent phrasings (as often occurs for TNFD-style nature or ISSB climate topics), include them all.
+2. Topic synonyms (2–10) are proposed and confirmed, with ACRONYMS AND SINGLE TOKENS explicitly listed. Prefer completeness over minimalism; if the topic legitimately has 8–10 substantively-equivalent phrasings (as often occurs for TNFD-style nature or ISSB climate topics), include them all. CRITICAL: always include all standard domain acronyms/abbreviations as individual entries in topicSynonyms (e.g. for nature: TNFD, SBTN, GBF, IPBES, ENCORE, KBA; for climate: TCFD, SBTi, CDP; for AI governance: LLM, AGI, GPAI). These single-token entries are fed directly to the BM25 retrieval index and match evidence passages far more reliably than multi-word phrases.
 3. Adjacent topics: ≥2 identified with example phrases, OR explicit "no adjacent topics identified" acknowledgment
 4. Every adjacent topic has ≥1 example phrase
 5. Anchor frameworks: either confirmed non-empty list or explicit "none applicable"
@@ -244,6 +244,15 @@ For every measure, set expected_yes_rate — the fraction of large-cap listed co
 
 ## C10 — topicTerm and topicSynonyms
 Framework-level. topicTerm is the canonical short phrase. topicSynonyms is a 2–10 entry list of substantively-equivalent alternative phrasings.
+
+## evidenceKeywords — short, high-precision retrieval tokens (MANDATORY)
+Each measure MUST have an evidenceKeywords array of 8–15 entries. These tokens are fed directly into BM25 retrieval — shorter and more specific terms retrieve evidence better. Rules:
+- AT LEAST 60% single-token entries: use individual keywords like "biodiversity", "deforestation", "sbtn", "wetland", not phrases like "nature-related financial risks" or "biodiversity-related disclosures".
+- Include all domain acronyms and abbreviations relevant to this specific measure (e.g. TNFD, SBTN, GBF, IPBES, ENCORE, KBA for nature measures; TCFD, SBTi, CDP for climate measures).
+- 2-word phrases ONLY when a single word is genuinely ambiguous. NO 3+ word phrases.
+- DO NOT include generic words: strategy, management, framework, disclosure, report, company, risk, opportunity.
+- Make evidenceKeywords SPECIFIC to the measure — the "board oversight" measure gets governance/committee tokens; the "deforestation" measure gets supply-chain/commodity tokens; do not reuse the same generic list across all measures.
+- DISTINCTIVENESS TEST (this is automatically checked and flagged): after removing (a) the framework's topic words/synonyms and (b) any token you also used in other measures, each measure MUST still have at least ~5 tokens left. Those remaining tokens are the ONLY thing that lets BM25 find THIS measure rather than the topic in general. Words like "nature", "biodiversity", "ecosystem", "opportunities", "natural capital" are topic words — they are stripped, so a list built mostly from them (e.g. "nature-related opportunities", "biodiversity opportunities", "natural capital opportunities") collapses to almost nothing distinctive and WILL be flagged. Instead name the concrete mechanisms/instruments/methods unique to the measure — e.g. for a nature-opportunities measure: biomimicry, regenerative, restoration, reforestation, rewilding, bioprospecting, ecotourism, "nature-based solutions", "payment for ecosystem services", "natural climate solutions", "biodiversity credits", nature-positive.
 
 # Sensitivity preference lever
 

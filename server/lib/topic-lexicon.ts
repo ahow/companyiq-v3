@@ -123,15 +123,17 @@ The assessment framework targets this topic:
 ${topic || name}
 """
 ${measuresBlock ? `\nThe framework's measures include:\n- ${measuresBlock}\n` : ""}
-TASK: List the distinctive words and short phrases that signal a passage is ABOUT THIS TOPIC. Include:
+TASK: List the distinctive TOKENS (single words preferred), acronyms, and minimal phrases that signal a passage is ABOUT THIS TOPIC. Include:
 - the core concept and its common synonyms / abbreviations / acronyms,
 - closely-related sub-concepts and technologies practitioners use interchangeably for this topic,
 - the most common NON-ENGLISH renderings of the core concept (French, German, Spanish, Italian, Portuguese, Chinese (Simplified & Traditional), Japanese, Korean) — only if a standard term exists.
 
-RULES:
-- High precision only. Do NOT include generic business words (e.g. "report", "risk", "company", "strategy") that would match unrelated passages.
-- Prefer multi-word phrases where a single word would be ambiguous.
-- Return ONLY a JSON object: {"terms": ["...", "..."]}. Max ${MAX_TERMS} entries. Lowercase. No duplicates.`;
+RULES — READ CAREFULLY:
+1. SINGLE-TOKEN TERMS FIRST. Aim for at least 60% single-token terms (one word). Single tokens like "biodiversity", "deforestation", "wetland" match prose far better than multi-word phrases like "nature-related financial risks" or "biodiversity-related disclosures". Include every relevant single-word synonym, acronym, and abbreviation.
+2. ACRONYMS AND ABBREVIATIONS ARE MANDATORY. For every standard industry acronym or abbreviation used by practitioners (e.g. for nature: TNFD, SBTN, GBF, IPBES, ENCORE, KBA, NBS; for climate: TCFD, GHG, SBT, CDP; for AI: LLM, AGI, RAG; etc.) include it as a single-token entry.
+3. Multi-word phrases ONLY when a single word is GENUINELY AMBIGUOUS without more context (e.g. "natural capital" not just "capital"; "machine learning" not just "machine"). Use ≤25% of your term budget on multi-word phrases. Maximum 2 words per phrase — no 3+ word phrases.
+4. High precision only. Do NOT include generic business words (e.g. "report", "risk", "company", "strategy", "management", "framework", "disclosure") that would match unrelated passages.
+5. Return ONLY a JSON object: {"terms": ["...", "..."]}. Max ${MAX_TERMS} entries. Lowercase. No duplicates.`;
 
   // 2026-09-05 fix: previously any LLM failure (network, JSON parse, empty response)
   // silently fell through to the generic-token fallback, which then persisted a
