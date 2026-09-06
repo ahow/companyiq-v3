@@ -103,7 +103,20 @@ export default function App() {
             />
           )}
           {page === "framework" && <FrameworkPage
-            onNavigateToV2Builder={() => navigate("framework-builder-v2")}
+            onNavigateToV2Builder={() => {
+              // "Create new" — clear any leftover ?frameworkId URL param from a previous
+              // "Continue in v2 builder" navigation, and clear the localStorage keys that
+              // initialise savedFrameworkId / testDriveListId on mount. Without this the
+              // freshly-mounted FrameworkBuilderV2Page reads the stale param/localStorage
+              // and immediately loads the last-saved framework instead of a blank intake.
+              window.history.pushState({}, "", window.location.pathname);
+              try {
+                localStorage.removeItem("fw-builder-v2-savedFrameworkId");
+                localStorage.removeItem("fw-builder-v2-testDriveListId");
+                localStorage.removeItem("fw-builder-v2-testDriveListName");
+              } catch { /* non-fatal */ }
+              navigate("framework-builder-v2");
+            }}
             onContinueV2Framework={(fwId) => {
               // Deep-link into the builder with the frameworkId so it restores server-side state.
               window.history.pushState({}, "", `?frameworkId=${fwId}`);
