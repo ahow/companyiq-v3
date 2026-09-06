@@ -503,7 +503,13 @@ export function applyRecencyGate<T extends { url: string; title: string; priorit
 // These URLs are NEVER useful for corporate disclosure analysis.
 // They are excluded before entering the candidate pool.
 
-const DENY_LIST_DOMAINS = [
+// Hostname-only entries (matched as exact host OR proper subdomain).
+// PREVIOUS BUG: entries were matched via substring `url.includes(entry)`,
+// which meant 'lever.co' matched 'unilever.com', 'ebay.com' matched any URL
+// containing 'ebay', etc. Fix: parse the URL's hostname and require
+// `host === entry || host.endsWith('.' + entry)`, which is the standard
+// hostname-suffix rule and cannot collateral-match unrelated issuers.
+const DENY_LIST_HOSTS = [
   // Podcast / media platforms
   "podcasts.apple.com", "music.apple.com", "apps.apple.com", "itunes.apple.com",
   "open.spotify.com", "soundcloud.com", "anchor.fm", "podcasts.google.com",
@@ -512,18 +518,30 @@ const DENY_LIST_DOMAINS = [
   // Social media (non-corporate)
   "tiktok.com", "pinterest.com", "tumblr.com", "reddit.com", "quora.com",
   // Job boards
-  "indeed.com", "glassdoor.com", "linkedin.com/jobs", "ziprecruiter.com",
-  "lever.co", "greenhouse.io", "workday.com/en-us/careers",
+  "indeed.com", "glassdoor.com", "ziprecruiter.com",
+  "lever.co", "greenhouse.io",
   // Generic aggregators / wikis
   "wikipedia.org", "wikimedia.org", "fandom.com",
   // Video platforms (unless corporate channel)
-  "youtube.com/watch", "vimeo.com",
+  "vimeo.com",
   // Academic / non-corporate
   "arxiv.org", "ssrn.com", "researchgate.net",
   // E-commerce
-  "amazon.com/dp", "amazon.com/gp", "ebay.com",
+  "ebay.com",
   // News aggregators (not primary sources)
   "news.google.com", "news.yahoo.com",
+];
+
+// Host + path-prefix entries: block only when BOTH the host matches AND the
+// path starts with the given prefix. Used for domains that host legitimate
+// corporate pages elsewhere (e.g. google.com/careers is noise, but google.com
+// itself is fine as an issuer domain).
+const DENY_LIST_HOST_PATHS: Array<{ host: string; pathPrefix: string }> = [
+  { host: "linkedin.com", pathPrefix: "/jobs" },
+  { host: "workday.com", pathPrefix: "/en-us/careers" },
+  { host: "youtube.com", pathPrefix: "/watch" },
+  { host: "amazon.com", pathPrefix: "/dp" },
+  { host: "amazon.com", pathPrefix: "/gp" },
 ];
 
 const DENY_LIST_PATH_PATTERNS = [
@@ -532,9 +550,25 @@ const DENY_LIST_PATH_PATTERNS = [
   /\/playlist/i, /\/episode/i, /\/podcast/i,
 ];
 
+function hostMatches(host: string, entry: string): boolean {
+  return host === entry || host.endsWith("." + entry);
+}
+
 function isUrlDenied(urlLower: string): boolean {
-  if (DENY_LIST_DOMAINS.some(d => urlLower.includes(d))) return true;
+  // Path-pattern rules apply to the URL text regardless of host and were
+  // never affected by the substring bug — keep as-is.
   if (DENY_LIST_PATH_PATTERNS.some(p => p.test(urlLower))) return true;
+  // Parse host + path. If the URL is malformed for any reason, fall through
+  // to "not denied" — the downstream fetch will error out safely.
+  let host = "";
+  let path = "";
+  try {
+    const u = new URL(urlLower);
+    host = u.hostname.replace(/^www\./, "");
+    path = u.pathname;
+  } catch { return false; }
+  if (DENY_LIST_HOSTS.some(d => hostMatches(host, d))) return true;
+  if (DENY_LIST_HOST_PATHS.some(({ host: h, pathPrefix }) => hostMatches(host, h) && path.startsWith(pathPrefix))) return true;
   return false;
 }
 
