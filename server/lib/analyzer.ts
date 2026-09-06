@@ -323,7 +323,7 @@ function buildBaseRatePriorBlock(measure: FrameworkMeasure): string {
 Across the universe of large-cap listed companies to which this framework applies, approximately ${pct}% would score Yes on this measure. This reflects current disclosure practice on the topic, not an aspiration. Use it to calibrate the evidentiary bar: apply the same evidentiary standard whether disclosure on this topic is common (higher base rate) or rare (lower). Do not default to No when concrete evidence is present just because you expect the answer to usually be No; do not lower the bar for evidence quality just because you expect the answer to usually be Yes.`;
 }
 
-function buildBinaryScoringPrompt(opts: {
+export function buildBinaryScoringPrompt(opts: {
   companyName: string;
   measure: FrameworkMeasure;
   evidenceText: string;
