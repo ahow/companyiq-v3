@@ -76,8 +76,8 @@ export function evaluateRobustness(intake: IntakeArtefact): RobustnessGateResult
   const syn = intake.topicSynonyms || [];
   items.push({
     id: "topicSynonyms",
-    label: "Topic synonyms (2–20) are proposed and confirmed",
-    passed: syn.length >= 2 && syn.length <= 20,
+    label: "Topic synonyms (≥2) are proposed and confirmed",
+    passed: syn.length >= 2,
     detail: `${syn.length} synonyms`,
   });
 
