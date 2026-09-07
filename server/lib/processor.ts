@@ -487,7 +487,9 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 
 // ─── Browser-Based Fetching (Puppeteer Fallback) ────────────────────────────
 
-const BROWSER_FETCH_TIMEOUT = 30000;
+// Fix C: env-driven (default 45s) so large WAF-defended issuer PDFs (20+ MB
+// annual/sustainability reports) have headroom to download via the browser path.
+const BROWSER_FETCH_TIMEOUT = parseInt(process.env.BROWSER_FETCH_TIMEOUT_MS || "45000", 10);
 
 // Limit how many browser fetches can run at once. Launching/holding many
 // Chromium contexts concurrently exhausts the container's process/fork and

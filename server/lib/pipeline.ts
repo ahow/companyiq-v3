@@ -891,7 +891,23 @@ async function runFetchPhase(opts: {
       // 41-K: Skip if host is circuit-broken
       let docHost = "";
       try { docHost = new URL(doc.url).hostname; } catch {}
-      if (docHost && hostCircuitBroken.has(docHost)) {
+
+      // Fix B: identify issuer-domain PDFs. Large legitimate issuer reports
+      // (20+ MB annual / sustainability PDFs) are EXPECTED to be slow and often
+      // live on WAF-defended hosts. They must be exempt from the slow-host
+      // circuit breaker — otherwise 3 big-but-successful downloads trip the
+      // breaker and kill every remaining report on that host.
+      const isPdfDoc = /\.pdf(\?.*)?$/i.test(doc.url);
+      const isIssuerHost = (() => {
+        if (!docHost) return false;
+        const h = docHost.replace(/^www\./, "");
+        return h === companyDomainLower ||
+          (!!companyDomainLower && h.endsWith("." + companyDomainLower)) ||
+          relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith("." + rd)));
+      })();
+      const isIssuerPdf = isPdfDoc && isIssuerHost;
+
+      if (docHost && hostCircuitBroken.has(docHost) && !isIssuerPdf) {
         console.log(`[${companyName}] 41-K: skipping ${doc.url.slice(0, 60)} (host circuit-broken)`);
         await storage.recordFetchFailure(companyId, doc.url, "circuit_broken");
         return;
@@ -904,8 +920,10 @@ async function runFetchPhase(opts: {
         const gateReason = ((doc as any).gateReason || "").toLowerCase();
         const isPinnedOrKnown = gateReason.includes("lane: pinned") || gateReason.includes("lane: known");
         // Fix 2a: if this host is known to return empty on HTTP, skip straight to browser.
+        // Fix C: issuer-domain PDFs always use the browser path — they sit on
+        // WAF-defended hosts where plain HTTP returns 403/empty.
         const historyFails = docHost ? (hostFailHistory.get(docHost) || 0) : 0;
-        const forceHeadless2a = isPinnedOrKnown || historyFails >= HOST_FAIL_THRESHOLD;
+        const forceHeadless2a = isPinnedOrKnown || historyFails >= HOST_FAIL_THRESHOLD || isIssuerPdf;
         if (forceHeadless2a && !isPinnedOrKnown) {
           console.log(`[${companyName}] Fix 2a: forcing headless for ${doc.url.slice(0, 80)} (host ${docHost} has ${historyFails} prior empty/transient failures)`);
         }
@@ -918,14 +936,16 @@ async function runFetchPhase(opts: {
         );
         // 41-K: Track fetch latency for circuit-breaker
         const fetchElapsed = Date.now() - fetchStart;
-        if (docHost && fetchElapsed >= SLOW_FETCH_THRESHOLD_MS) {
+        // Fix B: issuer-domain PDFs are expected to be large/slow — they must
+        // not count toward tripping the slow-host circuit breaker.
+        if (docHost && fetchElapsed >= SLOW_FETCH_THRESHOLD_MS && !isIssuerPdf) {
           const n = (hostSlowFetches.get(docHost) || 0) + 1;
           hostSlowFetches.set(docHost, n);
           if (n >= CIRCUIT_BREAK_THRESHOLD) {
             hostCircuitBroken.add(docHost);
             console.warn(`[${companyName}] 41-K: circuit break: ${docHost} (${n} consecutive slow fetches)`);
           }
-        } else if (docHost) {
+        } else if (docHost && !isIssuerPdf) {
           hostSlowFetches.set(docHost, 0); // reset streak on fast fetch
         }
 
@@ -1121,17 +1141,13 @@ async function runFetchPhase(opts: {
         `[${companyName}] Fix 2b: ${issuerDeadDocs.length} issuer-domain docs inaccessible — ` +
         `attempting PDF-fallback discovery from path patterns.`
       );
-      // Infer PDF URL candidates from dead HTML URLs
+      // Fix A: prioritise REAL discovered PDF URLs from the DB over guessed
+      // .html→.pdf patterns (guessed URLs rarely exist). Critically, the DB
+      // query now retries PDFs that previously FAILED with empty/transient/
+      // circuit-broken/timeout reasons — these are the genuine report PDFs on
+      // WAF-defended issuer hosts that the browser path can recover, not just
+      // untried 'pending' URLs.
       const pdfCandidates: string[] = [];
-      for (const doc of issuerDeadDocs) {
-        const htmlUrl = doc.url;
-        // Try simple HTML→PDF pattern: replace .html with .pdf
-        const pdfGuess = htmlUrl.replace(/\.html?(\?.*)?$/, ".pdf");
-        if (pdfGuess !== htmlUrl && !pdfCandidates.includes(pdfGuess)) {
-          pdfCandidates.push(pdfGuess);
-        }
-      }
-      // Also look for URLs already in the DB that are PDFs on the same domain but not yet fetched ok
       try {
         const { db: dbImport } = await import("../db.js");
         const { sql: sqlImport } = await import("drizzle-orm");
@@ -1139,17 +1155,29 @@ async function runFetchPhase(opts: {
           SELECT url FROM documents
           WHERE company_id = ${companyId}
             AND (url LIKE '%.pdf' OR type = 'pdf')
-            AND fetch_status = 'pending'
-          LIMIT 20
+            AND (
+              fetch_status = 'pending'
+              OR fetch_status = 'inaccessible'
+              OR (fetch_status = 'dead' AND failure_reason IN ('fetch_returned_empty', 'transient', 'circuit_broken', 'timeout'))
+            )
+          LIMIT 40
         `);
         for (const row of pdfRows.rows as any[]) {
           if (row.url && !pdfCandidates.includes(row.url)) pdfCandidates.push(row.url);
         }
       } catch {}
+      // Then append guessed HTML→PDF patterns from dead HTML URLs (lower priority)
+      for (const doc of issuerDeadDocs) {
+        const htmlUrl = doc.url;
+        const pdfGuess = htmlUrl.replace(/\.html?(\?.*)?$/, ".pdf");
+        if (pdfGuess !== htmlUrl && !pdfCandidates.includes(pdfGuess)) {
+          pdfCandidates.push(pdfGuess);
+        }
+      }
 
       // Attempt to fetch each PDF candidate via browser PDF path
       let pdfRecovered = 0;
-      for (const pdfUrl of pdfCandidates.slice(0, 10)) {
+      for (const pdfUrl of pdfCandidates.slice(0, 15)) {
         try {
           const { fetchPdfViaBrowser } = await import("./processor.js") as any;
           if (typeof fetchPdfViaBrowser !== 'function') break;
