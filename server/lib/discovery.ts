@@ -3093,12 +3093,54 @@ export async function runTargetedDisclosureQuery(
 ): Promise<DiscoveryCandidate[]> {
   try {
     const results = await webSearch(query, { num: opts.num ?? 10 });
-    return results.map((r) => ({
+
+    // Fix G: Filter repair-lane results to keep only those where at least one
+    // distinctive company name token appears in the result's title or URL.
+    // This prevents results about entirely different entities (e.g. "Banco
+    // Nacional de Costa Rica" when searching for Santander) from entering the
+    // corpus via the primary-disclosure-repair lane, where they would previously
+    // be ingested without any name-relevance check.
+    //
+    // "Distinctive" = a token that is ≥6 characters AND not a generic corporate/
+    // sector word. For very short company names (BHP, TSMC — no distinctive
+    // tokens after filtering) all results pass, which is safe because their names
+    // are so unusual that searches naturally stay on-topic.
+    const FIX_G_GENERIC = new Set([
+      'bank', 'banks', 'grupo', 'group', 'corp', 'corporation', 'company',
+      'companies', 'limited', 'holdings', 'international', 'national',
+      'industries', 'industry', 'services', 'service', 'financial', 'capital',
+      'management', 'partners', 'resources', 'solutions', 'systems', 'global',
+      'technology', 'technologies', 'energy', 'mining', 'retail', 'forest',
+      'investment', 'insurance',
+    ]);
+    const distinctiveTokens = companyName
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // strip diacritics (e.g. é→e)
+      .split(/[\s,\.&\-\(\)\/\+]+/)
+      .filter(w => w.length >= 6 && !FIX_G_GENERIC.has(w));
+
+    const filtered = distinctiveTokens.length > 0
+      ? results.filter(r => {
+          const haystack = (`${r.title || ''} ${r.link || ''}`)
+            .toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          return distinctiveTokens.some(t => haystack.includes(t));
+        })
+      : results; // no distinctive tokens → pass all results unfiltered
+
+    if (filtered.length < results.length) {
+      console.log(
+        `[${companyName}] Fix G: dropped ${results.length - filtered.length} repair-lane ` +
+        `result(s) with no company name signal (tokens: ${distinctiveTokens.join(', ')})`
+      );
+    }
+
+    return filtered.map(r => ({
       url: r.link,
-      title: r.title || "",
-      snippet: r.snippet || "",
-      lane: "primary-disclosure-repair",
-      priority: 55, // between IR (60+) and secondary (40) — rank layer decides final order
+      title: r.title || '',
+      snippet: r.snippet || '',
+      lane: 'primary-disclosure-repair',
+      priority: 55,
     }));
   } catch (e: any) {
     console.warn(`[${companyName}] Targeted disclosure query failed for "${query.slice(0, 80)}": ${e?.message}`);

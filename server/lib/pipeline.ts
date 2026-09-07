@@ -914,6 +914,57 @@ async function runFetchPhase(opts: {
         return;
       }
 
+      // Fix H: Pre-flight company-relevance check for repair-lane documents.
+      // Docs ingested via the 'primary-disclosure-repair' lane come from targeted
+      // web searches that can return results about entirely different entities (e.g.
+      // bncr.fi.cr — Banco Nacional de Costa Rica — returned when searching for
+      // Santander). When the title AND URL contain no distinctive token from the
+      // target company, the doc is almost certainly about a different entity.
+      // Reject it immediately (without fetching) so it:
+      //   (a) does not consume fetch budget;
+      //   (b) does not sit in the corpus as 'dead' (which falsely implies a
+      //       relevant-but-inaccessible document) and is never retried.
+      // This uses the same token logic as Fix G in discovery.ts — keep in sync.
+      {
+        const docGateReason = ((doc as any).gateReason || '');
+        const docLane = (docGateReason.match(/Lane:\s*([^;]+)/i)?.[1] || '').trim();
+        if (docLane === 'primary-disclosure-repair') {
+          const FIX_H_GENERIC = new Set([
+            'bank', 'banks', 'grupo', 'group', 'corp', 'corporation', 'company',
+            'companies', 'limited', 'holdings', 'international', 'national',
+            'industries', 'industry', 'services', 'service', 'financial', 'capital',
+            'management', 'partners', 'resources', 'solutions', 'systems', 'global',
+            'technology', 'technologies', 'energy', 'mining', 'retail', 'forest',
+            'investment', 'insurance',
+          ]);
+          const distinctiveH = companyName
+            .toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .split(/[\s,\.&\-\(\)\/\+]+/)
+            .filter(w => w.length >= 6 && !FIX_H_GENERIC.has(w));
+          if (distinctiveH.length > 0) {
+            const haystack = (`${(doc as any).title || ''} ${doc.url}`)
+              .toLowerCase()
+              .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            const hasCompanySignal = distinctiveH.some(t => haystack.includes(t));
+            if (!hasCompanySignal) {
+              console.warn(
+                `[${companyName}] Fix H: repair-lane doc has no company token in title/URL — ` +
+                `rejecting without fetch: ${doc.url.slice(0, 80)} ` +
+                `(tokens checked: ${distinctiveH.join(', ')})`
+              );
+              await storage.recordVerificationReject(
+                companyId,
+                doc.url,
+                `wrong_entity_by_title — no company token in repair-lane title/URL`,
+                batchId
+              );
+              return;
+            }
+          }
+        }
+      }
+
       try {
         const type = inferDocumentType(doc.url);
         // P5: Force headless for pinned/known URLs (they are high-priority and
@@ -1137,10 +1188,30 @@ async function runFetchPhase(opts: {
       return isInaccessibleOrEmpty && isIssuerDomain;
     });
 
-    if (issuerDeadDocs.length >= PDF_FALLBACK_THRESHOLD) {
+    // Fix I: Also trigger browser recovery for third-party PDFs with bot-blocking
+    // signals (blocked_403 or repeated timeout after exhausting retries).
+    // fetchIssuerPdfsWithPrimedSession is already generic — it handles any origin.
+    const thirdPartyBotBlockedPdfs = postFetchDocs.filter(d => {
+      const failureReason = (d as any).failureReason || '';
+      const isBotBlocked = d.fetchStatus === 'dead' &&
+        (failureReason === 'blocked_403' || failureReason === 'timeout');
+      const isPdf = (d.url || '').toLowerCase().endsWith('.pdf');
+      const isIssuerDomain = (() => {
+        try {
+          const h = new URL(d.url).hostname.replace(/^www\./, '');
+          return h === companyDomainLower ||
+            (!!companyDomainLower && h.endsWith('.' + companyDomainLower)) ||
+            relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith('.' + rd)));
+        } catch { return false; }
+      })();
+      return isBotBlocked && isPdf && !isIssuerDomain;
+    });
+
+    if (issuerDeadDocs.length >= PDF_FALLBACK_THRESHOLD || thirdPartyBotBlockedPdfs.length > 0) {
       console.log(
-        `[${companyName}] Fix 2b: ${issuerDeadDocs.length} issuer-domain docs inaccessible — ` +
-        `attempting PDF-fallback discovery from path patterns.`
+        `[${companyName}] Fix 2b/I: ${issuerDeadDocs.length} issuer-domain inaccessible, ` +
+        `${thirdPartyBotBlockedPdfs.length} third-party bot-blocked PDF(s) — ` +
+        `attempting browser-based PDF recovery.`
       );
       // Fix A: prioritise REAL discovered PDF URLs from the DB over guessed
       // .html→.pdf patterns (guessed URLs rarely exist). Critically, the DB
@@ -1189,7 +1260,7 @@ async function runFetchPhase(opts: {
             AND (
               fetch_status = 'pending'
               OR fetch_status = 'inaccessible'
-              OR (fetch_status = 'dead' AND failure_reason IN ('fetch_returned_empty', 'transient', 'circuit_broken', 'timeout'))
+              OR (fetch_status = 'dead' AND failure_reason IN ('fetch_returned_empty', 'transient', 'circuit_broken', 'timeout', 'blocked_403'))
             )
           ORDER BY
             (CASE WHEN url ~* ${priorityRegex} THEN 0 ELSE 1 END),
