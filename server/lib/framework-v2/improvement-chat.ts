@@ -40,11 +40,13 @@ export interface ImprovementChatContext {
   frameworkName: string;
   topicTerm: string;
   perCompanySummary: Array<{ companyName: string; yesCount: number; yesRate: number }>;
-  rootCauses: RootCauseReport;
+  rootCauses: RootCauseReport | null;
   flags: Flag[];
   proposals: EditProposal[];
   passedRobustnessCriteria: number;
   totalRobustnessCriteria: number;
+  terminologyGaps?: Array<{ term: string; companyCount: number; context: string }>;
+  vehicleMismatches?: Array<{ measureId: string; expectedVehicles: string[]; observedTypes: string[]; companyName: string }>;
 }
 
 /**
@@ -57,15 +59,26 @@ export function buildImprovementChatSystemPrompt(ctx: ImprovementChatContext): s
     .map((c) => `  - ${c.companyName}: ${c.yesCount} Yes (${(c.yesRate * 100).toFixed(0)}%)`)
     .join("\n");
 
-  const rcSummary = ctx.rootCauses.summary;
-  const companyClassifications = ctx.rootCauses.companies
+  const rcSummary = ctx.rootCauses?.summary;
+  const companyClassifications = ctx.rootCauses?.companies
     .map((c) => `  - ${c.companyName} [${c.classification}]: ${c.reasoning}`)
-    .join("\n");
+    .join("\n") ?? "  (corpus analysis unavailable)";
 
-  const measureIssues = ctx.rootCauses.measures
+  const measureIssues = ctx.rootCauses?.measures
     .filter((m) => m.classification !== "healthy")
     .map((m) => `  - ${m.measureId} [${m.classification}]: ${m.reasoning}`)
-    .join("\n");
+    .join("\n") ?? "";
+
+  const terminologyGapSection = ctx.terminologyGaps && ctx.terminologyGaps.length > 0
+    ? ctx.terminologyGaps.map((t) => `  - "${t.term}" (found in ${t.companyCount} company corpora near topic terms)`).join("\n")
+    : "  (none detected or corpus analysis unavailable)";
+
+  const vehicleMismatchSection = ctx.vehicleMismatches && ctx.vehicleMismatches.length > 0
+    ? ctx.vehicleMismatches.map((v) =>
+        `  - ${v.measureId} for ${v.companyName}: expected [${v.expectedVehicles.join(", ")}], ` +
+        `found evidence in [${v.observedTypes.join(", ")}]`
+      ).join("\n")
+    : "  (none detected or corpus analysis unavailable)";
 
   const proposalSummary = ctx.proposals
     .map((p, i) => `  [P${i + 1}] measure=${p.measureId} cause=${p.cause} action=${p.action}\n         rationale: ${p.rationale}`)
@@ -75,9 +88,9 @@ export function buildImprovementChatSystemPrompt(ctx: ImprovementChatContext): s
 
 TEST-DRIVE OUTCOME:
 - Robustness criteria passed: ${ctx.passedRobustnessCriteria}/${ctx.totalRobustnessCriteria}
-- Root-cause split: ${rcSummary.healthy} healthy companies, ${rcSummary.docCollectionFailures} doc-collection failures, ${rcSummary.frameworkIssues} framework issues, ${rcSummary.ambiguous} ambiguous
-- Measures classified as framework fault: ${rcSummary.deadMeasuresLikelyFrameworkFault}
-- Measures classified as corpus fault: ${rcSummary.deadMeasuresLikelyCorpusFault}
+- Root-cause split: ${rcSummary ? `${rcSummary.healthy} healthy companies, ${rcSummary.docCollectionFailures} doc-collection failures, ${rcSummary.frameworkIssues} framework issues, ${rcSummary.ambiguous} ambiguous` : "unavailable"}
+- Measures classified as framework fault: ${rcSummary ? rcSummary.deadMeasuresLikelyFrameworkFault : "unavailable"}
+- Measures classified as corpus fault: ${rcSummary ? rcSummary.deadMeasuresLikelyCorpusFault : "unavailable"}
 
 PER-COMPANY YES COUNTS:
 ${companySummary}
@@ -91,12 +104,20 @@ ${measureIssues || "  (none)"}
 AVAILABLE EDIT PROPOSALS:
 ${proposalSummary || "  (none)"}
 
+TERMINOLOGY GAP CANDIDATES:
+${terminologyGapSection}
+
+DISCLOSURE VEHICLE OBSERVATIONS:
+${vehicleMismatchSection}
+
 CRITICAL RULES FOR YOUR REPLIES:
 1. Ground every claim in the data above. Do NOT invent new companies, new measures, or new results.
 2. If the user asks about a company classified as "doc-collection-failure", explain that framework edits will not help — the fix is retrieval. Do not propose a measure edit for it.
 3. If the user asks about a measure classified as "collection-attributable", explain that the current test-drive cannot judge it — we need a company with strong disclosure on that sub-topic first.
 4. Keep answers focused. If the user asks "why did Ambev score 0", one paragraph is enough.
 5. When you want the user to take a concrete action, emit a structured action block. Do not describe an action in prose without emitting the block.
+6. If you see terminology gap candidates, explain they represent terms companies actually use for this topic that are NOT in the framework's topicSynonyms. Suggest the user add the most relevant ones to improve BM25 retrieval. Emit an <action type="add_synonyms" terms="term1,term2,term3" /> block when suggesting additions.
+7. If vehicle mismatches are present, explain that the evidence for a measure was found in document types the framework did not anticipate. Suggest the user consider updating disclosure_vehicles in the measure to include these types, if they are legitimate sources. Use the measure edit system (Re-draft with corrections) to update the measure definition to accept additional vehicle types.
 
 ACTION BLOCK SYNTAX:
 Emit each action on its own line, exactly as:
@@ -105,6 +126,7 @@ Emit each action on its own line, exactly as:
   <action type="apply_all_by_cause" cause="over-strict-fallback" />
   <action type="escalate_to_corpus" company="Ambev" />
   <action type="ignore_measure" measure="1.6-remuneration-linkage" reason="genuine non-disclosure" />
+  <action type="add_synonyms" terms="nature-related risk,biodiversity net gain" />
   <action type="rescore_now" />
 
 Emit blocks ONLY when the user should decide something. Every attribute must reference a real ID from the data above. Do not emit blocks in the middle of your prose — put them at the end.
@@ -113,7 +135,7 @@ Reply in plain English. Be direct. If the framework is broadly healthy but the u
 }
 
 export interface ExtractedAction {
-  type: "apply_edit" | "apply_all_by_cause" | "escalate_to_corpus" | "ignore_measure" | "rescore_now";
+  type: "apply_edit" | "apply_all_by_cause" | "escalate_to_corpus" | "ignore_measure" | "add_synonyms" | "rescore_now";
   attrs: Record<string, string>;
 }
 

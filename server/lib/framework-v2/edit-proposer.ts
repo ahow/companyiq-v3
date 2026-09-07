@@ -26,7 +26,8 @@ export type EditCause =
   | "missing-positive-examples" // no examples of what a Yes looks like
   | "adjacent-contamination"    // adjacent topic slipping through
   | "over-broad-wording"        // wording too permissive
-  | "insufficient-context";     // quotes lack surrounding context
+  | "insufficient-context"      // quotes lack surrounding context
+  | "terminology-gap";          // companies use terms not in topicSynonyms
 
 export type EditAction =
   | "broaden-fallback"
@@ -34,7 +35,8 @@ export type EditAction =
   | "tighten-definition"
   | "add-negative-examples"
   | "raise-min-context"
-  | "recalibrate-expected-rate";
+  | "recalibrate-expected-rate"
+  | "add-synonyms";
 
 export interface EditProposal {
   measureId: string;

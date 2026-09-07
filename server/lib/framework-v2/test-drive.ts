@@ -232,3 +232,90 @@ export function analyseTestDrive(
     passedGracefully: flags.filter((f) => f.severity === "error").length === 0,
   };
 }
+
+export interface TerminologyGapResult {
+  missingTerms: Array<{ term: string; companyCount: number; context: string }>;
+  // terms found in corpus text that aren't in topicSynonyms, with how many companies use them
+}
+
+/**
+ * Mine the test-drive corpus for terms that companies actually use for the topic
+ * but that are NOT already in topicSynonyms. Returns candidate additions ranked
+ * by frequency across companies.
+ *
+ * @param corpusTexts  Map of companyName → full corpus text (lowercased)
+ * @param topicSynonyms  Current synonym list (lowercased for comparison)
+ * @param topicTerm  The main topic term
+ */
+export function detectTerminologyGaps(
+  corpusTexts: Map<string, string>,
+  topicSynonyms: string[],
+  topicTerm: string,
+): TerminologyGapResult {
+  // Build a set of all current known terms (normalised)
+  const knownTermsLc = new Set([
+    topicTerm.toLowerCase(),
+    ...topicSynonyms.map((s) => s.toLowerCase()),
+  ]);
+
+  // We look for multi-word phrases (2–5 words) that:
+  //  1. Co-occur within 200 chars of any known term
+  //  2. Appear in ≥2 company corpora
+  //  3. Are NOT already in knownTermsLc
+  //  4. Pass a basic relevance heuristic (≥3 chars, not pure stopwords)
+
+  const STOPWORDS = new Set([
+    "the", "and", "for", "with", "that", "this", "from", "are", "has", "have",
+    "been", "not", "its", "our", "their", "we", "to", "of", "in", "on", "at",
+    "by", "as", "an", "a", "or", "be", "is", "was", "will", "it", "which",
+  ]);
+
+  // Extract candidate phrases: for each company corpus, find windows around known terms
+  const termCounts = new Map<string, Set<string>>(); // term → set of company names
+
+  for (const [companyName, text] of corpusTexts) {
+    for (const knownTerm of knownTermsLc) {
+      if (!knownTerm) continue;
+      let pos = 0;
+      while (true) {
+        const idx = text.indexOf(knownTerm, pos);
+        if (idx === -1) break;
+        pos = idx + 1;
+        // Look at the 200-char window around this occurrence
+        const windowStart = Math.max(0, idx - 100);
+        const windowEnd = Math.min(text.length, idx + knownTerm.length + 100);
+        const window = text.slice(windowStart, windowEnd);
+
+        // Extract 2–4 word sequences from the window that aren't the known term
+        const words = window.split(/\s+/).filter((w) => /^[a-z][a-z-]{2,}/.test(w));
+        for (let wi = 0; wi < words.length - 1; wi++) {
+          for (let len = 2; len <= 4 && wi + len <= words.length; len++) {
+            const phrase = words.slice(wi, wi + len).join(" ");
+            if (phrase === knownTerm) continue;
+            if (knownTermsLc.has(phrase)) continue;
+            // Skip phrases that are mostly stopwords
+            const contentWords = words.slice(wi, wi + len).filter((w) => !STOPWORDS.has(w));
+            if (contentWords.length === 0) continue;
+            if (phrase.length < 4 || phrase.length > 60) continue;
+            if (!termCounts.has(phrase)) termCounts.set(phrase, new Set());
+            termCounts.get(phrase)!.add(companyName);
+          }
+        }
+      }
+    }
+  }
+
+  // Filter: must appear in ≥2 companies, rank by company coverage
+  const candidates = Array.from(termCounts.entries())
+    .filter(([, companies]) => companies.size >= 2)
+    .sort((a, b) => b[1].size - a[1].size)
+    .slice(0, 10); // top 10 candidates
+
+  return {
+    missingTerms: candidates.map(([term, companies]) => ({
+      term,
+      companyCount: companies.size,
+      context: `Found in ${companies.size} company corpora near existing topic terms`,
+    })),
+  };
+}

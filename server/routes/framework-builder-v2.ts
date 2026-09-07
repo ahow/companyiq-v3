@@ -15,7 +15,7 @@ import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "
 import { analyseTestDrive, buildSampleSelectionPrompt, type TestDriveCompanyResult, type TestDriveSampleRequest } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
 import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
-import { diagnoseRootCauses, type CompanyCorpusStats } from "../lib/framework-v2/root-cause-diagnostic.js";
+import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } from "../lib/framework-v2/root-cause-diagnostic.js";
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import { batchTightenDefinitions, batchAppendExclusions, batchRegenerateExamples, groupProposalsByPatch, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
@@ -1728,7 +1728,7 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
     // Reload measure metadata for edit proposals.
     const measureMetaQuery = await db.execute(sql`
       SELECT measure_id, expected_yes_rate, title, substantive_definition, fallback_yes_criterion,
-             positive_examples, negative_examples, min_quote_context_chars
+             positive_examples, negative_examples, min_quote_context_chars, disclosure_vehicles
       FROM framework_measures WHERE framework_id = ${frameworkId}
     `);
     const measureRows = ((measureMetaQuery as any).rows || []) as any[];
@@ -1749,10 +1749,15 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       ORDER BY started_at DESC LIMIT 1
     `);
     const batchId = (batchRow as any).rows?.[0]?.id;
-    let rootCauses;
+    let rootCauses: RootCauseReport | null = null;
+    // Corpus text per company (lowercased), captured while computing root causes
+    // so terminology-gap mining below can reuse it without a second heavy query.
+    const corpusTexts = new Map<string, string>();
+    let topicSynonymsForGap: string[] = [];
     if (batchId) {
       const topicRow = await db.execute(sql`SELECT topic_synonyms FROM frameworks WHERE id = ${frameworkId}`);
       const topicSynonyms = ((topicRow as any).rows?.[0]?.topic_synonyms) || [];
+      topicSynonymsForGap = Array.isArray(topicSynonyms) ? topicSynonyms : [];
       const termsLc = [String(fwMeta.topic_term || "").toLowerCase(), ...topicSynonyms.map((s: string) => s.toLowerCase())].filter(Boolean);
       const corpusRows = await db.execute(sql`
         SELECT bc.company_id, c.name AS company_name, d.type, d.title,
@@ -1774,6 +1779,9 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
         const textLc = String(r.text || "").toLowerCase(); let docMentions = 0;
         for (const t of termsLc) { let i = textLc.indexOf(t); while (i !== -1) { docMentions++; i = textLc.indexOf(t, i + t.length); } }
         s.topicTermMentions += docMentions; if (docMentions > 0) s.topicMentioningDocs++;
+        // Accumulate corpus text per company for terminology gap mining (cap per-doc slice).
+        const existing = corpusTexts.get(r.company_name) ?? "";
+        corpusTexts.set(r.company_name, existing + " " + textLc.slice(0, 50000));
       }
       for (const r of results) {
         const k = String(r.companyId);
@@ -1784,7 +1792,79 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       rootCauses = diagnoseRootCauses(Object.values(perCompStats), measureMetadata.map((m: any) => m.measureId), scoresByCM);
     }
 
-    if (!rootCauses) return res.status(500).json({ error: "could not build root-cause context" });
+    // The chat can work without corpus-based root-cause data — flags, proposals,
+    // and per-company yes counts still give the LLM plenty to reason about. If the
+    // corpus lookup produced nothing (e.g. batchId null), fall back to a stub so
+    // the route returns 200 with useful context rather than a hard 500.
+    if (!rootCauses) {
+      rootCauses = {
+        companies: [],
+        measures: [],
+        summary: { docCollectionFailures: 0, frameworkIssues: 0, healthy: 0, ambiguous: 0, deadMeasuresLikelyFrameworkFault: 0, deadMeasuresLikelyCorpusFault: 0 },
+        headline: "Root-cause corpus analysis unavailable — discuss flags and proposals below.",
+      };
+    }
+
+    // ── Terminology gap detection ──────────────────────────────────────────
+    // Mine the corpus for terms companies actually use near the topic that
+    // aren't already in topicSynonyms. Pass the top candidates to the LLM.
+    let terminologyGapResult: import("../lib/framework-v2/test-drive.js").TerminologyGapResult | null = null;
+    try {
+      const { detectTerminologyGaps } = await import("../lib/framework-v2/test-drive.js");
+      if (corpusTexts.size > 0) {
+        terminologyGapResult = detectTerminologyGaps(corpusTexts, topicSynonymsForGap, String(fwMeta.topic_term || ""));
+      }
+    } catch (tgErr) {
+      console.warn("[improvement/chat] terminology gap detection failed (non-fatal):", tgErr);
+    }
+
+    // ── Disclosure vehicle mismatch detection ─────────────────────────────
+    const vehicleMismatches: Array<{ measureId: string; expectedVehicles: string[]; observedTypes: string[]; companyName: string }> = [];
+    try {
+      // For each measure that has disclosure_vehicles defined, check if any
+      // corpus documents are of types not in the expected list — especially
+      // for companies that scored zero on that measure.
+      const measuresWithVehicles = measureRows.filter((m: any) =>
+        Array.isArray(m.disclosure_vehicles) && m.disclosure_vehicles.length > 0
+      );
+      if (measuresWithVehicles.length > 0 && batchId) {
+        // Get doc types present in the corpus per company
+        const docTypeRows = await db.execute(sql`
+          SELECT c.name AS company_name, d.type AS doc_type, COUNT(*) AS cnt
+          FROM batch_corpus bc
+          JOIN companies c ON c.id = bc.company_id
+          JOIN documents d ON d.id = bc.document_id
+          WHERE bc.batch_id = ${batchId}
+          GROUP BY c.name, d.type
+        `);
+        const docTypesByCompany: Record<string, Set<string>> = {};
+        for (const r of ((docTypeRows as any).rows || [])) {
+          if (!docTypesByCompany[r.company_name]) docTypesByCompany[r.company_name] = new Set();
+          if (r.doc_type) docTypesByCompany[r.company_name].add(String(r.doc_type).toLowerCase());
+        }
+        // For each company that scored zero on a measure with disclosure_vehicles,
+        // check if observed doc types differ from expected
+        for (const m of measuresWithVehicles) {
+          const expectedVehicles = (m.disclosure_vehicles as string[]).map((v: string) => v.toLowerCase());
+          for (const r of results) {
+            const zeroOnMeasure = r.measures.find((mm: any) => mm.measureId === m.measure_id && mm.verdict === "No");
+            if (!zeroOnMeasure) continue;
+            const observedTypes = Array.from(docTypesByCompany[r.companyName] ?? []);
+            const unexpectedTypes = observedTypes.filter((t) => !expectedVehicles.some((ev) => t.includes(ev) || ev.includes(t)));
+            if (unexpectedTypes.length > 0) {
+              vehicleMismatches.push({
+                measureId: m.measure_id,
+                expectedVehicles,
+                observedTypes: unexpectedTypes.slice(0, 3),
+                companyName: r.companyName,
+              });
+            }
+          }
+        }
+      }
+    } catch (vmErr) {
+      console.warn("[improvement/chat] vehicle mismatch detection failed (non-fatal):", vmErr);
+    }
 
     const chatCtx: ImprovementChatContext = {
       frameworkName: fwMeta.name,
@@ -1795,6 +1875,8 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       proposals: editsBundle.proposals,
       passedRobustnessCriteria: 0,
       totalRobustnessCriteria: 6,
+      terminologyGaps: terminologyGapResult?.missingTerms,
+      vehicleMismatches: vehicleMismatches.length > 0 ? vehicleMismatches : undefined,
     };
 
     const system = buildImprovementChatSystemPrompt(chatCtx);
@@ -1803,14 +1885,15 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       .join("\n\n");
 
     const { completeWithFallback } = await import("../lib/ai-providers.js");
-    // Chat is a long-form consultation — use the widest allowable output window
-    // (32K on Claude Sonnet). The provider clamps further if needed. The full
-    // conversation is passed each turn so the LLM sees the entire back-and-forth,
-    // not just a truncated window.
+    // Conversational replies are short. 4000 output tokens is plenty and stays
+    // within the limits of every fallback provider (some cap far below Claude's
+    // 32K), avoiding a provider-side rejection that surfaced as "Error: Error".
+    // The full conversation is passed each turn so the LLM sees the entire
+    // back-and-forth, not just a truncated window.
     const { text: reply } = await completeWithFallback(providerName || "claude", {
       system,
       prompt: history + "\n\nAssistant:",
-      maxTokens: 32000,
+      maxTokens: 4000,
       temperature: 0.2,
     });
     const { displayText, actions } = extractActionsFromReply(reply);
@@ -1989,6 +2072,27 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
       } else if (action.type === "ignore_measure") {
         // No-op on framework; record for audit only.
         applied.push({ measureId: action.attrs.measure, action: "ignore", reason: action.attrs.reason });
+      } else if (action.type === "add_synonyms") {
+        // Append mined terminology-gap terms to the framework's topic_synonyms,
+        // de-duplicated against existing entries (case preserved as supplied).
+        const newTerms = String(action.attrs.terms || "").split(",").map((t: string) => t.trim()).filter(Boolean);
+        if (newTerms.length > 0) {
+          await db.execute(sql`
+            UPDATE frameworks
+            SET topic_synonyms = (
+              SELECT jsonb_agg(DISTINCT term)
+              FROM (
+                SELECT jsonb_array_elements_text(COALESCE(topic_synonyms, '[]'::jsonb)) AS term
+                UNION
+                SELECT unnest(${newTerms}::text[]) AS term
+              ) sub
+            )
+            WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+          `);
+          applied.push({ action: "add_synonyms", terms: newTerms });
+        } else {
+          skipped.push({ action, reason: "no terms supplied" });
+        }
       } else if (action.type === "rescore_now") {
         // Trigger fresh scoring via the existing /analyze route contract.
         // Client will re-navigate; server just acknowledges.
