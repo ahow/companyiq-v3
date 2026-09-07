@@ -1151,6 +1151,14 @@ async function runFetchPhase(opts: {
       try {
         const { db: dbImport } = await import("../db.js");
         const { sql: sqlImport } = await import("drizzle-orm");
+        // Fix D: deterministic, RELEVANCE-FIRST ordering. Previously there was no
+        // ORDER BY, so PostgreSQL returned rows in arbitrary physical order and the
+        // bounded attempt budget could be consumed by low-value PDFs (e.g. IR annual
+        // reports) before the topic-relevant sustainability/ESG reports were reached.
+        // For a nature/biodiversity framework the substantive disclosures live in the
+        // ESG/sustainability/CSR reports, so rank those — and recent years — first.
+        // This also makes the highest-value origin (e.g. esg.<domain>) the FIRST one
+        // processed, i.e. while the shared browser session is freshest.
         const pdfRows = await dbImport.execute(sqlImport`
           SELECT url FROM documents
           WHERE company_id = ${companyId}
@@ -1160,6 +1168,10 @@ async function runFetchPhase(opts: {
               OR fetch_status = 'inaccessible'
               OR (fetch_status = 'dead' AND failure_reason IN ('fetch_returned_empty', 'transient', 'circuit_broken', 'timeout'))
             )
+          ORDER BY
+            (CASE WHEN url ~* '(sustainab|biodivers|nature|esg|/csr|climate|environment|water|tcfd|tnfd)' THEN 0 ELSE 1 END),
+            (CASE WHEN url ~* '(2026|2025|2024|2023)' THEN 0 ELSE 1 END),
+            url
           LIMIT 40
         `);
         for (const row of pdfRows.rows as any[]) {
