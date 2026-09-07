@@ -942,13 +942,29 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
  *  - Bounded by an OVERALL budget (independent of the main fetch-phase budget) so
  *    it can never run unbounded, and a per-PDF timeout.
  *  - Returns a Map of url -> extracted text for the PDFs it recovered.
+ *  - Optionally fills `opts.outcomes` with a compact per-URL diagnostic so the
+ *    caller can PERSIST why each PDF failed. This is essential because Railway's
+ *    log rate-limiter drops the verbose per-document console output during a
+ *    scoring burst, so stdout cannot be relied on to explain recovery failures.
  */
+export interface PdfRecoveryOutcome {
+  url: string;
+  ok: boolean;
+  reason: string;          // 'ok' | 'http_404' | 'waf_block' | 'challenge_page' | 'empty_bytes' | 'not_pdf' | 'no_text' | 'nav_timeout' | 'browser_launch_failure' | 'budget_exhausted' | 'error'
+  httpStatus?: number;
+  bytes?: number;
+  chars?: number;
+  ms?: number;
+}
+
 export async function fetchIssuerPdfsWithPrimedSession(
   origin: string,
   urls: string[],
-  opts?: { overallBudgetMs?: number; perPdfTimeoutMs?: number }
+  opts?: { overallBudgetMs?: number; perPdfTimeoutMs?: number; outcomes?: PdfRecoveryOutcome[] }
 ): Promise<Map<string, string>> {
   const recovered = new Map<string, string>();
+  const outcomes = opts?.outcomes;
+  const note = (o: PdfRecoveryOutcome) => { if (outcomes) outcomes.push(o); };
   if (!origin || urls.length === 0) return recovered;
 
   const overallBudgetMs = opts?.overallBudgetMs ?? parseInt(process.env.PDF_RECOVERY_BUDGET_MS || "180000", 10); // 3 min
@@ -974,7 +990,11 @@ export async function fetchIssuerPdfsWithPrimedSession(
     console.log(`[Processor] PDF-recovery: primed WAF for ${origin} -> ${wafPrimed ? "sensor cookies present" : "no sensor cookies (continuing)"}; ${urls.length} candidate PDF(s)`);
 
     // In-page credentialed fetch that reuses the primed cookies (Strategy B).
-    const inPageFetch = async (target: string): Promise<string | null> => page.evaluate(async (t: string, originUrl: string) => {
+    // Returns a diagnostic object so the caller can persist WHY a fetch failed
+    // (HTTP status, byte count, and a short body snippet for WAF/challenge
+    // detection) — stdout is unreliable on Railway under log rate-limiting.
+    const inPageFetch = async (target: string): Promise<{ base64: string | null; status: number; bytes: number; snippet: string }> =>
+      page.evaluate(async (t: string, originUrl: string) => {
       // esbuild's keepNames wraps named inner helpers with __name(fn,"name"); that
       // helper does not exist in the browser realm, so the serialized callback throws
       // "__name is not defined". Provide an identity shim as the very first statement.
@@ -988,60 +1008,110 @@ export async function fetchIssuerPdfsWithPrimedSession(
         }
         return btoa(binary);
       };
-      const attempt = async (creds: RequestCredentials): Promise<string | null> => {
+      const attempt = async (creds: RequestCredentials): Promise<{ base64: string | null; status: number; bytes: number; snippet: string }> => {
         try {
           const resp = await fetch(t, { credentials: creds, headers: { Accept: "application/pdf,*/*", Referer: originUrl } });
-          if (!resp.ok) return null;
           const buf = await resp.arrayBuffer();
-          if (!buf || buf.byteLength === 0) return null;
-          return toB64(buf);
-        } catch { return null; }
+          const bytes = buf ? buf.byteLength : 0;
+          const head = bytes ? new Uint8Array(buf).slice(0, 5) : new Uint8Array();
+          const isPdf = head.length === 5 && String.fromCharCode(...head) === "%PDF-";
+          // Small non-PDF body → likely a WAF block / challenge page. Capture a snippet.
+          let snippet = "";
+          if (!isPdf && bytes > 0 && bytes < 200000) {
+            try { snippet = new TextDecoder().decode(new Uint8Array(buf).slice(0, 600)); } catch { snippet = ""; }
+          }
+          if (!resp.ok) return { base64: null, status: resp.status, bytes, snippet };
+          if (!bytes) return { base64: null, status: resp.status, bytes: 0, snippet };
+          if (!isPdf) return { base64: null, status: resp.status, bytes, snippet };
+          return { base64: toB64(buf), status: resp.status, bytes, snippet: "" };
+        } catch (e) {
+          return { base64: null, status: 0, bytes: 0, snippet: String(e).slice(0, 200) };
+        }
       };
-      return (await attempt("include")) || (await attempt("omit"));
+      const first = await attempt("include");
+      if (first.base64) return first;
+      const second = await attempt("omit");
+      // Prefer whichever attempt carries the more informative status/snippet.
+      return second.base64 || second.status ? second : first;
     }, target, origin);
 
+    // Classify a small HTML body as a Cloudflare/WAF challenge or block page.
+    const isChallengeSnippet = (s: string): boolean =>
+      /just a moment|cf-browser-verification|challenge-platform|cf-chl|attention required|access denied|_cf_chl_opt|enable javascript and cookies/i.test(s || "");
+
     for (const url of urls) {
+      const t0 = Date.now();
       if (Date.now() >= deadline) {
         console.warn(`[Processor] PDF-recovery: overall budget (${Math.round(overallBudgetMs / 1000)}s) exhausted for ${origin} — stopping with ${recovered.size} recovered`);
+        note({ url, ok: false, reason: "budget_exhausted", ms: 0 });
         break;
       }
       try {
         let text = "";
+        let httpStatus: number | undefined;
+        let bytes: number | undefined;
+        let reason = "no_text";
 
         // Strategy A: direct navigation to the PDF, reusing the primed session.
         try {
           const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: perPdfTimeoutMs });
-          if (resp && resp.ok()) {
+          if (resp) {
+            httpStatus = resp.status();
             const ct = String(resp.headers()["content-type"] || "").toLowerCase();
-            const bodyBuf: Buffer = await resp.buffer();
-            if (bodyBuf && bodyBuf.length > 0) {
-              const isPdf = bodyBuf.slice(0, 5).toString("latin1") === "%PDF-" || ct.includes("application/pdf");
-              if (isPdf && bodyBuf.slice(0, 5).toString("latin1") === "%PDF-") {
-                text = (await extractTextFromPdf(bodyBuf)) || "";
+            if (resp.ok()) {
+              const bodyBuf: Buffer = await resp.buffer();
+              if (bodyBuf && bodyBuf.length > 0) {
+                bytes = bodyBuf.length;
+                const isPdf = bodyBuf.slice(0, 5).toString("latin1") === "%PDF-" || ct.includes("application/pdf");
+                if (isPdf && bodyBuf.slice(0, 5).toString("latin1") === "%PDF-") {
+                  text = (await extractTextFromPdf(bodyBuf)) || "";
+                }
               }
             }
           }
         } catch (navErr: any) {
-          // fall through to in-page fetch
+          reason = /timeout/i.test(String(navErr?.message || navErr)) ? "nav_timeout" : "nav_error";
           console.log(`[Processor] PDF-recovery: direct nav did not yield bytes for ${url} (${String(navErr?.message || navErr).slice(0, 60)}) — trying in-page fetch`);
         }
 
         // Strategy B: in-page credentialed fetch using the primed cookies.
         if (!text) {
-          const base64 = await inPageFetch(url);
-          if (base64) {
-            const buf = Buffer.from(base64, "base64");
+          const r = await inPageFetch(url);
+          if (r.status) httpStatus = r.status;
+          if (r.bytes) bytes = r.bytes;
+          if (r.base64) {
+            const buf = Buffer.from(r.base64, "base64");
             if (buf.slice(0, 5).toString("latin1") === "%PDF-") {
               text = (await extractTextFromPdf(buf)) || "";
+              if (!text) reason = "no_text"; // PDF fetched but text extraction empty
+            } else {
+              reason = "not_pdf";
             }
+          } else if (r.status === 404) {
+            reason = "http_404";
+          } else if (r.status === 403 || r.status === 401 || r.status === 429) {
+            reason = isChallengeSnippet(r.snippet) ? "challenge_page" : "waf_block";
+          } else if (r.bytes === 0) {
+            reason = "empty_bytes";
+          } else if (isChallengeSnippet(r.snippet)) {
+            reason = "challenge_page";
+          } else if (r.status && r.status >= 400) {
+            reason = "waf_block";
+          } else if (r.bytes && r.bytes > 0) {
+            // 2xx but not a PDF and not a recognised challenge page — we got an
+            // HTML body (SPA shell / wrong URL) instead of the PDF.
+            reason = "not_pdf";
           }
         }
 
         if (text && text.length > 200) {
           recovered.set(url, text);
+          note({ url, ok: true, reason: "ok", httpStatus, bytes, chars: text.length, ms: Date.now() - t0 });
           console.log(`[Processor] PDF-recovery: recovered ${text.length} chars from ${url.slice(0, 90)}`);
         } else {
-          console.log(`[Processor] PDF-recovery: no usable content from ${url.slice(0, 90)}`);
+          if (text && text.length <= 200) reason = "no_text";
+          note({ url, ok: false, reason, httpStatus, bytes, chars: text.length, ms: Date.now() - t0 });
+          console.log(`[Processor] PDF-recovery: no usable content from ${url.slice(0, 90)} [reason=${reason} status=${httpStatus ?? "-"} bytes=${bytes ?? "-"}]`);
         }
       } catch (err: any) {
         const msg = String(err?.message || err);
@@ -1049,9 +1119,11 @@ export async function fetchIssuerPdfsWithPrimedSession(
         // stop the batch rather than hammering it further.
         if (/EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg)) {
           tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
+          note({ url, ok: false, reason: "browser_launch_failure", ms: Date.now() - t0 });
           console.warn(`[Processor] PDF-recovery: browser launch failure — aborting batch for ${origin} (${msg.slice(0, 80)})`);
           break;
         }
+        note({ url, ok: false, reason: "error", ms: Date.now() - t0 });
         console.warn(`[Processor] PDF-recovery: failed for ${url.slice(0, 90)}: ${msg.slice(0, 100)}`);
       }
     }

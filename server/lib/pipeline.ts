@@ -33,6 +33,7 @@ import {
   verifyLatestPrimaryDisclosure,
 } from "./primary-disclosure-check.js";
 import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError } from "./processor.js";
+import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
@@ -1209,6 +1210,15 @@ async function runFetchPhase(opts: {
       }
 
       let pdfRecovered = 0;
+      // Fix E: collect a per-URL recovery diagnostic for EVERY candidate and
+      // persist it to documents.failure_reason. Railway's log rate-limiter drops
+      // the verbose per-document console stream during a scoring burst, so stdout
+      // cannot be relied on to explain why an issuer PDF (e.g. esg.tsmc.com) was
+      // not recovered. Persisting the reason to the DB makes the next rescore
+      // self-diagnosing: query documents.failure_reason to see waf_block /
+      // challenge_page / http_404 / budget_exhausted / browser_launch_failure /
+      // nav_timeout per URL.
+      const recoveryOutcomes: PdfRecoveryOutcome[] = [];
       try {
         const { fetchIssuerPdfsWithPrimedSession } = await import("./processor.js") as any;
         if (typeof fetchIssuerPdfsWithPrimedSession === 'function') {
@@ -1219,7 +1229,7 @@ async function runFetchPhase(opts: {
             if (attemptBudget <= 0) break;
             const slice = urls.slice(0, attemptBudget);
             attemptBudget -= slice.length;
-            const recoveredMap: Map<string, string> = await fetchIssuerPdfsWithPrimedSession(origin, slice);
+            const recoveredMap: Map<string, string> = await fetchIssuerPdfsWithPrimedSession(origin, slice, { outcomes: recoveryOutcomes });
             for (const [pdfUrl, pdfText] of recoveredMap) {
               if (pdfText && pdfText.length > 200) {
                 await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
@@ -1234,6 +1244,36 @@ async function runFetchPhase(opts: {
       }
       if (pdfRecovered > 0) {
         console.log(`[${companyName}] Fix 2b: recovered ${pdfRecovered} PDF documents via fallback discovery`);
+      }
+
+      // Fix E: persist the per-URL recovery diagnostics. One low-volume UPDATE per
+      // NON-recovered candidate so we never overwrite a successful fetch's status.
+      if (recoveryOutcomes.length > 0) {
+        try {
+          const { db: diagDb } = await import("../db.js");
+          const { sql: diagSql } = await import("drizzle-orm");
+          let persisted = 0;
+          for (const o of recoveryOutcomes) {
+            if (o.ok) continue; // recorded as success via recordFetchSuccess above
+            const detail =
+              `recovery:${o.reason}` +
+              (o.httpStatus ? ` status=${o.httpStatus}` : "") +
+              (o.bytes != null ? ` bytes=${o.bytes}` : "");
+            await diagDb.execute(diagSql`
+              UPDATE documents
+                 SET failure_reason = ${detail.slice(0, 200)}
+               WHERE company_id = ${companyId}
+                 AND url = ${o.url}
+            `);
+            persisted++;
+          }
+          const summary = recoveryOutcomes.reduce((acc: Record<string, number>, o) => {
+            acc[o.reason] = (acc[o.reason] || 0) + 1; return acc;
+          }, {});
+          console.log(`[${companyName}] Fix E: persisted ${persisted} recovery diagnostics — ${JSON.stringify(summary)}`);
+        } catch (diagErr: any) {
+          console.warn(`[${companyName}] Fix E: failed to persist recovery diagnostics: ${diagErr?.message || diagErr}`);
+        }
       }
     }
   }
