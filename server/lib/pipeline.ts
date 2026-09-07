@@ -1175,21 +1175,50 @@ async function runFetchPhase(opts: {
         }
       }
 
-      // Attempt to fetch each PDF candidate via browser PDF path
+      // Fix 2b (session-primed recovery): group candidates by ORIGIN and recover
+      // each origin's PDFs with a SINGLE WAF-primed browser session, reusing the
+      // clearance cookie across all direct PDF navigations. This replaces the old
+      // per-URL loop that opened a fresh page and re-primed the WAF for every PDF
+      // (slow — blew the time budget — and fork-heavy — tripped the launch
+      // circuit, so most PDFs were skipped and recorded 'transient'/'dead').
+      //
+      // The recovery runs OUTSIDE the main fetch-phase budget (it is after the
+      // pass loop) and gets its own bounded budget; it also resets the stale
+      // browser launch circuit first, so a cooldown left over from the main phase
+      // no longer blocks recovery. Generalises to any WAF-defended issuer SPA.
+      const candidatesByOrigin = new Map<string, string[]>();
+      for (const pdfUrl of pdfCandidates.slice(0, 40)) {
+        let origin: string | null = null;
+        try { const u = new URL(pdfUrl); origin = `${u.protocol}//${u.host}`; } catch { origin = null; }
+        if (!origin) continue;
+        const list = candidatesByOrigin.get(origin) ?? [];
+        list.push(pdfUrl);
+        candidatesByOrigin.set(origin, list);
+      }
+
       let pdfRecovered = 0;
-      for (const pdfUrl of pdfCandidates.slice(0, 15)) {
-        try {
-          const { fetchPdfViaBrowser } = await import("./processor.js") as any;
-          if (typeof fetchPdfViaBrowser !== 'function') break;
-          const pdfText = await fetchPdfViaBrowser(pdfUrl);
-          if (pdfText && pdfText.length > 200) {
-            await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
-            pdfRecovered++;
-            console.log(`[${companyName}] Fix 2b: PDF fallback recovered ${pdfText.length} chars from ${pdfUrl.slice(0, 80)}`);
+      try {
+        const { fetchIssuerPdfsWithPrimedSession } = await import("./processor.js") as any;
+        if (typeof fetchIssuerPdfsWithPrimedSession === 'function') {
+          // Cap total recovery attempts across origins at 15 (highest-priority
+          // DB-sourced URLs come first per the ordering above).
+          let attemptBudget = 15;
+          for (const [origin, urls] of candidatesByOrigin) {
+            if (attemptBudget <= 0) break;
+            const slice = urls.slice(0, attemptBudget);
+            attemptBudget -= slice.length;
+            const recoveredMap: Map<string, string> = await fetchIssuerPdfsWithPrimedSession(origin, slice);
+            for (const [pdfUrl, pdfText] of recoveredMap) {
+              if (pdfText && pdfText.length > 200) {
+                await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
+                pdfRecovered++;
+                console.log(`[${companyName}] Fix 2b: PDF fallback recovered ${pdfText.length} chars from ${pdfUrl.slice(0, 80)}`);
+              }
+            }
           }
-        } catch (pdfErr: any) {
-          console.warn(`[${companyName}] Fix 2b: PDF fallback failed for ${pdfUrl.slice(0, 80)}: ${pdfErr.message}`);
         }
+      } catch (pdfErr: any) {
+        console.warn(`[${companyName}] Fix 2b: session-primed PDF recovery failed: ${pdfErr?.message || pdfErr}`);
       }
       if (pdfRecovered > 0) {
         console.log(`[${companyName}] Fix 2b: recovered ${pdfRecovered} PDF documents via fallback discovery`);

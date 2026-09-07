@@ -544,6 +544,23 @@ function tripBrowserCircuit(reason: string): void {
   );
 }
 
+/**
+ * Fix 2b (session-primed recovery): clear the browser launch circuit so a
+ * last-resort recovery pass gets a fresh attempt. The circuit trips during the
+ * resource-intensive main fetch phase (many concurrent large-PDF browser
+ * fetches cause transient fork/EAGAIN pressure) and then stays open for the
+ * cooldown window — which would otherwise cause every recovery fetch to be
+ * skipped even though the fork pressure has already passed. Resetting is safe:
+ * the very next launch attempt re-trips the circuit if the container is still
+ * genuinely out of process budget.
+ */
+export function resetBrowserCircuit(): void {
+  if (browserLaunchBlockedUntil !== 0) {
+    console.log(`[Processor] Browser launch circuit reset (was open until ${new Date(browserLaunchBlockedUntil).toISOString()})`);
+  }
+  browserLaunchBlockedUntil = 0;
+}
+
 async function launchChromiumWithRetry(executablePath: string): Promise<any> {
   // NOTE: we deliberately do NOT pass --single-process. While it reduces the
   // number of helper processes, in this container it is the dominant cause of
@@ -821,6 +838,10 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     // headers and try credentialed THEN uncredentialed. If the first pass returns
     // nothing AND the session was not yet primed, we re-prime and retry once.
     const inPageFetch = async (): Promise<string | null> => page.evaluate(async (target: string, originUrl: string) => {
+      // esbuild's keepNames wraps named inner helpers with __name(fn,"name"); that
+      // helper does not exist in the browser realm, so the serialized callback throws
+      // "__name is not defined". Provide an identity shim as the very first statement.
+      (globalThis as any).__name = (globalThis as any).__name || function (f: any) { return f; };
       const toB64 = (buf: ArrayBuffer): string => {
         let binary = "";
         const bytes = new Uint8Array(buf);
@@ -895,6 +916,158 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     }
     releaseBrowserSlot();
   }
+}
+
+/**
+ * Fix 2b (session-primed batch recovery): fetch several issuer-domain PDFs that
+ * all live on the SAME origin, reusing ONE WAF-primed browser page for the whole
+ * batch instead of opening a fresh page and re-priming the origin for every URL
+ * (what per-URL `fetchPdfViaBrowser` does).
+ *
+ * Why this is the right structural fix (not a per-company workaround):
+ *  - Class of problem: any issuer whose IR/ESG site is a WAF-defended SPA (TSMC,
+ *    SMFG, Tesla, …) exposes its real disclosures only as large PDFs that need a
+ *    primed browser session. Recovering 10–15 such PDFs by re-priming per URL is
+ *    both slow (blows the time budget) and fork-heavy (trips the launch circuit).
+ *  - Priming ONCE and reusing the page's WAF-clearance cookies for all direct PDF
+ *    navigations on that origin is far cheaper and is exactly what a real browser
+ *    session does.
+ *
+ * Behaviour:
+ *  - Resets the launch circuit first (last-resort recovery deserves a fresh try;
+ *    the main-phase fork pressure has already passed by the time we get here).
+ *  - Primes the WAF once on the origin root, then for each URL uses Strategy A
+ *    (direct navigation — the most reliable path over forced HTTP/1.1) and falls
+ *    back to an in-page credentialed fetch that reuses the primed cookies.
+ *  - Bounded by an OVERALL budget (independent of the main fetch-phase budget) so
+ *    it can never run unbounded, and a per-PDF timeout.
+ *  - Returns a Map of url -> extracted text for the PDFs it recovered.
+ */
+export async function fetchIssuerPdfsWithPrimedSession(
+  origin: string,
+  urls: string[],
+  opts?: { overallBudgetMs?: number; perPdfTimeoutMs?: number }
+): Promise<Map<string, string>> {
+  const recovered = new Map<string, string>();
+  if (!origin || urls.length === 0) return recovered;
+
+  const overallBudgetMs = opts?.overallBudgetMs ?? parseInt(process.env.PDF_RECOVERY_BUDGET_MS || "180000", 10); // 3 min
+  const perPdfTimeoutMs = opts?.perPdfTimeoutMs ?? BROWSER_FETCH_TIMEOUT;
+  const deadline = Date.now() + overallBudgetMs;
+
+  // Last-resort recovery: clear any stale launch-circuit cooldown left over from
+  // the main fetch phase so we actually get a browser here.
+  resetBrowserCircuit();
+
+  await acquireBrowserSlot();
+  let page: any = null;
+  let browserLaunched = false;
+  try {
+    const browser = await getSharedBrowser();
+    browserLaunched = true;
+    page = await browser.newPage();
+    await page.setUserAgent(USER_AGENT);
+    await page.setExtraHTTPHeaders(WAF_PRIME_HEADERS);
+
+    // Prime the WAF session ONCE for the whole batch.
+    const wafPrimed = await primeWafSession(page, origin);
+    console.log(`[Processor] PDF-recovery: primed WAF for ${origin} -> ${wafPrimed ? "sensor cookies present" : "no sensor cookies (continuing)"}; ${urls.length} candidate PDF(s)`);
+
+    // In-page credentialed fetch that reuses the primed cookies (Strategy B).
+    const inPageFetch = async (target: string): Promise<string | null> => page.evaluate(async (t: string, originUrl: string) => {
+      // esbuild's keepNames wraps named inner helpers with __name(fn,"name"); that
+      // helper does not exist in the browser realm, so the serialized callback throws
+      // "__name is not defined". Provide an identity shim as the very first statement.
+      (globalThis as any).__name = (globalThis as any).__name || function (f: any) { return f; };
+      const toB64 = (buf: ArrayBuffer): string => {
+        let binary = "";
+        const bytes = new Uint8Array(buf);
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)) as any);
+        }
+        return btoa(binary);
+      };
+      const attempt = async (creds: RequestCredentials): Promise<string | null> => {
+        try {
+          const resp = await fetch(t, { credentials: creds, headers: { Accept: "application/pdf,*/*", Referer: originUrl } });
+          if (!resp.ok) return null;
+          const buf = await resp.arrayBuffer();
+          if (!buf || buf.byteLength === 0) return null;
+          return toB64(buf);
+        } catch { return null; }
+      };
+      return (await attempt("include")) || (await attempt("omit"));
+    }, target, origin);
+
+    for (const url of urls) {
+      if (Date.now() >= deadline) {
+        console.warn(`[Processor] PDF-recovery: overall budget (${Math.round(overallBudgetMs / 1000)}s) exhausted for ${origin} — stopping with ${recovered.size} recovered`);
+        break;
+      }
+      try {
+        let text = "";
+
+        // Strategy A: direct navigation to the PDF, reusing the primed session.
+        try {
+          const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: perPdfTimeoutMs });
+          if (resp && resp.ok()) {
+            const ct = String(resp.headers()["content-type"] || "").toLowerCase();
+            const bodyBuf: Buffer = await resp.buffer();
+            if (bodyBuf && bodyBuf.length > 0) {
+              const isPdf = bodyBuf.slice(0, 5).toString("latin1") === "%PDF-" || ct.includes("application/pdf");
+              if (isPdf && bodyBuf.slice(0, 5).toString("latin1") === "%PDF-") {
+                text = (await extractTextFromPdf(bodyBuf)) || "";
+              }
+            }
+          }
+        } catch (navErr: any) {
+          // fall through to in-page fetch
+          console.log(`[Processor] PDF-recovery: direct nav did not yield bytes for ${url} (${String(navErr?.message || navErr).slice(0, 60)}) — trying in-page fetch`);
+        }
+
+        // Strategy B: in-page credentialed fetch using the primed cookies.
+        if (!text) {
+          const base64 = await inPageFetch(url);
+          if (base64) {
+            const buf = Buffer.from(base64, "base64");
+            if (buf.slice(0, 5).toString("latin1") === "%PDF-") {
+              text = (await extractTextFromPdf(buf)) || "";
+            }
+          }
+        }
+
+        if (text && text.length > 200) {
+          recovered.set(url, text);
+          console.log(`[Processor] PDF-recovery: recovered ${text.length} chars from ${url.slice(0, 90)}`);
+        } else {
+          console.log(`[Processor] PDF-recovery: no usable content from ${url.slice(0, 90)}`);
+        }
+      } catch (err: any) {
+        const msg = String(err?.message || err);
+        // A launch failure here means the container is genuinely out of budget —
+        // stop the batch rather than hammering it further.
+        if (/EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg)) {
+          tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
+          console.warn(`[Processor] PDF-recovery: browser launch failure — aborting batch for ${origin} (${msg.slice(0, 80)})`);
+          break;
+        }
+        console.warn(`[Processor] PDF-recovery: failed for ${url.slice(0, 90)}: ${msg.slice(0, 100)}`);
+      }
+    }
+  } catch (error: any) {
+    const msg = String(error?.message || error);
+    if (!browserLaunched || /EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg)) {
+      tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
+    }
+    console.warn(`[Processor] PDF-recovery: session setup failed for ${origin}: ${msg.slice(0, 120)}`);
+  } finally {
+    if (page) {
+      try { await page.close(); } catch { /* ignore */ }
+    }
+    releaseBrowserSlot();
+  }
+  return recovered;
 }
 
 // ─── Main Process Document Function ──────────────────────────────────────────
