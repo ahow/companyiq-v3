@@ -1188,13 +1188,29 @@ async function runFetchPhase(opts: {
       return isInaccessibleOrEmpty && isIssuerDomain;
     });
 
-    // Fix I: Also trigger browser recovery for third-party PDFs with bot-blocking
-    // signals (blocked_403 or repeated timeout after exhausting retries).
-    // fetchIssuerPdfsWithPrimedSession is already generic — it handles any origin.
+    // Fix I / I.2: Also trigger browser recovery for third-party PDFs with
+    // bot-blocking signals. fetchIssuerPdfsWithPrimedSession is already generic —
+    // it handles any origin.
+    //
+    // Fix I.2 (widened signal set): the original Fix I only matched 'blocked_403'
+    // and 'timeout'. In practice a JS-challenge / proof-of-work WAF (Cloudflare,
+    // Datadog, Incapsula) very often does NOT return a 403 to our HTTP fetcher —
+    // it returns an empty or challenge body with a 200, which the fetch layer
+    // records as 'fetch_returned_empty' (or 'transient' on a reset). That is
+    // exactly what happened to Newmont's gambusino/pngx mirrors: they were 'dead /
+    // fetch_returned_empty', so the Fix I trigger never fired and the browser
+    // recovery pass was skipped entirely. Widen the match to the full set of
+    // bot-block-consistent fetch failures so the recovery pass fires whenever a
+    // third-party PDF failed for a reason a real browser could plausibly clear.
+    // The pdfCandidates SQL below already includes all these reasons, so no
+    // candidate is missed once the pass runs; and the overall attempt budget
+    // (15 across origins, issuer-priority first) bounds the added browser cost.
+    const BOT_BLOCK_FAILURE_REASONS = new Set([
+      'blocked_403', 'timeout', 'fetch_returned_empty', 'transient',
+    ]);
     const thirdPartyBotBlockedPdfs = postFetchDocs.filter(d => {
       const failureReason = (d as any).failureReason || '';
-      const isBotBlocked = d.fetchStatus === 'dead' &&
-        (failureReason === 'blocked_403' || failureReason === 'timeout');
+      const isBotBlocked = d.fetchStatus === 'dead' && BOT_BLOCK_FAILURE_REASONS.has(failureReason);
       const isPdf = (d.url || '').toLowerCase().endsWith('.pdf');
       const isIssuerDomain = (() => {
         try {

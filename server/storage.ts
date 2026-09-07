@@ -1200,6 +1200,16 @@ export async function createBatchRun(workspaceId: number, frameworkId: number, t
       .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "running")));
   }
 
+  // Always stamp a deployment fingerprint at batch start. Reliability runs carry
+  // an explicit fingerprint (captured when the run was created); interactive
+  // runs (e.g. a rescore triggered from the UI) previously passed none, so the
+  // column was left NULL — which made it impossible to tell which commit actually
+  // produced a given run's corpus/scores after the fact. Fall back to the live
+  // environment fingerprint (RAILWAY_GIT_COMMIT_SHA / SOURCE_SHA etc.) so every
+  // batch is traceable to the deployed commit.
+  const effectiveDeploymentFingerprint =
+    reliability?.deploymentFingerprint ?? deploymentFingerprintFromEnvironment();
+
   try {
     const [batch] = await db.insert(schema.batchRuns).values({
       workspaceId,
@@ -1207,7 +1217,7 @@ export async function createBatchRun(workspaceId: number, frameworkId: number, t
       runKey: reliability?.runKey,
       testCycleId: reliability?.testCycleId,
       batteryLabel: reliability?.batteryLabel,
-      deploymentFingerprint: reliability?.deploymentFingerprint,
+      deploymentFingerprint: effectiveDeploymentFingerprint,
       frameworkId,
       listId,
       totalJobs,
