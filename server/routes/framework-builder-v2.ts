@@ -1104,100 +1104,12 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       robustness = computeRobustnessCriteria(results, measureMetadata, labels);
       edits = proposeEditsForFlags(report.flags || [], measuresById);
 
-      // 6b. Compute per-company corpus stats + per-measure topic-rich coverage
-      //     so we can separate doc-collection failures from framework issues.
-      try {
-        // Fetch framework topic terms for topic-mention detection.
-        const fwRow = await db.execute(sql`
-          SELECT topic_term, topic_synonyms FROM frameworks WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
-        `);
-        const fwMeta = ((fwRow as any).rows || [])[0] || {};
-        const topicTerm = String(fwMeta.topic_term || "").trim();
-        const topicSynonyms = Array.isArray(fwMeta.topic_synonyms) ? fwMeta.topic_synonyms : [];
-        const terms = [topicTerm, ...topicSynonyms].filter((t) => t && typeof t === "string" && t.length > 1);
-        const termsLc = terms.map((t) => t.toLowerCase());
-
-        // Pull document text via batch_corpus for this batch only. Batch_corpus
-        // was populated by the analysis pipeline, so this is the exact set of
-        // documents the LLM actually saw.
-        const corpusRows = await db.execute(sql`
-          SELECT bc.company_id, c.name AS company_name, d.id AS doc_id, d.type, d.title,
-                 LENGTH(COALESCE(d.content, dc.content, '')) AS len,
-                 COALESCE(d.content, dc.content, '') AS text
-          FROM batch_corpus bc
-          JOIN companies c ON c.id = bc.company_id
-          JOIN documents d ON d.id = bc.document_id
-          LEFT JOIN document_content dc ON dc.id = d.content_id
-          WHERE bc.batch_id = ${batch.id}
-        `);
-        const perCompany: Record<string, CompanyCorpusStats> = {};
-        for (const r of ((corpusRows as any).rows || [])) {
-          const cid = Number(r.company_id);
-          const key = String(cid);
-          if (!perCompany[key]) {
-            perCompany[key] = {
-              companyId: cid,
-              companyName: r.company_name,
-              docCount: 0,
-              totalChars: 0,
-              pdfCount: 0,
-              thematicReportCount: 0,
-              topicTermMentions: 0,
-              topicMentioningDocs: 0,
-              yesCount: 0,
-              totalMeasures: 0,
-            };
-          }
-          const stats = perCompany[key];
-          stats.docCount++;
-          stats.totalChars += Number(r.len || 0);
-          if (String(r.type || "").toLowerCase() === "pdf") stats.pdfCount++;
-          const titleLc = String(r.title || "").toLowerCase();
-          const isThematic =
-            titleLc.includes("sustainability") ||
-            titleLc.includes("tcfd") ||
-            titleLc.includes("tnfd") ||
-            titleLc.includes("esg report") ||
-            titleLc.includes("climate report") ||
-            titleLc.includes("nature report") ||
-            (topicTerm && titleLc.includes(topicTerm.toLowerCase()));
-          if (isThematic) stats.thematicReportCount++;
-          // Topic mentions across doc text (case-insensitive).
-          const textLc = String(r.text || "").toLowerCase();
-          let docMentions = 0;
-          for (const t of termsLc) {
-            if (!t) continue;
-            let idx = textLc.indexOf(t);
-            while (idx !== -1) {
-              docMentions++;
-              idx = textLc.indexOf(t, idx + t.length);
-            }
-          }
-          stats.topicTermMentions += docMentions;
-          if (docMentions > 0) stats.topicMentioningDocs++;
-        }
-        // Populate yesCount from results.
-        for (const r of results) {
-          const key = String(r.companyId);
-          if (perCompany[key]) {
-            perCompany[key].yesCount = r.measures.filter((m) => m.verdict === "Yes").length;
-            perCompany[key].totalMeasures = r.measures.length;
-          }
-        }
-
-        // Build per-measure verdict lookup.
-        const scoresByCM: Record<string, Record<string, string>> = {};
-        for (const r of results) {
-          const key = String(r.companyId);
-          scoresByCM[key] = {};
-          for (const m of r.measures) scoresByCM[key][m.measureId] = m.verdict;
-        }
-        const measureIds = measureMetadata.map((m: any) => m.measureId);
-
-        rootCauses = diagnoseRootCauses(Object.values(perCompany), measureIds, scoresByCM);
-      } catch (e: any) {
-        console.warn("[framework-builder v2 /test-drive/results] root-cause diagnostic failed:", e?.message);
-      }
+      // 6b. Root-cause corpus analysis is intentionally deferred to the improvement/chat
+      //     endpoint, which runs it lazily on first question with a bounded corpus query
+      //     (200K chars/company cap). Running it here would require scanning the full
+      //     document text for every poll, which causes 30s+ timeouts on large batches
+      //     (e.g. 954 docs / 564MB). rootCauses stays null; the chat endpoint fills it.
+      // rootCauses = null; (already initialised above)
 
       // Snapshot this batch's outputs (per-company, per-measure, robustness,
       // root-causes) into the iteration history table. Idempotent — already-
@@ -1759,10 +1671,14 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       const topicSynonyms = ((topicRow as any).rows?.[0]?.topic_synonyms) || [];
       topicSynonymsForGap = Array.isArray(topicSynonyms) ? topicSynonyms : [];
       const termsLc = [String(fwMeta.topic_term || "").toLowerCase(), ...topicSynonyms.map((s: string) => s.toLowerCase())].filter(Boolean);
+      // IMPORTANT: do NOT select LENGTH(full_content) — on large corpora (e.g. 564MB)
+      // Postgres must fully decompress every TOAST value to compute LENGTH, making this
+      // query take 10–30s even with a LEFT() limit applied.  We use LEFT(..., 50000)
+      // to sample each doc (enough for topic-mention detection and terminology gap
+      // mining) and derive char-count from the sample length, which is cheap.
       const corpusRows = await db.execute(sql`
         SELECT bc.company_id, c.name AS company_name, d.type, d.title,
-               LENGTH(COALESCE(d.content, dc.content, '')) AS len,
-               COALESCE(d.content, dc.content, '') AS text
+               LEFT(COALESCE(d.content, dc.content, ''), 50000) AS text
         FROM batch_corpus bc JOIN companies c ON c.id = bc.company_id
         JOIN documents d ON d.id = bc.document_id
         LEFT JOIN document_content dc ON dc.id = d.content_id
@@ -1772,7 +1688,9 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       for (const r of ((corpusRows as any).rows || [])) {
         const cid = Number(r.company_id); const k = String(cid);
         if (!perCompStats[k]) perCompStats[k] = { companyId: cid, companyName: r.company_name, docCount: 0, totalChars: 0, pdfCount: 0, thematicReportCount: 0, topicTermMentions: 0, topicMentioningDocs: 0, yesCount: 0, totalMeasures: 0 };
-        const s = perCompStats[k]; s.docCount++; s.totalChars += Number(r.len || 0);
+        const s = perCompStats[k]; s.docCount++;
+        // totalChars is an undercount (sample-based) but acceptable for root-cause thresholds.
+        s.totalChars += String(r.text || "").length;
         if (String(r.type || "").toLowerCase() === "pdf") s.pdfCount++;
         const titleLc = String(r.title || "").toLowerCase();
         if (titleLc.includes("sustainability") || titleLc.includes("tnfd") || titleLc.includes("tcfd") || titleLc.includes("esg report") || titleLc.includes("nature report")) s.thematicReportCount++;
@@ -1781,8 +1699,7 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
         s.topicTermMentions += docMentions; if (docMentions > 0) s.topicMentioningDocs++;
         // Accumulate corpus text per company for terminology gap mining. Cap BOTH
         // the per-doc slice AND the per-company total — detectTerminologyGaps only
-        // scans the first ~200K chars per company, so holding more just wastes heap
-        // (the unbounded version here contributed to an OOM crash).
+        // scans the first ~200K chars per company, so holding more just wastes heap.
         const CORPUS_TEXT_CAP_PER_COMPANY = 200_000;
         const existing = corpusTexts.get(r.company_name) ?? "";
         if (existing.length < CORPUS_TEXT_CAP_PER_COMPANY) {
