@@ -1228,7 +1228,7 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
 export interface PdfRecoveryOutcome {
   url: string;
   ok: boolean;
-  reason: string;          // 'ok' | 'http_404' | 'waf_block' | 'challenge_page' | 'empty_bytes' | 'not_pdf' | 'no_text' | 'nav_timeout' | 'browser_launch_failure' | 'budget_exhausted' | 'error'
+  reason: string;          // 'ok' | 'http_404' | 'waf_block' | 'challenge_page' | 'empty_bytes' | 'not_pdf' | 'no_text' | 'nav_timeout' | 'nav_error' | 'browser_launch_failure' | 'budget_exhausted' | 'session_setup_failed' | 'error'
   httpStatus?: number;
   bytes?: number;
   chars?: number;
@@ -1467,6 +1467,14 @@ export async function fetchIssuerPdfsWithPrimedSession(
       tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
     }
     console.warn(`[Processor] PDF-recovery: session setup failed for ${origin}: ${msg.slice(0, 120)}`);
+    // Fix L: note ALL URLs as session_setup_failed so Fix E can persist diagnostics
+    // even when the browser never reached the URL loop. Without this, the outer
+    // catch leaves recoveryOutcomes empty and Fix E skips the DB UPDATE for
+    // every URL in this origin batch — they retain their original failure_reason
+    // (timeout/transient) indefinitely.
+    for (const u of urls) {
+      note({ url: u, ok: false, reason: "session_setup_failed", ms: 0 });
+    }
   } finally {
     if (page) {
       try { await page.close(); } catch { /* ignore */ }
