@@ -15,6 +15,9 @@ RUN apt-get update && \
       libasound2 \
       libpangocairo-1.0-0 \
       libgtk-3-0 \
+      poppler-utils \
+      tesseract-ocr \
+      tesseract-ocr-eng \
       ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 

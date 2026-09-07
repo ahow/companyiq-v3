@@ -12,6 +12,7 @@ import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evide
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
+import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, type TestDriveCompanyResult, type TestDriveSampleRequest } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
 import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
@@ -2081,6 +2082,43 @@ router.post("/v2/export-seed", requireWorkspace, async (req: Request, res: Respo
     };
     const template = exportFrameworkAsSeedTemplate(input);
     return res.json({ template });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── GET /v2/:frameworkId/export-full — full-detail markdown export ───────
+
+router.get("/v2/:frameworkId/export-full", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const frameworkId = parseInt(String(req.params.frameworkId), 10);
+    if (!Number.isFinite(frameworkId) || frameworkId <= 0) {
+      return res.status(400).json({ error: "valid frameworkId required" });
+    }
+
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+
+    const fw = await storage.getFrameworkById(frameworkId, ctx.workspaceId);
+    if (!fw) {
+      return res.status(404).json({ error: "framework not found" });
+    }
+    const measures = await storage.getFrameworkMeasures(frameworkId);
+
+    const markdown = exportFrameworkAsFullDetail({
+      framework: fw as any,
+      measures: (measures as any[]) || [],
+    });
+
+    const slug = String((fw as any).name || `framework-${frameworkId}`)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || `framework-${frameworkId}`;
+
+    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${slug}-full-export.md"`);
+    return res.send(markdown);
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || "internal error" });
   }

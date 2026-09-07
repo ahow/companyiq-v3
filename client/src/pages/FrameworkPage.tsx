@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState, useRef, useEffect } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User, Settings, Globe, Search, Ban, Link2, Sparkles } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User, Settings, Globe, Search, Ban, Link2, Sparkles, Download } from "lucide-react";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -30,6 +30,7 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [showAIEditor, setShowAIEditor] = useState(false);
+  const [exportingFull, setExportingFull] = useState(false);
   const [showDiscoverySettings, setShowDiscoverySettings] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -146,6 +147,31 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
       queryClient.invalidateQueries({ queryKey: ["framework", activeFrameworkId] });
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  // Export full framework detail as downloadable markdown.
+  const handleExportFull = async () => {
+    if (!activeFrameworkId) return;
+    setExportingFull(true);
+    try {
+      const resp = await fetch(`/api/framework-builder/v2/${activeFrameworkId}/export-full`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `framework-${activeFrameworkId}-full-export.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(`Export failed: ${err.message}`);
+    } finally {
+      setExportingFull(false);
     }
   };
 
@@ -425,6 +451,14 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
                 }`}
               >
                 <Settings className="w-4 h-4" /> Discovery Settings
+              </button>
+              <button
+                onClick={handleExportFull}
+                disabled={exportingFull}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors disabled:opacity-50"
+                title="Export full framework detail as markdown — paste into a new v2 builder session to replicate exactly"
+              >
+                <Download className="w-4 h-4" /> {exportingFull ? "Exporting..." : "Export Full"}
               </button>
               <button
                 onClick={openAIEditor}

@@ -4,6 +4,10 @@ import pdfParse from "pdf-parse";
 import { normaliseCSRDHorizonMarkers } from "./csrd-table-normaliser";
 import crypto from "crypto";
 import puppeteer from "puppeteer-core";
+import { spawn } from "child_process";
+import { promises as fsp } from "fs";
+import os from "os";
+import path from "path";
 
 /**
  * Thrown when a document URL fails for a reason that will NOT resolve on retry
@@ -466,21 +470,222 @@ function extractTextFromHtml(html: string): string {
 
 // ─── PDF Processing ──────────────────────────────────────────────────────────
 
+// Minimum character count that we consider a "successful" text extraction.
+// Below this we treat the extraction as failed and escalate to the next
+// fallback (image-based / scanned PDFs commonly yield a handful of stray
+// glyphs via pdf-parse but no real text).
+const PDF_TEXT_MIN_CHARS = 100;
+
+/**
+ * Spawn a child process, write `input` (if any) to its stdin, and collect
+ * stdout as a Buffer with a hard timeout and output cap. Never rejects on a
+ * non-zero exit — resolves with whatever stdout was captured (empty on error)
+ * so the caller can decide whether to escalate. stderr is captured only for
+ * diagnostics.
+ */
+function runProcessCollect(
+  cmd: string,
+  args: string[],
+  opts: { input?: Buffer; timeoutMs: number; maxBuffer: number },
+): Promise<{ stdout: Buffer; code: number | null; timedOut: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    } catch (e: any) {
+      resolve({ stdout: Buffer.alloc(0), code: null, timedOut: false, error: e?.message });
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    let timedOut = false;
+    let stderr = "";
+
+    const finish = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        stdout: Buffer.concat(chunks),
+        code,
+        timedOut,
+        error: stderr.slice(0, 500) || undefined,
+      });
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill("SIGKILL"); } catch {}
+      finish(null);
+    }, opts.timeoutMs);
+
+    child.stdout?.on("data", (d: Buffer) => {
+      total += d.length;
+      if (total <= opts.maxBuffer) {
+        chunks.push(d);
+      } else if (!settled) {
+        // Cap exceeded — kill and keep what we have.
+        try { child.kill("SIGKILL"); } catch {}
+        finish(child.exitCode);
+      }
+    });
+    child.stderr?.on("data", (d: Buffer) => { stderr += d.toString("utf8"); });
+    child.on("error", (e: any) => {
+      if (!settled) { stderr += ` ${e?.message || e}`; finish(null); }
+    });
+    child.on("close", (code) => finish(code));
+
+    if (opts.input) {
+      try {
+        child.stdin?.write(opts.input);
+        child.stdin?.end();
+      } catch {
+        // stdin write can fail if the child already exited; the close/error
+        // handlers will settle the promise.
+      }
+    } else {
+      try { child.stdin?.end(); } catch {}
+    }
+  });
+}
+
+/**
+ * Fallback 1: pdftotext (poppler-utils) reading the PDF from stdin and writing
+ * plain text to stdout. Handles many PDFs that pdf-parse mishandles (compressed
+ * object streams, unusual encodings). Returns "" on any failure.
+ */
+async function extractViaPdftotext(buffer: Buffer): Promise<string> {
+  try {
+    const res = await runProcessCollect(
+      "pdftotext",
+      ["-q", "-enc", "UTF-8", "-", "-"],
+      { input: buffer, timeoutMs: 60_000, maxBuffer: 50 * 1024 * 1024 },
+    );
+    const text = res.stdout.toString("utf8");
+    if (res.timedOut) {
+      console.log(`[Processor] pdftotext fallback timed out after 60s (${text.length} chars captured)`);
+    } else if (res.error) {
+      console.log(`[Processor] pdftotext fallback stderr: ${res.error}`);
+    }
+    return text;
+  } catch (e: any) {
+    console.log(`[Processor] pdftotext fallback threw: ${e?.message}`);
+    return "";
+  }
+}
+
+/**
+ * Fallback 2: OCR for image-based / scanned PDFs. Rasterises the first 8 pages
+ * with pdftoppm (poppler-utils) at 150dpi and runs tesseract on each page image.
+ * Concatenates all recognised text. Bounded by a per-page timeout and an overall
+ * OCR budget so a pathological document cannot stall the pipeline. Always cleans
+ * up temp files. Returns whatever text was recognised (may be short).
+ */
+async function extractViaOcr(buffer: Buffer): Promise<string> {
+  const tmpDir = os.tmpdir();
+  const token = crypto.randomBytes(8).toString("hex");
+  const tmpPdf = path.join(tmpDir, `ciq_ocr_${token}.pdf`);
+  const tmpBase = path.join(tmpDir, `ciq_ocr_${token}`);
+  const createdFiles: string[] = [tmpPdf];
+  const OCR_TOTAL_BUDGET_MS = 120_000;
+  const started = Date.now();
+  try {
+    await fsp.writeFile(tmpPdf, buffer);
+
+    // Rasterise first 8 pages to JPEG at 150dpi → <tmpBase>-1.jpg, -2.jpg, ...
+    const ppm = await runProcessCollect(
+      "pdftoppm",
+      ["-jpeg", "-r", "150", "-l", "8", tmpPdf, tmpBase],
+      { input: undefined, timeoutMs: 60_000, maxBuffer: 1024 },
+    );
+    if (ppm.timedOut) {
+      console.log(`[Processor] OCR: pdftoppm timed out — aborting OCR`);
+    }
+
+    // Collect generated page images.
+    const entries = await fsp.readdir(tmpDir).catch(() => [] as string[]);
+    const baseName = path.basename(tmpBase);
+    const pageImages = entries
+      .filter((f) => f.startsWith(baseName) && f.toLowerCase().endsWith(".jpg"))
+      .sort()
+      .map((f) => path.join(tmpDir, f));
+    for (const img of pageImages) createdFiles.push(img);
+
+    if (pageImages.length === 0) {
+      console.log(`[Processor] OCR: no page images produced by pdftoppm`);
+      return "";
+    }
+
+    const parts: string[] = [];
+    for (const img of pageImages) {
+      if (Date.now() - started > OCR_TOTAL_BUDGET_MS) {
+        console.log(`[Processor] OCR: overall 120s budget exceeded — stopping at ${parts.length} page(s)`);
+        break;
+      }
+      const t = await runProcessCollect(
+        "tesseract",
+        [img, "stdout", "-l", "eng", "--psm", "1"],
+        { input: undefined, timeoutMs: 30_000, maxBuffer: 20 * 1024 * 1024 },
+      );
+      const pageText = t.stdout.toString("utf8").trim();
+      if (pageText) parts.push(pageText);
+    }
+    const ocrText = parts.join("\n\n");
+    console.log(`[Processor] OCR fallback recognised ${ocrText.length} chars across ${parts.length} page(s)`);
+    return ocrText;
+  } catch (e: any) {
+    console.log(`[Processor] OCR fallback threw: ${e?.message}`);
+    return "";
+  } finally {
+    for (const f of createdFiles) {
+      await fsp.unlink(f).catch(() => {});
+    }
+  }
+}
+
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  // ── Path 1: pdf-parse (primary) ──────────────────────────────────────────
   try {
     const data = await pdfParse(buffer);
     const raw = data.text || "";
     // I81: CSRD/ESRS IRO-table normaliser — inlines horizon markers next
     // to bullet-only rows so the flattened PDF preserves the table's
     // short/medium/long-term semantics after chunking. No-op on
-    // documents that don't contain a CSRD IRO header.
+    // documents that don't contain a CSRD IRO header. Applied ONLY on the
+    // pdf-parse path (the fallbacks below produce plain OCR/CLI text).
     const normalised = normaliseCSRDHorizonMarkers(raw);
     if (normalised.detected && normalised.annotationsAdded > 0) {
       console.log(`[Processor] CSRD IRO table detected — annotated ${normalised.annotationsAdded} horizon-marker rows`);
     }
-    return normalised.text;
+    if (normalised.text && normalised.text.trim().length >= PDF_TEXT_MIN_CHARS) {
+      return normalised.text;
+    }
+    console.log(`[Processor] pdf-parse yielded ${normalised.text.trim().length} chars (< ${PDF_TEXT_MIN_CHARS}) — trying pdftotext fallback`);
   } catch (error: any) {
-    console.warn(`[Processor] PDF parse error: ${error.message}`);
+    console.warn(`[Processor] PDF parse error: ${error.message} — trying pdftotext fallback`);
+  }
+
+  // ── Path 2: pdftotext (poppler-utils) fallback ───────────────────────────
+  try {
+    const viaCli = await extractViaPdftotext(buffer);
+    if (viaCli && viaCli.trim().length >= PDF_TEXT_MIN_CHARS) {
+      console.log(`[Processor] pdftotext fallback succeeded (${viaCli.trim().length} chars)`);
+      return viaCli;
+    }
+    console.log(`[Processor] pdftotext yielded ${viaCli.trim().length} chars (< ${PDF_TEXT_MIN_CHARS}) — trying OCR fallback`);
+  } catch (e: any) {
+    console.log(`[Processor] pdftotext fallback error: ${e?.message} — trying OCR fallback`);
+  }
+
+  // ── Path 3: OCR (pdftoppm + tesseract) fallback ──────────────────────────
+  // For image-based/scanned PDFs. Return whatever OCR recovers — any text is
+  // more useful than empty for these documents.
+  try {
+    const viaOcr = await extractViaOcr(buffer);
+    return viaOcr || "";
+  } catch (e: any) {
+    console.log(`[Processor] OCR fallback error: ${e?.message}`);
     return "";
   }
 }
