@@ -1160,6 +1160,28 @@ async function runFetchPhase(opts: {
         // ESG/sustainability/CSR reports, so rank those — and recent years — first.
         // This also makes the highest-value origin (e.g. esg.<domain>) the FIRST one
         // processed, i.e. while the shared browser session is freshest.
+        //
+        // Fix F: framework-level document priority URL patterns. Fix D's general
+        // ESG/sustainability tier is too coarse for issuers that host MANY PDFs on a
+        // single ESG subdomain (e.g. esg.<domain>): every URL matches the tier-1
+        // regex (the word "esg" is in the host), so they all share tier 1 and then
+        // sort alphabetically — pushing the highest-value dedicated disclosures
+        // (biodiversity statement, water statement, SDG/TNFD report) past the bounded
+        // attempt budget. Fix F adds a framework-defined TIER 0 above Fix D's tier so
+        // each framework can promote the specific document types that matter most for
+        // ITS topic. The patterns are stored per-framework in
+        // framework.documentPriorityUrlPatterns (jsonb array of regex substrings), so
+        // this logic stays generic — a climate framework would promote tcfd/transition
+        // plans, a water framework its water disclosures, etc. Falls back to a
+        // guaranteed non-matching pattern (no-op tier 0) when unconfigured.
+        const priorityPatterns: string[] = Array.isArray((framework as any).documentPriorityUrlPatterns)
+          ? ((framework as any).documentPriorityUrlPatterns as string[])
+              .filter((p: string) => typeof p === "string" && p.length > 0)
+              .slice(0, 20)
+          : [];
+        const priorityRegex = priorityPatterns.length > 0
+          ? `(${priorityPatterns.join("|")})`
+          : "(?!x)x"; // guaranteed non-matching pattern → tier 0 is a no-op
         const pdfRows = await dbImport.execute(sqlImport`
           SELECT url FROM documents
           WHERE company_id = ${companyId}
@@ -1170,6 +1192,7 @@ async function runFetchPhase(opts: {
               OR (fetch_status = 'dead' AND failure_reason IN ('fetch_returned_empty', 'transient', 'circuit_broken', 'timeout'))
             )
           ORDER BY
+            (CASE WHEN url ~* ${priorityRegex} THEN 0 ELSE 1 END),
             (CASE WHEN url ~* '(sustainab|biodivers|nature|esg|/csr|climate|environment|water|tcfd|tnfd)' THEN 0 ELSE 1 END),
             (CASE WHEN url ~* '(2026|2025|2024|2023)' THEN 0 ELSE 1 END),
             url

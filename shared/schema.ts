@@ -135,6 +135,11 @@ export const frameworks = pgTable("frameworks", {
   antiInferenceRules: jsonb("anti_inference_rules").$type<string[]>(),
   // 41-C: Framework-specific withdrawal detection patterns
   withdrawalPatterns: jsonb("withdrawal_patterns").$type<{ queries: string[]; documentRegex: string[] }>(),
+  // Fix F: per-framework document priority URL patterns (regex substrings). Promotes a
+  // framework's highest-value dedicated disclosures (e.g. biodiversity/water/SDG reports)
+  // into the top tier of the PDF-candidate recovery ordering, so they are attempted within
+  // the bounded budget even when an issuer hosts many PDFs on one ESG subdomain.
+  documentPriorityUrlPatterns: jsonb("document_priority_url_patterns").$type<string[]>(),
   // Sprint 10 v2 fields (PR #2). Optional / nullable. Analyzer reads if
   // present, else falls back to current I76 behaviour on the existing fields.
   builderVersion: text("builder_version").notNull().default("v1"),

@@ -787,6 +787,25 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS anti_inference_rules JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS authoritative_filing_types JSONB`);
 
+    // Fix F: per-framework document priority URL patterns (jsonb array of regex
+    // substrings). Used by the PDF-candidate recovery ordering in pipeline.ts to
+    // promote a framework's highest-value dedicated disclosures (e.g. biodiversity
+    // statement, water statement, SDG/TNFD report) into a tier above the general
+    // ESG/sustainability tier, so they are attempted within the bounded budget.
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS document_priority_url_patterns JSONB`);
+
+    // Fix F: seed fw5 (nature & biodiversity) document priority URL patterns. These
+    // short substrings match URL path segments for the framework's highest-value
+    // dedicated disclosures (e.g. /biodiversityStatement_e.pdf, /Water_Statement_e.pdf,
+    // /2023-SDGReport-e.pdf, tcfd/tnfd reports), promoting them above the general
+    // ESG/sustainability tier so they are attempted within the bounded recovery budget.
+    // Idempotent: only seeds when unset.
+    await db.execute(sql`
+      UPDATE frameworks
+        SET document_priority_url_patterns = '["biodiversit", "water.statement", "nature.statement", "sdg", "tnfd", "tcfd"]'::jsonb
+      WHERE id = 5 AND document_priority_url_patterns IS NULL
+    `);
+
 
     // B7 repair: fix corrupted authoritativeFilingTypes patterns containing literal
     // backspace characters (0x08) where \b word boundaries were intended.
