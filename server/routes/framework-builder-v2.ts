@@ -1779,9 +1779,15 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
         const textLc = String(r.text || "").toLowerCase(); let docMentions = 0;
         for (const t of termsLc) { let i = textLc.indexOf(t); while (i !== -1) { docMentions++; i = textLc.indexOf(t, i + t.length); } }
         s.topicTermMentions += docMentions; if (docMentions > 0) s.topicMentioningDocs++;
-        // Accumulate corpus text per company for terminology gap mining (cap per-doc slice).
+        // Accumulate corpus text per company for terminology gap mining. Cap BOTH
+        // the per-doc slice AND the per-company total — detectTerminologyGaps only
+        // scans the first ~200K chars per company, so holding more just wastes heap
+        // (the unbounded version here contributed to an OOM crash).
+        const CORPUS_TEXT_CAP_PER_COMPANY = 200_000;
         const existing = corpusTexts.get(r.company_name) ?? "";
-        corpusTexts.set(r.company_name, existing + " " + textLc.slice(0, 50000));
+        if (existing.length < CORPUS_TEXT_CAP_PER_COMPANY) {
+          corpusTexts.set(r.company_name, existing + " " + textLc.slice(0, 50000));
+        }
       }
       for (const r of results) {
         const k = String(r.companyId);

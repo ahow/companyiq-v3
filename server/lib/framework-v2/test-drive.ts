@@ -270,26 +270,43 @@ export function detectTerminologyGaps(
     "by", "as", "an", "a", "or", "be", "is", "was", "will", "it", "which",
   ]);
 
+  // ── Hard resource bounds ────────────────────────────────────────────────
+  // This function previously had no caps and mined every phrase around every
+  // occurrence of every known term across the full concatenated corpus. On a
+  // real test-drive (10 companies × up to ~1MB each × ~20 synonyms, each
+  // appearing hundreds of times) that allocated millions of phrase strings and
+  // exhausted the Node heap (OOM crash). Every value below is a hard ceiling so
+  // the worst case is a few tens of thousands of allocations, not millions.
+  const MAX_TEXT_PER_COMPANY = 200_000;   // chars scanned per company
+  const MAX_OCCURRENCES_PER_TERM = 40;    // windows examined per known term per company
+  const MAX_DISTINCT_PHRASES = 20_000;    // total distinct candidate phrases held at once
+  const WINDOW_RADIUS = 80;               // chars either side of a match
+
   // Extract candidate phrases: for each company corpus, find windows around known terms
   const termCounts = new Map<string, Set<string>>(); // term → set of company names
+  let capped = false; // stop growing the map once the phrase ceiling is hit
 
-  for (const [companyName, text] of corpusTexts) {
+  outer:
+  for (const [companyName, rawText] of corpusTexts) {
+    const text = rawText.length > MAX_TEXT_PER_COMPANY ? rawText.slice(0, MAX_TEXT_PER_COMPANY) : rawText;
     for (const knownTerm of knownTermsLc) {
       if (!knownTerm) continue;
       let pos = 0;
-      while (true) {
+      let occurrences = 0;
+      while (occurrences < MAX_OCCURRENCES_PER_TERM) {
         const idx = text.indexOf(knownTerm, pos);
         if (idx === -1) break;
-        pos = idx + 1;
-        // Look at the 200-char window around this occurrence
-        const windowStart = Math.max(0, idx - 100);
-        const windowEnd = Math.min(text.length, idx + knownTerm.length + 100);
+        pos = idx + knownTerm.length; // advance past the full match (no overlap)
+        occurrences++;
+        // Look at a bounded window around this occurrence
+        const windowStart = Math.max(0, idx - WINDOW_RADIUS);
+        const windowEnd = Math.min(text.length, idx + knownTerm.length + WINDOW_RADIUS);
         const window = text.slice(windowStart, windowEnd);
 
-        // Extract 2–4 word sequences from the window that aren't the known term
+        // Extract 2–3 word sequences from the window that aren't the known term
         const words = window.split(/\s+/).filter((w) => /^[a-z][a-z-]{2,}/.test(w));
         for (let wi = 0; wi < words.length - 1; wi++) {
-          for (let len = 2; len <= 4 && wi + len <= words.length; len++) {
+          for (let len = 2; len <= 3 && wi + len <= words.length; len++) {
             const phrase = words.slice(wi, wi + len).join(" ");
             if (phrase === knownTerm) continue;
             if (knownTermsLc.has(phrase)) continue;
@@ -297,11 +314,20 @@ export function detectTerminologyGaps(
             const contentWords = words.slice(wi, wi + len).filter((w) => !STOPWORDS.has(w));
             if (contentWords.length === 0) continue;
             if (phrase.length < 4 || phrase.length > 60) continue;
-            if (!termCounts.has(phrase)) termCounts.set(phrase, new Set());
-            termCounts.get(phrase)!.add(companyName);
+            let bucket = termCounts.get(phrase);
+            if (!bucket) {
+              // Only create new phrase buckets while under the ceiling. Once the
+              // ceiling is reached we keep counting phrases we've already seen
+              // (so ≥2-company detection still works) but stop adding new ones.
+              if (termCounts.size >= MAX_DISTINCT_PHRASES) { capped = true; continue; }
+              bucket = new Set();
+              termCounts.set(phrase, bucket);
+            }
+            bucket.add(companyName);
           }
         }
       }
+      if (capped && termCounts.size >= MAX_DISTINCT_PHRASES) break outer;
     }
   }
 
