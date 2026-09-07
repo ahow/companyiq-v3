@@ -758,7 +758,9 @@ async function primeWafSession(page: any, origin: string): Promise<boolean> {
   return await hasWafCookie();
 }
 
-async function fetchPdfViaBrowser(url: string): Promise<string> {
+// Fix 2b: exported so the pipeline's PDF-fallback discovery can invoke the
+// browser PDF path directly for inaccessible issuer-domain documents.
+export async function fetchPdfViaBrowser(url: string): Promise<string> {
   if (isBrowserCircuitOpen()) {
     // Browser fallback is temporarily unavailable — signal TRANSIENT so the
     // caller keeps the URL retryable rather than marking it permanently dead.

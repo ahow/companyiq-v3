@@ -580,6 +580,27 @@ export async function recordFetchDead(companyId: number, url: string, failureRea
 }
 
 /**
+ * Fix 2c: Marks a URL as 'inaccessible': the URL exists and responds but no
+ * fetch method could extract text (e.g. SPA that Puppeteer also can't render,
+ * WAF that blocks all agents). Unlike 'dead', inaccessible docs on the
+ * issuer's own domain are counted in the P3b confidence-downgrade and
+ * auto-reexam triggers, signalling a fetch-layer failure rather than
+ * absent content. Content-returning queries (getFetchedDocuments,
+ * getAllFetchedDocumentsForCompany) already exclude it because they filter on
+ * fetch_status = 'ok' / content_id IS NOT NULL, so an inaccessible doc never
+ * leaks into the evidence pool; but getAcceptedDocuments returns it (with its
+ * fetchStatus) so the dead-doc diagnostics can see it.
+ */
+export async function recordFetchInaccessible(companyId: number, url: string, failureReason?: string) {
+  await db.execute(sql`
+    UPDATE documents SET fetch_failures = fetch_failures + 1,
+    fetch_status = CASE WHEN fetch_failures + 1 >= 3 THEN 'inaccessible' ELSE 'pending' END,
+    failure_reason = COALESCE(${failureReason || null}, failure_reason)
+    WHERE company_id = ${companyId} AND url = ${url}
+  `);
+}
+
+/**
  * Terminal rejection: the post-fetch LLM verifier determined this document
  * belongs to a DIFFERENT company (or is generic/non-disclosure). Mark it
  * 'rejected' so it is (a) excluded from scoring (getAcceptedDocuments only

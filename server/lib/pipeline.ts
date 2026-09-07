@@ -330,6 +330,62 @@ async function runFetchPhase(opts: {
   //   hadn't fired yet.
   //
   // See provenance.ts::classifyProvenance R5c comment for the full rationale.
+  // Fix 1b: Domain-concentration heuristic.
+  // If discovery returned >=5 documents with >=60% on a single host that is NOT
+  // already in the company's domain list, auto-register it as an issuer-domain
+  // candidate for this run and raise a proposal for admin review.
+  // This catches acronym domains and ccTLD variants that the brand-token
+  // fallback misses — without hardcoding any names.
+  {
+    const allDocs = discoveryResult.documents;
+    if (allDocs.length >= 5 && !companyDomainLower) {
+      // Only fire when primary domain is missing — if domain is set, Rule 1 already handles it.
+      const hostBuckets = new Map<string, number>();
+      for (const doc of allDocs) {
+        try {
+          const h = new URL(doc.url).hostname.replace(/^www\./, "");
+          hostBuckets.set(h, (hostBuckets.get(h) || 0) + 1);
+        } catch {}
+      }
+      for (const [host, count] of hostBuckets) {
+        const ratio = count / allDocs.length;
+        if (ratio >= 0.60 && count >= 5) {
+          // Candidate: promote to relatedDomains for this run
+          if (!relatedDomainsLower.includes(host)) {
+            relatedDomainsLower.push(host);
+            console.log(
+              `[${companyName}] Fix 1b: domain-concentration heuristic promoted "${host}" ` +
+              `(${count}/${allDocs.length} docs, ${Math.round(ratio * 100)}%) to issuer-domain candidate.`
+            );
+            // Raise a domain proposal for admin review
+            try {
+              const { db: dbConc } = await import("../db.js");
+              const { sql: sqlConc } = await import("drizzle-orm");
+              await dbConc.execute(sqlConc`
+                INSERT INTO company_domain_proposals
+                  (company_id, proposal_type, current_value, proposed_value, sources, confidence, u17_impact_docs_flipped, status)
+                VALUES (
+                  ${companyId},
+                  'domain_concentration',
+                  ${JSON.stringify({ domain: companyDomainLower || null })},
+                  ${JSON.stringify({ domain: host })},
+                  ${JSON.stringify({ trigger: 'concentration_heuristic', ratio: Math.round(ratio * 100), docCount: count, totalDocs: allDocs.length })},
+                  'high',
+                  ${count},
+                  'pending'
+                )
+                ON CONFLICT DO NOTHING
+              `);
+            } catch (propErr: any) {
+              console.warn(`[${companyName}] Fix 1b: failed to raise domain proposal: ${propErr.message}`);
+            }
+          }
+          break; // only promote the single most concentrated host
+        }
+      }
+    }
+  }
+
   const irTenantCache = new Map<string, IrTenantBinding>();
   type FirstPassEntry = {
     doc: typeof discoveryResult.documents[number];
@@ -682,6 +738,35 @@ async function runFetchPhase(opts: {
   const MAX_PASSES = 4; // Each pass gives pending docs another attempt (3 failures = dead)
   let fetchBudgetExceeded = false;
 
+  // Fix 2a: Host-history-aware browser-first routing.
+  // Track per-host empty/transient failure counts across all docs for this company.
+  // When a host accumulates >= HOST_FAIL_THRESHOLD failures, subsequent docs on
+  // that host skip the HTTP-first path and go straight to browser rendering.
+  const HOST_FAIL_THRESHOLD = parseInt(process.env.HOST_FAIL_THRESHOLD || "3", 10);
+  const hostFailHistory = new Map<string, number>();
+  {
+    // Seed from already-dead/inaccessible docs for this company (from previous batches / passes)
+    const { db: dbImport } = await import("../db.js");
+    const { sql: sqlImport } = await import("drizzle-orm");
+    try {
+      const rows = await dbImport.execute(sqlImport`
+        SELECT regexp_replace(url, '^https?://([^/]+)/.*', '\\1') as host, COUNT(*) as cnt
+        FROM documents
+        WHERE company_id = ${companyId}
+          AND failure_reason IN ('fetch_returned_empty', 'transient', 'inaccessible')
+          AND fetch_status IN ('dead', 'inaccessible')
+        GROUP BY host
+      `);
+      for (const row of rows.rows as any[]) {
+        if (row.host && Number(row.cnt) >= HOST_FAIL_THRESHOLD) {
+          hostFailHistory.set(row.host, Number(row.cnt));
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[${companyName}] Fix 2a: host-history seeding failed (non-fatal): ${e.message}`);
+    }
+  }
+
   while (true) {
     pass++;
     if (cancelCheck?.()) break;
@@ -818,10 +903,16 @@ async function runFetchPhase(opts: {
         // often on defended/JS-rendered sites like smfg.co.jp).
         const gateReason = ((doc as any).gateReason || "").toLowerCase();
         const isPinnedOrKnown = gateReason.includes("lane: pinned") || gateReason.includes("lane: known");
+        // Fix 2a: if this host is known to return empty on HTTP, skip straight to browser.
+        const historyFails = docHost ? (hostFailHistory.get(docHost) || 0) : 0;
+        const forceHeadless2a = isPinnedOrKnown || historyFails >= HOST_FAIL_THRESHOLD;
+        if (forceHeadless2a && !isPinnedOrKnown) {
+          console.log(`[${companyName}] Fix 2a: forcing headless for ${doc.url.slice(0, 80)} (host ${docHost} has ${historyFails} prior empty/transient failures)`);
+        }
         // Wrap processDocument with a per-document timeout
         const fetchStart = Date.now();
         const content = await withTimeout(
-          processDocument(doc.url, type, { forceHeadless: isPinnedOrKnown }),
+          processDocument(doc.url, type, { forceHeadless: forceHeadless2a }),
           PER_DOCUMENT_TIMEOUT_MS,
           `[${companyName}] fetch ${doc.url.slice(0, 80)}`
         );
@@ -921,7 +1012,23 @@ async function runFetchPhase(opts: {
             }
           }
         } else {
-          await storage.recordFetchFailure(companyId, doc.url, "fetch_returned_empty");
+          // Fix 2a/2c: on an empty fetch, update in-run host failure history and, for
+          // issuer-domain URLs, record 'inaccessible' (a fetch-layer failure distinct
+          // from 'dead') so P3b + auto-reexam treat it as a fetch problem, not absent
+          // content. Non-issuer-domain URLs keep the ordinary retryable failure.
+          if (docHost) hostFailHistory.set(docHost, (hostFailHistory.get(docHost) || 0) + 1);
+          const isIssuerDomainDoc = (() => {
+            try {
+              const h = new URL(doc.url).hostname.replace(/^www\./, "");
+              return (companyDomainLower && (h === companyDomainLower || h.endsWith("." + companyDomainLower))) ||
+                relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith("." + rd)));
+            } catch { return false; }
+          })();
+          if (isIssuerDomainDoc) {
+            await storage.recordFetchInaccessible(companyId, doc.url, "fetch_returned_empty");
+          } else {
+            await storage.recordFetchFailure(companyId, doc.url, "fetch_returned_empty");
+          }
         }
       } catch (error: any) {
         if (error instanceof TimeoutError) {
@@ -929,6 +1036,8 @@ async function runFetchPhase(opts: {
           await storage.recordFetchDead(companyId, doc.url, "timeout");
         } else if (error instanceof TransientFetchError) {
           console.warn(`[${companyName}] Transient fetch failure — keeping retryable: ${doc.url.slice(0, 100)} (${error.message})`);
+          // Fix 2a: update in-run host failure history on transient failures too.
+          if (docHost) hostFailHistory.set(docHost, (hostFailHistory.get(docHost) || 0) + 1);
           await storage.recordFetchFailure(companyId, doc.url, "transient");
         } else if (error instanceof PermanentFetchError) {
           // Classify the permanent failure by HTTP status
@@ -982,6 +1091,81 @@ async function runFetchPhase(opts: {
     // Brief pause between passes to avoid hammering servers
     if (pass < MAX_PASSES) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+
+  // Fix 2b: PDF-fallback discovery.
+  // When >=PDF_FALLBACK_THRESHOLD docs on the company's primary domain are
+  // inaccessible/dead with empty-fetch failures, attempt a targeted PDF
+  // re-discovery using path-pattern inference from the dead URLs.
+  // This generalises to any company whose primary IR/ESG site is a JS SPA
+  // that blocks all fetchers — without hardcoding any URLs.
+  const PDF_FALLBACK_THRESHOLD = parseInt(process.env.PDF_FALLBACK_THRESHOLD || "5", 10);
+  {
+    const postFetchDocs = await storage.getAcceptedDocuments(companyId);
+    const issuerDeadDocs = postFetchDocs.filter(d => {
+      const isInaccessibleOrEmpty = d.fetchStatus === 'inaccessible' ||
+        (d.fetchStatus === 'dead' && ((d as any).failureReason === 'fetch_returned_empty' || (d as any).failureReason === 'transient'));
+      const isIssuerDomain = (() => {
+        try {
+          const h = new URL(d.url).hostname.replace(/^www\./, "");
+          return h === companyDomainLower || (!!companyDomainLower && h.endsWith("." + companyDomainLower)) ||
+            relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith("." + rd)));
+        } catch { return false; }
+      })();
+      return isInaccessibleOrEmpty && isIssuerDomain;
+    });
+
+    if (issuerDeadDocs.length >= PDF_FALLBACK_THRESHOLD) {
+      console.log(
+        `[${companyName}] Fix 2b: ${issuerDeadDocs.length} issuer-domain docs inaccessible — ` +
+        `attempting PDF-fallback discovery from path patterns.`
+      );
+      // Infer PDF URL candidates from dead HTML URLs
+      const pdfCandidates: string[] = [];
+      for (const doc of issuerDeadDocs) {
+        const htmlUrl = doc.url;
+        // Try simple HTML→PDF pattern: replace .html with .pdf
+        const pdfGuess = htmlUrl.replace(/\.html?(\?.*)?$/, ".pdf");
+        if (pdfGuess !== htmlUrl && !pdfCandidates.includes(pdfGuess)) {
+          pdfCandidates.push(pdfGuess);
+        }
+      }
+      // Also look for URLs already in the DB that are PDFs on the same domain but not yet fetched ok
+      try {
+        const { db: dbImport } = await import("../db.js");
+        const { sql: sqlImport } = await import("drizzle-orm");
+        const pdfRows = await dbImport.execute(sqlImport`
+          SELECT url FROM documents
+          WHERE company_id = ${companyId}
+            AND (url LIKE '%.pdf' OR type = 'pdf')
+            AND fetch_status = 'pending'
+          LIMIT 20
+        `);
+        for (const row of pdfRows.rows as any[]) {
+          if (row.url && !pdfCandidates.includes(row.url)) pdfCandidates.push(row.url);
+        }
+      } catch {}
+
+      // Attempt to fetch each PDF candidate via browser PDF path
+      let pdfRecovered = 0;
+      for (const pdfUrl of pdfCandidates.slice(0, 10)) {
+        try {
+          const { fetchPdfViaBrowser } = await import("./processor.js") as any;
+          if (typeof fetchPdfViaBrowser !== 'function') break;
+          const pdfText = await fetchPdfViaBrowser(pdfUrl);
+          if (pdfText && pdfText.length > 200) {
+            await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
+            pdfRecovered++;
+            console.log(`[${companyName}] Fix 2b: PDF fallback recovered ${pdfText.length} chars from ${pdfUrl.slice(0, 80)}`);
+          }
+        } catch (pdfErr: any) {
+          console.warn(`[${companyName}] Fix 2b: PDF fallback failed for ${pdfUrl.slice(0, 80)}: ${pdfErr.message}`);
+        }
+      }
+      if (pdfRecovered > 0) {
+        console.log(`[${companyName}] Fix 2b: recovered ${pdfRecovered} PDF documents via fallback discovery`);
+      }
     }
   }
 
@@ -1412,6 +1596,10 @@ async function runAnalyzePhase(opts: {
   const documentTitles: string[] = [];
   let excludedThirdPartyCount = 0;
   let upgradedToIssuerCount = 0;
+  // Fix 1a: set true when the U17 provenance filter excludes every document but
+  // content-bearing accepted docs exist; threaded into verdictNuance so the
+  // fallback (unfiltered corpus) is auditable in every measure's output.
+  let provenanceVerificationSkipped = false;
   // R5c: content-time classifier uses a FRESH tenant cache. This is the
   // after-fetch stage; fetched-content identity match on any Q4/MZiQ URL
   // propagates to its siblings within this loop. First-pass writes bindings;
@@ -1474,6 +1662,58 @@ async function runAnalyzePhase(opts: {
       `[${companyName}] U17 provenance filter: excluded=${excludedThirdPartyCount}, ` +
       `upgraded-to-issuer=${upgradedToIssuerCount}, kept=${documentTexts.length}`
     );
+  }
+
+  // Fix 1a: Empty-pack guard.
+  // If the U17 provenance filter excluded every document but fetchedDocs contains
+  // content-bearing accepted docs, fall back to including them all. This prevents
+  // a provenance mis-classification (e.g. company.domain missing or an acronym
+  // domain not matched) from silently producing a zero-evidence scoring run.
+  // The flag is threaded into verdictNuance so the output is auditable.
+  if (documentTexts.length === 0 && fetchedDocs.some(d => d.content && d.content.length > 50)) {
+    console.warn(
+      `[${companyName}] Fix 1a: U17 filter excluded ALL documents but ${fetchedDocs.length} have content. ` +
+      `Falling back to unfiltered corpus. Raise domain proposal for review.`
+    );
+    provenanceVerificationSkipped = true;
+    for (const doc of fetchedDocs) {
+      if (!doc.content || doc.content.length <= 50) continue;
+      documentTexts.push(doc.content);
+      documentUrls.push(doc.url);
+      documentTitles.push(doc.title || doc.url);
+    }
+    // Raise a domain proposal so an admin can confirm the correct domain.
+    try {
+      const { db: dbImport } = await import("../db.js");
+      const { sql: sqlImport } = await import("drizzle-orm");
+      const hostCounts = new Map<string, number>();
+      for (const doc of fetchedDocs) {
+        try {
+          const h = new URL(doc.url).hostname.replace(/^www\./, "");
+          hostCounts.set(h, (hostCounts.get(h) || 0) + 1);
+        } catch {}
+      }
+      const topHost = [...hostCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (topHost) {
+        await dbImport.execute(sqlImport`
+          INSERT INTO company_domain_proposals
+            (company_id, proposal_type, current_value, proposed_value, sources, confidence, u17_impact_docs_flipped, status)
+          VALUES (
+            ${companyId},
+            'domain_concentration',
+            ${JSON.stringify({ domain: company?.domain || null })},
+            ${JSON.stringify({ domain: topHost[0] })},
+            ${JSON.stringify({ trigger: 'empty_pack_fallback', topHost: topHost[0], docCount: topHost[1] })},
+            'high',
+            ${topHost[1]},
+            'pending'
+          )
+          ON CONFLICT DO NOTHING
+        `);
+      }
+    } catch (propErr: any) {
+      console.warn(`[${companyName}] Fix 1a: failed to raise domain proposal: ${propErr.message}`);
+    }
   }
 
   // ─── Temporal Validation Step ──────────────────────────────────────────────
@@ -1547,6 +1787,18 @@ async function runAnalyzePhase(opts: {
     }
   }
 
+  // Fix 1a: if the empty-pack guard fired, the corpus was assembled without
+  // provenance verification (all docs included as fallback). Annotate every
+  // measure so downstream consumers can see the evidence is unverified.
+  if (provenanceVerificationSkipped) {
+    for (const cat of analysis.categories) {
+      for (const m of cat.measures) {
+        m.verdictNuance = (m.verdictNuance || "") +
+          ` [provenance unverified — corpus domain classification failed; all docs included as fallback]`;
+      }
+    }
+  }
+
   // ─── FETCH-OUTCOME CONFIDENCE ADJUSTMENT ────────────────────────────────
   // If gate-accepted, on-topic documents failed to fetch (dead), any "No" verdict
   // with High/Medium confidence is unreliable — the evidence may have been in
@@ -1555,7 +1807,14 @@ async function runAnalyzePhase(opts: {
   // produce confident negatives.
   try {
     const allAcceptedDocs = await storage.getAcceptedDocuments(companyId);
-    const deadAccepted = allAcceptedDocs.filter(d => d.fetchStatus === "dead");
+    // Fix 2c: 'inaccessible' issuer-domain docs are a fetch-layer failure and must be
+    // counted alongside 'dead' for the confidence downgrade — an inaccessible doc's
+    // evidence is likely present but unretrievable, exactly like a dead one.
+    const inaccessibleAccepted = allAcceptedDocs.filter(d => d.fetchStatus === "inaccessible");
+    const deadAccepted = [
+      ...allAcceptedDocs.filter(d => d.fetchStatus === "dead"),
+      ...inaccessibleAccepted,
+    ];
     if (deadAccepted.length > 0) {
       const deadTitles = deadAccepted.map(d => d.title || d.url).slice(0, 5);
       const deadCount = deadAccepted.length;
@@ -1986,7 +2245,9 @@ async function maybeAutoReexamine(opts: {
       // failure that should be escalated.
       const allDocs = await storage.getAcceptedDocuments(companyId);
       const firstPartyDocs = allDocs.filter((d: any) => d.sourceType === "first_party");
-      const firstPartyDead = firstPartyDocs.filter((d: any) => d.fetchStatus === "dead").length;
+      // Fix 2c: count 'inaccessible' as dead for the auto-reexam escalation trigger —
+      // both signal a fetch-layer failure on first-party docs, not absent content.
+      const firstPartyDead = firstPartyDocs.filter((d: any) => d.fetchStatus === "dead" || d.fetchStatus === "inaccessible").length;
       const firstPartyDeadRatio = firstPartyDocs.length > 0 ? firstPartyDead / firstPartyDocs.length : 0;
 
       if (firstPartyDeadRatio >= 0.5 && firstPartyDocs.length >= 3) {
