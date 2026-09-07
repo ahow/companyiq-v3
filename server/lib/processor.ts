@@ -954,6 +954,13 @@ const WAF_PRIME_HEADERS: Record<string, string> = {
   "Upgrade-Insecure-Requests": "1",
 };
 
+// Classify a small HTML body as a Cloudflare/WAF challenge or block page.
+// Module-level so both the browser-based recovery strategies and the Fix K
+// Node.js direct-download path (nodeFetchPdf) can share one definition.
+function isChallengeSnippet(s: string): boolean {
+  return /just a moment|cf-browser-verification|challenge-platform|cf-chl|attention required|access denied|_cf_chl_opt|enable javascript and cookies/i.test(s || "");
+}
+
 async function primeWafSession(page: any, origin: string): Promise<boolean> {
   const budgetMs = parseInt(process.env.WAF_PRIME_BUDGET_MS || "7000", 10);
   const deadline = Date.now() + budgetMs;
@@ -980,6 +987,72 @@ async function primeWafSession(page: any, origin: string): Promise<boolean> {
     }
   }
   return await hasWafCookie();
+}
+
+/**
+ * Fix K — Strategy C: Download a PDF via a direct Node.js (axios) HTTPS
+ * request, bypassing the Chromium CDP channel.
+ *
+ * Why Strategies A and B fail for large PDFs:
+ *   A) page.goto + resp.buffer() must buffer the ENTIRE body inside Chrome
+ *      before the promise resolves — large sustainability reports (often 10–50 MB)
+ *      consistently exceed perPdfTimeoutMs (45 s default).
+ *   B) inPageFetch serialises the whole body as base64 over the CDP WebSocket —
+ *      equally slow and memory-intensive for large binaries.
+ *
+ * Strategy C: after WAF priming the browser holds clearance cookies in its jar.
+ * We extract them with page.cookies() and replay them on an axios GET that uses
+ * the Node.js HTTPS stack directly — no CDP serialisation, no Chrome navigation
+ * state machine, socket-inactivity timeout instead of a wall-clock body buffer.
+ * The result is either fast success (cookie accepted → streaming download) or
+ * fast failure (WAF rejects → 403/200+challenge snippet in < 1 s) — far cheaper
+ * than burning 45 s per URL in Chrome before diagnosing the failure.
+ *
+ * Limitation: strict Akamai deployments that bind _abck to the Chrome JA3
+ * fingerprint will reject Node.js requests even with the correct cookie. In that
+ * case Strategy C returns a waf_block/challenge_page result and the caller falls
+ * back to Strategies A and B as before. No regression — C is additive.
+ */
+async function nodeFetchPdf(
+  url: string,
+  cookieHeader: string,
+  referer: string,
+  timeoutMs: number,
+): Promise<{ buf: Buffer | null; status: number; bytes: number; snippet: string }> {
+  if (!cookieHeader) return { buf: null, status: 0, bytes: 0, snippet: "no_cookies" };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await axios.get(url, {
+      responseType: "arraybuffer",
+      signal: controller.signal as any,
+      maxRedirects: 5,
+      timeout: 30000,               // socket inactivity timeout (per chunk)
+      maxContentLength: 100 * 1024 * 1024,
+      validateStatus: () => true,   // never throw on 4xx/5xx
+      headers: {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/pdf,*/*;q=0.9",
+        "Referer": referer,
+        "Cookie": cookieHeader,
+        ...WAF_PRIME_HEADERS,
+      },
+    });
+    clearTimeout(timer);
+    const status: number = response?.status ?? 0;
+    const raw = response?.data;
+    const buf: Buffer = raw ? Buffer.from(raw as ArrayBuffer) : Buffer.alloc(0);
+    const bytes = buf.length;
+    const isPdf = bytes >= 5 && buf.slice(0, 5).toString("latin1") === "%PDF-";
+    let snippet = "";
+    if (!isPdf && bytes > 0 && bytes < 200_000) {
+      try { snippet = buf.slice(0, 600).toString("utf8"); } catch { snippet = ""; }
+    }
+    return { buf: isPdf ? buf : null, status, bytes, snippet };
+  } catch (e: any) {
+    clearTimeout(timer);
+    return { buf: null, status: 0, bytes: 0, snippet: String(e?.message ?? e).slice(0, 200) };
+  }
 }
 
 // Fix 2b: exported so the pipeline's PDF-fallback discovery can invoke the
@@ -1194,6 +1267,17 @@ export async function fetchIssuerPdfsWithPrimedSession(
     const wafPrimed = await primeWafSession(page, origin);
     console.log(`[Processor] PDF-recovery: primed WAF for ${origin} -> ${wafPrimed ? "sensor cookies present" : "no sensor cookies (continuing)"}; ${urls.length} candidate PDF(s)`);
 
+    // Fix K — Strategy C: extract the browser's WAF-clearance cookies to use in
+    // direct Node.js HTTPS requests (nodeFetchPdf). This lets us attempt each PDF
+    // via the Node HTTP stack before falling back to the CDP-based Strategies A/B.
+    let cookieHeader = "";
+    try {
+      const pageCookies: Array<{ name: string; value: string }> = await page.cookies();
+      cookieHeader = pageCookies.map((c) => `${c.name}=${c.value}`).join("; ");
+    } catch {
+      cookieHeader = "";
+    }
+
     // In-page credentialed fetch that reuses the primed cookies (Strategy B).
     // Returns a diagnostic object so the caller can persist WHY a fetch failed
     // (HTTP status, byte count, and a short body snippet for WAF/challenge
@@ -1240,15 +1324,21 @@ export async function fetchIssuerPdfsWithPrimedSession(
       return second.base64 || second.status ? second : first;
     }, target, origin);
 
-    // Classify a small HTML body as a Cloudflare/WAF challenge or block page.
-    const isChallengeSnippet = (s: string): boolean =>
-      /just a moment|cf-browser-verification|challenge-platform|cf-chl|attention required|access denied|_cf_chl_opt|enable javascript and cookies/i.test(s || "");
-
-    for (const url of urls) {
+    for (let urlIdx = 0; urlIdx < urls.length; urlIdx++) {
+      const url = urls[urlIdx];
       const t0 = Date.now();
       if (Date.now() >= deadline) {
-        console.warn(`[Processor] PDF-recovery: overall budget (${Math.round(overallBudgetMs / 1000)}s) exhausted for ${origin} — stopping with ${recovered.size} recovered`);
-        note({ url, ok: false, reason: "budget_exhausted", ms: 0 });
+        // Note ALL remaining URLs as budget_exhausted so Fix E can persist
+        // diagnostics for every candidate, not just the one that triggered the
+        // deadline. Without this, remaining URLs keep their original failure_reason.
+        const remaining = urls.length - urlIdx;
+        console.warn(
+          `[Processor] PDF-recovery: overall budget (${Math.round(overallBudgetMs / 1000)}s) exhausted for ${origin}` +
+          ` — stopping with ${recovered.size} recovered; marking ${remaining} remaining URL(s) as budget_exhausted`,
+        );
+        for (let j = urlIdx; j < urls.length; j++) {
+          note({ url: urls[j], ok: false, reason: "budget_exhausted", ms: 0 });
+        }
         break;
       }
       try {
@@ -1257,26 +1347,65 @@ export async function fetchIssuerPdfsWithPrimedSession(
         let bytes: number | undefined;
         let reason = "no_text";
 
+        // Fix K — Strategy C: direct Node.js HTTPS download using browser-extracted
+        // WAF-clearance cookies. Fast success or fast failure — avoids 45 s Chrome
+        // timeout per large PDF. Falls through to Strategy A/B if C doesn't get a PDF.
+        if (cookieHeader) {
+          try {
+            const cRes = await nodeFetchPdf(url, cookieHeader, origin, perPdfTimeoutMs);
+            if (cRes.status) httpStatus = cRes.status;
+            if (cRes.bytes) bytes = cRes.bytes;
+            if (cRes.buf) {
+              text = (await extractTextFromPdf(cRes.buf)) || "";
+              if (text) {
+                console.log(`[Processor] PDF-recovery [C]: node-fetch yielded ${text.length} chars from ${url.slice(0, 80)}`);
+              } else {
+                reason = "no_text";
+              }
+            } else if (cRes.status === 404) {
+              // Definitively missing — skip A/B
+              reason = "http_404";
+              note({ url, ok: false, reason, httpStatus, bytes, chars: 0, ms: Date.now() - t0 });
+              console.log(`[Processor] PDF-recovery [C]: 404 for ${url.slice(0, 80)} — skipping A/B`);
+              continue;
+            } else {
+              // WAF block, empty, or challenge — log and fall through to A/B
+              const cReason = cRes.bytes === 0 ? "empty_bytes"
+                : isChallengeSnippet(cRes.snippet) ? "challenge_page"
+                : (cRes.status && cRes.status >= 400) ? "waf_block"
+                : "empty_bytes";
+              console.log(
+                `[Processor] PDF-recovery [C]: node-fetch result: status=${cRes.status} bytes=${cRes.bytes}` +
+                ` reason=${cReason} — falling back to A/B for ${url.slice(0, 60)}`,
+              );
+            }
+          } catch (cErr: any) {
+            console.log(`[Processor] PDF-recovery [C]: node-fetch error: ${String(cErr?.message ?? cErr).slice(0, 80)} — falling back to A/B`);
+          }
+        }
+
         // Strategy A: direct navigation to the PDF, reusing the primed session.
-        try {
-          const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: perPdfTimeoutMs });
-          if (resp) {
-            httpStatus = resp.status();
-            const ct = String(resp.headers()["content-type"] || "").toLowerCase();
-            if (resp.ok()) {
-              const bodyBuf: Buffer = await resp.buffer();
-              if (bodyBuf && bodyBuf.length > 0) {
-                bytes = bodyBuf.length;
-                const isPdf = bodyBuf.slice(0, 5).toString("latin1") === "%PDF-" || ct.includes("application/pdf");
-                if (isPdf && bodyBuf.slice(0, 5).toString("latin1") === "%PDF-") {
-                  text = (await extractTextFromPdf(bodyBuf)) || "";
+        if (!text) {
+          try {
+            const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: perPdfTimeoutMs });
+            if (resp) {
+              httpStatus = resp.status();
+              const ct = String(resp.headers()["content-type"] || "").toLowerCase();
+              if (resp.ok()) {
+                const bodyBuf: Buffer = await resp.buffer();
+                if (bodyBuf && bodyBuf.length > 0) {
+                  bytes = bodyBuf.length;
+                  const isPdf = bodyBuf.slice(0, 5).toString("latin1") === "%PDF-" || ct.includes("application/pdf");
+                  if (isPdf && bodyBuf.slice(0, 5).toString("latin1") === "%PDF-") {
+                    text = (await extractTextFromPdf(bodyBuf)) || "";
+                  }
                 }
               }
             }
+          } catch (navErr: any) {
+            reason = /timeout/i.test(String(navErr?.message || navErr)) ? "nav_timeout" : "nav_error";
+            console.log(`[Processor] PDF-recovery [A]: direct nav failed for ${url.slice(0, 60)} (${String(navErr?.message || navErr).slice(0, 60)}) — trying B`);
           }
-        } catch (navErr: any) {
-          reason = /timeout/i.test(String(navErr?.message || navErr)) ? "nav_timeout" : "nav_error";
-          console.log(`[Processor] PDF-recovery: direct nav did not yield bytes for ${url} (${String(navErr?.message || navErr).slice(0, 60)}) — trying in-page fetch`);
         }
 
         // Strategy B: in-page credentialed fetch using the primed cookies.
