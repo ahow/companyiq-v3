@@ -1278,9 +1278,20 @@ async function runFetchPhase(opts: {
               OR fetch_status = 'inaccessible'
               OR (fetch_status = 'dead' AND failure_reason IN ('fetch_returned_empty', 'transient', 'circuit_broken', 'timeout', 'blocked_403'))
             )
+          -- Ordering tiers:
+          --   tier-0: framework-configurable priorityRegex (documentPriorityUrlPatterns).
+          --           This is the ONLY topical prioritisation. Each framework declares the
+          --           URL substrings that identify its highest-value dedicated disclosures
+          --           (e.g. a nature framework promotes biodiversity/water/tnfd; a climate
+          --           framework tcfd/transition-plan; a modern-slavery framework its own).
+          --   tier-1: recency (recent report years first).
+          --   tier-2: alphabetical (stable, deterministic).
+          -- NOTE: a hardcoded ESG-topic regex tier previously sat between tier-0 and recency.
+          -- It was removed because it silently deprioritised documents for any NON-ESG
+          -- framework, making the recovery ordering topic-specific. Topical prioritisation is
+          -- now entirely framework-configurable via documentPriorityUrlPatterns (tier-0).
           ORDER BY
             (CASE WHEN url ~* ${priorityRegex} THEN 0 ELSE 1 END),
-            (CASE WHEN url ~* '(sustainab|biodivers|nature|esg|/csr|climate|environment|water|tcfd|tnfd)' THEN 0 ELSE 1 END),
             (CASE WHEN url ~* '(2026|2025|2024|2023)' THEN 0 ELSE 1 END),
             url
           LIMIT 40

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import {
-  hasCSRDHorizonTable,
-  normaliseCSRDHorizonMarkers,
-} from "./csrd-table-normaliser";
+  hasTableHorizonMarkers,
+  normaliseTableHorizonMarkers,
+} from "./table-horizon-normaliser";
 
 let pass = 0;
 let fail = 0;
@@ -17,19 +17,19 @@ function test(name: string, fn: () => void) {
   }
 }
 
-console.log("CSRD table normaliser tests");
+console.log("Table horizon-marker normaliser tests");
 
-test("no-op on plain text without CSRD header", () => {
+test("no-op on plain text without horizon-table header", () => {
   const t = "Some paragraph.\n\nAnother paragraph.\n\nNo tables here.";
-  const r = normaliseCSRDHorizonMarkers(t);
+  const r = normaliseTableHorizonMarkers(t);
   assert.equal(r.detected, false);
   assert.equal(r.annotationsAdded, 0);
   assert.equal(r.text, t);
 });
 
-test("no-op on text with bullets but no CSRD header", () => {
+test("no-op on text with bullets but no horizon-table header", () => {
   const t = "Bullet list:\n\u2022 apples\n\u2022 pears\n\u2022 oranges";
-  const r = normaliseCSRDHorizonMarkers(t);
+  const r = normaliseTableHorizonMarkers(t);
   assert.equal(r.detected, false);
   assert.equal(r.text, t);
 });
@@ -37,7 +37,7 @@ test("no-op on text with bullets but no CSRD header", () => {
 test("detects header even with lots of intervening text", () => {
   const header =
     "Value chain Time horizon\nSubtopic IRO name\nRationale\nShort term Medium term Long term";
-  assert.equal(hasCSRDHorizonTable(header), true);
+  assert.equal(hasTableHorizonMarkers(header), true);
 });
 
 test("annotates '\u2022\u2022\u2022' as short/medium/long", () => {
@@ -53,7 +53,7 @@ test("annotates '\u2022\u2022\u2022' as short/medium/long", () => {
     "Risk: This risk in our upstream value chain...",
     "\u2022\u2022\u2022",
   ].join("\n");
-  const r = normaliseCSRDHorizonMarkers(doc);
+  const r = normaliseTableHorizonMarkers(doc);
   assert.equal(r.detected, true);
   assert.equal(r.annotationsAdded, 2);
   assert.match(r.text, /\u2022\u2022\u2022 \[horizon: short, medium and long term\]/);
@@ -69,7 +69,7 @@ test("annotates '\u2022' and '\u2022\u2022' variants", () => {
     "Risk C",
     "\u2022\u2022\u2022",
   ].join("\n");
-  const r = normaliseCSRDHorizonMarkers(doc);
+  const r = normaliseTableHorizonMarkers(doc);
   assert.equal(r.detected, true);
   assert.equal(r.annotationsAdded, 3);
   assert.match(r.text, /\u2022 \[horizon: short term\]/);
@@ -84,7 +84,7 @@ test("annotates filled/empty circle notation \u25cf\u25cf\u25cb", () => {
     "\u25cf\u25cb\u25cb",
     "\u25cf\u25cf\u25cf",
   ].join("\n");
-  const r = normaliseCSRDHorizonMarkers(doc);
+  const r = normaliseTableHorizonMarkers(doc);
   assert.equal(r.detected, true);
   assert.equal(r.annotationsAdded, 3);
   assert.match(r.text, /\u25cf\u25cf\u25cb \[horizon: short and medium term\]/);
@@ -97,7 +97,7 @@ test("does NOT annotate bullet within a normal sentence", () => {
     "IRO Subtopic Short term Medium term Long term",
     "This is a real sentence \u2022 with a bullet character in it.",
   ].join("\n");
-  const r = normaliseCSRDHorizonMarkers(doc);
+  const r = normaliseTableHorizonMarkers(doc);
   assert.equal(r.detected, true);
   assert.equal(r.annotationsAdded, 0);
   assert.equal(r.text.includes("[horizon:"), false);
@@ -109,14 +109,14 @@ test("idempotent: running twice produces the same output", () => {
     "Risk A",
     "\u2022\u2022\u2022",
   ].join("\n");
-  const first = normaliseCSRDHorizonMarkers(doc).text;
-  const second = normaliseCSRDHorizonMarkers(first).text;
+  const first = normaliseTableHorizonMarkers(doc).text;
+  const second = normaliseTableHorizonMarkers(first).text;
   assert.equal(first, second);
 });
 
 test("byte-identical output when no header detected (backward-compat guard)", () => {
   const doc = "Random\n\ntext with \u2022 bullets but no ESRS header\n\u2022\u2022\u2022";
-  const r = normaliseCSRDHorizonMarkers(doc);
+  const r = normaliseTableHorizonMarkers(doc);
   assert.equal(r.detected, false);
   assert.equal(r.annotationsAdded, 0);
   assert.equal(r.text, doc);
@@ -143,7 +143,7 @@ Deforestation
 \u2022
 Risk: This risk in our upstream value chain relates to how agricultural activities can be a key driver of land-use change and can contribute to deforestation.
 \u2022\u2022\u2022`;
-  const r = normaliseCSRDHorizonMarkers(doc);
+  const r = normaliseTableHorizonMarkers(doc);
   assert.equal(r.detected, true);
   assert.equal(r.annotationsAdded, 4);
   // Both "•••" occurrences should now carry the horizon annotation

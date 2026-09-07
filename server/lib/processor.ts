@@ -1,7 +1,7 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 import pdfParse from "pdf-parse";
-import { normaliseCSRDHorizonMarkers } from "./csrd-table-normaliser";
+import { normaliseTableHorizonMarkers } from "./table-horizon-normaliser";
 import crypto from "crypto";
 import puppeteer from "puppeteer-core";
 import { spawn } from "child_process";
@@ -649,14 +649,14 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   try {
     const data = await pdfParse(buffer);
     const raw = data.text || "";
-    // I81: CSRD/ESRS IRO-table normaliser — inlines horizon markers next
-    // to bullet-only rows so the flattened PDF preserves the table's
-    // short/medium/long-term semantics after chunking. No-op on
-    // documents that don't contain a CSRD IRO header. Applied ONLY on the
-    // pdf-parse path (the fallbacks below produce plain OCR/CLI text).
-    const normalised = normaliseCSRDHorizonMarkers(raw);
+    // I81: horizon-marker table normaliser — inlines time-horizon markers
+    // next to bullet-only rows so the flattened PDF preserves the table's
+    // short/medium/long-term semantics after chunking. Format-agnostic: a
+    // no-op on documents that don't contain such a header. Applied ONLY on
+    // the pdf-parse path (the fallbacks below produce plain OCR/CLI text).
+    const normalised = normaliseTableHorizonMarkers(raw);
     if (normalised.detected && normalised.annotationsAdded > 0) {
-      console.log(`[Processor] CSRD IRO table detected — annotated ${normalised.annotationsAdded} horizon-marker rows`);
+      console.log(`[Processor] Structured horizon-marker table detected — annotated ${normalised.annotationsAdded} rows`);
     }
     if (normalised.text && normalised.text.trim().length >= PDF_TEXT_MIN_CHARS) {
       return normalised.text;

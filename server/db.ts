@@ -794,16 +794,32 @@ export async function initializeDatabase(): Promise<void> {
     // ESG/sustainability tier, so they are attempted within the bounded budget.
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS document_priority_url_patterns JSONB`);
 
-    // Fix F: seed fw5 (nature & biodiversity) document priority URL patterns. These
-    // short substrings match URL path segments for the framework's highest-value
-    // dedicated disclosures (e.g. /biodiversityStatement_e.pdf, /Water_Statement_e.pdf,
-    // /2023-SDGReport-e.pdf, tcfd/tnfd reports), promoting them above the general
-    // ESG/sustainability tier so they are attempted within the bounded recovery budget.
-    // Idempotent: only seeds when unset.
+    // Fix F / tier-1 generalisation: seed fw5 (nature & biodiversity) document priority
+    // URL patterns. These short substrings match URL path segments for the framework's
+    // highest-value dedicated disclosures (e.g. /biodiversityStatement_e.pdf,
+    // /Water_Statement_e.pdf, /2023-SDGReport-e.pdf, tcfd/tnfd reports, and the broader
+    // sustainability/ESG/CSR report families).
+    //
+    // The list was broadened when the hardcoded tier-1 ESG regex was removed from
+    // pipeline.ts (that regex — sustainab|biodivers|nature|esg|/csr|climate|environment|
+    // water|tcfd|tnfd — used to provide a second ordering tier for ALL frameworks, which
+    // silently deprioritised documents for non-ESG frameworks). Topical prioritisation is
+    // now entirely per-framework via documentPriorityUrlPatterns (tier-0). To preserve
+    // fw5's recovery ordering after tier-1's removal, its patterns now include the full
+    // set the tier-1 regex previously supplied, unioned with the biodiversity-specific
+    // markers.
+    //
+    // Upgrade-safe: applies when unset OR when the row has not yet been broadened (i.e.
+    // does not contain "sustainab"). Idempotent thereafter, and never clobbers a value a
+    // user has since customised to include the broad terms.
     await db.execute(sql`
       UPDATE frameworks
-        SET document_priority_url_patterns = '["biodiversit", "water.statement", "nature.statement", "sdg", "tnfd", "tcfd"]'::jsonb
-      WHERE id = 5 AND document_priority_url_patterns IS NULL
+        SET document_priority_url_patterns = '["biodivers","nature","sustainab","esg","/csr","climate","environment","water","sdg","tnfd","tcfd"]'::jsonb
+      WHERE id = 5
+        AND (
+          document_priority_url_patterns IS NULL
+          OR NOT (document_priority_url_patterns @> '["sustainab"]'::jsonb)
+        )
     `);
 
 

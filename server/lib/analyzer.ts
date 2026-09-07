@@ -45,7 +45,7 @@ export function getPipelineVersion(): string {
 // indicators — typically drawn as filled circles or bullets ("•", "••",
 // "•••") — end up on their own lines detached from the header row that
 // defined "Short term / Medium term / Long term". Our PDF post-processor
-// (csrd-table-normaliser.ts) inlines a "[horizon: ...]" annotation next to
+// (table-horizon-normaliser.ts) inlines a "[horizon: ...]" annotation next to
 // each such line, but for chunks that miss the annotation (older cached
 // content, non-standard notations, or documents where the header is too
 // distant), we also tell the scorer directly. This prevents the scorer

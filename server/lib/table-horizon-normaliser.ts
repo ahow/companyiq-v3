@@ -1,13 +1,13 @@
 /**
- * CSRD/ESRS IRO-table normaliser.
+ * Structured PDF table horizon-marker normaliser.
  *
  * Motivation
  * ----------
- * Many CSRD/ESRS Non-Financial Statements present their material impacts,
- * risks and opportunities (IROs) as a table with columns like:
+ * Many disclosure documents present their material impacts, risks and
+ * opportunities as a table with a set of "time horizon" columns, e.g.:
  *
  *   Value chain        Time horizon
- *   Subtopic  IRO name  Upstream / Own operations / Downstream  Rationale  Short term / Medium term / Long term
+ *   Subtopic  Item name  Upstream / Own operations / Downstream  Rationale  Short term / Medium term / Long term
  *
  * When the PDF is flattened by pdf-parse, the header appears once, then
  * every data row loses its column alignment. The three horizon columns are
@@ -18,21 +18,24 @@
  * "•••" means "short + medium + long-term horizons all apply". It just
  * looks like a decorative bullet.
  *
- * We saw this concretely on Nestlé's Non-Financial Statement 2025: the
- * biodiversity IRO table lists Deforestation, Pollinator decline, Soil
- * erosion etc. as nature-related risks with "•••" markers indicating the
- * horizons — but the scorer returns "No, no time horizons disclosed".
+ * This pattern was first observed on CSRD/ESRS Non-Financial Statements
+ * (e.g. Nestlé's Non-Financial Statement 2025: the biodiversity IRO table
+ * lists Deforestation, Pollinator decline, Soil erosion etc. as
+ * nature-related risks with "•••" markers indicating the horizons — but the
+ * scorer returned "No, no time horizons disclosed"). The normaliser itself
+ * is format-agnostic: it fires on any document that uses a short/medium/
+ * long-term horizon-column table, regardless of framework.
  *
  * Design
  * ------
  * The normaliser runs AFTER pdf-parse but BEFORE the whitespace cleanup and
  * chunking. It:
  *
- *   1. Detects whether the document contains one or more CSRD IRO-table
- *      headers (a compact regex over "Short term/Medium term/Long term"
- *      preceded by IRO/rationale/subtopic keywords). If not, it returns
- *      the text unchanged — this makes the pass a no-op on any document
- *      that doesn't use this pattern.
+ *   1. Detects whether the document contains one or more horizon-column
+ *      table headers (a compact regex over "Short term/Medium term/Long
+ *      term" preceded by IRO/rationale/subtopic keywords). If not, it
+ *      returns the text unchanged — this makes the pass a no-op on any
+ *      document that doesn't use this pattern.
  *
  *   2. For documents that DO contain such a header, it inlines a compact
  *      "[horizons: short|medium|long]" annotation next to each row's
@@ -40,7 +43,7 @@
  *      chunks that get the row without the header will still carry the
  *      horizon information.
  *
- *   3. Handles the three most common CSRD table conventions:
+ *   3. Handles the three most common table conventions:
  *      a) "•" / "••" / "•••" ASCII bullets (Nestlé, several KPMG-templated
  *         reports)
  *      b) "●" filled circles / "○" empty circles (some PwC-templated
@@ -60,8 +63,8 @@
  *
  * Safety
  * ------
- * - When no CSRD header is detected, output is byte-identical to input
- *   (verified by unit test).
+ * - When no horizon-table header is detected, output is byte-identical to
+ *   input (verified by unit test).
  * - The normaliser only edits bullet-only lines (lines whose content is a
  *   run of horizon markers and optional whitespace). It never edits
  *   sentences, so it cannot corrupt regular narrative text.
@@ -95,14 +98,14 @@ const FILLED_CIRCLE_HORIZONS: Array<[RegExp, string]> = [
 // and other column names between them). Requires all three ESRS horizon
 // labels to appear within ~200 characters of each other AND at least one
 // IRO-vocabulary word nearby.
-const CSRD_IRO_HEADER = /(?:IRO|Subtopic|Rationale|Value chain|Impact\/Risk\/Opportunity)[\s\S]{0,400}?Short[\s\-]*term[\s\S]{0,80}?Medium[\s\-]*term[\s\S]{0,80}?Long[\s\-]*term/i;
+const HORIZON_TABLE_HEADER = /(?:IRO|Subtopic|Rationale|Value chain|Impact\/Risk\/Opportunity)[\s\S]{0,400}?Short[\s\-]*term[\s\S]{0,80}?Medium[\s\-]*term[\s\S]{0,80}?Long[\s\-]*term/i;
 
 /**
- * Detect whether the flattened PDF text contains at least one CSRD IRO
+ * Detect whether the flattened PDF text contains at least one horizon-column
  * table header. Used as the gate for the annotation pass.
  */
-export function hasCSRDHorizonTable(text: string): boolean {
-  return CSRD_IRO_HEADER.test(text);
+export function hasTableHorizonMarkers(text: string): boolean {
+  return HORIZON_TABLE_HEADER.test(text);
 }
 
 /**
@@ -131,18 +134,18 @@ function annotateBulletRow(line: string): string {
 }
 
 /**
- * Public entry point: normalise CSRD IRO-table horizon markers in a
- * flattened PDF text. Returns the input unchanged when no CSRD table
+ * Public entry point: normalise structured horizon-marker tables in a
+ * flattened PDF text. Returns the input unchanged when no horizon-table
  * header is detected. When a header IS detected, every bullet-only line
  * gets an inline "[horizon: ...]" annotation so that downstream chunks
  * carry the horizon meaning even when separated from the table header.
  */
-export function normaliseCSRDHorizonMarkers(text: string): {
+export function normaliseTableHorizonMarkers(text: string): {
   text: string;
   detected: boolean;
   annotationsAdded: number;
 } {
-  if (!hasCSRDHorizonTable(text)) {
+  if (!hasTableHorizonMarkers(text)) {
     return { text, detected: false, annotationsAdded: 0 };
   }
 
