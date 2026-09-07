@@ -893,11 +893,15 @@ async function runFetchPhase(opts: {
       let docHost = "";
       try { docHost = new URL(doc.url).hostname; } catch {}
 
-      // Fix B: identify issuer-domain PDFs. Large legitimate issuer reports
-      // (20+ MB annual / sustainability PDFs) are EXPECTED to be slow and often
-      // live on WAF-defended hosts. They must be exempt from the slow-host
-      // circuit breaker — otherwise 3 big-but-successful downloads trip the
-      // breaker and kill every remaining report on that host.
+      // Fix B / Fix M: identify issuer-domain documents. All content hosted on
+      // the issuer's own domain (PDFs AND HTML pages) is expected to be slow
+      // and often lives on WAF-defended hosts. Exempting only PDFs (the old
+      // isIssuerPdf guard) left HTML sustainability pages on issuer domains
+      // (e.g. vale.com/esg/*, suncor.com/sustainability) vulnerable to the
+      // slow-host circuit breaker — 3 slow page loads would trip the breaker
+      // and mark every remaining issuer-domain URL as circuit_broken.
+      // Fix M: widen the exemption to ALL issuer-domain documents so the
+      // circuit breaker never fires for hosts the issuer controls.
       const isPdfDoc = /\.pdf(\?.*)?$/i.test(doc.url);
       const isIssuerHost = (() => {
         if (!docHost) return false;
@@ -906,9 +910,9 @@ async function runFetchPhase(opts: {
           (!!companyDomainLower && h.endsWith("." + companyDomainLower)) ||
           relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith("." + rd)));
       })();
-      const isIssuerPdf = isPdfDoc && isIssuerHost;
+      const isIssuerExempt = isIssuerHost; // Fix M: all issuer-domain docs exempt (not just PDFs)
 
-      if (docHost && hostCircuitBroken.has(docHost) && !isIssuerPdf) {
+      if (docHost && hostCircuitBroken.has(docHost) && !isIssuerExempt) {
         console.log(`[${companyName}] 41-K: skipping ${doc.url.slice(0, 60)} (host circuit-broken)`);
         await storage.recordFetchFailure(companyId, doc.url, "circuit_broken");
         return;
@@ -975,7 +979,7 @@ async function runFetchPhase(opts: {
         // Fix C: issuer-domain PDFs always use the browser path — they sit on
         // WAF-defended hosts where plain HTTP returns 403/empty.
         const historyFails = docHost ? (hostFailHistory.get(docHost) || 0) : 0;
-        const forceHeadless2a = isPinnedOrKnown || historyFails >= HOST_FAIL_THRESHOLD || isIssuerPdf;
+        const forceHeadless2a = isPinnedOrKnown || historyFails >= HOST_FAIL_THRESHOLD || isIssuerExempt;
         if (forceHeadless2a && !isPinnedOrKnown) {
           console.log(`[${companyName}] Fix 2a: forcing headless for ${doc.url.slice(0, 80)} (host ${docHost} has ${historyFails} prior empty/transient failures)`);
         }
@@ -990,14 +994,14 @@ async function runFetchPhase(opts: {
         const fetchElapsed = Date.now() - fetchStart;
         // Fix B: issuer-domain PDFs are expected to be large/slow — they must
         // not count toward tripping the slow-host circuit breaker.
-        if (docHost && fetchElapsed >= SLOW_FETCH_THRESHOLD_MS && !isIssuerPdf) {
+        if (docHost && fetchElapsed >= SLOW_FETCH_THRESHOLD_MS && !isIssuerExempt) {
           const n = (hostSlowFetches.get(docHost) || 0) + 1;
           hostSlowFetches.set(docHost, n);
           if (n >= CIRCUIT_BREAK_THRESHOLD) {
             hostCircuitBroken.add(docHost);
             console.warn(`[${companyName}] 41-K: circuit break: ${docHost} (${n} consecutive slow fetches)`);
           }
-        } else if (docHost && !isIssuerPdf) {
+        } else if (docHost && !isIssuerExempt) {
           hostSlowFetches.set(docHost, 0); // reset streak on fast fetch
         }
 
