@@ -836,7 +836,13 @@ async function detectAndResolvContradiction(opts: {
 
 // ─── Document Summarization ──────────────────────────────────────────────────
 
-async function summarizeDocuments(opts: {
+// Exported for the variability-experiment harness (server/scripts/variability_run.ts).
+// This is the REAL, deterministic (no-LLM) retrieval-corpus builder used by the
+// production pipeline for corpora above the BM25-skip threshold. Exporting it lets
+// the harness reproduce production's exact combinedText rather than reimplementing
+// (and drifting from) the doc-prioritisation + chunk-sanity + capping logic.
+// Behaviour-preserving change: only the `export` keyword is added.
+export async function summarizeDocuments(opts: {
   companyName: string;
   companyId: number;
   documentTexts: string[];
