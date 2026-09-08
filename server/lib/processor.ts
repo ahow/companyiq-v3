@@ -884,8 +884,9 @@ async function fetchWithBrowser(url: string): Promise<string> {
     // Wait a moment for any JS-rendered content
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    // Extract text content from the page
-    const content = await page.evaluate(() => {
+    // Extract text content from the page. The evaluate() call is destructive
+    // (it removes noise DOM nodes), so this must run AFTER we capture rawHtml.
+    const extractText = async (): Promise<string> => page.evaluate(() => {
       // Remove noise elements
       const removeSelectors = [
         "script", "style", "nav", "footer", "header", "aside",
@@ -901,6 +902,43 @@ async function fetchWithBrowser(url: string): Promise<string> {
       const targetEl = mainEl || document.body;
       return targetEl?.textContent?.replace(/\s+/g, " ").trim() || "";
     });
+
+    // Fix N: capture the raw HTML BEFORE the destructive text extraction so we
+    // can detect a WAF/bot challenge interstitial. Then extract text.
+    let rawHtml = "";
+    try { rawHtml = await page.content(); } catch { rawHtml = ""; }
+    let content = await extractText();
+
+    // Fix N: WAF session priming fallback for HTML pages. Mirrors the PDF path
+    // (fetchPdfViaBrowser / fetchIssuerPdfsWithPrimedSession): some issuer-domain
+    // HTML pages behind Akamai/Imperva/Cloudflare return an empty shell or a
+    // challenge interstitial on the first cold navigation because the WAF trust
+    // cookies (_abck, bm_sv, reese84, incap_ses_*, …) are only issued after the
+    // sensor JS runs on the origin. When the first pass yields near-empty content
+    // or a recognised challenge page, prime the WAF session on the origin and
+    // re-navigate once. Purely additive: non-WAF hosts that returned real content
+    // on the first pass never enter this branch, so behaviour is unchanged.
+    const needsPrime =
+      content.length <= 50 || isChallengeSnippet(rawHtml) || looksLikeChallenge(rawHtml);
+    if (needsPrime) {
+      const origin = originOf(url);
+      if (origin) {
+        try {
+          await page.setExtraHTTPHeaders(WAF_PRIME_HEADERS);
+          const primed = await primeWafSession(page, origin);
+          if (primed) {
+            await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            const reExtracted = await extractText();
+            if (reExtracted && reExtracted.length > content.length) {
+              content = reExtracted;
+            }
+          }
+        } catch (primeErr: any) {
+          console.warn(`[Processor] Fix N: WAF prime retry failed for ${url}: ${String(primeErr?.message || primeErr).slice(0, 80)}`);
+        }
+      }
+    }
 
     return content;
   } catch (error: any) {
