@@ -1147,10 +1147,15 @@ export async function fetchPdfDirectRetry(
   }
 }
 
-// Fix 2b/E (pre-browser strategy): Google webcache text for a URL. Works when the
-// live host is fully blocking all fetchers but a cached copy still exists. Strips
-// HTML to plain text. Never throws: returns text (string) or null on any failure.
-// Fully generic — works for any URL/company.
+// Fix 2b/E (pre-browser strategy) — DEPRECATED / DO NOT WIRE INTO THE PIPELINE.
+// Google retired the webcache feature in early 2024: webcache.googleusercontent.com
+// now returns a generic "Google Search" stub page for EVERY url (verified against
+// suncor.com PDFs, Wikipedia and example.com — 0 real recoveries). This function is
+// kept only so any external caller still compiles; it will effectively always return
+// null in production. Do not re-add it to the Fix 2b recovery loop — it only adds a
+// wasted HTTP round-trip. If a cache-style fallback is ever needed again, target a
+// live archive that still serves content (e.g. the Wayback Machine / archive.org).
+// Never throws: returns text (string) or null on any failure. Generic for any URL.
 export async function fetchPdfGoogleCache(url: string): Promise<string | null> {
   const CHROME_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";

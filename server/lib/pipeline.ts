@@ -1330,20 +1330,26 @@ async function runFetchPhase(opts: {
 
       let pdfRecovered = 0;
 
-      // Fix 2b/D+E (pre-browser recovery): before spending the expensive browser
-      // budget, try two cheap, fork-free strategies on each candidate PDF:
+      // Fix 2b/D (pre-browser recovery): before spending the expensive browser
+      // budget, try one cheap, fork-free strategy on each candidate PDF:
       //   Strategy D — a direct Node.js HTTPS GET with a realistic browser header
       //     set + a small random delay. Some WAFs only block Chromium's CDP fetch
-      //     fingerprint, not a plain HTTPS client with browser-like headers.
-      //   Strategy E — Google webcache text for the URL. Works when the live host
-      //     is fully blocking but a cached copy still exists.
+      //     fingerprint, not a plain HTTPS client with browser-like headers, so D
+      //     recovers those cheaply. (It does NOT defeat a Cloudflare IP/ASN
+      //     reputation hard-block — e.g. suncor.com, nestle.com.my — which returns
+      //     403 to every server-side client incl. genuine-TLS-fingerprint ones;
+      //     those need a residential proxy and fall through to issuer_site_blocked.)
+      //   Strategy E (Google webcache) was REMOVED: Google retired the webcache
+      //     feature in early 2024, so webcache.googleusercontent.com now returns a
+      //     generic "Google Search" stub for every URL — verified 0/N recovery. It
+      //     only added a wasted HTTP round-trip per candidate. See processor.ts.
       // Any URL recovered here is recorded immediately and excluded from the
       // browser queue, saving the bounded browser budget for the hard cases.
-      // Both strategies never throw and work for any origin — fully generic.
+      // Strategy D never throws and works for any origin — fully generic.
       const preBrowserRecovered = new Set<string>();
       const getOrigin = (u: string) => { try { const p = new URL(u); return p.protocol + "//" + p.host; } catch { return ""; } };
       try {
-        const { fetchPdfDirectRetry, fetchPdfGoogleCache } = await import("./processor.js") as any;
+        const { fetchPdfDirectRetry } = await import("./processor.js") as any;
         for (const pdfUrl of pdfCandidates.slice(0, 40)) {
           try {
             let directText: string | null = null;
@@ -1355,22 +1361,11 @@ async function runFetchPhase(opts: {
               pdfRecovered++;
               preBrowserRecovered.add(pdfUrl);
               console.log(`[${companyName}] Fix 2b/D: direct-retry recovered ${directText.length} chars from ${pdfUrl.slice(0, 80)}`);
-              continue;
-            }
-            let cacheText: string | null = null;
-            if (typeof fetchPdfGoogleCache === "function") {
-              cacheText = await fetchPdfGoogleCache(pdfUrl);
-            }
-            if (cacheText && cacheText.length > 200) {
-              await storage.recordFetchSuccess(companyId, pdfUrl, cacheText);
-              pdfRecovered++;
-              preBrowserRecovered.add(pdfUrl);
-              console.log(`[${companyName}] Fix 2b/E: google-cache recovered ${cacheText.length} chars from ${pdfUrl.slice(0, 80)}`);
             }
           } catch { /* per-URL non-fatal — fall through to browser recovery */ }
         }
       } catch (preErr: any) {
-        console.warn(`[${companyName}] Fix 2b: pre-browser recovery (D+E) failed to load strategies: ${preErr?.message || preErr}`);
+        console.warn(`[${companyName}] Fix 2b: pre-browser recovery (D) failed to load strategy: ${preErr?.message || preErr}`);
       }
 
       // Fix 2b (session-primed recovery): group candidates by ORIGIN and recover
@@ -1396,7 +1391,7 @@ async function runFetchPhase(opts: {
         candidatesByOrigin.set(origin, list);
       }
       console.log(
-        `[${companyName}] Fix 2b: pre-browser recovery (D+E) recovered ${preBrowserRecovered.size} doc(s); ` +
+        `[${companyName}] Fix 2b: pre-browser recovery (D) recovered ${preBrowserRecovered.size} doc(s); ` +
         `${candidatesByOrigin.size} origin(s) queued for browser recovery.`
       );
 
