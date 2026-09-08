@@ -332,15 +332,21 @@ async function runFetchPhase(opts: {
   //
   // See provenance.ts::classifyProvenance R5c comment for the full rationale.
   // Fix 1b: Domain-concentration heuristic.
-  // If discovery returned >=5 documents with >=60% on a single host that is NOT
-  // already in the company's domain list, auto-register it as an issuer-domain
-  // candidate for this run and raise a proposal for admin review.
-  // This catches acronym domains and ccTLD variants that the brand-token
-  // fallback misses — without hardcoding any names.
+  // If discovery returned >=5 documents with >=60% on a single host, promote that
+  // host to an issuer-domain candidate for this run and raise a proposal for admin
+  // review. This fires in two structurally-distinct cases:
+  //   (a) No primary domain is set (!companyDomainLower) — the original case: the
+  //       concentrated host is likely the issuer's own site (acronym domains,
+  //       ccTLD variants) that the brand-token fallback missed.
+  //   (b) A primary domain IS set, but the concentrated host is an unregistered
+  //       SUBDOMAIN of it (host.endsWith('.' + companyDomainLower)) that is not yet
+  //       in relatedDomainsLower — e.g. esg.<domain> or reports.<domain>. The
+  //       provenance classifier can't tag such URLs as issuer content until the
+  //       subdomain is promoted, so we promote it here for the run and propose it.
+  // Neither case hardcodes any company/topic names.
   {
     const allDocs = discoveryResult.documents;
-    if (allDocs.length >= 5 && !companyDomainLower) {
-      // Only fire when primary domain is missing — if domain is set, Rule 1 already handles it.
+    if (allDocs.length >= 5) {
       const hostBuckets = new Map<string, number>();
       for (const doc of allDocs) {
         try {
@@ -350,13 +356,22 @@ async function runFetchPhase(opts: {
       }
       for (const [host, count] of hostBuckets) {
         const ratio = count / allDocs.length;
-        if (ratio >= 0.60 && count >= 5) {
+        if (ratio < 0.60 || count < 5) continue;
+        // Determine which triggering case (a) or (b) applies to this host.
+        const isSubdomainOfCompany =
+          !!companyDomainLower &&
+          host !== companyDomainLower &&
+          host.endsWith("." + companyDomainLower);
+        const qualifies =
+          !companyDomainLower || (isSubdomainOfCompany && !relatedDomainsLower.includes(host));
+        if (qualifies) {
           // Candidate: promote to relatedDomains for this run
           if (!relatedDomainsLower.includes(host)) {
             relatedDomainsLower.push(host);
             console.log(
               `[${companyName}] Fix 1b: domain-concentration heuristic promoted "${host}" ` +
-              `(${count}/${allDocs.length} docs, ${Math.round(ratio * 100)}%) to issuer-domain candidate.`
+              `(${count}/${allDocs.length} docs, ${Math.round(ratio * 100)}%) to issuer-domain candidate` +
+              `${isSubdomainOfCompany ? ` (subdomain of ${companyDomainLower})` : ""}.`
             );
             // Raise a domain proposal for admin review
             try {
@@ -1313,6 +1328,51 @@ async function runFetchPhase(opts: {
         }
       }
 
+      let pdfRecovered = 0;
+
+      // Fix 2b/D+E (pre-browser recovery): before spending the expensive browser
+      // budget, try two cheap, fork-free strategies on each candidate PDF:
+      //   Strategy D — a direct Node.js HTTPS GET with a realistic browser header
+      //     set + a small random delay. Some WAFs only block Chromium's CDP fetch
+      //     fingerprint, not a plain HTTPS client with browser-like headers.
+      //   Strategy E — Google webcache text for the URL. Works when the live host
+      //     is fully blocking but a cached copy still exists.
+      // Any URL recovered here is recorded immediately and excluded from the
+      // browser queue, saving the bounded browser budget for the hard cases.
+      // Both strategies never throw and work for any origin — fully generic.
+      const preBrowserRecovered = new Set<string>();
+      const getOrigin = (u: string) => { try { const p = new URL(u); return p.protocol + "//" + p.host; } catch { return ""; } };
+      try {
+        const { fetchPdfDirectRetry, fetchPdfGoogleCache } = await import("./processor.js") as any;
+        for (const pdfUrl of pdfCandidates.slice(0, 40)) {
+          try {
+            let directText: string | null = null;
+            if (typeof fetchPdfDirectRetry === "function") {
+              directText = await fetchPdfDirectRetry(pdfUrl, getOrigin(pdfUrl));
+            }
+            if (directText && directText.length > 200) {
+              await storage.recordFetchSuccess(companyId, pdfUrl, directText);
+              pdfRecovered++;
+              preBrowserRecovered.add(pdfUrl);
+              console.log(`[${companyName}] Fix 2b/D: direct-retry recovered ${directText.length} chars from ${pdfUrl.slice(0, 80)}`);
+              continue;
+            }
+            let cacheText: string | null = null;
+            if (typeof fetchPdfGoogleCache === "function") {
+              cacheText = await fetchPdfGoogleCache(pdfUrl);
+            }
+            if (cacheText && cacheText.length > 200) {
+              await storage.recordFetchSuccess(companyId, pdfUrl, cacheText);
+              pdfRecovered++;
+              preBrowserRecovered.add(pdfUrl);
+              console.log(`[${companyName}] Fix 2b/E: google-cache recovered ${cacheText.length} chars from ${pdfUrl.slice(0, 80)}`);
+            }
+          } catch { /* per-URL non-fatal — fall through to browser recovery */ }
+        }
+      } catch (preErr: any) {
+        console.warn(`[${companyName}] Fix 2b: pre-browser recovery (D+E) failed to load strategies: ${preErr?.message || preErr}`);
+      }
+
       // Fix 2b (session-primed recovery): group candidates by ORIGIN and recover
       // each origin's PDFs with a SINGLE WAF-primed browser session, reusing the
       // clearance cookie across all direct PDF navigations. This replaces the old
@@ -1324,8 +1384,10 @@ async function runFetchPhase(opts: {
       // pass loop) and gets its own bounded budget; it also resets the stale
       // browser launch circuit first, so a cooldown left over from the main phase
       // no longer blocks recovery. Generalises to any WAF-defended issuer SPA.
+      // URLs already recovered by the pre-browser D/E pass are skipped here.
       const candidatesByOrigin = new Map<string, string[]>();
       for (const pdfUrl of pdfCandidates.slice(0, 40)) {
+        if (preBrowserRecovered.has(pdfUrl)) continue; // already recovered by D/E
         let origin: string | null = null;
         try { const u = new URL(pdfUrl); origin = `${u.protocol}//${u.host}`; } catch { origin = null; }
         if (!origin) continue;
@@ -1333,8 +1395,11 @@ async function runFetchPhase(opts: {
         list.push(pdfUrl);
         candidatesByOrigin.set(origin, list);
       }
+      console.log(
+        `[${companyName}] Fix 2b: pre-browser recovery (D+E) recovered ${preBrowserRecovered.size} doc(s); ` +
+        `${candidatesByOrigin.size} origin(s) queued for browser recovery.`
+      );
 
-      let pdfRecovered = 0;
       // Fix E: collect a per-URL recovery diagnostic for EVERY candidate and
       // persist it to documents.failure_reason. Railway's log rate-limiter drops
       // the verbose per-document console stream during a scoring burst, so stdout
@@ -1369,6 +1434,59 @@ async function runFetchPhase(opts: {
       }
       if (pdfRecovered > 0) {
         console.log(`[${companyName}] Fix 2b: recovered ${pdfRecovered} PDF documents via fallback discovery`);
+      }
+
+      // Fix 2b (issuer-site-blocked detection): generalised admin signal.
+      // When Fix 2b was triggered, the issuer's own site is majority-blocked, it
+      // exposes fewer than 5 successfully-fetched PDFs, AND every recovery strategy
+      // (pre-browser D/E + browser session priming) produced nothing, the issuer's
+      // primary site is effectively opaque to all fetchers and has no PDF fallback.
+      // Raise a proposal so an admin can review that company (any framework) — e.g.
+      // to add an alternate mirror or a manual corpus. No company/topic hardcoding.
+      try {
+        const issuerDomainDocs = postFetchDocs.filter(d => {
+          try {
+            const h = new URL(d.url).hostname.replace(/^www\./, "");
+            return h === companyDomainLower ||
+              (!!companyDomainLower && h.endsWith("." + companyDomainLower)) ||
+              relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith("." + rd)));
+          } catch { return false; }
+        });
+        const issuerTotalDocs = issuerDomainDocs.length;
+        const issuerOkPdfCount = issuerDomainDocs.filter(d =>
+          (d as any).type === 'pdf' && d.fetchStatus === 'ok'
+        ).length;
+        const issuerBlockRate = issuerTotalDocs > 0 ? (issuerDeadDocs.length / issuerTotalDocs) : 0;
+        if (
+          issuerDeadDocs.length >= PDF_FALLBACK_THRESHOLD &&
+          issuerBlockRate >= 0.50 &&
+          issuerOkPdfCount < 5 &&
+          pdfRecovered === 0
+        ) {
+          console.log(
+            `[${companyName}] Fix 2b: issuer site appears fully blocked and lacks PDF coverage — ` +
+            `raised 'issuer_site_blocked' proposal for admin review.`
+          );
+          const { db: dbBlocked } = await import("../db.js");
+          const { sql: sqlBlocked } = await import("drizzle-orm");
+          await dbBlocked.execute(sqlBlocked`
+            INSERT INTO company_domain_proposals
+              (company_id, proposal_type, current_value, proposed_value, sources, confidence, u17_impact_docs_flipped, status)
+            VALUES (
+              ${companyId},
+              'issuer_site_blocked',
+              ${JSON.stringify(companyDomainLower || null)},
+              ${JSON.stringify({ issuerBlockRate: Math.round(issuerBlockRate * 100) / 100, issuerDeadCount: issuerDeadDocs.length, issuerTotalDocs, issuerOkPdfCount })},
+              ${JSON.stringify({ trigger: 'issuer_site_blocked' })},
+              'high',
+              ${issuerDeadDocs.length},
+              'pending'
+            )
+            ON CONFLICT DO NOTHING
+          `);
+        }
+      } catch (blockedErr: any) {
+        console.warn(`[${companyName}] Fix 2b: failed to raise issuer_site_blocked proposal: ${blockedErr?.message || blockedErr}`);
       }
 
       // Fix E: persist the per-URL recovery diagnostics. One low-volume UPDATE per

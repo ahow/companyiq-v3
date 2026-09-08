@@ -1093,6 +1093,104 @@ async function nodeFetchPdf(
   }
 }
 
+// Fix 2b/D (pre-browser strategy): direct Node.js HTTPS GET with a realistic
+// browser header set and a small random delay. Some WAFs only fingerprint and
+// block Chromium's CDP fetch, not a plain HTTP client presenting browser-like
+// headers — so a direct retry can recover a PDF that the browser path cannot.
+// Never throws: returns extracted PDF text (string) or null on any failure.
+// Fully generic — works for any URL/company.
+export async function fetchPdfDirectRetry(
+  url: string,
+  origin: string,
+  opts?: { delayMs?: number },
+): Promise<string | null> {
+  const CHROME_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  const delayMs = opts?.delayMs ?? (Math.floor(Math.random() * 2000) + 1000);
+  try {
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    const response = await axios.get(url, {
+      responseType: "arraybuffer",
+      maxRedirects: 5,
+      timeout: 30000,
+      maxContentLength: 100 * 1024 * 1024,
+      validateStatus: () => true, // never throw on 4xx/5xx
+      headers: {
+        "User-Agent": CHROME_UA,
+        "Accept": "application/pdf,application/octet-stream,*/*;q=0.9",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": (origin || "") + "/",
+        "Connection": "keep-alive",
+      },
+    });
+    const status: number = response?.status ?? 0;
+    if (status < 200 || status >= 300) {
+      console.log(`[Processor] Strategy D: non-2xx (${status}) for ${url.slice(0, 80)}`);
+      return null;
+    }
+    const raw = response?.data;
+    const buf: Buffer = raw ? Buffer.from(raw as ArrayBuffer) : Buffer.alloc(0);
+    const isPdf = buf.length >= 5 && buf.slice(0, 5).toString("latin1") === "%PDF-";
+    if (!isPdf) {
+      console.log(`[Processor] Strategy D: not a PDF (${buf.length}B) for ${url.slice(0, 80)}`);
+      return null;
+    }
+    const text = await extractTextFromPdf(buf);
+    if (text && text.length > 0) {
+      console.log(`[Processor] Strategy D: recovered ${text.length} chars from ${url.slice(0, 80)}`);
+      return text;
+    }
+    return null;
+  } catch (e: any) {
+    console.log(`[Processor] Strategy D: error for ${url.slice(0, 80)}: ${String(e?.message ?? e).slice(0, 120)}`);
+    return null;
+  }
+}
+
+// Fix 2b/E (pre-browser strategy): Google webcache text for a URL. Works when the
+// live host is fully blocking all fetchers but a cached copy still exists. Strips
+// HTML to plain text. Never throws: returns text (string) or null on any failure.
+// Fully generic — works for any URL/company.
+export async function fetchPdfGoogleCache(url: string): Promise<string | null> {
+  const CHROME_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  const cacheUrl = `https://webcache.googleusercontent.com/search?q=cache:${encodeURIComponent(url)}&hl=en`;
+  try {
+    const response = await axios.get(cacheUrl, {
+      responseType: "text",
+      maxRedirects: 5,
+      timeout: 20000,
+      validateStatus: () => true, // never throw on 4xx/5xx
+      headers: {
+        "User-Agent": CHROME_UA,
+        "Accept": "text/html,*/*;q=0.9",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    const status: number = response?.status ?? 0;
+    if (status < 200 || status >= 300) {
+      console.log(`[Processor] Strategy E: non-2xx (${status}) for ${url.slice(0, 80)}`);
+      return null;
+    }
+    const html = typeof response.data === "string" ? response.data : String(response.data ?? "");
+    const stripped = html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (stripped.length > 200) {
+      console.log(`[Processor] Strategy E: recovered ${stripped.length} chars from cache of ${url.slice(0, 80)}`);
+      return stripped;
+    }
+    console.log(`[Processor] Strategy E: cache text too short (${stripped.length}) for ${url.slice(0, 80)}`);
+    return null;
+  } catch (e: any) {
+    console.log(`[Processor] Strategy E: error for ${url.slice(0, 80)}: ${String(e?.message ?? e).slice(0, 120)}`);
+    return null;
+  }
+}
+
 // Fix 2b: exported so the pipeline's PDF-fallback discovery can invoke the
 // browser PDF path directly for inaccessible issuer-domain documents.
 export async function fetchPdfViaBrowser(url: string): Promise<string> {
