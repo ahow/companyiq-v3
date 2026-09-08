@@ -1,4 +1,5 @@
 import axios from "axios";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import * as cheerio from "cheerio";
 import pdfParse from "pdf-parse";
 import { normaliseTableHorizonMarkers } from "./table-horizon-normaliser";
@@ -16,6 +17,51 @@ import path from "path";
  * burning 3 retry passes (and, for slow timeouts, minutes of budget) on a URL
  * that is never going to succeed.
  */
+// ---------------------------------------------------------------------------
+// Residential proxy support (Evomi / any HTTP proxy)
+//
+// Set EVOMI_PROXY_USER + EVOMI_PROXY_PASS in Railway env vars to enable.
+// When unset the helpers return null/[] and every caller falls through to its
+// existing direct-connect path — zero behaviour change with no env vars set.
+//
+// Host and port default to Evomi's residential endpoint; override via
+// EVOMI_PROXY_HOST / EVOMI_PROXY_PORT if you switch provider.
+// ---------------------------------------------------------------------------
+function buildProxyUrl(): string | null {
+  const user = process.env.EVOMI_PROXY_USER;
+  const pass = process.env.EVOMI_PROXY_PASS;
+  if (!user || !pass) return null;
+  const host = process.env.EVOMI_PROXY_HOST ?? "core-residential.evomi.com";
+  const port = process.env.EVOMI_PROXY_PORT ?? "1000";
+  return `http://${user}:${pass}@${host}:${port}`;
+}
+
+/** Returns an HttpsProxyAgent when proxy env vars are configured, else null. */
+function getProxyAgent(): InstanceType<typeof HttpsProxyAgent> | null {
+  const url = buildProxyUrl();
+  return url ? new HttpsProxyAgent(url) : null;
+}
+
+/**
+ * Returns `--proxy-server=<url>` arg(s) for Puppeteer, plus the credentials
+ * object needed for page.authenticate(), when proxy env vars are configured.
+ * Returns empty arrays / null when proxy is not configured.
+ */
+function getProxyBrowserConfig(): {
+  args: string[];
+  credentials: { username: string; password: string } | null;
+} {
+  const user = process.env.EVOMI_PROXY_USER;
+  const pass = process.env.EVOMI_PROXY_PASS;
+  if (!user || !pass) return { args: [], credentials: null };
+  const host = process.env.EVOMI_PROXY_HOST ?? "core-residential.evomi.com";
+  const port = process.env.EVOMI_PROXY_PORT ?? "1000";
+  return {
+    args: [`--proxy-server=http://${host}:${port}`],
+    credentials: { username: user, password: pass },
+  };
+}
+
 export class PermanentFetchError extends Error {
   statusCode?: number;
   constructor(message: string, statusCode?: number) {
@@ -793,6 +839,12 @@ async function launchChromiumWithRetry(executablePath: string): Promise<any> {
     // requests are served normally (verified: Adobe 10-K + AI Ethics PDFs).
     "--disable-http2",
   ];
+  // Inject residential proxy args if configured (env-gated, no-op when unset).
+  const { args: proxyArgs } = getProxyBrowserConfig();
+  args.push(...proxyArgs);
+  if (proxyArgs.length > 0) {
+    console.log(`[Processor] Browser launching with residential proxy (${proxyArgs[0]})`);
+  }
   const MAX_LAUNCH_ATTEMPTS = parseInt(process.env.BROWSER_LAUNCH_ATTEMPTS || "3", 10);
   let lastErr: any = null;
   for (let attempt = 1; attempt <= MAX_LAUNCH_ATTEMPTS; attempt++) {
@@ -863,6 +915,9 @@ async function fetchWithBrowser(url: string): Promise<string> {
     const browser = await getSharedBrowser();
     page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
+    // Authenticate with residential proxy if configured (no-op when unset).
+    const _proxyCreds1 = getProxyBrowserConfig().credentials;
+    if (_proxyCreds1) await page.authenticate(_proxyCreds1);
     await page.setViewport({ width: 1280, height: 800 });
 
     // Block unnecessary resources to speed up loading
@@ -1109,12 +1164,15 @@ export async function fetchPdfDirectRetry(
   const delayMs = opts?.delayMs ?? (Math.floor(Math.random() * 2000) + 1000);
   try {
     if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    const proxyAgent = getProxyAgent();
     const response = await axios.get(url, {
       responseType: "arraybuffer",
       maxRedirects: 5,
       timeout: 30000,
       maxContentLength: 100 * 1024 * 1024,
       validateStatus: () => true, // never throw on 4xx/5xx
+      // Route through residential proxy if configured (env-gated, no-op when unset).
+      ...(proxyAgent ? { httpsAgent: proxyAgent } : {}),
       headers: {
         "User-Agent": CHROME_UA,
         "Accept": "application/pdf,application/octet-stream,*/*;q=0.9",
@@ -1125,7 +1183,7 @@ export async function fetchPdfDirectRetry(
     });
     const status: number = response?.status ?? 0;
     if (status < 200 || status >= 300) {
-      console.log(`[Processor] Strategy D: non-2xx (${status}) for ${url.slice(0, 80)}`);
+      console.log(`[Processor] Strategy D${proxyAgent ? " (proxy)" : ""}: non-2xx (${status}) for ${url.slice(0, 80)}`);
       return null;
     }
     const raw = response?.data;
@@ -1212,6 +1270,9 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     browserLaunched = true;
     page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
+    // Authenticate with residential proxy if configured (no-op when unset).
+    const _proxyCreds2 = getProxyBrowserConfig().credentials;
+    if (_proxyCreds2) await page.authenticate(_proxyCreds2);
     await page.setExtraHTTPHeaders(WAF_PRIME_HEADERS);
 
     // Strategy A (primary): navigate directly to the PDF URL and capture the
@@ -1402,6 +1463,9 @@ export async function fetchIssuerPdfsWithPrimedSession(
     browserLaunched = true;
     page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
+    // Authenticate with residential proxy if configured (no-op when unset).
+    const _proxyCreds3 = getProxyBrowserConfig().credentials;
+    if (_proxyCreds3) await page.authenticate(_proxyCreds3);
     await page.setExtraHTTPHeaders(WAF_PRIME_HEADERS);
 
     // Prime the WAF session ONCE for the whole batch.
