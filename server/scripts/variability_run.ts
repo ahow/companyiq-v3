@@ -36,9 +36,13 @@
  */
 import { loadSecrets } from "./variability_secrets.js";
 const secretsStatus = loadSecrets();
-if (!secretsStatus.present.DEEPSEEK_API_KEY || !secretsStatus.present.OPENROUTER_API_KEY || !secretsStatus.present.MISTRAL_API_KEY || !secretsStatus.present.DATABASE_URL) {
-  console.error("FATAL: missing secrets", secretsStatus.present);
-  process.exit(1);
+// Required for the reliable model set: deepseek (DEEPSEEK_API_KEY), glm-4.6-zai
+// (ZAI_API_KEY), claude-arbiter + mistral-or (OPENROUTER_API_KEY), DB (DATABASE_URL).
+for (const req of ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "ZAI_API_KEY", "DATABASE_URL"] as const) {
+  if (!secretsStatus.present[req]) {
+    console.error(`FATAL: missing secret ${req}`, secretsStatus.present);
+    process.exit(1);
+  }
 }
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
@@ -70,7 +74,30 @@ if (measureLimit) measures = measures.slice(0, measureLimit);
 const OUT = `${OUTDIR}/${companyId}_run${runIndex}${measureLimit ? `_lim${measureLimit}` : ""}.json`;
 if (existsSync(OUT)) { console.error(`SKIP (exists): ${OUT}`); process.exit(0); }
 
-const CASCADE = { primary: "deepseek", secondary: "glm-4.6", arbiter: "mistral-arbiter" };
+// Reliable model set (all confirmed working live this session):
+//   primary   deepseek            (DeepSeek direct)
+//   secondary glm-4.6-zai         (z.ai native — content always populated, seed+json)
+//   arbiter   claude-arbiter      (anthropic/claude-sonnet-4.5 via OpenRouter — the
+//                                   ORIGINAL documented cascade arbiter; prod's
+//                                   cascade_v2 mistral-arbiter is currently 403 →
+//                                   silent deepseek fallback, so it is unusable)
+// extra:      mistral-or          (mistralai/mistral-large via OpenRouter) — recorded
+//                                   as a 4th independent verdict so the intended-but-
+//                                   prod-broken European arbiter's behaviour + its own
+//                                   run-to-run variance are visible. NOT part of the
+//                                   reconstructed 3-model cascade decision.
+const CASCADE = { primary: "deepseek", secondary: "glm-4.6-zai", arbiter: "claude-arbiter" };
+const EXTRA_LLMS = ["mistral-or"];
+const ALL_LLMS = [CASCADE.primary, CASCADE.secondary, CASCADE.arbiter, ...EXTRA_LLMS];
+// glm-4.6 / claude are reasoning-capable and need output headroom so the reasoning
+// trace does not starve the JSON answer (prod's 2000 caused glm content=null). z.ai
+// keeps reasoning in a separate field, but claude via OpenRouter shares the budget.
+// Sized so glm-4.6's reasoning_content (a reasoning model: observed up to ~8.4k
+// tokens) plus the JSON answer always fit — below this, glm intermittently hits
+// finish_reason=length with empty content, a harness artifact that would masquerade
+// as run-to-run variance. Non-reasoning providers stop early, so the higher cap
+// costs them nothing. The provider layer clamps to each provider's maxOutputTokens.
+const SCORING_MAX_TOKENS = 32000;
 
 function deterministicSeed(measureId: string, cid: number, providerIndex: number): number {
   return createHash("sha256").update(`${measureId}:${cid}:${providerIndex}`).digest().readUInt32BE(0);
@@ -154,6 +181,12 @@ async function main() {
 
       const chunkView = (p: any) => ({
         fingerprint: p.fingerprint,
+        // Definitive signal: sha256 of the actual composed evidence text that is
+        // fed to the LLMs. The `fingerprint`/`topChunks` diagnostics are BM25-ranked
+        // and do NOT reflect the rescore's reordering/reselection, so we hash the
+        // real text: a run-to-run change here isolates rescore-driven pack variance.
+        textHash: createHash("sha256").update(String(p.text || "")).digest("hex"),
+        textLen: String(p.text || "").length,
         chunkCount: p.chunkCount,
         totalChars: p.totalChars,
         topicHits: p.topicHits,
@@ -165,20 +198,26 @@ async function main() {
         })),
       });
 
-      // ---- score with each cascade LLM (single pass; real seed/prompt) ----
+      // ---- score with each LLM (single pass; real seed/prompt) ----
       const llmResults: any[] = [];
-      for (const provider of [CASCADE.primary, CASCADE.secondary, CASCADE.arbiter]) {
+      for (const provider of ALL_LLMS) {
         const { system, prompt } = buildBinaryScoringPrompt({
           companyName, measure, evidenceText, topicDescription, framework,
         });
         // Production cascade uses providerIndex 0 (single pass per stage).
-        // mistral-arbiter ignores seed (supportsSeed:false) but we pass it uniformly;
-        // the provider layer drops it for mistral.
-        const seed = deterministicSeed(measure.measureId, companyId, 0);
+        // Mask to signed 31-bit: z.ai (glm-4.6 native) validates `seed` as a
+        // signed int32 and 400s on values > 2147483647 (deterministicSeed returns
+        // a full uint32). Masking is deterministic and identical every run, so it
+        // adds ZERO run-to-run variance while staying within every provider's range.
+        const seed = deterministicSeed(measure.measureId, companyId, 0) & 0x7fffffff;
         let rec: any = { llm: provider, seed };
+        if (process.env.DUMP_GLM_PROMPT && provider === "glm-4.6-zai") {
+          writeFileSync(`/home/ubuntu/glm_prompt_${measure.measureId}.json`,
+            JSON.stringify({ system, prompt, seed }, null, 2));
+        }
         try {
           const { text, provider: gradedBy, model } = await completeScoring(provider, {
-            system, prompt, json: true, maxTokens: 2000, seed,
+            system, prompt, json: true, maxTokens: SCORING_MAX_TOKENS, seed,
           });
           const parsed = extractAndParseJSON(text);
           const score = parsed.score === 1 ? 1 : 0; // binary mode
@@ -228,11 +267,19 @@ async function main() {
       records.push({
         measureId: measure.measureId, title: measure.title, category,
         chunks: { bm25: chunkView(bm25), production: chunkView(prod),
-          rescoreOn, packChangedByRescore: bm25.fingerprint !== prod.fingerprint },
+          rescoreOn,
+          // Compare the composed evidence text (not the BM25-only fingerprint,
+          // which the rescore does not update) so this flag truly reflects whether
+          // the LLM rescore altered the evidence the scorers saw.
+          packChangedByRescore:
+            createHash("sha256").update(String(bm25.text || "")).digest("hex") !==
+            createHash("sha256").update(String(prod.text || "")).digest("hex") },
         evidenceFingerprintScored: prod.fingerprint,
         llmResults, cascade,
       });
-      console.error(`  ${measure.measureId.padEnd(26)} ds=${verdictLabel(s1 ?? -9)} glm=${verdictLabel(s2 ?? -9)} mis=${s3 == null ? "-" : verdictLabel(s3)} => ${cascade.verdict}/${cascade.stage}${records[records.length-1].chunks.packChangedByRescore ? "  [pack↻]" : ""}`);
+      const sM = byLlm["mistral-or"]?.score;
+      const lab = (s: any) => (s == null ? "-" : verdictLabel(s));
+      console.error(`  ${measure.measureId.padEnd(26)} ds=${lab(s1)} glm=${lab(s2)} claude=${lab(s3)} mistral=${lab(sM)} => ${cascade.verdict}/${cascade.stage}${records[records.length-1].chunks.packChangedByRescore ? "  [pack↻]" : ""}`);
     }
   }
 
@@ -242,7 +289,9 @@ async function main() {
       measureCount: measures.length, totalCorpusChars: totalChars,
       combinedTextChars: combinedText.length, combinedTextHash: combinedHash,
       summarizerModel: summ.model, topicTermCount: topicTerms.length,
-      cascade: CASCADE, scoringMode: "binary", passes: 1,
+      cascade: CASCADE, extraLlms: EXTRA_LLMS, allLlms: ALL_LLMS,
+      scoringMaxTokens: SCORING_MAX_TOKENS,
+      scoringMode: "binary", passes: 1,
       rescoreOn: isRescoreEnabled(), retrievalV2: true,
       deepReadInHarness: false, issuerProfileSupplied: false,
       elapsedSec: null as any, ts: new Date().toISOString(),

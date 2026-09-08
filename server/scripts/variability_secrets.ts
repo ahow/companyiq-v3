@@ -42,6 +42,23 @@ export function loadSecrets(): {
     process.env.DATABASE_URL = dsnMatch[1];
   }
 
+  // --- extra local keys (gitignored, user-provided in-session) ---
+  // /home/ubuntu/var_keys.env holds KEY=VALUE lines (e.g. ZAI_API_KEY). Outside
+  // the repo, mode 600, never committed. Read first so it can supply keys the
+  // SENSITIVE.md table does not carry (z.ai native).
+  try {
+    const kv = readFileSync("/home/ubuntu/var_keys.env", "utf8");
+    for (const line of kv.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) continue;
+      const eq = t.indexOf("=");
+      if (eq === -1) continue;
+      const k = t.slice(0, eq).trim();
+      const v = t.slice(eq + 1).trim();
+      if (k && v && !process.env[k]) process.env[k] = v;
+    }
+  } catch { /* optional file */ }
+
   // --- LLM provider keys from the SENSITIVE markdown table ---
   const md = readFileSync(SENSITIVE_MD, "utf8");
   const wanted = [
@@ -62,6 +79,7 @@ export function loadSecrets(): {
     "DEEPSEEK_API_KEY",
     "OPENROUTER_API_KEY",
     "MISTRAL_API_KEY",
+    "ZAI_API_KEY",
   ];
   const present: Record<string, boolean> = {};
   const lengths: Record<string, number> = {};
