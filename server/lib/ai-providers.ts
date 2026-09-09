@@ -511,6 +511,27 @@ function initProviders() {
   });
   providers.set("claude-arbiter", claudeArbiter);
 
+  // ─── GPT-5 via OpenRouter — cascade_v2 arbiter (variability experiment) ────
+  // Stage-3 tiebreaker for the NEW cascade (primaries deepseek + mistral-or).
+  // Fires only when the two primaries disagree. Routed via OpenRouter reusing the
+  // SAME OPENROUTER_API_KEY/auth as the other OpenRouter providers — no separate
+  // OpenAI key, no hardcoded secret. Model id `openai/gpt-5` was verified present
+  // in the live OpenRouter /models listing (queried with the existing key) before
+  // wiring — it is not invented. Requests JSON output like the other providers.
+  const gpt5Arbiter = new OpenAICompatibleProvider({
+    name: "gpt5-arbiter",
+    model: "openai/gpt-5",
+    family: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    seed: 42,
+    // GPT-5 is a reasoning model on OpenRouter: give the answer headroom so the
+    // reasoning trace does not starve the JSON answer (same rationale as claude).
+    maxOutputTokens: 32000,
+    extraHeaders: openrouterHeaders,
+  });
+  providers.set("gpt5-arbiter", gpt5Arbiter);
+
   // ─── Mistral Large 3 — cascade arbiter (PR 2) ───────────────────────────
   // Alternative to claude-arbiter. Introduced after iteration 8 audit showed
   // Claude deferred 92% of the time to DeepSeek on DeepSeek/GLM disagreements,

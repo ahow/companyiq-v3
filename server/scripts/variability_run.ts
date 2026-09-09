@@ -71,7 +71,18 @@ if (!company) { console.error(`company ${companyId} not in var_companies.json`);
 const companyName: string = company.name;
 if (measureLimit) measures = measures.slice(0, measureLimit);
 
-const OUT = `${OUTDIR}/${companyId}_run${runIndex}${measureLimit ? `_lim${measureLimit}` : ""}.json`;
+// ---- cascade mode (flag/env, old behaviour preserved by default) ----
+//   legacy (default): deepseek + glm-4.6-zai decide, claude-arbiter tiebreaks
+//                     (the original documented cascade — byte-for-byte unchanged).
+//   v2 (CASCADE_MODE=v2): deepseek + mistral-or decide, GPT-5 arbiter tiebreaks,
+//                     and GLM is demoted to a scored-only extra vote that NEVER
+//                     affects the verdict.
+const CASCADE_MODE = (process.env.CASCADE_MODE || "legacy").toLowerCase();
+const NEW_CASCADE = CASCADE_MODE === "v2";
+
+// v2 runs are written to a distinct filename so they never clobber (or SKIP on)
+// the existing legacy 13_run*.json files, keeping the A-B comparison intact.
+const OUT = `${OUTDIR}/${companyId}_run${runIndex}${NEW_CASCADE ? "_v2" : ""}${measureLimit ? `_lim${measureLimit}` : ""}.json`;
 if (existsSync(OUT)) { console.error(`SKIP (exists): ${OUT}`); process.exit(0); }
 
 // Reliable model set (all confirmed working live this session):
@@ -86,8 +97,13 @@ if (existsSync(OUT)) { console.error(`SKIP (exists): ${OUT}`); process.exit(0); 
 //                                   prod-broken European arbiter's behaviour + its own
 //                                   run-to-run variance are visible. NOT part of the
 //                                   reconstructed 3-model cascade decision.
-const CASCADE = { primary: "deepseek", secondary: "glm-4.6-zai", arbiter: "claude-arbiter" };
-const EXTRA_LLMS = ["mistral-or"];
+// v2 cascade: deepseek + mistral-or are the deciding primaries, gpt5-arbiter is
+// the stage-3 tiebreaker (fires ONLY on primary disagreement), and glm-4.6-zai is
+// kept as a scored-only EXTRA vote that does NOT affect the verdict.
+const CASCADE = NEW_CASCADE
+  ? { primary: "deepseek", secondary: "mistral-or", arbiter: "gpt5-arbiter" }
+  : { primary: "deepseek", secondary: "glm-4.6-zai", arbiter: "claude-arbiter" };
+const EXTRA_LLMS = NEW_CASCADE ? ["glm-4.6-zai"] : ["mistral-or"];
 const ALL_LLMS = [CASCADE.primary, CASCADE.secondary, CASCADE.arbiter, ...EXTRA_LLMS];
 // glm-4.6 / claude are reasoning-capable and need output headroom so the reasoning
 // trace does not starve the JSON answer (prod's 2000 caused glm content=null). z.ai
@@ -115,6 +131,7 @@ async function main() {
   const { buildEvidencePacksForCategory, deriveTopicTerms } = await import("../lib/passage-retrieval.js");
   const { completeScoring } = await import("../lib/ai-providers.js");
   const { rescorePacksForCategory, isRescoreEnabled } = await import("../lib/passage-rescore.js");
+  const { gateEvidence } = await import("../lib/evidence-gate.js");
 
   // ---- frozen corpus ----
   const corpus: Array<{ url: string; title: string; text: string }> =
@@ -193,9 +210,8 @@ async function main() {
         })),
       });
 
-      // ---- score with each LLM (single pass; real seed/prompt) ----
-      const llmResults: any[] = [];
-      for (const provider of ALL_LLMS) {
+      // ---- score ONE provider (real seed/prompt) + apply the evidence gate ----
+      const scoreOne = async (provider: string) => {
         const { system, prompt } = buildBinaryScoringPrompt({
           companyName, measure, evidenceText, topicDescription, framework,
         });
@@ -215,47 +231,91 @@ async function main() {
             system, prompt, json: true, maxTokens: SCORING_MAX_TOKENS, seed,
           });
           const parsed = extractAndParseJSON(text);
-          const score = parsed.score === 1 ? 1 : 0; // binary mode
+          const rawScore = parsed.score === 1 ? 1 : 0; // binary mode
           const validVerdict = ["Yes", "No", "Partial"];
-          const verdict = parsed.verdict && validVerdict.includes(parsed.verdict)
-            ? parsed.verdict : (score === 1 ? "Yes" : "No");
+          let verdict = parsed.verdict && validVerdict.includes(parsed.verdict)
+            ? parsed.verdict : (rawScore === 1 ? "Yes" : "No");
           const quotes = Array.isArray(parsed.quotes)
             ? parsed.quotes.filter((q: any) => q && typeof q.text === "string" && q.text.length > 0)
             : [];
+          const cleanQuotes = quotes.map((q: any) => ({ text: q.text, source: q.source || "" }));
+          // ---- deterministic evidence-integrity gate: applied to EVERY model
+          //      (primaries, extra votes, AND the arbiter) right after JSON parse
+          //      and BEFORE any cascade decision uses this score. Binary preserved. ----
+          const { score, gate } = gateEvidence({
+            originalScore: rawScore, quotes: cleanQuotes, packText: evidenceText,
+            positiveExamples: measure.positiveExamples || [],
+            negativeExamples: measure.negativeExamples || [],
+          });
+          if (gate.downgraded) verdict = "No"; // gate-downgraded YES → No (0/1 kept)
           rec = { ...rec, gradedBy, model, score, verdict,
             evidenceSummary: String(parsed.evidenceSummary || parsed.reasoning || ""),
-            quotes: quotes.map((q: any) => ({ text: q.text, source: q.source || "" })) };
+            quotes: cleanQuotes, gate };
         } catch (e: any) {
           rec = { ...rec, error: String(e?.message || e) };
         }
-        llmResults.push(rec);
-      }
+        return rec;
+      };
 
-      // ---- reconstruct the cascade decision from the 3 votes (scoreWithCascade) ----
+      // ---- score the deciding primaries + extra votes (arbiter deferred in v2) ----
+      const llmResults: any[] = [];
+      // v2: score only the primaries + extra (glm) up front; the GPT-5 arbiter is
+      //     fired conditionally below (ONLY on primary disagreement).
+      // legacy: score all four as before so the 3-vote reconstruction has s3.
+      const preArbiter = NEW_CASCADE
+        ? [CASCADE.primary, CASCADE.secondary, ...EXTRA_LLMS]
+        : ALL_LLMS;
+      for (const provider of preArbiter) llmResults.push(await scoreOne(provider));
+
       const byLlm: Record<string, any> = {};
       for (const r of llmResults) byLlm[r.llm] = r;
-      const s1 = byLlm[CASCADE.primary]?.score;
-      const s2 = byLlm[CASCADE.secondary]?.score;
-      const s3 = byLlm[CASCADE.arbiter]?.score;
+      const s1 = byLlm[CASCADE.primary]?.score;   // GATED
+      const s2 = byLlm[CASCADE.secondary]?.score; // GATED
       let cascade: any;
-      if (s1 == null || s2 == null) {
-        cascade = { stage: "error", note: "primary/secondary missing" };
-      } else if (s1 === s2) {
-        cascade = { stage: "agreed", score: s1, verdict: verdictLabel(s1),
-          confidence: "High", arbiterFired: false };
-      } else if (s3 == null) {
-        cascade = { stage: "error", note: "arbiter missing on disagreement" };
-      } else {
-        const votes = [s1, s2, s3];
-        const uniq = Array.from(new Set(votes));
-        if (uniq.length === 3) {
-          cascade = { stage: "3-way", score: s3, verdict: verdictLabel(s3),
-            confidence: "Review-required", arbiterFired: true };
+
+      if (NEW_CASCADE) {
+        // ---- v2: primaries decide; GPT-5 arbiter fires ONLY on disagreement ----
+        if (s1 == null || s2 == null) {
+          cascade = { stage: "error", note: "primary/secondary missing", arbiterFired: false };
+        } else if (s1 === s2) {
+          cascade = { stage: "agreed", score: s1, verdict: verdictLabel(s1),
+            confidence: "High", arbiterFired: false };
         } else {
-          const majorityScore = votes.find((v) => votes.filter((x) => x === v).length >= 2)!;
-          const arbiterSidedWith = s3 === s1 ? CASCADE.primary : (s3 === s2 ? CASCADE.secondary : "neither");
-          cascade = { stage: "arbiter", score: majorityScore, verdict: verdictLabel(majorityScore),
-            confidence: "Medium", arbiterFired: true, arbiterSidedWith };
+          const arbRec = await scoreOne(CASCADE.arbiter); // gated inside scoreOne
+          llmResults.push(arbRec);
+          byLlm[arbRec.llm] = arbRec;
+          const s3 = arbRec.score;
+          if (s3 == null) {
+            cascade = { stage: "error", note: "arbiter missing on disagreement", arbiterFired: true };
+          } else {
+            const arbiterSidedWith = s3 === s1 ? CASCADE.primary
+              : (s3 === s2 ? CASCADE.secondary : "neither");
+            cascade = { stage: "arbiter", score: s3, verdict: verdictLabel(s3),
+              confidence: "Medium", arbiterFired: true, arbiterSidedWith };
+          }
+        }
+      } else {
+        // ---- legacy (unchanged): deepseek+glm decide, claude tiebreaks on disagree ----
+        const s3 = byLlm[CASCADE.arbiter]?.score;
+        if (s1 == null || s2 == null) {
+          cascade = { stage: "error", note: "primary/secondary missing" };
+        } else if (s1 === s2) {
+          cascade = { stage: "agreed", score: s1, verdict: verdictLabel(s1),
+            confidence: "High", arbiterFired: false };
+        } else if (s3 == null) {
+          cascade = { stage: "error", note: "arbiter missing on disagreement" };
+        } else {
+          const votes = [s1, s2, s3];
+          const uniq = Array.from(new Set(votes));
+          if (uniq.length === 3) {
+            cascade = { stage: "3-way", score: s3, verdict: verdictLabel(s3),
+              confidence: "Review-required", arbiterFired: true };
+          } else {
+            const majorityScore = votes.find((v) => votes.filter((x) => x === v).length >= 2)!;
+            const arbiterSidedWith = s3 === s1 ? CASCADE.primary : (s3 === s2 ? CASCADE.secondary : "neither");
+            cascade = { stage: "arbiter", score: majorityScore, verdict: verdictLabel(majorityScore),
+              confidence: "Medium", arbiterFired: true, arbiterSidedWith };
+          }
         }
       }
 
@@ -272,9 +332,19 @@ async function main() {
         evidenceFingerprintScored: prod.fingerprint,
         llmResults, cascade,
       });
-      const sM = byLlm["mistral-or"]?.score;
+
       const lab = (s: any) => (s == null ? "-" : verdictLabel(s));
-      console.error(`  ${measure.measureId.padEnd(26)} ds=${lab(s1)} glm=${lab(s2)} claude=${lab(s3)} mistral=${lab(sM)} => ${cascade.verdict}/${cascade.stage}${records[records.length-1].chunks.packChangedByRescore ? "  [pack↻]" : ""}`);
+      const gv = (llm: string) => { // gated verdict + ↓ if the gate downgraded it
+        const r = byLlm[llm];
+        if (!r) return "-";
+        return `${lab(r.score)}${r.gate && r.gate.downgraded ? "↓" : ""}`;
+      };
+      const packMark = records[records.length - 1].chunks.packChangedByRescore ? "  [pack↻]" : "";
+      if (NEW_CASCADE) {
+        console.error(`  ${measure.measureId.padEnd(26)} ds=${gv(CASCADE.primary)} mistral=${gv(CASCADE.secondary)} gpt5=${gv(CASCADE.arbiter)} glm=${gv("glm-4.6-zai")} => ${cascade.verdict}/${cascade.stage}${cascade.arbiterFired ? " [arb]" : ""}${packMark}`);
+      } else {
+        console.error(`  ${measure.measureId.padEnd(26)} ds=${gv(CASCADE.primary)} glm=${gv(CASCADE.secondary)} claude=${gv(CASCADE.arbiter)} mistral=${gv("mistral-or")} => ${cascade.verdict}/${cascade.stage}${packMark}`);
+      }
     }
   }
 
@@ -285,6 +355,7 @@ async function main() {
       combinedTextChars: combinedText.length, combinedTextHash: combinedHash,
       summarizerModel: summ.model, topicTermCount: topicTerms.length,
       cascade: CASCADE, extraLlms: EXTRA_LLMS, allLlms: ALL_LLMS,
+      cascadeMode: CASCADE_MODE, evidenceGate: true,
       scoringMaxTokens: SCORING_MAX_TOKENS,
       scoringMode: "binary", passes: 1,
       rescoreOn: isRescoreEnabled(), retrievalV2: true,
