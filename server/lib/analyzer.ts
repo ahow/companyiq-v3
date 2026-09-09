@@ -15,6 +15,7 @@ import { corpusSourceTypes } from "./discovery.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { createHash } from "crypto";
+import { jsonrepair } from "jsonrepair";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 // ─── Methodology Stamping ───────────────────────────────────────────────────
@@ -558,8 +559,19 @@ Evaluate this measure and return a JSON object with exactly these fields:
 
 // ─── JSON Parsing with Repair ────────────────────────────────────────────────
 
-function extractAndParseJSON(text: string): any {
-  // Strategy 1: Direct parse
+// Exported so the variability harness (server/scripts/variability_run.ts) shares
+// the IDENTICAL parse+repair logic instead of maintaining a divergent copy.
+//
+// Root cause this repairs: some LLMs (observed on claude-sonnet-4.5 as the arbiter,
+// ~20% of calls) emit verbatim quotes that embed a LITERAL control character
+// (newline/carriage-return/tab) or an UNESCAPED inner double-quote inside a JSON
+// string value (e.g. a quote containing `"Science Based Targets"`), producing
+// structurally invalid JSON. finish_reason is `stop` — this is NOT truncation.
+// The repair below is model-agnostic: it fixes the invalid JSON structurally
+// rather than patching any one provider.
+export function extractAndParseJSON(text: string): any {
+  // Strategy 1: Direct parse (fast path — ALREADY-VALID JSON is returned here,
+  // byte-for-byte identical to the previous behaviour, no repair applied).
   try {
     return JSON.parse(text);
   } catch {}
@@ -581,15 +593,31 @@ function extractAndParseJSON(text: string): any {
     } catch {}
   }
 
-  // Strategy 4: Fix common issues (unescaped quotes in strings)
+  // Strategy 4: Structural repair on the best candidate string. This handles the
+  // two proven failure modes generally:
+  //   (a) literal control chars (\n, \r, \t) inside string values → escaped;
+  //   (b) unescaped double-quotes inside string values → escaped.
+  // Candidate preference: fence content > first-brace..last-brace substring > raw.
+  let candidate: string;
+  if (fenceMatch) {
+    candidate = fenceMatch[1].trim();
+  } else if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidate = text.slice(firstBrace, lastBrace + 1);
+  } else {
+    candidate = text;
+  }
   try {
-    const cleaned = text
-      .replace(/```json\s*/g, "")
-      .replace(/```\s*/g, "")
-      .trim();
-    return JSON.parse(cleaned);
+    return JSON.parse(jsonrepair(candidate));
   } catch {}
 
+  // Total failure — log a truncated diagnostic (first 300 + last 300 chars) so
+  // future failures are inspectable. Do NOT log secrets (this is raw model output).
+  const head = text.slice(0, 300);
+  const tail = text.length > 600 ? text.slice(-300) : "";
+  console.error(
+    `[analyzer] extractAndParseJSON: all strategies failed (len=${text.length}). ` +
+    `head=${JSON.stringify(head)}` + (tail ? ` tail=${JSON.stringify(tail)}` : ""),
+  );
   throw new Error("Failed to parse JSON from LLM response");
 }
 

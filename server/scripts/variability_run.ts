@@ -102,21 +102,16 @@ const SCORING_MAX_TOKENS = 32000;
 function deterministicSeed(measureId: string, cid: number, providerIndex: number): number {
   return createHash("sha256").update(`${measureId}:${cid}:${providerIndex}`).digest().readUInt32BE(0);
 }
-function extractAndParseJSON(text: string): any {
-  try { return JSON.parse(text); } catch {}
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) { try { return JSON.parse(fence[1].trim()); } catch {} }
-  const fb = text.indexOf("{"), lb = text.lastIndexOf("}");
-  if (fb !== -1 && lb > fb) { try { return JSON.parse(text.slice(fb, lb + 1)); } catch {} }
-  throw new Error("Failed to parse JSON from LLM response");
-}
+// extractAndParseJSON is imported (not duplicated) from ../lib/analyzer.js inside
+// main() — see the dynamic import block below — so the harness uses the IDENTICAL
+// parse+repair+raw-on-failure-logging logic as production.
 function verdictLabel(s: number): string { return s === 1 ? "Yes" : s === 0.5 ? "Partial" : "No"; }
 
 async function main() {
   const t0 = Date.now();
   // Import lib modules AFTER secrets are set.
   const analyzer = await import("../lib/analyzer.js");
-  const { buildBinaryScoringPrompt, summarizeDocuments } = analyzer as any;
+  const { buildBinaryScoringPrompt, summarizeDocuments, extractAndParseJSON } = analyzer as any;
   const { buildEvidencePacksForCategory, deriveTopicTerms } = await import("../lib/passage-retrieval.js");
   const { completeScoring } = await import("../lib/ai-providers.js");
   const { rescorePacksForCategory, isRescoreEnabled } = await import("../lib/passage-rescore.js");
