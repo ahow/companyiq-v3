@@ -183,6 +183,7 @@ class OpenAICompatibleProvider implements AIProvider {
   private maxOutputTokens: number;
 
   private extraHeaders: Record<string, string>;
+  private extraBody: Record<string, any>;
   private supportsJsonMode: boolean;
   private supportsSeed: boolean;
 
@@ -195,6 +196,7 @@ class OpenAICompatibleProvider implements AIProvider {
     seed?: number;
     maxOutputTokens?: number;
     extraHeaders?: Record<string, string>;
+    extraBody?: Record<string, any>;
     supportsJsonMode?: boolean;
     supportsSeed?: boolean;
   }) {
@@ -208,6 +210,7 @@ class OpenAICompatibleProvider implements AIProvider {
     this.seed = config.seed;
     this.maxOutputTokens = config.maxOutputTokens ?? 8192;
     this.extraHeaders = config.extraHeaders ?? {};
+    this.extraBody = config.extraBody ?? {};
     // JSON mode (response_format) is supported by most OpenAI-compatible APIs, but
     // not universally (e.g., MiniMax rejects response_format type json_object);
     // allow opt-out.
@@ -256,6 +259,9 @@ class OpenAICompatibleProvider implements AIProvider {
       body.seed = effectiveSeed;
     }
     if (opts.json && this.supportsJsonMode) body.response_format = { type: "json_object" };
+    // Additive per-provider body params (e.g. z.ai glm-4.6 `thinking` toggle).
+    // Empty {} for all existing providers, so this is a no-op for them.
+    Object.assign(body, this.extraBody);
 
     // Try each available key once; rotate on rate-limit (429) or auth (401) errors
     let lastError: any;
@@ -505,6 +511,27 @@ function initProviders() {
   });
   providers.set("claude-arbiter", claudeArbiter);
 
+  // ─── GPT-5 via OpenRouter — cascade_v2 arbiter (variability experiment) ────
+  // Stage-3 tiebreaker for the NEW cascade (primaries deepseek + mistral-or).
+  // Fires only when the two primaries disagree. Routed via OpenRouter reusing the
+  // SAME OPENROUTER_API_KEY/auth as the other OpenRouter providers — no separate
+  // OpenAI key, no hardcoded secret. Model id `openai/gpt-5` was verified present
+  // in the live OpenRouter /models listing (queried with the existing key) before
+  // wiring — it is not invented. Requests JSON output like the other providers.
+  const gpt5Arbiter = new OpenAICompatibleProvider({
+    name: "gpt5-arbiter",
+    model: "openai/gpt-5",
+    family: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    seed: 42,
+    // GPT-5 is a reasoning model on OpenRouter: give the answer headroom so the
+    // reasoning trace does not starve the JSON answer (same rationale as claude).
+    maxOutputTokens: 32000,
+    extraHeaders: openrouterHeaders,
+  });
+  providers.set("gpt5-arbiter", gpt5Arbiter);
+
   // ─── Mistral Large 3 — cascade arbiter (PR 2) ───────────────────────────
   // Alternative to claude-arbiter. Introduced after iteration 8 audit showed
   // Claude deferred 92% of the time to DeepSeek on DeepSeek/GLM disagreements,
@@ -527,6 +554,56 @@ function initProviders() {
     supportsSeed: false,
   });
   providers.set("mistral-arbiter", mistralArbiter);
+
+  // ─── glm-4.6 via z.ai NATIVE API (variability experiment) ────────────────
+  // Additive, opt-in provider used only when referenced by name. The default
+  // "glm-4.6" provider routes through OpenRouter (which currently lands on the
+  // Venice upstream, emitting a large `reasoning` block that starves the answer
+  // at maxTokens<=2000 and returns content=null). z.ai's own API returns the
+  // answer in `content` with reasoning kept in a separate `reasoning_content`
+  // field, so content is always populated. Supports seed + json_object (tested).
+  // Nothing in the production scoring path references this name, so registering
+  // it does not change existing behaviour.
+  const glm46Zai = new OpenAICompatibleProvider({
+    name: "glm-4.6-zai",
+    model: "glm-4.6",
+    family: "zai",
+    apiKeyEnv: "ZAI_API_KEY",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    seed: 42,
+    // glm-4.6 is a reasoning model: it emits a large reasoning_content block
+    // before the answer. At small budgets the reasoning occasionally overruns
+    // max_tokens (finish_reason=length, content empty). The cap only limits —
+    // actual token cost tracks the reasoning glm generates (~8k tokens), so a
+    // generous cap is free insurance that the answer is always emitted.
+    maxOutputTokens: 32000,
+    // z.ai `thinking` toggle. Reasoning ON is faithful to glm-4.6 but slow
+    // (~67s/call, occasional >120s timeouts); OFF is ~6s/call with clean JSON.
+    // Default ON (faithful); set GLM_THINKING=disabled for large batch runs.
+    extraBody: {
+      thinking: { type: process.env.GLM_THINKING === "disabled" ? "disabled" : "enabled" },
+    },
+  });
+  providers.set("glm-4.6-zai", glm46Zai);
+
+  // ─── Mistral Large via OpenRouter (variability experiment) ───────────────
+  // Additive, opt-in provider. The direct Mistral API keys available cannot
+  // reach mistral-large-latest (tier_not_allowed / rate-limited to zero
+  // throughput), but OpenRouter serves mistralai/mistral-large reliably on the
+  // existing OPENROUTER_API_KEY (tested: HTTP 200, seed + json_object accepted).
+  // Used to record the intended (currently prod-broken) arbiter's independent
+  // verdict. Not referenced by the production cascade.
+  const mistralOr = new OpenAICompatibleProvider({
+    name: "mistral-or",
+    model: "mistralai/mistral-large",
+    family: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    seed: 42,
+    maxOutputTokens: 8192,
+    extraHeaders: openrouterHeaders,
+  });
+  providers.set("mistral-or", mistralOr);
 
   // Kimi (moonshot supports up to 4K output tokens)
   // KIMI_API_KEY must be set via environment variable
@@ -637,7 +714,7 @@ export function getIndependentTieBreakerProvider(primaryName: string): AIProvide
 
 export async function completeWithFallback(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
 ): Promise<{ text: string; provider: string }> {
   // Gate every LLM call (primary + fallbacks) through the global semaphore so
   // total in-flight requests never exceed LLM_MAX_CONCURRENCY for this process.
@@ -786,7 +863,7 @@ export async function completeScoring(
 
 async function completeWithFallbackInner(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
 ): Promise<{ text: string; provider: string }> {
   const errors: string[] = [];
   const primary = getProvider(providerName);

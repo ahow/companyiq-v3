@@ -763,6 +763,39 @@ export interface EvidencePack {
     docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>;
     queryTermCount: number;
   };
+  // Task F: per-quote chunk-rank audit for the near-cutoff analysis. Populated by
+  // rescorePackWithLLM (LLM rescore path only): an ordered record of ALL rescored
+  // candidates with their post-blend rank, scores, char length, cumulative offset,
+  // and inclusion/drop status, plus the blended-score gap at the budget cut.
+  // Diagnostic-only; never influences scoring. Absent when rescoring is off.
+  chunkRankAudit?: ChunkRankAudit;
+}
+
+// Task F: ordered rescore-candidate audit attached to an EvidencePack.
+export interface ChunkRankAuditEntry {
+  blendedRank: number;      // 0-based rank after the BM25+LLM blend sort
+  blended: number;          // blended (final) score
+  bm25: number;             // raw BM25 score
+  llm: number | null;       // LLM relevance score (null if the LLM didn't score it)
+  charLen: number;          // candidate chunk length in chars
+  charOffset: number | null; // cumulative char offset in the pack if included, else null
+  included: boolean;
+  dropReason: string | null; // "char-budget" | "chunk-cap" | "per-doc-cap" | "full-doc-included"
+  docIndex: number;
+  fingerprint: string;      // short text fingerprint (NOT full text)
+}
+
+export interface ChunkRankAudit {
+  measureId: string;
+  budgetChars: number;
+  budgetChunks: number;
+  totalCandidates: number;
+  totalIncluded: number;      // rescored candidates included (excludes full-doc entries)
+  fullDocsIncluded: number;   // full-document inclusions that also consumed budget
+  lastIncludedBlended: number | null;  // blended score of the last INCLUDED candidate
+  firstExcludedBlended: number | null; // blended score of the first EXCLUDED candidate
+  blendedGapAtCut: number | null;      // lastIncluded - firstExcluded (the gap at the cut)
+  entries: ChunkRankAuditEntry[];
 }
 
 // ─── Per-Measure SEC Section Relevance ───────────────────────────────────────
@@ -1010,8 +1043,8 @@ const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_
 // Raised 20 -> 24 so the enlarged, self-sizing BM25 reserve (below) cannot starve
 // the topic floor / score-fill stages: the reserve may now claim up to
 // BM25_RESERVE_CHUNKS slots, so topK must leave headroom for topic + fill chunks.
-const EVIDENCE_TOP_K = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "24", 10);
-const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "20000", 10);
+const EVIDENCE_TOP_K = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "30", 10);
+const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "30000", 10);
 
 // REVIEWER FIX v3d rec #1 (augment-not-displace): for regulatory-filing measures
 // (9.x / risk-factor), the forced Item 1A chunk(s) are added on a DEDICATED extra

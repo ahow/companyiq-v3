@@ -14,7 +14,9 @@ import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
+import { gateEvidence, type EvidenceGateResult } from "./evidence-gate.js";
 import { createHash } from "crypto";
+import { jsonrepair } from "jsonrepair";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 // ─── Methodology Stamping ───────────────────────────────────────────────────
@@ -98,6 +100,15 @@ export interface MeasureResult {
     topChunks: Array<{ docUrl: string | null; docTitle: string | null; seqInDoc: number | null; score: number; textPreview: string; forced: boolean }>;
     docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>;
     queryTermCount: number;
+  };
+  // Task A: compact outcome of the deterministic evidence-integrity gate applied
+  // to the winning model's output for this measure. Persisted with the per-cell
+  // result (see pipeline.ts). Present only when the gate ran (RETRIEVAL_EVIDENCE_GATE).
+  gateResult?: {
+    quotesTotal: number;
+    quotesValid: number;
+    downgraded: boolean;
+    failures: EvidenceGateResult["failures"];
   };
 }
 
@@ -202,11 +213,13 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     scoringCascade: settings.scoring_cascade === "true",
     cascadePrimary: settings.cascade_primary || "deepseek",
     cascadeSecondary: settings.cascade_secondary || "glm-4.6",
-    // PR 2: when cascade_v2 flag is on and no explicit arbiter override is
-    // set, default to mistral-arbiter (Mistral Large 3) instead of
-    // claude-arbiter. Legacy behaviour preserved when cascade_v2="false".
+    // PR 2 / Task E: when cascade_v2 flag is on and no explicit arbiter override
+    // is set, default to gpt5-arbiter (OpenAI GPT-5 via OpenRouter) instead of
+    // mistral-arbiter (which is 403-broken). mistral-arbiter is still selectable
+    // via an explicit cascade_arbiter override. Legacy behaviour preserved when
+    // cascade_v2="false" (claude-arbiter).
     cascadeArbiter: settings.cascade_arbiter
-      || (settings.cascade_v2 === "true" ? "mistral-arbiter" : "claude-arbiter"),
+      || (settings.cascade_v2 === "true" ? "gpt5-arbiter" : "claude-arbiter"),
     // PR 1 · Change 1a: default OFF. Enabled via workspace_settings.retrieval_v2="true".
     retrievalV2: settings.retrieval_v2 === "true",
     // PR 1 · Change 4: default OFF. Enabled via workspace_settings.auto_reretrieval="true".
@@ -277,8 +290,11 @@ function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | 
   }
 
   // C6: positive_examples via top-level column (fallback if scoringGuidance JSON didn't include them)
+  // Q3 move 3: fence positive examples as ILLUSTRATIVE-ONLY. These strings are the ones that get
+  // echoed back verbatim as fabricated quotes (the anti-echo gate exists because of this), so they
+  // are explicitly marked never-quotable. Evidence quotes must come from the retrieved pack only.
   if (Array.isArray(m.positiveExamples) && m.positiveExamples.length > 0) {
-    v2Block += `\n\nCONCRETE POSITIVE EXAMPLES (SHOULD score Yes):\n${m.positiveExamples.map((e: string) => `- ${e}`).join("\n")}`;
+    v2Block += `\n\nILLUSTRATIVE POSITIVE PATTERNS (for calibration ONLY — these are NOT source evidence; NEVER quote, paraphrase, or cite them as a company's disclosure. Any quote you return must be a verbatim span copied from the provided evidence pack):\n${m.positiveExamples.map((e: string) => `- ${e}`).join("\n")}`;
   }
 
   // C2: whatDoesNotConstituteEvidence via top-level column
@@ -406,7 +422,7 @@ ${terminologyBlock}`;
     // showing the scorer the shape of an acceptable positive rather than
     // relying on abstract policy language.
     if (sg.positive_examples && Array.isArray(sg.positive_examples) && sg.positive_examples.length > 0) {
-      scoringGuidance += `\n\nPOSITIVE EXAMPLES (concrete disclosures that SHOULD score Yes):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
+      scoringGuidance += `\n\nILLUSTRATIVE POSITIVE PATTERNS (for calibration ONLY — NOT source evidence; NEVER quote, paraphrase, or cite these as a disclosure. Any quote returned must be a verbatim span from the provided evidence pack):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
     if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
       scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
@@ -521,7 +537,7 @@ ${terminologyBlock}`;
     // I76: positive_examples give the scorer concrete calibration anchors of
     // what SHOULD score Yes / Partial (same rationale as the other prompt path).
     if (sg.positive_examples && Array.isArray(sg.positive_examples) && sg.positive_examples.length > 0) {
-      scoringGuidance += `\n\nPOSITIVE EXAMPLES (concrete disclosures that SHOULD score Yes):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
+      scoringGuidance += `\n\nILLUSTRATIVE POSITIVE PATTERNS (for calibration ONLY — NOT source evidence; NEVER quote, paraphrase, or cite these as a disclosure. Any quote returned must be a verbatim span from the provided evidence pack):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
     if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
       scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
@@ -558,8 +574,19 @@ Evaluate this measure and return a JSON object with exactly these fields:
 
 // ─── JSON Parsing with Repair ────────────────────────────────────────────────
 
-function extractAndParseJSON(text: string): any {
-  // Strategy 1: Direct parse
+// Exported so the variability harness (server/scripts/variability_run.ts) shares
+// the IDENTICAL parse+repair logic instead of maintaining a divergent copy.
+//
+// Root cause this repairs: some LLMs (observed on claude-sonnet-4.5 as the arbiter,
+// ~20% of calls) emit verbatim quotes that embed a LITERAL control character
+// (newline/carriage-return/tab) or an UNESCAPED inner double-quote inside a JSON
+// string value (e.g. a quote containing `"Science Based Targets"`), producing
+// structurally invalid JSON. finish_reason is `stop` — this is NOT truncation.
+// The repair below is model-agnostic: it fixes the invalid JSON structurally
+// rather than patching any one provider.
+export function extractAndParseJSON(text: string): any {
+  // Strategy 1: Direct parse (fast path — ALREADY-VALID JSON is returned here,
+  // byte-for-byte identical to the previous behaviour, no repair applied).
   try {
     return JSON.parse(text);
   } catch {}
@@ -581,15 +608,31 @@ function extractAndParseJSON(text: string): any {
     } catch {}
   }
 
-  // Strategy 4: Fix common issues (unescaped quotes in strings)
+  // Strategy 4: Structural repair on the best candidate string. This handles the
+  // two proven failure modes generally:
+  //   (a) literal control chars (\n, \r, \t) inside string values → escaped;
+  //   (b) unescaped double-quotes inside string values → escaped.
+  // Candidate preference: fence content > first-brace..last-brace substring > raw.
+  let candidate: string;
+  if (fenceMatch) {
+    candidate = fenceMatch[1].trim();
+  } else if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidate = text.slice(firstBrace, lastBrace + 1);
+  } else {
+    candidate = text;
+  }
   try {
-    const cleaned = text
-      .replace(/```json\s*/g, "")
-      .replace(/```\s*/g, "")
-      .trim();
-    return JSON.parse(cleaned);
+    return JSON.parse(jsonrepair(candidate));
   } catch {}
 
+  // Total failure — log a truncated diagnostic (first 300 + last 300 chars) so
+  // future failures are inspectable. Do NOT log secrets (this is raw model output).
+  const head = text.slice(0, 300);
+  const tail = text.length > 600 ? text.slice(-300) : "";
+  console.error(
+    `[analyzer] extractAndParseJSON: all strategies failed (len=${text.length}). ` +
+    `head=${JSON.stringify(head)}` + (tail ? ` tail=${JSON.stringify(tail)}` : ""),
+  );
   throw new Error("Failed to parse JSON from LLM response");
 }
 
@@ -836,7 +879,13 @@ async function detectAndResolvContradiction(opts: {
 
 // ─── Document Summarization ──────────────────────────────────────────────────
 
-async function summarizeDocuments(opts: {
+// Exported for the variability-experiment harness (server/scripts/variability_run.ts).
+// This is the REAL, deterministic (no-LLM) retrieval-corpus builder used by the
+// production pipeline for corpora above the BM25-skip threshold. Exporting it lets
+// the harness reproduce production's exact combinedText rather than reimplementing
+// (and drifting from) the doc-prioritisation + chunk-sanity + capping logic.
+// Behaviour-preserving change: only the `export` keyword is added.
+export async function summarizeDocuments(opts: {
   companyName: string;
   companyId: number;
   documentTexts: string[];
@@ -1779,8 +1828,8 @@ export async function analyzeCompanyMeasures(opts: {
         // I74: pass through env-driven budgets rather than hardcoding, so
         // RETRIEVAL_EVIDENCE_MAX_CHARS / RETRIEVAL_EVIDENCE_TOP_K govern both
         // the initial pack builder and the rescorer.
-        const _rescBudgetChars = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "20000", 10);
-        const _rescBudgetChunks = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "20", 10);
+        const _rescBudgetChars = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "30000", 10);
+        const _rescBudgetChunks = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "30", 10);
         evidencePacks = await rescorePacksForCategory(evidencePacks as any, categoryMeasures, combinedText, _rescBudgetChars, _rescBudgetChunks, topicPrimaryDocUrls);
       }
     } else {
@@ -2878,17 +2927,60 @@ async function scoreWithCascade(opts: {
   const secondary = settings.cascadeSecondary || "glm-4.6";
   const arbiter = settings.cascadeArbiter || "claude-arbiter";
 
+  // Task A: deterministic evidence-integrity gate config. ON by default in
+  // production; RETRIEVAL_EVIDENCE_GATE=0|false disables it entirely (kill-switch).
+  // Strict-strip (RETRIEVAL_GATE_STRICT_STRIP, default true) removes flagged
+  // quotes from the stored evidence even when the YES survives on another quote.
+  const gateEnabled = !["0", "false"].includes(
+    (process.env.RETRIEVAL_EVIDENCE_GATE || "").toLowerCase(),
+  );
+  const gateStrictStrip = (process.env.RETRIEVAL_GATE_STRICT_STRIP || "true").toLowerCase() !== "false";
+
+  // Apply the gate to a single model's parsed output. Runs for EVERY stage
+  // (both primaries and the arbiter) BEFORE its score enters the cascade
+  // comparison, so any downgrade feeds the disagreement logic. Binary preserved:
+  // a YES survives only with >=1 valid quote, otherwise downgraded to 0; NO stays 0.
+  const gateOne = (result: MeasureResult): MeasureResult => {
+    if (!gateEnabled) return result;
+    const { score, gate, keptQuotes } = gateEvidence({
+      originalScore: result.score === 1 ? 1 : 0,
+      quotes: (result.quotes || []).map((q) => ({ ...q, source: q.source || "" })),
+      packText: evidenceText,
+      positiveExamples: (measure as any).positiveExamples || [],
+      negativeExamples: (measure as any).negativeExamples || [],
+      strictStrip: gateStrictStrip,
+      // Source-attribution (Task C) is additive: production does not yet thread
+      // per-document pack segments, so omitting documentSegments keeps behaviour
+      // exactly as before while the capability is available for callers that do.
+    });
+    result.quotes = keptQuotes;
+    if (gate.downgraded) {
+      result.score = 0;
+      result.verdict = "No";
+    } else {
+      result.score = score;
+    }
+    result.gateResult = {
+      quotesTotal: gate.quotesTotal,
+      quotesValid: gate.quotesValid,
+      downgraded: gate.downgraded,
+      failures: gate.failures,
+    };
+    return result;
+  };
+
   // Inside cascade: run ONE pass per stage (cascade IS the diversity mechanism;
   // triple self-consistency per stage would be 9 calls/measure and wasteful).
   const scoreOne = async (provider: string): Promise<MeasureResult> => {
     const prev = process.env.SCORING_SELF_CONSISTENCY;
     process.env.SCORING_SELF_CONSISTENCY = "1";
     try {
-      return await scoreSingleMeasure({
+      const result = await scoreSingleMeasure({
         companyName, companyId, measure, evidenceText, terminology,
         topicDescription, provider, temporalWarning,
         scoringMode: settings.scoringMode, framework,
       });
+      return gateOne(result);
     } finally {
       if (prev === undefined) delete process.env.SCORING_SELF_CONSISTENCY;
       else process.env.SCORING_SELF_CONSISTENCY = prev;
