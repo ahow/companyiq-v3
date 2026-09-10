@@ -36,12 +36,27 @@
  * few million cheap integer ops per quote — negligible.
  */
 
-export type GateFailureReason = "provenance" | "anti-echo" | "source";
+export type GateFailureReason =
+  | "provenance"
+  | "anti-echo"
+  | "source"
+  | "source-attribution";
 
 export interface GateFailure {
   quoteText: string;
   source: string;
   reasons: GateFailureReason[];
+}
+
+/**
+ * Optional per-document segment of the assembled pack (Task C). `id` is a
+ * document identity (e.g. filename / title) that a quote.source may name; `text`
+ * is that document's slice of the pack. When supplied, a quote whose source
+ * resolves to a segment must have provenance against THAT segment's text.
+ */
+export interface DocumentSegment {
+  id: string;
+  text: string;
 }
 
 export interface EvidenceGateResult {
@@ -63,6 +78,24 @@ export interface GateParams {
   packText: string;
   positiveExamples?: string[];
   negativeExamples?: string[];
+  /**
+   * Task B — strict-strip. When true (default), invalid quotes are dropped from
+   * the returned `keptQuotes` so a flagged quote is never presented as support,
+   * even when the YES survives on another valid quote. When false, `keptQuotes`
+   * is the full input list (legacy behaviour).
+   */
+  strictStrip?: boolean;
+  /**
+   * Task C — optional per-document pack segments. If a quote.source resolves to
+   * one of these, provenance is required against THAT document's text. Omit for
+   * exactly-as-before behaviour.
+   */
+  documentSegments?: DocumentSegment[];
+  /**
+   * Task C — enable the source-attribution dimension. Default true, but only has
+   * any effect when documentSegments are supplied.
+   */
+  sourceAttribution?: boolean;
 }
 
 // Thresholds (documented above).
@@ -71,6 +104,10 @@ const PROVENANCE_MIN_LCS = 120; // OR absolute LCS >= 120 chars
 const ANTI_ECHO_MIN_RUN = 60; // shared verbatim run >= 60 chars = echo
 const SOURCE_MIN_LEN = 4; // source shorter than this = thin
 const SOURCE_ABSENT_MARKERS = ["no such", "not found", "n/a"];
+// Task C: how strongly a quote.source must overlap a segment id to be "attributed"
+// to that document. Whole id, or an absolute run of this many chars.
+const SOURCE_ATTRIBUTION_MIN_RATIO = 0.9;
+const SOURCE_ATTRIBUTION_MIN_RUN = 12;
 
 /** Normalise exactly like echo_provenance_scan.py:norm(). */
 export function normaliseForGate(s: string): string {
@@ -157,34 +194,90 @@ export function checkSource(source: string): boolean {
 }
 
 /**
- * Run the full gate on a model's output for a single measure.
- * Pure & synchronous. Returns the (possibly downgraded) binary score plus a
- * per-llmResult gate record. Never mutates its inputs.
+ * Task C — resolve a quote.source to one of the supplied per-document segments.
+ * A segment matches when its normalised id shares a >= SOURCE_ATTRIBUTION_MIN_RUN
+ * contiguous run with the normalised source (either direction), so a bare title
+ * inside a longer citation still resolves. Returns the best (longest-run) match,
+ * or null when nothing resolves (caller then falls back to pack-wide provenance).
  */
-export function gateEvidence(params: GateParams): {
+export function resolveDocumentSegment(
+  source: string,
+  segments: DocumentSegment[],
+): DocumentSegment | null {
+  const s = normaliseForGate(source);
+  if (!s || !segments || segments.length === 0) return null;
+  let best: DocumentSegment | null = null;
+  let bestRun = 0;
+  for (const seg of segments) {
+    const id = normaliseForGate(seg.id || "");
+    if (!id) continue;
+    const run = longestCommonSubstringLength(s, id);
+    // Require a meaningful overlap: the whole id, or >= threshold chars of it.
+    const enough =
+      run >= id.length * SOURCE_ATTRIBUTION_MIN_RATIO ||
+      run >= SOURCE_ATTRIBUTION_MIN_RUN;
+    if (enough && run > bestRun) {
+      bestRun = run;
+      best = seg;
+    }
+  }
+  return best;
+}
+
+/**
+ * Run the full gate on a model's output for a single measure.
+ * Pure & synchronous. Returns the (possibly downgraded) binary score, a
+ * per-llmResult gate record, and the quotes to keep (strict-strip aware).
+ * Never mutates its inputs.
+ */
+export function gateEvidence<Q extends QuoteInput>(
+  params: Omit<GateParams, "quotes"> & { quotes: Q[] },
+): {
   score: number;
   gate: EvidenceGateResult;
+  keptQuotes: Q[];
 } {
   const { originalScore, quotes, packText } = params;
+  const strictStrip = params.strictStrip !== false; // Task B: default true
+  const sourceAttribution = params.sourceAttribution !== false; // Task C: default true
+  const segments = params.documentSegments || [];
   const examples = [
     ...(params.positiveExamples || []),
     ...(params.negativeExamples || []),
   ];
 
   const failures: GateFailure[] = [];
+  const keptQuotes: Q[] = [];
   let quotesValid = 0;
 
   for (const q of quotes || []) {
     const text = q?.text || "";
     const source = q?.source || "";
     const reasons: GateFailureReason[] = [];
-    if (!checkProvenance(text, packText)) reasons.push("provenance");
+
+    const packOk = checkProvenance(text, packText);
+    if (!packOk) {
+      reasons.push("provenance");
+    } else if (sourceAttribution && segments.length > 0) {
+      // Task C: pack-wide provenance passed — additionally require the quote to
+      // trace to the SPECIFIC document its source names, when that document is
+      // present as a segment. Unresolvable sources fall back to pack-wide (no
+      // hard fail on attribution alone).
+      const seg = resolveDocumentSegment(source, segments);
+      if (seg && !checkProvenance(text, seg.text)) {
+        reasons.push("source-attribution");
+      }
+    }
+
     if (!checkAntiEcho(text, examples)) reasons.push("anti-echo");
     if (!checkSource(source)) reasons.push("source");
+
     if (reasons.length === 0) {
       quotesValid++;
+      keptQuotes.push(q);
     } else {
       failures.push({ quoteText: text, source, reasons });
+      if (!strictStrip) keptQuotes.push(q); // legacy: keep flagged quotes too
     }
   }
 
@@ -197,5 +290,6 @@ export function gateEvidence(params: GateParams): {
   return {
     score,
     gate: { quotesTotal, quotesValid, failures, downgraded, originalScore },
+    keptQuotes,
   };
 }

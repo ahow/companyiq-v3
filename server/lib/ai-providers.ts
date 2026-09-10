@@ -714,7 +714,7 @@ export function getIndependentTieBreakerProvider(primaryName: string): AIProvide
 
 export async function completeWithFallback(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
 ): Promise<{ text: string; provider: string }> {
   // Gate every LLM call (primary + fallbacks) through the global semaphore so
   // total in-flight requests never exceed LLM_MAX_CONCURRENCY for this process.
@@ -863,7 +863,7 @@ export async function completeScoring(
 
 async function completeWithFallbackInner(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
 ): Promise<{ text: string; provider: string }> {
   const errors: string[] = [];
   const primary = getProvider(providerName);

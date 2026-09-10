@@ -2325,7 +2325,34 @@ async function runAnalyzePhase(opts: {
         source: "retrieval-diagnostic",
         sourceUrl: "diag://retrieval-v1",
       } : null;
-      const finalQuotes = diagQuote ? [...quotes, diagQuote] : quotes;
+      // Task A: persist the deterministic evidence-gate outcome for this cell as
+      // another diagnostic sidecar quote (sourceUrl 'diag://evidence-gate-v1', so
+      // the UI's http(s)-only quote filter ignores it). This embeds the compact
+      // gateResult in the EXISTING per-cell quotes JSON — no schema change, no
+      // new table. Never influences the grade (the score is already gated upstream).
+      const gr = (m as any).gateResult as
+        | { quotesTotal: number; quotesValid: number; downgraded: boolean; failures: any[] }
+        | undefined;
+      const gateQuote = gr ? {
+        text: JSON.stringify({
+          v: 1,
+          quotesTotal: gr.quotesTotal,
+          quotesValid: gr.quotesValid,
+          downgraded: gr.downgraded,
+          failures: (gr.failures || []).map((f: any) => ({
+            source: f.source,
+            reasons: f.reasons,
+            quote: String(f.quoteText || "").slice(0, 160),
+          })),
+        }),
+        source: "evidence-gate",
+        sourceUrl: "diag://evidence-gate-v1",
+      } : null;
+      const finalQuotes = [
+        ...quotes,
+        ...(diagQuote ? [diagQuote] : []),
+        ...(gateQuote ? [gateQuote] : []),
+      ];
       return {
         companyId,
         frameworkId: framework.id,

@@ -24,7 +24,7 @@
 // point of the change.
 
 import { createHash } from "crypto";
-import { buildBM25Index, bm25Score, chunkDocuments, tokenize, type Chunk, type EvidencePack, type BM25Index } from "./passage-retrieval.js";
+import { buildBM25Index, bm25Score, chunkDocuments, tokenize, type Chunk, type EvidencePack, type BM25Index, type ChunkRankAudit, type ChunkRankAuditEntry } from "./passage-retrieval.js";
 import type { FrameworkMeasure } from "../../shared/schema.js";
 
 // I70: default flipped from opt-in to opt-out. Batch 1114 vs primary-source
@@ -37,6 +37,12 @@ const RESCORE_MODEL = process.env.RETRIEVAL_LLM_RESCORE_MODEL || "deepseek";
 const RESCORE_CANDIDATES = parseInt(process.env.RETRIEVAL_LLM_RESCORE_CANDIDATES || "30", 10);
 const RESCORE_BM25_WEIGHT = parseFloat(process.env.RETRIEVAL_LLM_RESCORE_BM25_WEIGHT || "0.3");
 const RESCORE_MAX_CHARS_PER_CANDIDATE = parseInt(process.env.RETRIEVAL_LLM_RESCORE_MAX_CHARS || "600", 10);
+// Task D — deterministic ranking layer. The rescore completion is temperature 0
+// but was UNSEEDED, so chunk selection churned run-to-run. Seed it (and ONLY it,
+// not the scoring model) for a stable ranking. RETRIEVAL_LLM_RESCORE_SEED, default
+// 42. Providers that support seed (see ai-providers.ts) honour it; ones that
+// ignore seed are unaffected (they were already non-deterministic).
+const RESCORE_SEED = parseInt(process.env.RETRIEVAL_LLM_RESCORE_SEED || "42", 10);
 
 // I71 — FULL-DOCUMENT ACCESS FOR SMALL TOPIC-PRIMARY DOCS.
 // When a document classified as topic-primary is small enough to fit in the
@@ -167,6 +173,7 @@ async function scoreCandidatesWithLLM(measure: FrameworkMeasure, candidates: Can
       maxTokens: 2048,
       temperature: 0,
       json: true,
+      seed: RESCORE_SEED, // Task D: seed the ranking layer only (not the scoring model)
     });
     raw = resp.text || "";
   } catch (err: any) {
@@ -306,25 +313,80 @@ export async function rescorePackWithLLM(
   const fullyIncludedDocs = new Set<number>();
   const MAX_PER_DOC = 5; // matches the sync builder's default cap
 
+  let fullDocsIncluded = 0;
   for (const fd of fullDocsRanked) {
     if (text.length + fd.info.len > budgetChars) continue;
     text += (text.length > 0 ? "\n\n" : "") + fd.info.text;
     chunkCount += 1; // count each full doc as one entry in the pack
     fullyIncludedDocs.add(fd.docIndex);
     perDocCount.set(fd.docIndex, MAX_PER_DOC); // block further additions from this doc
+    fullDocsIncluded++;
   }
 
-  for (const b of blended) {
-    if (chunkCount >= budgetChunks) break;
-    if (text.length + b.c.chunk.text.length > budgetChars) continue;
+  // Task F: record an ordered audit of ALL rescored candidates (included AND
+  // excluded) as we compose the pack. The inclusion decision is byte-identical to
+  // the previous loop — a candidate is included iff none of the exclusion
+  // conditions hold; the extra bookkeeping only observes it. Full-doc inclusions
+  // above already consumed chunkCount/chars, so the cut reflects real budget use.
+  const auditEntries: ChunkRankAuditEntry[] = [];
+  let lastIncludedBlended: number | null = null;
+  let firstExcludedBlended: number | null = null;
+  for (let rank = 0; rank < blended.length; rank++) {
+    const b = blended[rank];
     const doc = b.c.chunk.docIndex;
-    if (fullyIncludedDocs.has(doc)) continue;
-    const used = perDocCount.get(doc) || 0;
-    if (used >= MAX_PER_DOC) continue;
-    text += (text.length > 0 ? "\n\n" : "") + b.c.chunk.text;
-    chunkCount++;
-    perDocCount.set(doc, used + 1);
+    const charLen = b.c.chunk.text.length;
+    let included = false;
+    let dropReason: string | null = null;
+    let charOffset: number | null = null;
+
+    if (chunkCount >= budgetChunks) {
+      dropReason = "chunk-cap";
+    } else if (fullyIncludedDocs.has(doc)) {
+      dropReason = "full-doc-included";
+    } else if ((perDocCount.get(doc) || 0) >= MAX_PER_DOC) {
+      dropReason = "per-doc-cap";
+    } else if (text.length + charLen > budgetChars) {
+      dropReason = "char-budget";
+    } else {
+      charOffset = text.length;
+      text += (text.length > 0 ? "\n\n" : "") + b.c.chunk.text;
+      chunkCount++;
+      perDocCount.set(doc, (perDocCount.get(doc) || 0) + 1);
+      included = true;
+    }
+
+    if (included) lastIncludedBlended = b.final;
+    else if (firstExcludedBlended === null) firstExcludedBlended = b.final;
+
+    auditEntries.push({
+      blendedRank: rank,
+      blended: Number(b.final.toFixed(4)),
+      bm25: Number(b.c.bm25.toFixed(4)),
+      llm: b.llm ?? null,
+      charLen,
+      charOffset,
+      included,
+      dropReason,
+      docIndex: doc,
+      fingerprint: b.c.chunk.text.slice(0, 80),
+    });
   }
+
+  const chunkRankAudit: ChunkRankAudit = {
+    measureId: measure.measureId,
+    budgetChars,
+    budgetChunks,
+    totalCandidates: blended.length,
+    totalIncluded: auditEntries.filter((e) => e.included).length,
+    fullDocsIncluded,
+    lastIncludedBlended,
+    firstExcludedBlended,
+    blendedGapAtCut:
+      lastIncludedBlended !== null && firstExcludedBlended !== null
+        ? Number((lastIncludedBlended - firstExcludedBlended).toFixed(4))
+        : null,
+    entries: auditEntries,
+  };
 
   // Diagnostic
   const top5Before = candidates.slice(0, 5).map(c => `bm=${c.bm25.toFixed(1)}`).join(",");
@@ -337,6 +399,7 @@ export async function rescorePackWithLLM(
     text,
     chunkCount,
     totalChars: text.length,
+    chunkRankAudit, // Task F: attach the per-measure near-cutoff audit
     // Preserve fingerprint eligibility semantics of the original pack
   };
 }

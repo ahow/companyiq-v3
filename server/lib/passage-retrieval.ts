@@ -763,6 +763,39 @@ export interface EvidencePack {
     docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>;
     queryTermCount: number;
   };
+  // Task F: per-quote chunk-rank audit for the near-cutoff analysis. Populated by
+  // rescorePackWithLLM (LLM rescore path only): an ordered record of ALL rescored
+  // candidates with their post-blend rank, scores, char length, cumulative offset,
+  // and inclusion/drop status, plus the blended-score gap at the budget cut.
+  // Diagnostic-only; never influences scoring. Absent when rescoring is off.
+  chunkRankAudit?: ChunkRankAudit;
+}
+
+// Task F: ordered rescore-candidate audit attached to an EvidencePack.
+export interface ChunkRankAuditEntry {
+  blendedRank: number;      // 0-based rank after the BM25+LLM blend sort
+  blended: number;          // blended (final) score
+  bm25: number;             // raw BM25 score
+  llm: number | null;       // LLM relevance score (null if the LLM didn't score it)
+  charLen: number;          // candidate chunk length in chars
+  charOffset: number | null; // cumulative char offset in the pack if included, else null
+  included: boolean;
+  dropReason: string | null; // "char-budget" | "chunk-cap" | "per-doc-cap" | "full-doc-included"
+  docIndex: number;
+  fingerprint: string;      // short text fingerprint (NOT full text)
+}
+
+export interface ChunkRankAudit {
+  measureId: string;
+  budgetChars: number;
+  budgetChunks: number;
+  totalCandidates: number;
+  totalIncluded: number;      // rescored candidates included (excludes full-doc entries)
+  fullDocsIncluded: number;   // full-document inclusions that also consumed budget
+  lastIncludedBlended: number | null;  // blended score of the last INCLUDED candidate
+  firstExcludedBlended: number | null; // blended score of the first EXCLUDED candidate
+  blendedGapAtCut: number | null;      // lastIncluded - firstExcluded (the gap at the cut)
+  entries: ChunkRankAuditEntry[];
 }
 
 // ─── Per-Measure SEC Section Relevance ───────────────────────────────────────

@@ -45,8 +45,9 @@ for (const req of ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "ZAI_API_KEY", "DAT
   }
 }
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
 import { createHash } from "crypto";
+import type { ChunkRankAudit, ChunkRankAuditEntry } from "../lib/passage-retrieval.js";
 
 const HOME = "/home/ubuntu";
 const OUTDIR = `${HOME}/var_out`;
@@ -131,7 +132,31 @@ async function main() {
   const { buildEvidencePacksForCategory, deriveTopicTerms } = await import("../lib/passage-retrieval.js");
   const { completeScoring } = await import("../lib/ai-providers.js");
   const { rescorePacksForCategory, isRescoreEnabled } = await import("../lib/passage-rescore.js");
-  const { gateEvidence } = await import("../lib/evidence-gate.js");
+  const { gateEvidence, normaliseForGate, longestCommonSubstringLength } = await import("../lib/evidence-gate.js");
+
+  // Task F: resolve a returned quote to the rescore candidate it came from, using
+  // a normalised longest-common-substring match against each candidate's short
+  // fingerprint. Returns the best-matching audit entry (+ run length), or null.
+  const CHUNK_MATCH_MIN_RUN = 24; // min normalised contiguous run to count as a match
+  const resolveQuoteToCandidate = (
+    quoteText: string,
+    audit: ChunkRankAudit | undefined,
+  ): { entry: ChunkRankAuditEntry | null; run: number } => {
+    if (!audit || !audit.entries?.length) return { entry: null, run: 0 };
+    const q = normaliseForGate(quoteText);
+    if (!q) return { entry: null, run: 0 };
+    let best: ChunkRankAuditEntry | null = null;
+    let bestRun = 0;
+    for (const e of audit.entries) {
+      const f = normaliseForGate(e.fingerprint || "");
+      if (!f) continue;
+      const run = longestCommonSubstringLength(q, f);
+      if (run > bestRun) { bestRun = run; best = e; }
+    }
+    return bestRun >= CHUNK_MATCH_MIN_RUN ? { entry: best, run: bestRun } : { entry: null, run: bestRun };
+  };
+
+  const CHUNK_RANK_JSONL = `${OUTDIR}/chunk_rank_audit.jsonl`;
 
   // ---- frozen corpus ----
   const corpus: Array<{ url: string; title: string; text: string }> =
@@ -319,6 +344,35 @@ async function main() {
         }
       }
 
+      // ---- Task F: per-quote chunk-rank resolution (near-cutoff analysis) ----
+      const audit = (prod as any).chunkRankAudit as ChunkRankAudit | undefined;
+      let lastIncludedRank: number | null = null;
+      if (audit) for (const e of audit.entries) if (e.included) lastIncludedRank = e.blendedRank;
+      const chunkRankResolutions: any[] = [];
+      for (const r of llmResults) {
+        if (r.error || !Array.isArray(r.quotes)) continue;
+        for (const q of r.quotes) {
+          const { entry, run } = resolveQuoteToCandidate(q.text, audit);
+          const rec = {
+            companyId, runIndex, measureId: measure.measureId, model: r.llm,
+            matchedChunkBlendedRank: entry ? entry.blendedRank : null,
+            totalIncluded: audit ? audit.totalIncluded : null,
+            totalCandidates: audit ? audit.totalCandidates : null,
+            matchedChunkIncluded: entry ? entry.included : null,
+            matchedChunkCharOffset: entry ? entry.charOffset : null,
+            distanceFromCutInRanks:
+              entry && lastIncludedRank != null ? entry.blendedRank - lastIncludedRank : null,
+            // true = the quote traced to a candidate the budget EXCLUDED, i.e. it
+            // came from full-doc access rather than the budgeted rescore pack.
+            fromExcludedCandidate: entry ? !entry.included : null,
+            matchRun: run,
+            quotePreview: String(q.text || "").slice(0, 100),
+          };
+          chunkRankResolutions.push(rec);
+          appendFileSync(CHUNK_RANK_JSONL, JSON.stringify(rec) + "\n");
+        }
+      }
+
       records.push({
         measureId: measure.measureId, title: measure.title, category,
         chunks: { bm25: chunkView(bm25), production: chunkView(prod),
@@ -331,6 +385,10 @@ async function main() {
             createHash("sha256").update(String(prod.text || "")).digest("hex") },
         evidenceFingerprintScored: prod.fingerprint,
         llmResults, cascade,
+        // Task F: lightweight per-measure audit (fingerprints + ranks + offsets,
+        // NOT full text) and the per-quote resolutions used for the analysis.
+        chunkRankAudit: audit || null,
+        chunkRankResolutions,
       });
 
       const lab = (s: any) => (s == null ? "-" : verdictLabel(s));

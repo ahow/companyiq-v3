@@ -14,6 +14,7 @@ import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
+import { gateEvidence, type EvidenceGateResult } from "./evidence-gate.js";
 import { createHash } from "crypto";
 import { jsonrepair } from "jsonrepair";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -99,6 +100,15 @@ export interface MeasureResult {
     topChunks: Array<{ docUrl: string | null; docTitle: string | null; seqInDoc: number | null; score: number; textPreview: string; forced: boolean }>;
     docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>;
     queryTermCount: number;
+  };
+  // Task A: compact outcome of the deterministic evidence-integrity gate applied
+  // to the winning model's output for this measure. Persisted with the per-cell
+  // result (see pipeline.ts). Present only when the gate ran (RETRIEVAL_EVIDENCE_GATE).
+  gateResult?: {
+    quotesTotal: number;
+    quotesValid: number;
+    downgraded: boolean;
+    failures: EvidenceGateResult["failures"];
   };
 }
 
@@ -203,11 +213,13 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     scoringCascade: settings.scoring_cascade === "true",
     cascadePrimary: settings.cascade_primary || "deepseek",
     cascadeSecondary: settings.cascade_secondary || "glm-4.6",
-    // PR 2: when cascade_v2 flag is on and no explicit arbiter override is
-    // set, default to mistral-arbiter (Mistral Large 3) instead of
-    // claude-arbiter. Legacy behaviour preserved when cascade_v2="false".
+    // PR 2 / Task E: when cascade_v2 flag is on and no explicit arbiter override
+    // is set, default to gpt5-arbiter (OpenAI GPT-5 via OpenRouter) instead of
+    // mistral-arbiter (which is 403-broken). mistral-arbiter is still selectable
+    // via an explicit cascade_arbiter override. Legacy behaviour preserved when
+    // cascade_v2="false" (claude-arbiter).
     cascadeArbiter: settings.cascade_arbiter
-      || (settings.cascade_v2 === "true" ? "mistral-arbiter" : "claude-arbiter"),
+      || (settings.cascade_v2 === "true" ? "gpt5-arbiter" : "claude-arbiter"),
     // PR 1 · Change 1a: default OFF. Enabled via workspace_settings.retrieval_v2="true".
     retrievalV2: settings.retrieval_v2 === "true",
     // PR 1 · Change 4: default OFF. Enabled via workspace_settings.auto_reretrieval="true".
@@ -2912,17 +2924,60 @@ async function scoreWithCascade(opts: {
   const secondary = settings.cascadeSecondary || "glm-4.6";
   const arbiter = settings.cascadeArbiter || "claude-arbiter";
 
+  // Task A: deterministic evidence-integrity gate config. ON by default in
+  // production; RETRIEVAL_EVIDENCE_GATE=0|false disables it entirely (kill-switch).
+  // Strict-strip (RETRIEVAL_GATE_STRICT_STRIP, default true) removes flagged
+  // quotes from the stored evidence even when the YES survives on another quote.
+  const gateEnabled = !["0", "false"].includes(
+    (process.env.RETRIEVAL_EVIDENCE_GATE || "").toLowerCase(),
+  );
+  const gateStrictStrip = (process.env.RETRIEVAL_GATE_STRICT_STRIP || "true").toLowerCase() !== "false";
+
+  // Apply the gate to a single model's parsed output. Runs for EVERY stage
+  // (both primaries and the arbiter) BEFORE its score enters the cascade
+  // comparison, so any downgrade feeds the disagreement logic. Binary preserved:
+  // a YES survives only with >=1 valid quote, otherwise downgraded to 0; NO stays 0.
+  const gateOne = (result: MeasureResult): MeasureResult => {
+    if (!gateEnabled) return result;
+    const { score, gate, keptQuotes } = gateEvidence({
+      originalScore: result.score === 1 ? 1 : 0,
+      quotes: (result.quotes || []).map((q) => ({ ...q, source: q.source || "" })),
+      packText: evidenceText,
+      positiveExamples: (measure as any).positiveExamples || [],
+      negativeExamples: (measure as any).negativeExamples || [],
+      strictStrip: gateStrictStrip,
+      // Source-attribution (Task C) is additive: production does not yet thread
+      // per-document pack segments, so omitting documentSegments keeps behaviour
+      // exactly as before while the capability is available for callers that do.
+    });
+    result.quotes = keptQuotes;
+    if (gate.downgraded) {
+      result.score = 0;
+      result.verdict = "No";
+    } else {
+      result.score = score;
+    }
+    result.gateResult = {
+      quotesTotal: gate.quotesTotal,
+      quotesValid: gate.quotesValid,
+      downgraded: gate.downgraded,
+      failures: gate.failures,
+    };
+    return result;
+  };
+
   // Inside cascade: run ONE pass per stage (cascade IS the diversity mechanism;
   // triple self-consistency per stage would be 9 calls/measure and wasteful).
   const scoreOne = async (provider: string): Promise<MeasureResult> => {
     const prev = process.env.SCORING_SELF_CONSISTENCY;
     process.env.SCORING_SELF_CONSISTENCY = "1";
     try {
-      return await scoreSingleMeasure({
+      const result = await scoreSingleMeasure({
         companyName, companyId, measure, evidenceText, terminology,
         topicDescription, provider, temporalWarning,
         scoringMode: settings.scoringMode, framework,
       });
+      return gateOne(result);
     } finally {
       if (prev === undefined) delete process.env.SCORING_SELF_CONSISTENCY;
       else process.env.SCORING_SELF_CONSISTENCY = prev;
