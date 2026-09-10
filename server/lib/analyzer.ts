@@ -290,8 +290,11 @@ function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | 
   }
 
   // C6: positive_examples via top-level column (fallback if scoringGuidance JSON didn't include them)
+  // Q3 move 3: fence positive examples as ILLUSTRATIVE-ONLY. These strings are the ones that get
+  // echoed back verbatim as fabricated quotes (the anti-echo gate exists because of this), so they
+  // are explicitly marked never-quotable. Evidence quotes must come from the retrieved pack only.
   if (Array.isArray(m.positiveExamples) && m.positiveExamples.length > 0) {
-    v2Block += `\n\nCONCRETE POSITIVE EXAMPLES (SHOULD score Yes):\n${m.positiveExamples.map((e: string) => `- ${e}`).join("\n")}`;
+    v2Block += `\n\nILLUSTRATIVE POSITIVE PATTERNS (for calibration ONLY — these are NOT source evidence; NEVER quote, paraphrase, or cite them as a company's disclosure. Any quote you return must be a verbatim span copied from the provided evidence pack):\n${m.positiveExamples.map((e: string) => `- ${e}`).join("\n")}`;
   }
 
   // C2: whatDoesNotConstituteEvidence via top-level column
@@ -419,7 +422,7 @@ ${terminologyBlock}`;
     // showing the scorer the shape of an acceptable positive rather than
     // relying on abstract policy language.
     if (sg.positive_examples && Array.isArray(sg.positive_examples) && sg.positive_examples.length > 0) {
-      scoringGuidance += `\n\nPOSITIVE EXAMPLES (concrete disclosures that SHOULD score Yes):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
+      scoringGuidance += `\n\nILLUSTRATIVE POSITIVE PATTERNS (for calibration ONLY — NOT source evidence; NEVER quote, paraphrase, or cite these as a disclosure. Any quote returned must be a verbatim span from the provided evidence pack):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
     if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
       scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
@@ -534,7 +537,7 @@ ${terminologyBlock}`;
     // I76: positive_examples give the scorer concrete calibration anchors of
     // what SHOULD score Yes / Partial (same rationale as the other prompt path).
     if (sg.positive_examples && Array.isArray(sg.positive_examples) && sg.positive_examples.length > 0) {
-      scoringGuidance += `\n\nPOSITIVE EXAMPLES (concrete disclosures that SHOULD score Yes):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
+      scoringGuidance += `\n\nILLUSTRATIVE POSITIVE PATTERNS (for calibration ONLY — NOT source evidence; NEVER quote, paraphrase, or cite these as a disclosure. Any quote returned must be a verbatim span from the provided evidence pack):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
     if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
       scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
