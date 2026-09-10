@@ -104,7 +104,9 @@ if (existsSync(OUT)) { console.error(`SKIP (exists): ${OUT}`); process.exit(0); 
 const CASCADE = NEW_CASCADE
   ? { primary: "deepseek", secondary: "mistral-or", arbiter: "gpt5-arbiter" }
   : { primary: "deepseek", secondary: "glm-4.6-zai", arbiter: "claude-arbiter" };
-const EXTRA_LLMS = NEW_CASCADE ? ["glm-4.6-zai"] : ["mistral-or"];
+const EXTRA_LLMS = (process.env.SKIP_EXTRA_LLMS === "1" || process.env.SKIP_EXTRA_LLMS === "true")
+  ? []
+  : (NEW_CASCADE ? ["glm-4.6-zai"] : ["mistral-or"]);
 const ALL_LLMS = [CASCADE.primary, CASCADE.secondary, CASCADE.arbiter, ...EXTRA_LLMS];
 // glm-4.6 / claude are reasoning-capable and need output headroom so the reasoning
 // trace does not starve the JSON answer (prod's 2000 caused glm content=null). z.ai

@@ -1043,8 +1043,8 @@ const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_
 // Raised 20 -> 24 so the enlarged, self-sizing BM25 reserve (below) cannot starve
 // the topic floor / score-fill stages: the reserve may now claim up to
 // BM25_RESERVE_CHUNKS slots, so topK must leave headroom for topic + fill chunks.
-const EVIDENCE_TOP_K = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "24", 10);
-const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "20000", 10);
+const EVIDENCE_TOP_K = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "30", 10);
+const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "30000", 10);
 
 // REVIEWER FIX v3d rec #1 (augment-not-displace): for regulatory-filing measures
 // (9.x / risk-factor), the forced Item 1A chunk(s) are added on a DEDICATED extra
