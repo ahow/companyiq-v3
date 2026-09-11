@@ -16,7 +16,25 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(data.error || res.statusText);
+    // Preserve the full structured error body so callers can read machine-readable
+    // fields (e.g. the design-issue acceptance gate: blocked, issues,
+    // blockingIssueIds). Without this, non-2xx bodies were discarded and only the
+    // message survived.
+    const err = new Error(data?.error || res.statusText) as Error & {
+      status?: number;
+      body?: any;
+      blocked?: boolean;
+      issues?: any;
+      blockingIssueIds?: any;
+    };
+    err.status = res.status;
+    err.body = data;
+    if (data && typeof data === "object") {
+      if ("blocked" in data) err.blocked = data.blocked;
+      if ("issues" in data) err.issues = data.issues;
+      if ("blockingIssueIds" in data) err.blockingIssueIds = data.blockingIssueIds;
+    }
+    throw err;
   }
 
   return res.json();

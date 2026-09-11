@@ -49,6 +49,29 @@ interface Validation {
   violations: Violation[];
 }
 
+// Structured design issue emitted by the save acceptance gate (server:
+// rules.ts StructuredIssue). Rendered as a four-part accept-or-fix card.
+interface StructuredIssue {
+  id: string;
+  ruleCode: string;
+  severity: "error" | "warning";
+  measureId: string;
+  field: string;
+  issue: string;
+  reason: string;
+  solution: string;
+  implication: string;
+}
+
+// State captured when POST /v2/save returns a blocked 400.
+interface SaveGate {
+  issues: StructuredIssue[];
+  issuesReadable?: string;
+  blockingIssueIds: string[];
+  summary?: string;
+  productionReady: boolean;
+}
+
 interface TestDriveCandidate {
   name: string;
   ticker?: string;
@@ -167,6 +190,17 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
   const [testDriveListName, setTestDriveListName] = useState<string | null>(() => {
     try { return localStorage.getItem("fw-builder-v2-testDriveListName"); } catch { return null; }
   });
+  // Design-issue acceptance gate (populated when POST /v2/save returns blocked:true).
+  const [saveGate, setSaveGate] = useState<SaveGate | null>(null);
+  const [acceptedIssueIds, setAcceptedIssueIds] = useState<string[]>([]);
+  // Multi-run test-drive: how many scoring batches the flip detector expects.
+  const [scoringRunsTarget, setScoringRunsTarget] = useState<number>(() => {
+    try {
+      const stored = localStorage.getItem("fw-builder-v2-scoringRuns");
+      return stored ? Math.max(1, Number(stored) || 1) : 1;
+    } catch { return 1; }
+  });
+  const [scoringProgress, setScoringProgress] = useState<string | null>(null);
 
   // Persist test-drive identifiers across refreshes so users can return to the
   // improvement panel without losing state. Cleared by the "Build another" button.
@@ -406,7 +440,17 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     }
   }
 
-  async function saveFramework(productionReady: boolean): Promise<number | null> {
+  // Toggle explicit acceptance of a single outstanding design issue.
+  function toggleAcceptIssue(id: string) {
+    setAcceptedIssueIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
+
+  async function saveFramework(
+    productionReady: boolean,
+    gateOpts?: { acceptedIssueIds?: string[]; proceedWithWarnings?: boolean },
+  ): Promise<number | null> {
     if (!draft || !intake) return null;
     setError(null);
     setLoading(true);
@@ -419,13 +463,32 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
           testDriveSummary: null,
           testDriveWarnings: [],
           productionReady,
+          // Design-issue acceptance gate: resubmit accepted ids or a
+          // proceed-with-warnings override so the server lets the save through.
+          ...(gateOpts?.acceptedIssueIds ? { acceptedIssueIds: gateOpts.acceptedIssueIds } : {}),
+          ...(gateOpts?.proceedWithWarnings ? { proceedWithWarnings: true } : {}),
         }),
       });
+      setSaveGate(null);
+      setAcceptedIssueIds([]);
       setSavedFrameworkId(res.frameworkId);
       setStage("saved");
       return res.frameworkId as number;
     } catch (err: any) {
-      setError(err?.message || String(err));
+      // A blocked 400 carries the structured design issues; surface the accept /
+      // proceed gate instead of a raw error message.
+      const body = err?.body ?? err;
+      if (err?.blocked || body?.blocked) {
+        setSaveGate({
+          issues: body?.issues ?? [],
+          issuesReadable: body?.issuesReadable,
+          blockingIssueIds: body?.blockingIssueIds ?? [],
+          summary: body?.summary,
+          productionReady: false,
+        });
+      } else {
+        setError(err?.message || String(err));
+      }
       return null;
     } finally {
       setLoading(false);
@@ -447,16 +510,27 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
         fwId = save.frameworkId as number;
         setSavedFrameworkId(fwId);
       }
-      // 2. Create companies + list.
+      // 2. Create companies + list. Request multiple scoring runs so the flip
+      //    detector has run-to-run data (design-time only; live scoring is
+      //    single-shot and untouched). Server clamps `runs` to [1, maxRuns].
       const run = await api.request("/framework-builder/v2/test-drive/run", {
         method: "POST",
         body: JSON.stringify({
           frameworkId: fwId,
           frameworkName: draft.framework?.name,
           companies: testDriveCompanies,
+          runs: 3,
         }),
       });
-      // 3. Kick off /api/analyze against the new list + framework.
+      // Persist the server-clamped run target; the results panel auto-continues
+      // (rescore) until this many iterations are recorded. See scoringRunsTarget.
+      const scoringRuns = Math.max(1, Number(run.scoringRuns) || 1);
+      setScoringRunsTarget(scoringRuns);
+      try { localStorage.setItem("fw-builder-v2-scoringRuns", String(scoringRuns)); } catch { /* ignore */ }
+      setScoringProgress(scoringRuns > 1 ? `Multi-run scoring: iteration 1 of ${scoringRuns} starting…` : null);
+      // 3. Kick off /api/analyze against the new list + framework (batch 1 of N).
+      //    Analyze is async and single-active-batch; runs 2..N are driven by the
+      //    results panel via /v2/rescore once each prior batch completes.
       await api.request("/analyze", {
         method: "POST",
         body: JSON.stringify({
@@ -657,29 +731,57 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
           )}
 
           {stage === "review" && draft && (
-            <DraftReview
-              draft={draft}
-              validation={validation}
-              onSelectTestDrive={selectTestDriveSample}
-              onSave={saveFramework}
-              loading={loading}
-              measureCount={measureCount}
-              errorCount={errorCount}
-              warningCount={warningCount}
-              repairAttempts={repairAttempts}
-              truncationRecovered={truncationRecovered}
-              onRedraft={redraftWithCorrections}
-            />
+            <>
+              <DraftReview
+                draft={draft}
+                validation={validation}
+                onSelectTestDrive={selectTestDriveSample}
+                onSave={saveFramework}
+                loading={loading}
+                measureCount={measureCount}
+                errorCount={errorCount}
+                warningCount={warningCount}
+                repairAttempts={repairAttempts}
+                truncationRecovered={truncationRecovered}
+                onRedraft={redraftWithCorrections}
+              />
+              {saveGate && (
+                <SaveGatePanel
+                  gate={saveGate}
+                  acceptedIssueIds={acceptedIssueIds}
+                  onToggleAccept={toggleAcceptIssue}
+                  onSaveAccepted={() => saveFramework(false, { acceptedIssueIds })}
+                  onProceed={() => saveFramework(false, { proceedWithWarnings: true })}
+                  onRedraft={() => { setSaveGate(null); void redraftWithCorrections(); }}
+                  onDismiss={() => { setSaveGate(null); setAcceptedIssueIds([]); }}
+                  loading={loading}
+                />
+              )}
+            </>
           )}
 
           {stage === "test-drive" && (
-            <TestDriveReview
-              companies={testDriveCompanies || []}
-              onBack={() => setStage("review")}
-              onSaveWithoutTestDrive={() => saveFramework(false)}
-              onRunTestDrive={runTestDriveScoring}
-              loading={loading}
-            />
+            <>
+              <TestDriveReview
+                companies={testDriveCompanies || []}
+                onBack={() => setStage("review")}
+                onSaveWithoutTestDrive={() => saveFramework(false)}
+                onRunTestDrive={runTestDriveScoring}
+                loading={loading}
+              />
+              {saveGate && (
+                <SaveGatePanel
+                  gate={saveGate}
+                  acceptedIssueIds={acceptedIssueIds}
+                  onToggleAccept={toggleAcceptIssue}
+                  onSaveAccepted={() => saveFramework(false, { acceptedIssueIds })}
+                  onProceed={() => saveFramework(false, { proceedWithWarnings: true })}
+                  onRedraft={() => { setSaveGate(null); setStage("review"); void redraftWithCorrections(); }}
+                  onDismiss={() => { setSaveGate(null); setAcceptedIssueIds([]); }}
+                  loading={loading}
+                />
+              )}
+            </>
           )}
 
           {stage === "saved" && savedFrameworkId && (
@@ -693,7 +795,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                 It appears in your Frameworks list and can be used to score companies through the existing pipeline.
               </p>
               {testDriveListId && savedFrameworkId && (
-                <TestDriveResultsPanel frameworkId={savedFrameworkId} listId={testDriveListId} listName={testDriveListName} />
+                <TestDriveResultsPanel frameworkId={savedFrameworkId} listId={testDriveListId} listName={testDriveListName} scoringRunsTarget={scoringRunsTarget} />
               )}
               <div className="mt-4 flex gap-2">
                 {onGoToFrameworks && (
@@ -1034,6 +1136,176 @@ function DraftReview({
   );
 }
 
+// Acceptance gate shown when POST /v2/save returns blocked:true. Each structured
+// issue is rendered four-part (issue / reason / solution / implication) with an
+// Accept toggle for error-severity items; warnings are shown but never block.
+// Saving is allowed once every blocking id is accepted, or via "Save anyway".
+function SaveGatePanel({
+  gate,
+  acceptedIssueIds,
+  onToggleAccept,
+  onSaveAccepted,
+  onProceed,
+  onRedraft,
+  onDismiss,
+  loading,
+}: {
+  gate: SaveGate;
+  acceptedIssueIds: string[];
+  onToggleAccept: (id: string) => void;
+  onSaveAccepted: () => void;
+  onProceed: () => void;
+  onRedraft: () => void;
+  onDismiss: () => void;
+  loading: boolean;
+}) {
+  const errors = gate.issues.filter((i) => i.severity === "error");
+  const warnings = gate.issues.filter((i) => i.severity === "warning");
+  const blockingSet = new Set(gate.blockingIssueIds);
+  const acceptedSet = new Set(acceptedIssueIds);
+  const remainingBlocking = gate.blockingIssueIds.filter((id) => !acceptedSet.has(id));
+  const allAccepted = remainingBlocking.length === 0 && gate.blockingIssueIds.length > 0;
+
+  return (
+    <div className="mt-4 bg-white dark:bg-gray-800 rounded-lg border border-red-300 dark:border-red-800 shadow-sm p-6">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="w-6 h-6 text-red-600 flex-shrink-0" />
+          <h2 className="text-xl font-semibold">Save blocked — outstanding design issues</h2>
+        </div>
+        <button
+          onClick={onDismiss}
+          className="text-sm text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+          title="Dismiss the gate without saving"
+        >
+          Dismiss
+        </button>
+      </div>
+      {gate.summary && (
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{gate.summary}</p>
+      )}
+      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        {gate.blockingIssueIds.length} error-severity issue(s) block this save. Accept each one
+        explicitly (acknowledging the flip risk), re-draft to fix them, or save anyway with all
+        warnings knowingly accepted.
+      </p>
+
+      {errors.length > 0 && (
+        <div className="space-y-3 mb-4">
+          <h3 className="text-sm font-semibold text-red-700 dark:text-red-400">
+            Errors ({errors.length})
+          </h3>
+          {errors.map((issue) => {
+            const isBlocking = blockingSet.has(issue.id);
+            const accepted = acceptedSet.has(issue.id);
+            return (
+              <div
+                key={issue.id}
+                className={`rounded-lg border p-4 ${
+                  accepted
+                    ? "border-green-300 dark:border-green-800 bg-green-50/50 dark:bg-green-900/10"
+                    : "border-red-200 dark:border-red-900 bg-red-50/40 dark:bg-red-900/10"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="text-xs font-mono text-gray-500">
+                    {issue.ruleCode}
+                    {issue.measureId && issue.measureId !== "framework-level" && (
+                      <span className="ml-1">· {issue.measureId}</span>
+                    )}
+                    {issue.field && <span className="ml-1">· {issue.field}</span>}
+                  </div>
+                  {isBlocking && (
+                    <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={accepted}
+                        onChange={() => onToggleAccept(issue.id)}
+                        className="w-4 h-4"
+                      />
+                      <span className={accepted ? "text-green-700 dark:text-green-400 font-medium" : "text-gray-700 dark:text-gray-300"}>
+                        {accepted ? "Accepted" : "Accept"}
+                      </span>
+                    </label>
+                  )}
+                </div>
+                <dl className="mt-2 text-sm space-y-1.5">
+                  <div><dt className="inline font-semibold">Issue: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.issue}</dd></div>
+                  <div><dt className="inline font-semibold">Reason: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.reason}</dd></div>
+                  <div><dt className="inline font-semibold">Solution: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.solution}</dd></div>
+                  <div><dt className="inline font-semibold">Implication: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.implication}</dd></div>
+                </dl>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {warnings.length > 0 && (
+        <div className="space-y-3 mb-4">
+          <h3 className="text-sm font-semibold text-yellow-700 dark:text-yellow-400">
+            Warnings ({warnings.length}) — non-blocking
+          </h3>
+          {warnings.map((issue) => (
+            <div
+              key={issue.id}
+              className="rounded-lg border border-yellow-200 dark:border-yellow-900 bg-yellow-50/40 dark:bg-yellow-900/10 p-4"
+            >
+              <div className="text-xs font-mono text-gray-500">
+                {issue.ruleCode}
+                {issue.measureId && issue.measureId !== "framework-level" && (
+                  <span className="ml-1">· {issue.measureId}</span>
+                )}
+                {issue.field && <span className="ml-1">· {issue.field}</span>}
+              </div>
+              <dl className="mt-2 text-sm space-y-1.5">
+                <div><dt className="inline font-semibold">Issue: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.issue}</dd></div>
+                <div><dt className="inline font-semibold">Reason: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.reason}</dd></div>
+                <div><dt className="inline font-semibold">Solution: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.solution}</dd></div>
+                <div><dt className="inline font-semibold">Implication: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.implication}</dd></div>
+              </dl>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2 pt-2 border-t dark:border-gray-700">
+        <button
+          onClick={onSaveAccepted}
+          disabled={loading || !allAccepted}
+          className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+          title={
+            allAccepted
+              ? "Save as draft with the accepted issues acknowledged"
+              : `Accept all ${gate.blockingIssueIds.length} blocking issue(s) first (${remainingBlocking.length} remaining)`
+          }
+        >
+          <Save className="w-4 h-4" />
+          {allAccepted
+            ? "Save with accepted issues"
+            : `Accept all to save (${remainingBlocking.length} left)`}
+        </button>
+        <button
+          onClick={onProceed}
+          disabled={loading}
+          className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+          title="Save as draft, accepting all outstanding issues at once"
+        >
+          <AlertTriangle className="w-4 h-4" /> Save anyway (proceed with warnings)
+        </button>
+        <button
+          onClick={onRedraft}
+          disabled={loading}
+          className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+          title="Re-draft the framework to fix every outstanding issue"
+        >
+          <RotateCcw className="w-4 h-4" /> Re-draft to fix all
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TestDriveReview({
   companies,
   onBack,
@@ -1178,6 +1450,19 @@ interface FlagItem {
   suggestedFix: string;
   observedRate?: number;
   expectedRate?: number;
+  flipRate?: number; // ITEM 2: fraction of companies whose verdict differs across runs
+  flippedCompanies?: Array<{ companyId: string; verdicts: string[] }>;
+}
+
+// ITEM 2: per-measure run-to-run flip statistics (server: test-drive.ts
+// MeasureFlipStat). Populated once >=2 scoring iterations have been recorded.
+interface MeasureFlipStat {
+  measureId: string;
+  runs: number;
+  companiesCompared: number;
+  flippedCount: number;
+  flipRate: number;
+  flippedCompanies: Array<{ companyId: string; verdicts: string[] }>;
 }
 
 interface RobustnessCriterion {
@@ -1312,7 +1597,7 @@ interface IterationSnapshot {
   rootCauses: RootCauseReport | null;
 }
 
-function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId: number; listId: number; listName: string | null }) {
+function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarget = 1 }: { frameworkId: number; listId: number; listName: string | null; scoringRunsTarget?: number }) {
   const [batch, setBatch] = useState<{ status: string; completedJobs: number; totalJobs: number; failedJobs: number } | null>(null);
   const [perCompany, setPerCompany] = useState<PerCompanyResult[]>([]);
   const [report, setReport] = useState<{ flags: FlagItem[]; summary: string; passedGracefully: boolean; totalCompanies: number; totalMeasures: number } | null>(null);
@@ -1376,6 +1661,11 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
   const [iterations, setIterations] = useState<IterationSnapshot[]>([]);
   const [rescoring, setRescoring] = useState(false);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
+  // ITEM 2: per-measure run-to-run flip stats + auto-continue guard. The guard
+  // records how many iterations we have already auto-rescored past, so the
+  // auto-continue effect fires at most once per completed batch.
+  const [flipStats, setFlipStats] = useState<MeasureFlipStat[]>([]);
+  const autoRescoreGuard = useRef(0);
   const [applyingIterate, setApplyingIterate] = useState(false);
   const [applyIterateResult, setApplyIterateResult] = useState<string | null>(null);
   const [applyIterateError, setApplyIterateError] = useState<string | null>(null);
@@ -1445,6 +1735,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
       setEdits(r.edits || null);
       setRootCauses(r.rootCauses || null);
       setLabelsInferred(!!r.labelsInferred);
+      setFlipStats(r.flipStats || []);
       if (r.scoringComplete) void fetchIterations();
       setError(null);
     } catch (e: any) {
@@ -1495,6 +1786,26 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
   const isRunning = batch && batch.status !== "completed" && batch.status !== "failed";
   const isComplete = batch?.status === "completed";
 
+  // ITEM 2: auto-continue the multi-run test-drive. Analyze is async and
+  // single-active-batch, so we cannot fire N batches at once — instead, each
+  // time a batch completes and we still have fewer iterations than the target,
+  // kick one rescore (which snapshots the completed batch as an iteration, then
+  // starts a fresh batch). The ref guard ensures we trigger at most once per
+  // recorded iteration, so remounts / extra polls do not double-fire.
+  useEffect(() => {
+    if (scoringRunsTarget <= 1) return;
+    if (!isComplete || rescoring) return;
+    if (iterations.length >= scoringRunsTarget) return;
+    if (autoRescoreGuard.current >= iterations.length + 1) return;
+    autoRescoreGuard.current = iterations.length + 1;
+    void triggerRescore();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isComplete, iterations.length, rescoring, scoringRunsTarget]);
+
+  const multiRunActive = scoringRunsTarget > 1;
+  const iterationsRecorded = iterations.length;
+  const multiRunDone = multiRunActive && iterationsRecorded >= scoringRunsTarget;
+
   return (
     <div className="mt-3 p-4 bg-white dark:bg-gray-800 rounded border border-green-300 dark:border-green-700 space-y-3">
       <div className="flex items-center justify-between">
@@ -1526,6 +1837,20 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
         </div>
       </div>
       {rescoreError && <div className="text-sm text-red-600">Rescore error: {rescoreError}</div>}
+
+      {multiRunActive && (
+        <div className={`text-sm rounded px-3 py-2 border ${multiRunDone ? "bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-800 text-green-800 dark:text-green-300" : "bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-800 text-blue-800 dark:text-blue-300"}`}>
+          {multiRunDone ? (
+            <>Multi-run test-drive complete: {iterationsRecorded} of {scoringRunsTarget} scoring iterations recorded. Per-measure flip stats below.</>
+          ) : (
+            <>
+              Multi-run test-drive: {iterationsRecorded} of {scoringRunsTarget} scoring iterations recorded
+              {(rescoring || isRunning) && " — next iteration scoring…"}
+              . The same sample is scored repeatedly so the flip detector can measure run-to-run stability. This runs automatically; you can leave and return to this page.
+            </>
+          )}
+        </div>
+      )}
 
       {error && <div className="text-sm text-red-600">Poll error: {error}</div>}
 
@@ -1565,6 +1890,80 @@ function TestDriveResultsPanel({ frameworkId, listId, listName }: { frameworkId:
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ─── Test-drive flags (incl. multi-run flip diagnostics) ─── */}
+      {isComplete && report && report.flags.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Test-drive flags ({report.flags.length})
+          </div>
+          <div className="space-y-2">
+            {report.flags.map((f, idx) => (
+              <div
+                key={`${f.measureId}-${f.rule}-${idx}`}
+                className={`rounded border p-3 ${f.severity === "error" ? "border-red-200 dark:border-red-900 bg-red-50/40 dark:bg-red-900/10" : "border-yellow-200 dark:border-yellow-900 bg-yellow-50/40 dark:bg-yellow-900/10"}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-mono text-gray-500">
+                    <span className={f.severity === "error" ? "text-red-700 dark:text-red-400" : "text-yellow-700 dark:text-yellow-400"}>{f.severity}</span>
+                    {" · "}{f.rule}
+                    {f.measureId && <span className="ml-1">· {f.measureId}</span>}
+                  </div>
+                  {typeof f.flipRate === "number" && (
+                    <span className="text-xs text-gray-600 dark:text-gray-400">
+                      flip rate {(f.flipRate * 100).toFixed(0)}%
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm text-gray-800 dark:text-gray-200 mt-1">{f.message}</div>
+                {f.suggestedFix && (
+                  <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                    <strong>Suggested fix:</strong> {f.suggestedFix}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Per-measure run-to-run flip stats (multi-run test-drive) ─── */}
+      {isComplete && flipStats.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Run-to-run flip stats <span className="text-xs font-normal text-gray-500">(across {Math.max(...flipStats.map((s) => s.runs))} scoring iterations)</span>
+          </div>
+          <div className="border rounded dark:border-gray-700 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-900/40">
+                <tr>
+                  <th className="text-left px-3 py-2">Measure</th>
+                  <th className="text-right px-3 py-2">Runs</th>
+                  <th className="text-right px-3 py-2">Companies compared</th>
+                  <th className="text-right px-3 py-2">Flipped</th>
+                  <th className="text-right px-3 py-2">Flip rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {flipStats.map((s) => (
+                  <tr key={s.measureId} className="border-t dark:border-gray-700">
+                    <td className="px-3 py-1.5 font-mono text-xs">{s.measureId}</td>
+                    <td className="px-3 py-1.5 text-right">{s.runs}</td>
+                    <td className="px-3 py-1.5 text-right">{s.companiesCompared}</td>
+                    <td className="px-3 py-1.5 text-right">{s.flippedCount}</td>
+                    <td className={`px-3 py-1.5 text-right ${s.flipRate > 0 ? "text-red-600 dark:text-red-400 font-medium" : ""}`}>
+                      {(s.flipRate * 100).toFixed(0)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-xs text-gray-500">
+            A non-zero flip rate means a measure gave different verdicts to the same company across identical re-runs — a residual-instability signal that the measure's criteria are ambiguous.
+          </div>
         </div>
       )}
 
