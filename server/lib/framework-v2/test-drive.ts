@@ -17,6 +17,7 @@
  */
 
 import type { MeasureResult } from "../analyzer.js";
+import { DEGREE_WORDS } from "./rules.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -53,12 +54,19 @@ export interface TestDriveCompanyResult {
 
 export interface Flag {
   measureId: string;
-  rule: string; // "too-narrow" | "too-broad" | "off-expected-narrow" | "off-expected-broad" | "r33-heavy-flipping" | "adjacent-topic-contamination"
+  // "too-narrow" | "too-broad" | "off-expected-narrow" | "off-expected-broad"
+  // | "r33-heavy-flipping" | "adjacent-topic-contamination"
+  // | "residual-instability"  (ITEM 2: verdict flips across identical re-runs)
+  // | "no-differentiation"    (ITEM 3: measure gives the SAME verdict to every company)
+  // | "sparse-corpus"         (ITEM 3: companies are data-sparse for this topic)
+  rule: string;
   severity: "error" | "warning";
   message: string;
   suggestedFix: string;
   observedRate?: number;
   expectedRate?: number;
+  flipRate?: number; // ITEM 2: fraction of companies whose verdict differs across runs
+  flippedCompanies?: Array<{ companyId: string; verdicts: string[] }>; // ITEM 2 detail
 }
 
 export interface TestDriveFlagReport {
@@ -67,6 +75,119 @@ export interface TestDriveFlagReport {
   flags: Flag[];
   summary: string;
   passedGracefully: boolean; // true if no error-severity flags
+}
+
+// ─── Multi-run flip detection (ITEM 2) ────────────────────────────────────
+//
+// Run-to-run verdict instability is a DESIGN defect, not a scoring-runtime one:
+// live scoring stays single-shot. In the test-drive design loop we deliberately
+// score the SAME sample k times (each completed batch = one iteration row in
+// framework_v2_iterations) and compare verdicts per company across those
+// iterations. A measure whose verdict changes for a company given identical
+// evidence is under-specified and must be rewritten to a countable, quote-
+// verifiable rule (C11). This is a design-time diagnostic only.
+
+export interface MultiRunIteration {
+  iterationNumber: number;
+  // measureId → { companyId(string) → verdict } for that iteration.
+  // Mirrors framework_v2_iterations.per_measure[measureId].verdictsByCompany.
+  perMeasure: Record<string, { verdictsByCompany: Record<string, string> }>;
+}
+
+export interface MeasureFlipStat {
+  measureId: string;
+  runs: number; // number of iterations that scored this measure
+  companiesCompared: number; // companies present in >=2 iterations
+  flippedCount: number; // companies whose verdict was not identical across runs
+  flipRate: number; // flippedCount / companiesCompared (0 when nothing to compare)
+  flippedCompanies: Array<{ companyId: string; verdicts: string[] }>;
+}
+
+/**
+ * Compare per-company verdicts for each measure across k iterations and report
+ * how many companies received a non-identical verdict run-to-run (a "flip").
+ * Only companies that appear in >=2 iterations are compared.
+ */
+export function computeFlipStats(multiRun: MultiRunIteration[]): MeasureFlipStat[] {
+  if (!multiRun || multiRun.length < 2) return [];
+  const measureIds = new Set<string>();
+  for (const it of multiRun) {
+    for (const mid of Object.keys(it.perMeasure || {})) measureIds.add(mid);
+  }
+
+  const stats: MeasureFlipStat[] = [];
+  for (const measureId of measureIds) {
+    // companyId → list of verdicts (one per iteration that scored it)
+    const byCompany = new Map<string, string[]>();
+    let runs = 0;
+    for (const it of multiRun) {
+      const pm = it.perMeasure?.[measureId];
+      if (!pm || !pm.verdictsByCompany) continue;
+      runs++;
+      for (const [companyId, verdict] of Object.entries(pm.verdictsByCompany)) {
+        if (verdict == null) continue;
+        const list = byCompany.get(companyId) ?? [];
+        list.push(String(verdict));
+        byCompany.set(companyId, list);
+      }
+    }
+
+    const flippedCompanies: Array<{ companyId: string; verdicts: string[] }> = [];
+    let companiesCompared = 0;
+    for (const [companyId, verdicts] of byCompany) {
+      if (verdicts.length < 2) continue; // not comparable
+      companiesCompared++;
+      if (new Set(verdicts).size > 1) {
+        flippedCompanies.push({ companyId, verdicts });
+      }
+    }
+
+    stats.push({
+      measureId,
+      runs,
+      companiesCompared,
+      flippedCount: flippedCompanies.length,
+      flipRate: companiesCompared > 0 ? flippedCompanies.length / companiesCompared : 0,
+      flippedCompanies,
+    });
+  }
+  return stats;
+}
+
+// ─── Sparse-corpus surfacing (ITEM 3) ─────────────────────────────────────
+//
+// A measure can look "broken" (all-No / off-expected) simply because the
+// test-drive companies had no substantive corpus for the topic. The root-cause
+// diagnostic already classifies companies as "doc-collection-failure"; here we
+// surface that as an actionable design-time prompt so the designer revisits
+// whether key sources were missed BEFORE editing measure wording.
+
+export interface SparseCompanySignal {
+  companyId: string | number;
+  companyName?: string;
+  classification: string; // e.g. "doc-collection-failure"
+}
+
+/**
+ * Build a single actionable sparse-corpus flag from root-cause company
+ * classifications. Returns null when no company is data-sparse.
+ */
+export function buildSparseCorpusFlag(sparse: SparseCompanySignal[]): Flag | null {
+  if (!sparse || sparse.length === 0) return null;
+  const names = sparse
+    .map((s) => s.companyName || `company ${s.companyId}`)
+    .filter(Boolean);
+  const list = names.slice(0, 8).join(", ") + (names.length > 8 ? `, +${names.length - 8} more` : "");
+  return {
+    measureId: "*",
+    rule: "sparse-corpus",
+    severity: "warning",
+    message:
+      `${sparse.length} test-drive ${sparse.length === 1 ? "company appears" : "companies appear"} data-sparse for this topic ` +
+      `(${list}). Flags on these companies may reflect missing source documents, not measure wording.`,
+    suggestedFix:
+      "Before editing measures, revisit corpus collection for these companies: confirm the expected disclosure sources (annual report, sustainability report, relevant filings) were actually collected. Re-run the test-drive once the corpus is complete, then re-assess measure-level flags.",
+  };
 }
 
 // ─── Sample selection prompt for the LLM ─────────────────────────────────
@@ -112,15 +233,31 @@ const FLAG_THRESHOLDS = {
   OFF_EXPECTED_MAX_EXPECTED_FOR_BROAD: 0.80, // only flag broad if expected <= this
   R33_HEAVY_FLIP_RATE: 0.40, // ≥40% of Yes verdicts flipped by R3.3
   ADJACENT_CONTAMINATION_RATE: 0.30, // ≥30% of Yes verdicts backed by adjacent-topic quotes
+  NO_DIFFERENTIATION_MIN_COMPANIES: 3, // need ≥3 scored companies before "no differentiation" is meaningful
+  RESIDUAL_INSTABILITY_ERROR_RATE: 0.30, // flip rate ≥30% of compared companies → error severity
 };
+
+// C11-style rewrite guidance reused when a measure flips run-to-run (ITEM 2).
+// Live scoring stays single-shot; the fix is to remove design ambiguity so
+// identical evidence always yields the same verdict.
+const C11_REWRITE_SUGGESTION =
+  "Verdict is unstable across identical re-runs — the measure leaves a judgment call that two scoring passes resolve differently. " +
+  "Rewrite the deciding criteria to be countable and quote-verifiable (C11): replace degree words " +
+  `(${DEGREE_WORDS.slice(0, 8).join(", ")}, …) with an explicit N-of-M test over NAMED artefacts, ` +
+  'e.g. "Yes if at least 2 of the following appear in a verbatim quote: (a) …, (b) …, (c) …". Then re-run the test-drive to confirm the flips are gone.';
 
 export function analyseTestDrive(
   results: TestDriveCompanyResult[],
   measureMetadata: Array<{ measureId: string; expected_yes_rate?: number }>,
+  multiRun?: MultiRunIteration[],
 ): TestDriveFlagReport {
   const totalCompanies = results.length;
   const measureIds = Array.from(new Set(measureMetadata.map((m) => m.measureId)));
   const flags: Flag[] = [];
+
+  // ITEM 2: per-measure flip stats across k iterations (design-time diagnostic).
+  const flipStats = computeFlipStats(multiRun ?? []);
+  const flipByMeasure = new Map(flipStats.map((s) => [s.measureId, s]));
 
   // Aggregate per-measure stats across companies
   for (const meta of measureMetadata) {
@@ -131,6 +268,60 @@ export function analyseTestDrive(
     const yesCount = perCompanyVerdicts.filter((v) => v && v.verdict === "Yes").length;
     const observedRate = totalCompanies > 0 ? yesCount / totalCompanies : 0;
     const expectedRate = meta.expected_yes_rate ?? 0.35;
+
+    // Rule: no differentiation (ITEM 3)
+    // The measure hands the SAME verdict to every scored company (all-Yes,
+    // all-No, all-Partial, …) — it has zero discriminating power regardless of
+    // what that single verdict is. Distinct from off-expected (which compares to
+    // an expected rate): here the problem is that the measure cannot tell any two
+    // companies apart, so the framework gains no information from it.
+    const recordedVerdicts = perCompanyVerdicts.filter((v) => v != null).map((v) => v!.verdict);
+    const distinctVerdicts = new Set(recordedVerdicts);
+    if (
+      recordedVerdicts.length >= FLAG_THRESHOLDS.NO_DIFFERENTIATION_MIN_COMPANIES &&
+      distinctVerdicts.size === 1
+    ) {
+      const only = [...distinctVerdicts][0];
+      flags.push({
+        measureId: meta.measureId,
+        rule: "no-differentiation",
+        severity: "error",
+        message: `Measure returned "${only}" for all ${recordedVerdicts.length} scored companies — it does not differentiate between them and adds no signal to the framework.`,
+        suggestedFix:
+          only === "Yes"
+            ? "The bar is so low every company clears it. Redesign the measure to test a specific, discriminating artefact (name the disclosure that only some companies make) so the verdict can vary."
+            : only === "No"
+            ? "The bar is so high no company clears it, or the criterion tests something companies never disclose. Redesign around an artefact that leading companies actually report, so Yes is achievable and the verdict can vary."
+            : `Every company resolves to "${only}". Redesign the measure so its criterion discriminates — test a named, quote-verifiable artefact that only some companies disclose.`,
+        observedRate,
+        expectedRate,
+      });
+    }
+
+    // Rule: residual instability across re-runs (ITEM 2)
+    // The same sample scored k times produced different verdicts for one or more
+    // companies. This is a DESIGN defect (ambiguous criteria), not scoring noise
+    // to be sampled away — live scoring stays single-shot. Route to the C11
+    // countable-rewrite proposal.
+    const flip = flipByMeasure.get(meta.measureId);
+    if (flip && flip.companiesCompared > 0 && flip.flippedCount > 0) {
+      const detail = flip.flippedCompanies
+        .slice(0, 5)
+        .map((c) => `company ${c.companyId} [${c.verdicts.join(" → ")}]`)
+        .join(", ");
+      flags.push({
+        measureId: meta.measureId,
+        rule: "residual-instability",
+        severity: flip.flipRate >= FLAG_THRESHOLDS.RESIDUAL_INSTABILITY_ERROR_RATE ? "error" : "warning",
+        message:
+          `Verdict flipped run-to-run for ${flip.flippedCount}/${flip.companiesCompared} companies across ${flip.runs} identical re-runs ` +
+          `(${(flip.flipRate * 100).toFixed(0)}% flip rate): ${detail}${flip.flippedCompanies.length > 5 ? ", …" : ""}. ` +
+          `Identical evidence must always yield the same verdict.`,
+        suggestedFix: C11_REWRITE_SUGGESTION,
+        flipRate: flip.flipRate,
+        flippedCompanies: flip.flippedCompanies,
+      });
+    }
 
     // Rule: too narrow
     if (yesCount === FLAG_THRESHOLDS.TOO_NARROW_YES_COUNT) {

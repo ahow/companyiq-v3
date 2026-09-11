@@ -50,7 +50,9 @@ import { createHash } from "crypto";
 import type { ChunkRankAudit, ChunkRankAuditEntry } from "../lib/passage-retrieval.js";
 
 const HOME = "/home/ubuntu";
-const OUTDIR = `${HOME}/var_out`;
+// Output dir override (reversible; defaults to var_out so baseline behaviour is
+// unchanged). Used by the 3.5 decidable-threshold dry-run to keep baselines intact.
+const OUTDIR = process.env.VAR_OUT_DIR || `${HOME}/var_out`;
 mkdirSync(OUTDIR, { recursive: true });
 
 // ---- args ----
@@ -64,7 +66,7 @@ if (!companyId || !runIndex) {
 
 // ---- static inputs (frozen) ----
 const framework = JSON.parse(readFileSync(`${HOME}/var_framework.json`, "utf8"));
-let measures = JSON.parse(readFileSync(`${HOME}/var_measures.json`, "utf8"));
+let measures = JSON.parse(readFileSync(process.env.MEASURES_FILE || `${HOME}/var_measures.json`, "utf8"));
 const lexTerms: string[] = JSON.parse(readFileSync(`${HOME}/var_topicterms.json`, "utf8"));
 const companies = JSON.parse(readFileSync(`${HOME}/var_companies.json`, "utf8"));
 const company = companies.find((c: any) => c.id === companyId);
@@ -126,6 +128,38 @@ function deterministicSeed(measureId: string, cid: number, providerIndex: number
 // parse+repair+raw-on-failure-logging logic as production.
 function verdictLabel(s: number): string { return s === 1 ? "Yes" : s === 0.5 ? "Partial" : "No"; }
 
+// Streaming fallback for corpora too large to read as a single JS string.
+// V8's max string length is ~536M chars; the frozen corpus for a document-heavy
+// issuer (e.g. Banco Santander: 1.16 GB file, 356M chars across 156 docs, 8 of
+// which are 24-42M-char ESEF/iXBRL packages) exceeds it, so a whole-file
+// readFileSync(...,"utf8") throws ERR_STRING_TOO_LONG. This parses the JSON array
+// element-by-element so each document text becomes its own sub-limit string. The
+// resulting array is identical to JSON.parse of the same file — scoring unaffected.
+async function loadCorpusStreaming(path: string): Promise<Array<{ url: string; title: string; text: string }>> {
+  // Read a sibling NDJSON file (one document object per line) line-by-line. A
+  // whole-file JSON streaming parser (stream-json) balloons far past the machine's
+  // RAM on this 1.16 GB file because of per-token object overhead; NDJSON line
+  // reading holds only the final document array (each line's text is well under
+  // V8's per-string limit — the largest single doc is ~42M chars). The NDJSON is
+  // produced once from the frozen corpus and contains byte-identical document text.
+  const { createReadStream, existsSync } = await import("fs");
+  const readline = await import("readline");
+  const ndjsonPath = path.replace(/\.json$/, ".ndjson");
+  if (!existsSync(ndjsonPath)) {
+    throw new Error(
+      `Corpus ${path} exceeds V8 string limit and no NDJSON sibling found at ${ndjsonPath}. ` +
+      `Generate it with make_ndjson.py before running this company.`,
+    );
+  }
+  const out: Array<{ url: string; title: string; text: string }> = [];
+  const rl = readline.createInterface({ input: createReadStream(ndjsonPath), crlfDelay: Infinity });
+  for await (const line of rl) {
+    const s = line.trim();
+    if (s) out.push(JSON.parse(s));
+  }
+  return out;
+}
+
 async function main() {
   const t0 = Date.now();
   // Import lib modules AFTER secrets are set.
@@ -161,8 +195,23 @@ async function main() {
   const CHUNK_RANK_JSONL = `${OUTDIR}/chunk_rank_audit.jsonl`;
 
   // ---- frozen corpus ----
-  const corpus: Array<{ url: string; title: string; text: string }> =
-    JSON.parse(readFileSync(`${HOME}/var_corpus/${companyId}.json`, "utf8"));
+  // Fast path: whole-file parse (well under V8's string limit for nearly all
+  // issuers). Fallback to streaming parse only when the file is too large to hold
+  // as a single string (ERR_STRING_TOO_LONG) — see loadCorpusStreaming above. The
+  // corpus array is byte-identical either way, so scoring output is unaffected.
+  const corpusPath = `${HOME}/var_corpus/${companyId}.json`;
+  let corpus: Array<{ url: string; title: string; text: string }>;
+  try {
+    corpus = JSON.parse(readFileSync(corpusPath, "utf8"));
+  } catch (e: any) {
+    if (e && e.code === "ERR_STRING_TOO_LONG") {
+      console.log(`[corpus] ${corpusPath} exceeds V8 max string length — streaming-parsing array`);
+      corpus = await loadCorpusStreaming(corpusPath);
+      console.log(`[corpus] streamed ${corpus.length} documents`);
+    } else {
+      throw e;
+    }
+  }
   const documentTexts = corpus.map((d) => d.text || "");
   const documentUrls = corpus.map((d) => d.url || "");
   const documentTitles = corpus.map((d) => d.title || "");

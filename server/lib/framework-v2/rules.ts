@@ -1,5 +1,5 @@
 /**
- * Framework Creation v2 — Construction Rules C1–C10
+ * Framework Creation v2 — Construction Rules C1–C11
  *
  * Each rule is a build-time enforcement of a property that prevents a specific
  * failure mode identified in Sprint 9 FP/FN diagnostics.
@@ -98,6 +98,26 @@ const COVERAGE_KEYWORDS_IN_TITLE = [
   "group-wide", "company-wide", "globally",
 ];
 
+// Degree / holistic-judgment words. When a Yes-condition hinges on one of
+// these, two scoring models routinely read the SAME anchor sentence and split
+// on whether it clears the bar — the root cause of run-to-run verdict flips.
+// Curated set: err toward this list, keep editable. Whole-word, case-insensitive.
+export const DEGREE_WORDS: readonly string[] = [
+  "substantive", "substantively", "substantially",
+  "systematic", "systematically",
+  "integrated", "integration",
+  "sufficient", "sufficiently",
+  "robust",
+  "meaningful",
+  "adequate", "adequately",
+  "appropriate", "appropriately",
+  "comprehensive", "comprehensively",
+  "holistic",
+  "effective", "effectively",
+  "strong",
+  "well-developed",
+];
+
 // ─── Helper ──────────────────────────────────────────────────────────────
 
 function toText(field: string | string[] | undefined): string {
@@ -107,6 +127,105 @@ function toText(field: string | string[] | undefined): string {
 
 function isExceptionMeasure(m: MeasureDraft): boolean {
   return Boolean(m.r3_1_exception_metrics || m.r3_1_exception_coverage);
+}
+
+// Whole-word, case-insensitive degree-word matcher. Returns the distinct
+// degree words found in `text` (lower-cased). Data-driven from DEGREE_WORDS.
+const DEGREE_WORD_REGEX = new RegExp(
+  `\\b(${DEGREE_WORDS.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`,
+  "gi",
+);
+
+export function findDegreeWords(text: string): string[] {
+  if (!text) return [];
+  const found = new Set<string>();
+  DEGREE_WORD_REGEX.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = DEGREE_WORD_REGEX.exec(text)) !== null) {
+    found.add(m[1].toLowerCase());
+  }
+  return [...found];
+}
+
+// Detects an explicit COUNTABLE decision rule — an N-of-M test over named,
+// quote-verifiable artefacts. Accepts selection phrasing ("at least N of",
+// "any N of", "N of the following", "any of the following") OR an enumerated
+// list of >=3 named items ("(1)..(2)..(3)", "1...2...3.", "1)..2)..3)", or
+// "(a)..(b)..(c)"). Pattern-based, not hardcoded to any measure.
+function hasCountableRule(text: string): boolean {
+  if (!text) return false;
+  const numWord = "(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten)";
+  const selectionPatterns = [
+    new RegExp(`\\bat least\\s+${numWord}\\s+of\\b`, "i"),
+    new RegExp(`\\bany\\s+${numWord}\\s+of\\b`, "i"),
+    new RegExp(`\\b${numWord}\\s+of the following\\b`, "i"),
+    new RegExp(`\\b${numWord}\\s+or more of\\b`, "i"),
+    /\bany of the following\b/i,
+  ];
+  for (const p of selectionPatterns) if (p.test(text)) return true;
+  // Enumerated list of >=3 named items across common styles.
+  const enumPatterns = [
+    /\((\d+)\)/g,            // (1) (2) (3)
+    /(?:^|\n|\.\s)(\d+)\.\s/g, // 1. 2. 3.
+    /(?:^|\n)(\d+)\)\s/g,    // 1) 2) 3)
+    /\(([a-z])\)/gi,         // (a) (b) (c)
+  ];
+  for (const pat of enumPatterns) {
+    pat.lastIndex = 0;
+    const seen = new Set<string>();
+    let mm: RegExpExecArray | null;
+    while ((mm = pat.exec(text)) !== null) seen.add(mm[1].toLowerCase());
+    if (seen.size >= 3) return true;
+  }
+  return false;
+}
+
+// Split a fallback_yes_criterion into its TOP-LEVEL numbered conditions.
+// Recognises "(1)(2)(3)", "1. 2. 3." and "1) 2) 3)" as top-level condition
+// delimiters, while treating "(a)(b)(c)" as sub-items WITHIN a condition (a
+// named-artefact enumeration), NOT as separate conditions. Any preamble before
+// the first marker (the "Yes if ANY of the following…" OR-framing) is dropped —
+// it is not a deciding test. When no numbered structure is present the whole
+// text is returned as a single condition. Marker numbers are bounded to 1–20 so
+// years/amounts ("by 2030.", "$10") are not mistaken for list markers.
+function splitIntoConditions(text: string): string[] {
+  if (!text) return [];
+  const markerRe = /(?:\((\d+)\)|(?:^|\n|\s)(\d+)[.)](?=\s))/g;
+  const starts: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = markerRe.exec(text)) !== null) {
+    const numStr = m[1] !== undefined ? m[1] : m[2];
+    const num = parseInt(numStr, 10);
+    if (!(num >= 1 && num <= 20)) continue;
+    // For the whitespace-prefixed branch, skip the leading ws char so the snippet
+    // begins at the digit; the "(N)" and start-of-string branches begin already.
+    const start = m[2] !== undefined && /\s/.test(text[m.index]) ? m.index + 1 : m.index;
+    starts.push(start);
+  }
+  if (starts.length === 0) {
+    const whole = text.trim();
+    return whole ? [whole] : [];
+  }
+  const parts: string[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const s = starts[i];
+    const e = i + 1 < starts.length ? starts[i + 1] : text.length;
+    const seg = text.slice(s, e).trim();
+    if (seg) parts.push(seg);
+  }
+  return parts;
+}
+
+// True when a single condition enumerates >=2 distinct named sub-items
+// "(a)(b)(c)" — an in-condition artefact enumeration that makes the deciding
+// test quote-verifiable even if the condition also uses a degree word.
+function hasNamedArtefactEnumeration(text: string): boolean {
+  if (!text) return false;
+  const re = /\(([a-z])\)/gi;
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) seen.add(m[1].toLowerCase());
+  return seen.size >= 2;
 }
 
 function containsTopicOrSynonym(text: unknown, topicTerm: unknown, synonyms: unknown): boolean {
@@ -696,6 +815,75 @@ export function validateC10(fw: FrameworkDraft): ValidationResult {
   return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };
 }
 
+// ─── C11 — Decidable threshold: degree words require a countable rule ──────
+//
+// fallback_yes_criterion is judged PER CONDITION: it is split into its top-level
+// numbered conditions and every condition whose deciding test relies on a degree
+// word MUST itself carry an in-condition countable/named decidable test. A
+// countable rule sitting in a DIFFERENT condition no longer rescues it — that is
+// exactly the run-to-run flip case (e.g. condition #1 "…risks are INTEGRATED into
+// ERM…" while a different condition happens to enumerate "(a)…(e)").
+//
+// scoringGuidance and substantive_definition keep the original MEASURE-LEVEL
+// behaviour: a degree word there needs a countable rule somewhere in the
+// measure's decision text. To preserve one-violation-per-measure for that path,
+// the secondary check only runs when the fallback conditions are clean.
+
+export function validateC11(fw: FrameworkDraft): ValidationResult {
+  const violations: Violation[] = [];
+  for (const m of fw.measures) {
+    let measureErrored = false;
+    const fallbackText = toText(m.fallback_yes_criterion);
+
+    // ── fallback_yes_criterion: PER-CONDITION decidability ──
+    for (const cond of splitIntoConditions(fallbackText)) {
+      const words = findDegreeWords(cond);
+      if (words.length === 0) continue;
+      // The degree word must be made decidable WITHIN this same condition.
+      if (hasCountableRule(cond) || hasNamedArtefactEnumeration(cond)) continue;
+      const flat = cond.replace(/\s+/g, " ").trim();
+      const snippet = flat.length > 140 ? flat.slice(0, 140) + "…" : flat;
+      violations.push({
+        measureId: m.measureId,
+        rule: "C11",
+        severity: "error",
+        message: `Degree word(s) [${words.join(", ")}] are the deciding test of a fallback_yes_criterion condition that carries no in-condition countable or named-artefact test: "${snippet}". A degree judgment is not decidable from a verbatim quote — two scoring models split on it run-to-run. A countable rule in a different condition does not rescue this one.`,
+        suggestion: `Rewrite THIS condition as a countable N-of-M test over NAMED, quote-verifiable artefacts, e.g. "at least 2 of the following appear in a verbatim quote: (a) …, (b) …, (c) …".`,
+      });
+      measureErrored = true;
+    }
+
+    // ── scoringGuidance + substantive_definition: MEASURE-LEVEL (unchanged) ──
+    // Skipped when the fallback already flagged this measure, so a measure is not
+    // double-reported (matches the original rule's one-violation-per-measure).
+    if (!measureErrored) {
+      const secondaryFields: Array<{ name: string; text: string }> = [
+        { name: "scoringGuidance", text: toText(m.scoringGuidance) },
+        { name: "substantive_definition", text: toText(m.substantive_definition) },
+      ];
+      const hits = secondaryFields
+        .map((f) => ({ field: f.name, words: findDegreeWords(f.text) }))
+        .filter((h) => h.words.length > 0);
+      if (hits.length > 0) {
+        // A countable rule anywhere in the measure's decision text governs.
+        const combined = [fallbackText, ...secondaryFields.map((f) => f.text)].join("\n");
+        if (!hasCountableRule(combined)) {
+          const allWords = [...new Set(hits.flatMap((h) => h.words))];
+          const fieldList = hits.map((h) => `${h.field} (${h.words.join(", ")})`).join("; ");
+          violations.push({
+            measureId: m.measureId,
+            rule: "C11",
+            severity: "error",
+            message: `Degree word(s) [${allWords.join(", ")}] appear in ${fieldList} but the measure carries no countable decision rule. A degree judgment is not decidable from a verbatim quote — two scoring models split on it run-to-run.`,
+            suggestion: `Replace the degree judgment with a countable N-of-M test over NAMED, quote-verifiable artefacts, e.g. "Yes if at least 2 of the following are present in a verbatim quote: (a) …, (b) …, (c) …".`,
+          });
+        }
+      }
+    }
+  }
+  return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };
+}
+
 // ─── Combined validator ───────────────────────────────────────────────────
 
 export function validateAll(fw: FrameworkDraft): ValidationResult {
@@ -711,6 +899,7 @@ export function validateAll(fw: FrameworkDraft): ValidationResult {
     ["C8", validateC8],
     ["C9", validateC9],
     ["C10", validateC10],
+    ["C11", validateC11],
   ] as const) {
     const r = fn(fw);
     all.push(...r.violations);
@@ -722,7 +911,7 @@ export function validateAll(fw: FrameworkDraft): ValidationResult {
 }
 
 export function summariseViolations(violations: Violation[]): string {
-  if (violations.length === 0) return "All C1–C10 rules pass.";
+  if (violations.length === 0) return "All C1–C11 rules pass.";
   const errors = violations.filter((v) => v.severity === "error");
   const warnings = violations.filter((v) => v.severity === "warning");
   const byMeasure = new Map<string, Violation[]>();
@@ -744,4 +933,208 @@ export function summariseViolations(violations: Violation[]): string {
     lines.push("");
   }
   return lines.join("\n");
+}
+
+// ─── Design-issue acceptance gate (ITEM 1) ─────────────────────────────────
+//
+// The builder must not silently draft/save a framework that carries design
+// issues. Every validation violation is transformed into a STRUCTURED,
+// machine-readable issue with four decision-supporting parts, so the client can
+// render an accept-or-fix gate and the intake facilitator can explain each
+// issue in the same shape:
+//
+//   (a) issue       — what is wrong, and where (measure/field)
+//   (b) reason      — WHY it harms run-to-run robustness
+//   (c) solution    — the concrete countable/N-of-M rewrite to apply
+//   (d) implication — what happens if it is NOT changed
+//
+// `id` is stable per (ruleCode, measureId, field) so the client can pass the
+// SAME id back in acceptedIssueIds once the user has explicitly accepted it.
+
+export interface StructuredIssue {
+  id: string;
+  ruleCode: string;              // "C1".."C11", "evidence-keyword-distinctiveness", "internal"
+  severity: "error" | "warning";
+  measureId: string;             // "framework-level" when the violation is not measure-scoped
+  field: string;                 // best-effort source field the issue concerns
+  issue: string;                 // (a) what is wrong
+  reason: string;                // (b) why it harms robustness
+  solution: string;              // (c) concrete fix
+  implication: string;           // (d) cost of not changing
+}
+
+// Per-rule metadata used to derive the four-part explanation. `field` is the
+// primary framework field a rule inspects; `reason`/`implication` explain the
+// robustness cost in decision-oriented language. Rules not listed fall back to
+// a generic robustness rationale.
+const RULE_ISSUE_META: Record<
+  string,
+  { field: string; reason: string; implication: string }
+> = {
+  C1: {
+    field: "title / c1_achievement_guidance",
+    reason:
+      "The measure tests an outcome rather than a disclosed position, so whether an achievement claim 'counts' is a judgment call — two scoring models split on it.",
+    implication: "Verdicts flip run-to-run between reviewers who read the achievement claim differently.",
+  },
+  C2: {
+    field: "whatDoesNotConstituteEvidence",
+    reason:
+      "A tense/forward-looking exclusion rejects valid evidence on a non-substantive ground, which different runs apply inconsistently.",
+    implication: "Legitimate disclosures are dropped unpredictably, lowering recall and destabilising the verdict.",
+  },
+  C3: {
+    field: "scoringGuidance / min_quote_context_chars",
+    reason:
+      "Without a minimum quote-context requirement, models accept truncated snippets whose meaning is ambiguous.",
+    implication: "The same disclosure is read as Yes by one run and No by another depending on how much context it quoted.",
+  },
+  C4: {
+    field: "fallback_yes_criterion",
+    reason:
+      "Fallback conditions are not a numbered OR-list of ≥3 countable, topic-anchored conditions, so what triggers a Yes is under-specified.",
+    implication: "Borderline companies flip Yes/No between runs because the trigger set is not decidable from the quote.",
+  },
+  C5: {
+    field: "substantive_definition",
+    reason:
+      "Missing adjacent-topic exclusion lets evidence from a neighbouring topic satisfy this measure when vocabulary overlaps.",
+    implication: "Adjacent-topic disclosures are counted inconsistently, inflating and destabilising the Yes rate.",
+  },
+  C6: {
+    field: "positive_examples / negative_examples",
+    reason:
+      "Too few positive or adversarial-negative examples leaves the boundary between Yes and No unanchored for the scorer.",
+    implication: "Runs disagree on borderline cases because they have no shared calibration examples to anchor the decision.",
+  },
+  C7: {
+    field: "title / coverage_whitelist",
+    reason:
+      "A coverage measure without an explicit threshold and whitelist phrases forces the scorer to judge 'how much coverage is enough'.",
+    implication: "Partial-coverage companies flip run-to-run on the unstated threshold.",
+  },
+  C8: {
+    field: "substantive_definition",
+    reason:
+      "Without the vehicle-agnostic clause, the scorer may reject valid evidence for appearing in an unexpected document type.",
+    implication: "The same disclosure counts or not depending on which vehicle a run happened to weight.",
+  },
+  C9: {
+    field: "expected_yes_rate",
+    reason:
+      "A missing or implausible expected_yes_rate removes the sanity check that catches a measure firing far too often or too rarely.",
+    implication: "Calibration drift goes undetected, so a mis-scoped measure keeps producing unstable verdicts.",
+  },
+  C10: {
+    field: "topicTerm / topicSynonyms",
+    reason:
+      "Topic term and synonyms are not fully registered, so retrieval misses evidence phrased with unregistered terms.",
+    implication: "Which evidence surfaces depends on run-to-run retrieval variance, changing the verdict.",
+  },
+  C11: {
+    field: "fallback_yes_criterion / scoringGuidance / substantive_definition",
+    reason:
+      "A degree word (e.g. 'substantive', 'integrated') is the deciding test but is not decidable from a verbatim quote — two scoring models read the same anchor sentence and split on whether it clears the bar.",
+    implication: "This is the direct cause of run-to-run verdict flips; the measure's score is not reproducible.",
+  },
+  "evidence-keyword-distinctiveness": {
+    field: "evidenceKeywords",
+    reason:
+      "The measure's evidence keywords collapse to the topic lexicon, so BM25 cannot distinguish THIS measure from the topic in general.",
+    implication: "Retrieval pulls generic topic passages, so the evidence set — and the verdict — shifts between runs.",
+  },
+  internal: {
+    field: "(validator)",
+    reason: "The validator could not complete, so robustness cannot be confirmed.",
+    implication: "The framework may carry undetected design issues that flip verdicts run-to-run.",
+  },
+};
+
+const GENERIC_ISSUE_META = {
+  field: "(measure)",
+  reason: "This design issue leaves a scoring decision under-specified.",
+  implication: "Under-specified decisions are resolved differently across runs, producing verdict flips.",
+};
+
+function slugForIssueId(s: string): string {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "x";
+}
+
+/**
+ * Transform raw validation violations into the structured, four-part issue
+ * shape the acceptance gate and the intake facilitator both consume.
+ * `message` becomes the issue text; `suggestion` becomes the solution (the C11
+ * countable-rewrite text is reused verbatim); reason/implication/field are
+ * derived from the rule code.
+ */
+export function toStructuredIssues(violations: Violation[]): StructuredIssue[] {
+  return violations.map((v, idx) => {
+    const meta = RULE_ISSUE_META[v.rule] || GENERIC_ISSUE_META;
+    const measureId = v.measureId || "framework-level";
+    const id = `${slugForIssueId(v.rule)}__${slugForIssueId(measureId)}__${idx}`;
+    return {
+      id,
+      ruleCode: v.rule,
+      severity: v.severity,
+      measureId,
+      field: meta.field,
+      issue: v.message,
+      reason: meta.reason,
+      solution:
+        v.suggestion ||
+        "Rewrite the deciding test so it is verifiable true/false from a single verbatim quote (a named body, document, dated/quantified metric, or explicit N-of-M list of named artefacts).",
+      implication: meta.implication,
+    };
+  });
+}
+
+/**
+ * Human-readable rendering of the structured issues, in the same four-part
+ * format the facilitator uses in chat. Errors first, then warnings.
+ */
+export function renderStructuredIssues(issues: StructuredIssue[]): string {
+  if (issues.length === 0) return "No outstanding design issues — all C1–C11 rules pass.";
+  const order = { error: 0, warning: 1 } as const;
+  const sorted = [...issues].sort((a, b) => order[a.severity] - order[b.severity]);
+  const errors = issues.filter((i) => i.severity === "error").length;
+  const warnings = issues.length - errors;
+  const lines: string[] = [
+    `${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"} must be reviewed before drafting/saving.`,
+    "",
+  ];
+  for (const i of sorted) {
+    lines.push(`### [${i.severity.toUpperCase()}][${i.ruleCode}] ${i.measureId} — ${i.field}  (id: ${i.id})`);
+    lines.push(`- **Issue:** ${i.issue}`);
+    lines.push(`- **Reason:** ${i.reason}`);
+    lines.push(`- **Proposed solution:** ${i.solution}`);
+    lines.push(`- **Implication of not changing:** ${i.implication}`);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Acceptance-gate decision for the SAVE/DRAFT path.
+ *
+ * - error-severity issues BLOCK unless the client has explicitly accepted each
+ *   one (its id present in acceptedIssueIds) or passed proceedWithWarnings for
+ *   the whole set.
+ * - warning-severity issues never block; they are surfaced but pass through.
+ *
+ * Returns the outstanding (unaccepted error) issues so the caller can 400 with
+ * an actionable payload.
+ */
+export function evaluateAcceptanceGate(
+  issues: StructuredIssue[],
+  opts: { acceptedIssueIds?: string[]; proceedWithWarnings?: boolean },
+): { allowed: boolean; blockingIssues: StructuredIssue[]; acceptedCount: number } {
+  const accepted = new Set(opts.acceptedIssueIds || []);
+  const errors = issues.filter((i) => i.severity === "error");
+  // proceedWithWarnings accepts the ENTIRE current issue set at once (the user
+  // explicitly chose proceed-with-warnings after reviewing them).
+  const blockingIssues = opts.proceedWithWarnings
+    ? []
+    : errors.filter((i) => !accepted.has(i.id));
+  const acceptedCount = errors.filter((i) => accepted.has(i.id)).length + (opts.proceedWithWarnings ? errors.length : 0);
+  return { allowed: blockingIssues.length === 0, blockingIssues, acceptedCount };
 }

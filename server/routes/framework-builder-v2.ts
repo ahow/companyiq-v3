@@ -7,13 +7,13 @@
 
 import { Router, Request, Response } from "express";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
-import { validateAll, summariseViolations, type FrameworkDraft } from "../lib/framework-v2/rules.js";
+import { validateAll, summariseViolations, toStructuredIssues, renderStructuredIssues, evaluateAcceptanceGate, type FrameworkDraft, type StructuredIssue } from "../lib/framework-v2/rules.js";
 import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evidence-keyword-distinctiveness.js";
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
-import { analyseTestDrive, buildSampleSelectionPrompt, type TestDriveCompanyResult, type TestDriveSampleRequest } from "../lib/framework-v2/test-drive.js";
+import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
 import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
 import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } from "../lib/framework-v2/root-cause-diagnostic.js";
@@ -418,7 +418,29 @@ function appendEvidenceKeywordWarnings(validation: any, fwDraft: FrameworkDraft)
   return validation;
 }
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean } | { error: string; raw?: string }> {
+// ITEM 1 — Build the machine-readable + human-readable design-issue payload
+// attached to every draft/validate/save response. `issues` is the structured
+// list the client renders as an accept-or-fix gate; `issuesReadable` is the
+// four-part prose rendering; `errorCount`/`warningCount` let the client decide
+// whether the gate blocks. The SAME issue ids are what the client passes back
+// in acceptedIssueIds once the user explicitly accepts an outstanding issue.
+function buildIssuePayload(validation: any): {
+  issues: StructuredIssue[];
+  issuesReadable: string;
+  errorCount: number;
+  warningCount: number;
+} {
+  const violations = (validation?.violations || []) as any[];
+  const issues = toStructuredIssues(violations);
+  return {
+    issues,
+    issuesReadable: renderStructuredIssues(issues),
+    errorCount: issues.filter((i) => i.severity === "error").length,
+    warningCount: issues.filter((i) => i.severity === "warning").length,
+  };
+}
+
+async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number } | { error: string; raw?: string }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
   if ("error" in first) return first;
@@ -472,7 +494,16 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
 
   const measures = flattenMeasures(draft);
   const truncationRecovered = Boolean((draft as any).__truncationRecovered);
-  return { draft, measures, validation, summary: summariseViolations(validation.violations), repairAttempts, truncationRecovered };
+  const issuePayload = buildIssuePayload(validation);
+  return {
+    draft,
+    measures,
+    validation,
+    summary: summariseViolations(validation.violations),
+    repairAttempts,
+    truncationRecovered,
+    ...issuePayload,
+  };
 }
 
 // ─── POST /v2/draft — draft the framework from a confirmed intake (SYNC) ───
@@ -697,6 +728,7 @@ router.post("/v2/validate", async (req: Request, res: Response) => {
     return res.json({
       validation,
       summary: summariseViolations(validation.violations),
+      ...buildIssuePayload(validation),
     });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || "internal error" });
@@ -706,16 +738,26 @@ router.post("/v2/validate", async (req: Request, res: Response) => {
 // ─── POST /v2/save — persist a validated v2 framework ────────────────────
 // Called by the client after the user has drafted + validated + (optionally)
 // test-driven the framework. Writes framework + measures with builder_version="v2"
-// and all C1-C10 fields populated.
+// and all C1-C11 fields populated.
+//
+// ITEM 1 — Acceptance gate: the save is BLOCKED while any error-severity design
+// issue is outstanding. The client must resolve the issue (re-draft) OR pass
+// its id in `acceptedIssueIds` (explicit per-issue acceptance) OR pass
+// `proceedWithWarnings: true` (accept the whole current error set knowingly).
+// Warning-severity issues never block; they are returned for surfacing. This
+// enforcement applies to EVERY save (both save-as-draft and production-ready) so
+// an ambiguous framework can no longer be persisted silently.
 
 router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) => {
   try {
-    const { draft, intake, testDriveSummary, testDriveWarnings, productionReady } = req.body as {
+    const { draft, intake, testDriveSummary, testDriveWarnings, productionReady, acceptedIssueIds, proceedWithWarnings } = req.body as {
       draft: any;
       intake: IntakeArtefact;
       testDriveSummary?: any;
       testDriveWarnings?: any[];
       productionReady?: boolean;
+      acceptedIssueIds?: string[];
+      proceedWithWarnings?: boolean;
     };
     if (!draft?.framework || !Array.isArray(draft?.categories)) {
       return res.status(400).json({ error: "draft with framework + categories required" });
@@ -737,14 +779,33 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       validation = { passed: false, violations: [{ rule: "internal", severity: "error", message: `Validator threw: ${e?.message || e}` }] };
     }
 
-    // Only block save-as-production-ready when validation fails. Save-as-draft
-    // is allowed even with errors so the user can test-drive an imperfect
-    // framework, then edit or repair before promoting.
-    if (productionReady && !validation.passed) {
+    // ITEM 1 — Acceptance gate. Transform violations into structured issues and
+    // block the save while any error-severity issue is unaccepted. This replaces
+    // the old "only block production-ready" behaviour: an ambiguous framework can
+    // no longer be silently saved-as-draft either — the user must explicitly
+    // accept each outstanding error (acceptedIssueIds) or proceedWithWarnings.
+    const issuePayload = buildIssuePayload(validation);
+    const gate = evaluateAcceptanceGate(issuePayload.issues, { acceptedIssueIds, proceedWithWarnings });
+    if (!gate.allowed) {
       return res.status(400).json({
-        error: "Framework fails C1-C10 validation and cannot be saved as production-ready. Save as draft instead.",
+        error:
+          `Framework has ${gate.blockingIssues.length} outstanding error-severity design issue(s) that must be resolved or explicitly accepted before saving. ` +
+          `Re-draft to fix them, or re-submit with acceptedIssueIds (the id of each issue you accept) or proceedWithWarnings: true.`,
+        blocked: true,
         validation,
         summary: summariseViolations(validation.violations),
+        ...issuePayload,
+        blockingIssueIds: gate.blockingIssues.map((i) => i.id),
+      });
+    }
+    // Production-ready additionally requires a clean pass (no accepted-away
+    // errors): a framework promoted to production must not ship known flip risks.
+    if (productionReady && !validation.passed) {
+      return res.status(400).json({
+        error: "Framework fails C1-C11 validation and cannot be saved as production-ready. Save as draft instead.",
+        validation,
+        summary: summariseViolations(validation.violations),
+        ...issuePayload,
       });
     }
 
@@ -770,7 +831,7 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       productionReady: Boolean(productionReady),
       rulesActive: draft.framework.rulesActive || {
         C1: true, C2: true, C3: true, C4: true, C5: true,
-        C6: true, C7: true, C8: true, C9: true, C10: true,
+        C6: true, C7: true, C8: true, C9: true, C10: true, C11: true,
       },
       intakeArtefact: intake as any,
     } as any);
@@ -830,6 +891,11 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       builderVersion: "v2",
       measureCount: measures.length,
       productionReady: Boolean(productionReady),
+      // Surface the accepted-issue trail so the client can show what was saved
+      // with known warnings/accepted errors.
+      acceptedErrorCount: gate.acceptedCount,
+      warningCount: issuePayload.warningCount,
+      issues: issuePayload.issues,
     });
   } catch (err: any) {
     console.error("[framework-builder v2 /save] error:", err);
@@ -886,14 +952,25 @@ router.post("/v2/test-drive/select", async (req: Request, res: Response) => {
 
 router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Response) => {
   try {
-    const { frameworkId, companies, frameworkName } = req.body as {
+    const { frameworkId, companies, frameworkName, runs } = req.body as {
       frameworkId: number;
       frameworkName?: string;
       companies: Array<{ name: string; ticker?: string; sector?: string; country?: string; isKnownDiscloser?: boolean }>;
+      runs?: number; // ITEM 2: how many times to score the SAME sample (flip detection)
     };
     if (!frameworkId || !Array.isArray(companies) || companies.length === 0) {
       return res.status(400).json({ error: "frameworkId and companies[] required" });
     }
+
+    // ITEM 2: bounded number of scoring runs for run-to-run flip detection.
+    // Each completed batch becomes one framework_v2_iterations row; the flip
+    // detector compares verdicts per company across these iterations. This is a
+    // DESIGN-time diagnostic — live scoring stays single-shot. k is clamped to
+    // [1, TEST_DRIVE_MAX_RUNS] and defaults to TEST_DRIVE_RUNS.
+    const defaultRuns = Math.max(1, parseInt(process.env.TEST_DRIVE_RUNS || "3", 10) || 3);
+    const maxRuns = Math.max(1, parseInt(process.env.TEST_DRIVE_MAX_RUNS || "5", 10) || 5);
+    const requestedRuns = Number.isFinite(runs as number) ? Math.floor(runs as number) : defaultRuns;
+    const scoringRuns = Math.min(maxRuns, Math.max(1, requestedRuns));
     const ctx = getSessionContext(req);
     if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
 
@@ -948,7 +1025,12 @@ router.post("/v2/test-drive/run", requireWorkspace, async (req: Request, res: Re
       listName,
       companyIds,
       companyCount: companyIds.length,
-      hint: "POST /api/analyze with { frameworkId, listId } to kick off scoring, or navigate to Results with these IDs.",
+      scoringRuns, // ITEM 2: score the sample this many times for flip detection
+      maxRuns,
+      hint:
+        scoringRuns > 1
+          ? `POST /api/analyze with { frameworkId, listId } ${scoringRuns} times to score the same sample repeatedly; each completed batch is one iteration, and /v2/test-drive/results reports per-measure run-to-run flip rates.`
+          : "POST /api/analyze with { frameworkId, listId } to kick off scoring, or navigate to Results with these IDs.",
     });
   } catch (err: any) {
     console.error("[framework-builder v2 /test-drive/run] error:", err);
@@ -1100,36 +1182,74 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
     let robustness: any = null;
     let edits: any = null;
     let rootCauses: any = null;
+    let flipStats: any[] = [];
     if (scoringComplete) {
-      report = analyseTestDrive(results, measureMetadata);
+      // Snapshot this batch FIRST so its verdicts are persisted as an iteration
+      // row before we build the multi-run flip input — otherwise the current
+      // batch would be missing from the run-to-run comparison. Idempotent:
+      // already-snapshotted batches are skipped inside snapshotIteration().
+      let snapIterationNumber: number | undefined;
+      try {
+        const snap = await snapshotIteration(frameworkId, listId, ctx.workspaceId);
+        snapIterationNumber = snap?.iterationNumber;
+      } catch (e: any) {
+        console.warn("[framework-builder v2 /test-drive/results] iteration snapshot failed:", e?.message);
+      }
+
+      // ITEM 2: build the multi-run flip input from ALL iteration snapshots for
+      // this framework+list. Two or more iterations = the same sample scored
+      // repeatedly; the flip detector compares per-company verdicts across them.
+      let multiRun: MultiRunIteration[] = [];
+      try {
+        const iterRows = await db.execute(sql`
+          SELECT iteration_number, per_measure
+          FROM framework_v2_iterations
+          WHERE framework_id = ${frameworkId} AND list_id = ${listId}
+          ORDER BY iteration_number ASC
+        `);
+        multiRun = ((iterRows as any).rows || []).map((r: any) => ({
+          iterationNumber: Number(r.iteration_number),
+          perMeasure: (r.per_measure && typeof r.per_measure === "object") ? r.per_measure : {},
+        }));
+      } catch (e: any) {
+        console.warn("[framework-builder v2 /test-drive/results] multi-run load failed (non-fatal):", e?.message);
+      }
+      flipStats = computeFlipStats(multiRun);
+
+      report = analyseTestDrive(results, measureMetadata, multiRun);
+
+      // ITEM 3: surface data-sparse companies as an actionable design-time prompt.
+      // Full root-cause corpus analysis is deferred to /v2/improvement/chat (heavy
+      // corpus scan). Here we use a light heuristic that needs no corpus scan: a
+      // company that produced ZERO evidence quotes across every measure is almost
+      // certainly missing source documents rather than genuinely non-disclosing.
+      const sparseCompanies = results
+        .filter((r) => r.measures.length > 0 && r.measures.every((m) => (m.quoteCount || 0) === 0))
+        .map((r) => ({ companyId: r.companyId, companyName: r.companyName, classification: "no-evidence-in-corpus" }));
+      const sparseFlag = buildSparseCorpusFlag(sparseCompanies);
+      if (sparseFlag && report) {
+        report.flags = [sparseFlag, ...(report.flags || [])];
+        report.summary = `${report.summary}\n  • [sparse-corpus] ${sparseFlag.message}`;
+      }
+
       robustness = computeRobustnessCriteria(results, measureMetadata, labels);
       edits = proposeEditsForFlags(report.flags || [], measuresById);
 
-      // 6b. Root-cause corpus analysis is intentionally deferred to the improvement/chat
-      //     endpoint, which runs it lazily on first question with a bounded corpus query
-      //     (200K chars/company cap). Running it here would require scanning the full
-      //     document text for every poll, which causes 30s+ timeouts on large batches
-      //     (e.g. 954 docs / 564MB). rootCauses stays null; the chat endpoint fills it.
-      // rootCauses = null; (already initialised above)
-
-      // Snapshot this batch's outputs (per-company, per-measure, robustness,
-      // root-causes) into the iteration history table. Idempotent — already-
-      // snapshotted batches are skipped by the UNIQUE(batch_id) check inside
-      // snapshotIteration(). Then top up the latest row with robustness+rootCauses
-      // that snapshotIteration doesn't compute itself.
+      // Top up the snapshot row with robustness (+ rootCauses, still null here;
+      // filled lazily by /v2/improvement/chat) that snapshotIteration() itself
+      // does not compute.
       try {
-        const snap = await snapshotIteration(frameworkId, listId, ctx.workspaceId);
-        if (snap?.iterationNumber) {
+        if (snapIterationNumber) {
           await db.execute(sql`
             UPDATE framework_v2_iterations
             SET robustness = ${JSON.stringify(robustness)}::jsonb,
                 rootCauses = ${JSON.stringify(rootCauses)}::jsonb
             WHERE framework_id = ${frameworkId} AND list_id = ${listId}
-              AND iteration_number = ${snap.iterationNumber}
+              AND iteration_number = ${snapIterationNumber}
           `);
         }
       } catch (e: any) {
-        console.warn("[framework-builder v2 /test-drive/results] iteration snapshot failed:", e?.message);
+        console.warn("[framework-builder v2 /test-drive/results] iteration top-up failed:", e?.message);
       }
     }
 
@@ -1150,6 +1270,8 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       robustness,
       edits,
       rootCauses,
+      flipStats, // ITEM 2: per-measure run-to-run flip stats across iterations
+      iterationsCompared: flipStats.length > 0 ? Math.max(...flipStats.map((s: any) => s.runs || 0)) : 0,
       labelsInferred,
     });
   } catch (err: any) {
@@ -1652,8 +1774,26 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
     const measuresById: Record<string, any> = {};
     for (const m of measureRows) measuresById[m.measure_id] = m;
 
+    // ITEM 2: load iteration snapshots so the chat's flag report includes the
+    // same run-to-run flip detection the results panel shows. Flipping measures
+    // therefore reach the improvement LLM with the C11 countable-rewrite advice.
+    let multiRunForChat: MultiRunIteration[] = [];
+    try {
+      const iterRows = await db.execute(sql`
+        SELECT iteration_number, per_measure FROM framework_v2_iterations
+        WHERE framework_id = ${frameworkId} AND list_id = ${listId}
+        ORDER BY iteration_number ASC
+      `);
+      multiRunForChat = ((iterRows as any).rows || []).map((r: any) => ({
+        iterationNumber: Number(r.iteration_number),
+        perMeasure: (r.per_measure && typeof r.per_measure === "object") ? r.per_measure : {},
+      }));
+    } catch (e: any) {
+      console.warn("[improvement/chat] multi-run load failed (non-fatal):", e?.message);
+    }
+
     // Recompute flag report + edit proposals.
-    const report = analyseTestDrive(results as any, measureMetadata);
+    const report = analyseTestDrive(results as any, measureMetadata, multiRunForChat);
     const editsBundle = proposeEditsForFlags(report.flags || [], measuresById);
 
     // Recompute root causes.
@@ -1727,6 +1867,20 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
         summary: { docCollectionFailures: 0, frameworkIssues: 0, healthy: 0, ambiguous: 0, deadMeasuresLikelyFrameworkFault: 0, deadMeasuresLikelyCorpusFault: 0 },
         headline: "Root-cause corpus analysis unavailable — discuss flags and proposals below.",
       };
+    }
+
+    // ITEM 3: surface data-sparse companies (root-cause "doc-collection-failure")
+    // as an explicit, actionable prompt in the improvement flow, so the designer
+    // fixes corpus collection before rewording measures that look broken only
+    // because their evidence was never collected.
+    try {
+      const sparseSignals: SparseCompanySignal[] = (rootCauses?.companies || [])
+        .filter((c: any) => c.classification === "doc-collection-failure")
+        .map((c: any) => ({ companyId: c.companyId, companyName: c.companyName, classification: c.classification }));
+      const sparseFlag = buildSparseCorpusFlag(sparseSignals);
+      if (sparseFlag) report.flags = [sparseFlag, ...(report.flags || [])];
+    } catch (e: any) {
+      console.warn("[improvement/chat] sparse-corpus surfacing failed (non-fatal):", e?.message);
     }
 
     // ── Terminology gap detection ──────────────────────────────────────────

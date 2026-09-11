@@ -84,6 +84,16 @@ export function buildImprovementChatSystemPrompt(ctx: ImprovementChatContext): s
     .map((p, i) => `  [P${i + 1}] measure=${p.measureId} cause=${p.cause} action=${p.action}\n         rationale: ${p.rationale}`)
     .join("\n");
 
+  // Flag summary — includes run-to-run instability (residual-instability),
+  // zero-differentiation (no-differentiation) and sparse-corpus flags so the
+  // LLM can reason about them. Errors first, then warnings.
+  const flagSummary = (ctx.flags && ctx.flags.length > 0)
+    ? [...ctx.flags]
+        .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1))
+        .map((f) => `  - [${f.severity}] ${f.rule} (${f.measureId}): ${f.message}\n         fix: ${f.suggestedFix}`)
+        .join("\n")
+    : "  (none)";
+
   return `You are a framework-improvement consultant. The user has just tested a CompanyIQ v2 framework called "${ctx.frameworkName}" on 10 sample companies. Your job is to help them understand the results and decide what to do next.
 
 TEST-DRIVE OUTCOME:
@@ -100,6 +110,9 @@ ${companyClassifications}
 
 MEASURES NEEDING ATTENTION:
 ${measureIssues || "  (none)"}
+
+TEST-DRIVE FLAGS (includes run-to-run instability and zero-differentiation):
+${flagSummary}
 
 AVAILABLE EDIT PROPOSALS:
 ${proposalSummary || "  (none)"}
@@ -118,6 +131,9 @@ CRITICAL RULES FOR YOUR REPLIES:
 5. When you want the user to take a concrete action, emit a structured action block. Do not describe an action in prose without emitting the block.
 6. If you see terminology gap candidates, explain they represent terms companies actually use for this topic that are NOT in the framework's topicSynonyms. Suggest the user add the most relevant ones to improve BM25 retrieval. Emit an <action type="add_synonyms" terms="term1,term2,term3" /> block when suggesting additions.
 7. If vehicle mismatches are present, explain that the evidence for a measure was found in document types the framework did not anticipate. Suggest the user consider updating disclosure_vehicles in the measure to include these types, if they are legitimate sources. Use the measure edit system (Re-draft with corrections) to update the measure definition to accept additional vehicle types.
+8. If a measure carries a "residual-instability" flag, its verdict changed run-to-run on identical evidence. This is an AMBIGUOUS-DESIGN defect — do NOT suggest re-scoring more times or averaging; live scoring stays single-shot. The fix is to rewrite the deciding criteria to be countable and quote-verifiable (C11): replace degree words with an explicit N-of-M test over named artefacts. Steer the user to Re-draft that measure with a countable rule.
+9. If a measure carries a "no-differentiation" flag, it returned the SAME verdict for every company and adds no signal. Explain it must be redesigned to test a discriminating, named artefact so the verdict can vary — not merely re-tuned.
+10. If a "sparse-corpus" flag is present, the listed companies appear data-sparse for this topic. Treat their measure flags as likely retrieval failures, not wording problems: advise fixing corpus collection and re-running the test-drive before editing those measures.
 
 ACTION BLOCK SYNTAX:
 Emit each action on its own line, exactly as:
