@@ -23,10 +23,14 @@ import type { Flag } from "./test-drive.js";
 export type EditCause =
   | "over-strict-fallback"      // fallback_yes_criterion too tight
   | "over-narrow-definition"    // substantive_definition too specific
+  | "over-broad-definition"     // substantive_definition too permissive (too-broad → tighten)
   | "missing-positive-examples" // no examples of what a Yes looks like
   | "adjacent-contamination"    // adjacent topic slipping through
   | "over-broad-wording"        // wording too permissive
   | "insufficient-context"      // quotes lack surrounding context
+  | "ambiguous-criteria"        // verdict flips run-to-run (residual instability, C11)
+  | "non-discriminating"        // measure gives the same verdict to every company
+  | "near-duplicate"            // two measures are near-duplicates (merge/differentiate)
   | "terminology-gap";          // companies use terms not in topicSynonyms
 
 export type EditAction =
@@ -36,6 +40,9 @@ export type EditAction =
   | "add-negative-examples"
   | "raise-min-context"
   | "recalibrate-expected-rate"
+  | "rewrite-countable"         // C11: rewrite deciding criteria to a countable N-of-M test
+  | "broaden-or-redefine"       // redefine so the measure separates companies
+  | "merge-or-differentiate"    // resolve a near-duplicate pair
   | "add-synonyms";
 
 export interface EditProposal {
@@ -118,11 +125,13 @@ export function proposeEditForFlag(
           expectedImpact: "should reduce Yes rate by disqualifying common false-positive patterns",
         };
       }
-      // Tighten definition
+      // Tighten definition — the measure is too BROAD, so tightening it is the
+      // correct move. (Bug fix: this branch previously reported the too-NARROW
+      // cause "over-narrow-definition", mislabelling every too-broad tighten.)
       return {
         measureId,
         flagRule: flag.rule,
-        cause: "over-narrow-definition",
+        cause: "over-broad-definition",
         action: "tighten-definition",
         fieldPath: "substantive_definition",
         currentValueSummary: truncate(m.substantive_definition || "", 160),
@@ -163,9 +172,95 @@ export function proposeEditForFlag(
         expectedImpact: "should suppress adjacent-topic contamination on Yes verdicts",
       };
 
+    case "residual-instability":
+      // ITEM 2 / spec §4.1: the same sample scored k times produced different
+      // verdicts for one or more companies. This is a DESIGN defect (ambiguous
+      // criteria), not scoring noise to sample away — live scoring stays
+      // single-shot. The C11 fix (rewrite the deciding criteria to a countable,
+      // quote-verifiable N-of-M test over named artefacts) takes PRECEDENCE over
+      // any calibration edit, because a measure that will not reproduce cannot be
+      // calibrated meaningfully.
+      return {
+        measureId,
+        flagRule: flag.rule,
+        cause: "ambiguous-criteria",
+        action: "rewrite-countable",
+        fieldPath: "substantive_definition",
+        currentValueSummary: truncate(m.substantive_definition || "", 160),
+        proposedValueSummary:
+          "rewrite deciding criteria to a countable, quote-verifiable N-of-M test over NAMED artefacts (C11)",
+        rationale:
+          "Verdict is unstable across identical re-runs — the measure leaves a judgment call two passes resolve differently. Remove the degree-word ambiguity by making the deciding rule countable and quote-verifiable. Stability must be fixed before calibration.",
+        patch: { op: "rewrite_countable", path: "substantive_definition", value: null },
+        expectedImpact:
+          typeof flag.flipRate === "number"
+            ? `should drive the ${(flag.flipRate * 100).toFixed(0)}% run-to-run flip rate toward 0%`
+            : "should eliminate run-to-run verdict flips",
+      };
+
+    case "no-differentiation":
+      // ITEM 3 / spec §4.5: the measure hands the SAME verdict to every scored
+      // company — zero discriminating power. Propose broadening/redefining so it
+      // separates companies; if the measure is redundant with another, it is a
+      // candidate for removal (surfaced, never auto-deleted).
+      return {
+        measureId,
+        flagRule: flag.rule,
+        cause: "non-discriminating",
+        action: "broaden-or-redefine",
+        fieldPath: "substantive_definition",
+        currentValueSummary: truncate(m.substantive_definition || "", 160),
+        proposedValueSummary:
+          "redefine around a named, quote-verifiable artefact that only SOME companies disclose (or remove if redundant)",
+        rationale:
+          "The measure returns one verdict for every company, so the framework gains no information from it. Redefine it to test a discriminating artefact so the verdict can vary; if another measure already captures this, consider removing it instead.",
+        patch: { op: "broaden_or_redefine", path: "substantive_definition", value: null },
+        expectedImpact: "should let the verdict vary across companies, restoring discriminating power",
+      };
+
     default:
       return null;
   }
+}
+
+/**
+ * Near-duplication proposal (spec §4.2). Unlike flag-driven proposals, near-dups
+ * are measure PAIRS, so they are proposed from the quality-metrics focal list
+ * rather than the per-measure flag stream. The proposal is user-selectable and
+ * never auto-deletes either measure — the user (or LLM recommendation flow)
+ * decides whether to merge the pair or differentiate them.
+ */
+export interface NearDuplicateInput {
+  measureIdA: string;
+  measureIdB: string;
+  labelA: string;
+  labelB: string;
+  agreement: number;
+  kappa: number;
+  n: number;
+}
+
+export function proposeMergeForNearDuplicate(pair: NearDuplicateInput): EditProposal {
+  return {
+    measureId: pair.measureIdA,
+    flagRule: "near-duplication",
+    cause: "near-duplicate",
+    action: "merge-or-differentiate",
+    fieldPath: "substantive_definition",
+    currentValueSummary: `${pair.labelA} ↔ ${pair.labelB}`,
+    proposedValueSummary:
+      `merge into one measure OR differentiate their substantive_definition so they test distinct artefacts`,
+    rationale:
+      `"${pair.labelA}" and "${pair.labelB}" agree on ${(pair.agreement * 100).toFixed(0)}% of ${pair.n} companies ` +
+      `(κ=${pair.kappa.toFixed(2)}) — they are near-duplicates carrying overlapping signal. Merge them, or sharpen one so ` +
+      `it tests something the other does not. Human-overrideable; neither measure is removed automatically.`,
+    patch: {
+      op: "merge_or_differentiate",
+      path: "substantive_definition",
+      value: { measureIdA: pair.measureIdA, measureIdB: pair.measureIdB },
+    },
+    expectedImpact: "should reduce within-pillar redundancy without losing coverage",
+  };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────

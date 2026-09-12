@@ -16,7 +16,8 @@ import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
-import { proposeEditsForFlags } from "../lib/framework-v2/edit-proposer.js";
+import { proposeEditsForFlags, proposeMergeForNearDuplicate } from "../lib/framework-v2/edit-proposer.js";
+import { computeQualityMetrics, coherenceGateMetrics, type MeasureSpecFields, type QualityMetricsReport } from "../lib/framework-v2/quality-metrics.js";
 import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } from "../lib/framework-v2/root-cause-diagnostic.js";
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import { batchTightenDefinitions, batchAppendExclusions, batchRegenerateExamples, groupProposalsByPatch, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
@@ -1309,7 +1310,7 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
 
     // 4. Fetch measure metadata (expected_yes_rate + full definition for edit proposals).
     const measureMetaQuery = await db.execute(sql`
-      SELECT measure_id, expected_yes_rate, title, substantive_definition,
+      SELECT measure_id, expected_yes_rate, title, category, substantive_definition,
              fallback_yes_criterion, positive_examples, negative_examples,
              min_quote_context_chars
       FROM framework_measures
@@ -1320,9 +1321,16 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       measureId: m.measure_id,
       expected_yes_rate: typeof m.expected_yes_rate === "number" ? m.expected_yes_rate : 0.35,
       title: m.title,
+      // Pillar grouping for within-pillar KR-20 / cross-pillar independence (Tier-1
+      // quality metrics). `category` is the framework_measures pillar column.
+      pillar: m.category || undefined,
     }));
     // Full measure definitions keyed by measure_id, for edit-proposal generation.
     const measuresById: Record<string, any> = {};
+    // Per-measure spec fields for the transparency spec-completeness checklist
+    // (quality-metrics §4.10). Maps existing framework_measures columns onto the
+    // generic checklist slots; borderlineExamples has no column yet (left absent).
+    const measureSpecs: Record<string, MeasureSpecFields> = {};
     for (const m of measureRows) {
       measuresById[m.measure_id] = {
         substantive_definition: m.substantive_definition,
@@ -1330,6 +1338,13 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
         positive_examples: m.positive_examples,
         negative_examples: m.negative_examples,
         min_quote_context_chars: m.min_quote_context_chars,
+      };
+      measureSpecs[m.measure_id] = {
+        definition: m.substantive_definition,
+        inclusion: m.positive_examples,
+        exclusion: m.negative_examples,
+        evidenceStandard: m.fallback_yes_criterion,
+        // borderlineExamples: no dedicated column yet — leave undefined.
       };
     }
 
@@ -1393,6 +1408,8 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
     let edits: any = null;
     let rootCauses: any = null;
     let flipStats: any[] = [];
+    let qualityMetrics: QualityMetricsReport | null = null;
+    let nearDuplicateEdits: any[] = [];
     if (scoringComplete) {
       // Snapshot this batch FIRST so its verdicts are persisted as an iteration
       // row before we build the multi-run flip input — otherwise the current
@@ -1445,6 +1462,44 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       robustness = computeRobustnessCriteria(results, measureMetadata, labels);
       edits = proposeEditsForFlags(report.flags || [], measuresById);
 
+      // Tier-1 design-time quality gate (quality-metrics.ts). ADDITIVE and
+      // non-fatal: this augments — never replaces — the 6-criteria robustness
+      // scorecard above. All thresholds are DEFERRED placeholders (see
+      // QUALITY_GATE_THRESHOLDS); N is taken from results.length, never hardcoded.
+      try {
+        qualityMetrics = computeQualityMetrics({
+          results,
+          measureMetadata,
+          multiRun,
+          measureSpecs,
+        });
+        // Fold the coherence GATE metrics (cross-pillar independence, KR-20 band,
+        // contribution balance) into the report's coverage-style gate list so the
+        // UI can render them alongside the other gates.
+        const coherenceGates = coherenceGateMetrics({
+          results,
+          measureMetadata,
+          multiRun,
+          measureSpecs,
+        });
+        (qualityMetrics as any).coherenceGates = coherenceGates;
+        // Near-duplicate pairs become selectable merge/differentiate proposals.
+        // Nothing is auto-applied — the UI presents each pair as accept/dismiss.
+        nearDuplicateEdits = (qualityMetrics.nearDuplicatePairs || []).map((p) =>
+          proposeMergeForNearDuplicate({
+            measureIdA: p.measureIdA,
+            measureIdB: p.measureIdB,
+            labelA: p.labelA,
+            labelB: p.labelB,
+            agreement: p.agreement,
+            kappa: p.kappa,
+            n: p.n,
+          }),
+        );
+      } catch (e: any) {
+        console.warn("[framework-builder v2 /test-drive/results] quality metrics failed (non-fatal):", e?.message);
+      }
+
       // Top up the snapshot row with robustness (+ rootCauses, still null here;
       // filled lazily by /v2/improvement/chat) that snapshotIteration() itself
       // does not compute.
@@ -1483,6 +1538,8 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       flipStats, // ITEM 2: per-measure run-to-run flip stats across iterations
       iterationsCompared: flipStats.length > 0 ? Math.max(...flipStats.map((s: any) => s.runs || 0)) : 0,
       labelsInferred,
+      qualityMetrics, // Tier-1 design-time quality gate (MAXIMISE + GATE metrics, Q composite)
+      nearDuplicateEdits, // selectable merge/differentiate proposals for near-duplicate pairs
     });
   } catch (err: any) {
     console.error("[framework-builder v2 /test-drive/results] error:", err);
@@ -1686,8 +1743,13 @@ async function snapshotIteration(
   }
 
   // Compute per-company and per-measure summaries from measure_scores.
+  // Also persist per-cell confidence + evidence fingerprint so future runs can
+  // compute retrieval-stability (Jaccard over fingerprints) and confidence-
+  // conditioned stability across iterations (quality-metrics §4.7). Both are
+  // OPTIONAL, backward-compatible additions to the per_measure jsonb.
   const scoresQ = await db.execute(sql`
-    SELECT ms.company_id, c.name AS company_name, ms.measure_id, ms.verdict
+    SELECT ms.company_id, c.name AS company_name, ms.measure_id, ms.verdict,
+           ms.confidence, ms.evidence_fingerprint
     FROM measure_scores ms JOIN companies c ON c.id = ms.company_id
     JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
     WHERE ms.framework_id = ${frameworkId}
@@ -1695,7 +1757,16 @@ async function snapshotIteration(
   const scoreRows = ((scoresQ as any).rows || []) as any[];
 
   const byCompany: Record<string, any> = {};
-  const byMeasure: Record<string, { yesCount: number; totalCount: number; verdictsByCompany: Record<string, string> }> = {};
+  const byMeasure: Record<
+    string,
+    {
+      yesCount: number;
+      totalCount: number;
+      verdictsByCompany: Record<string, string>;
+      confidenceByCompany: Record<string, string>;
+      fingerprintsByCompany: Record<string, string>;
+    }
+  > = {};
   for (const r of scoreRows) {
     const cid = String(r.company_id);
     if (!byCompany[cid]) byCompany[cid] = { companyId: r.company_id, companyName: r.company_name, yesCount: 0, noCount: 0, partialCount: 0, total: 0 };
@@ -1704,10 +1775,12 @@ async function snapshotIteration(
     else if (r.verdict === "Partial") byCompany[cid].partialCount++;
     else byCompany[cid].noCount++;
 
-    if (!byMeasure[r.measure_id]) byMeasure[r.measure_id] = { yesCount: 0, totalCount: 0, verdictsByCompany: {} };
+    if (!byMeasure[r.measure_id]) byMeasure[r.measure_id] = { yesCount: 0, totalCount: 0, verdictsByCompany: {}, confidenceByCompany: {}, fingerprintsByCompany: {} };
     byMeasure[r.measure_id].totalCount++;
     if (r.verdict === "Yes") byMeasure[r.measure_id].yesCount++;
     byMeasure[r.measure_id].verdictsByCompany[cid] = r.verdict || "No";
+    if (r.confidence) byMeasure[r.measure_id].confidenceByCompany[cid] = String(r.confidence);
+    if (r.evidence_fingerprint) byMeasure[r.measure_id].fingerprintsByCompany[cid] = String(r.evidence_fingerprint);
   }
   const perCompany = Object.values(byCompany).map((c: any) => ({
     ...c,

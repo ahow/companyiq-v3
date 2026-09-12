@@ -1660,6 +1660,89 @@ interface IterationSnapshot {
   rootCauses: RootCauseReport | null;
 }
 
+// ─── Tier-1 design-time quality metrics (server: quality-metrics.ts) ────────
+// These mirror the QualityMetricsReport shapes. MAXIMISE metrics are reported to
+// steer improvement; GATE metrics are judged against DEFERRED placeholder
+// thresholds (thresholdsAreDeferred=true) so the UI shows the observed value and
+// a "threshold deferred" note rather than a hard pass/fail.
+interface QGateMetric {
+  id: string;
+  label: string;
+  role: "GATE";
+  value: number | null;
+  threshold: number | null;
+  thresholdDirection: "min" | "max" | "band";
+  passed: boolean | null;
+  observed: string;
+  detail: string;
+  status?: string;
+}
+interface QMaximiseMetric {
+  id: string;
+  label: string;
+  role: "MAXIMISE";
+  value: number | null;
+  observed: string;
+  detail: string;
+  status?: string;
+}
+interface QNearDuplicatePair {
+  measureIdA: string;
+  measureIdB: string;
+  labelA: string;
+  labelB: string;
+  agreement: number;
+  kappa: number;
+  n: number;
+  recommendation: "merge-or-differentiate";
+}
+interface QPerIndicatorMetric {
+  measureId: string;
+  label: string;
+  passRate: number;
+  inInformationBand: boolean;
+  answerability: number;
+  cellStability: number | null;
+  kappa: number | null;
+  specCompleteness: number | null;
+}
+interface QDimensionScore {
+  dimension: "reliability" | "coherenceRedundancy" | "accuracy";
+  weight: number;
+  S_d: number | null;
+  meanRho: number | null;
+  indicatorCount: number;
+  status?: string;
+}
+interface QWeightSensitivityGuard {
+  stable: boolean;
+  qBaseline: number | null;
+  qRange: [number, number] | null;
+  dimensionRankStable: boolean;
+  note: string;
+}
+interface QualityMetricsReport {
+  n: number;
+  runs: number;
+  reliability: QMaximiseMetric[];
+  coherenceRedundancy: QMaximiseMetric[];
+  discrimination: QGateMetric[];
+  coverage: QGateMetric[];
+  auditability: QGateMetric[];
+  robustness: QGateMetric[];
+  transparency: QGateMetric[];
+  coherenceGates?: QGateMetric[];
+  nearDuplicatePairs: QNearDuplicatePair[];
+  perIndicator: QPerIndicatorMetric[];
+  q: {
+    Q: number | null;
+    dimensions: QDimensionScore[];
+    weightSensitivity: QWeightSensitivityGuard;
+    note: string;
+  };
+  thresholdsAreDeferred: true;
+}
+
 function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarget = 1 }: { frameworkId: number; listId: number; listName: string | null; scoringRunsTarget?: number }) {
   const [batch, setBatch] = useState<{ status: string; completedJobs: number; totalJobs: number; failedJobs: number } | null>(null);
   const [perCompany, setPerCompany] = useState<PerCompanyResult[]>([]);
@@ -1667,6 +1750,9 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   const [robustness, setRobustness] = useState<{ criteria: RobustnessCriterion[]; passedCount: number; totalCount: number; allPassed: boolean } | null>(null);
   const [edits, setEdits] = useState<{ proposals: EditProposal[]; causeBreakdown: Record<string, number>; totalFlags: number; totalWithProposals: number } | null>(null);
   const [rootCauses, setRootCauses] = useState<RootCauseReport | null>(null);
+  const [qualityMetrics, setQualityMetrics] = useState<QualityMetricsReport | null>(null);
+  // Near-duplicate accept/dismiss selections, keyed by "<measureIdA>::<measureIdB>".
+  const [nearDupDecisions, setNearDupDecisions] = useState<Record<string, "accept" | "dismiss">>({});
   const [labelsInferred, setLabelsInferred] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1799,6 +1885,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       setRootCauses(r.rootCauses || null);
       setLabelsInferred(!!r.labelsInferred);
       setFlipStats(r.flipStats || []);
+      setQualityMetrics(r.qualityMetrics || null);
       if (r.scoringComplete) void fetchIterations();
       setError(null);
     } catch (e: any) {
@@ -2067,6 +2154,15 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
             ))}
           </div>
         </div>
+      )}
+
+      {/* ─── Tier-1 design-time quality metrics ─── */}
+      {isComplete && qualityMetrics && (
+        <QualityMetricsPanel
+          qm={qualityMetrics}
+          nearDupDecisions={nearDupDecisions}
+          setNearDupDecisions={setNearDupDecisions}
+        />
       )}
 
       {/* ─── Iteration history ─── */}
@@ -2424,6 +2520,225 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
 // ─── Improvement chat component (Stage 2) ───
 interface ChatAction { type: string; attrs: Record<string, string> }
 interface ChatTurn { role: "user" | "assistant"; content: string; actions?: ChatAction[] }
+
+// ─── Tier-1 design-time quality metrics panel ───
+// Renders the MAXIMISE metrics (reliability, coherence redundancy), the GATE
+// metrics (discrimination, coverage, auditability, robustness, transparency,
+// coherence gates), the per-dimension Q composite with its weight-sensitivity
+// guard, the per-indicator table, and the selectable near-duplicate list.
+// GATE thresholds are DEFERRED placeholders, so gates render as observed values
+// with a "threshold deferred" note rather than hard pass/fail.
+function QualityMetricsPanel({
+  qm,
+  nearDupDecisions,
+  setNearDupDecisions,
+}: {
+  qm: QualityMetricsReport;
+  nearDupDecisions: Record<string, "accept" | "dismiss">;
+  setNearDupDecisions: React.Dispatch<React.SetStateAction<Record<string, "accept" | "dismiss">>>;
+}) {
+  const fmt = (v: number | null, digits = 2): string => (v == null ? "—" : v.toFixed(digits));
+  const dimLabel: Record<string, string> = {
+    reliability: "Reliability",
+    coherenceRedundancy: "Coherence (non-redundancy)",
+    accuracy: "Accuracy / discrimination",
+  };
+
+  const maximiseCards = (metrics: QMaximiseMetric[]) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+      {metrics.map((m) => (
+        <div key={m.id} className="p-2.5 border rounded text-sm border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-gray-900 dark:text-gray-100">{m.label}</span>
+            <span className="text-[10px] uppercase tracking-wide text-blue-700 dark:text-blue-300 font-semibold">maximise</span>
+          </div>
+          <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+            <span className="font-medium">Observed:</span> {m.observed}
+            {m.status && <span className="ml-1.5 italic text-gray-500">({m.status})</span>}
+          </div>
+          <div className="mt-1 text-xs text-gray-500">{m.detail}</div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const gateCards = (metrics: QGateMetric[]) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+      {metrics.map((m) => (
+        <div key={m.id} className="p-2.5 border rounded text-sm border-gray-300 bg-gray-50 dark:bg-gray-800/40 dark:border-gray-700">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-gray-900 dark:text-gray-100">{m.label}</span>
+            <span className="text-[10px] uppercase tracking-wide text-gray-600 dark:text-gray-400 font-semibold">gate</span>
+          </div>
+          <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+            <span className="font-medium">Observed:</span> {m.observed}
+            {m.status && <span className="ml-1.5 italic text-gray-500">({m.status})</span>}
+          </div>
+          <div className="mt-1 text-xs text-gray-500">{m.detail}</div>
+          <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-400 italic">
+            Threshold deferred — value reported, not gated ({m.thresholdDirection})
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const allGates: QGateMetric[] = [
+    ...(qm.discrimination || []),
+    ...(qm.coverage || []),
+    ...(qm.auditability || []),
+    ...(qm.robustness || []),
+    ...(qm.transparency || []),
+    ...(qm.coherenceGates || []),
+  ];
+
+  return (
+    <div className="space-y-4 border-t border-gray-200 dark:border-gray-700 pt-4">
+      <div className="flex items-baseline justify-between">
+        <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          Design-time quality metrics (Tier-1)
+          <span className="ml-2 text-xs font-normal text-gray-500">
+            N = {qm.n} companies · {qm.runs} run{qm.runs === 1 ? "" : "s"}
+          </span>
+        </div>
+        <span className="text-xs text-amber-700 dark:text-amber-400 italic">
+          Thresholds deferred — metrics reported for calibration, not enforced as pass/fail
+        </span>
+      </div>
+
+      {/* Q composite by dimension */}
+      <div className="space-y-2">
+        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+          Composite quality Q
+          <span className="ml-2 text-base font-semibold text-indigo-700 dark:text-indigo-300">{fmt(qm.q.Q)}</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          {qm.q.dimensions.map((d) => (
+            <div key={d.dimension} className="p-2.5 border rounded text-sm border-indigo-200 bg-indigo-50 dark:bg-indigo-900/20 dark:border-indigo-800">
+              <div className="font-medium text-gray-900 dark:text-gray-100">{dimLabel[d.dimension] || d.dimension}</div>
+              <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                S<sub>d</sub> = <span className="font-medium">{fmt(d.S_d)}</span>
+                <span className="mx-1.5 text-gray-400">|</span>
+                w<sub>d</sub> = {fmt(d.weight)}
+              </div>
+              <div className="mt-0.5 text-xs text-gray-500">
+                mean ρ = {fmt(d.meanRho)} · {d.indicatorCount} indicator{d.indicatorCount === 1 ? "" : "s"}
+                {d.status && <span className="ml-1 italic">({d.status})</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className={`text-xs ${qm.q.weightSensitivity.stable ? "text-gray-500" : "text-amber-700 dark:text-amber-400"}`}>
+          {qm.q.weightSensitivity.stable ? "✓ " : "⚠ "}
+          {qm.q.weightSensitivity.note}
+        </div>
+        <div className="text-[11px] text-gray-500 italic">{qm.q.note}</div>
+      </div>
+
+      {/* MAXIMISE metrics */}
+      {qm.reliability.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Reliability (maximise)</div>
+          {maximiseCards(qm.reliability)}
+        </div>
+      )}
+      {qm.coherenceRedundancy.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Coherence — non-redundancy (maximise)</div>
+          {maximiseCards(qm.coherenceRedundancy)}
+        </div>
+      )}
+
+      {/* GATE metrics */}
+      {allGates.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Gate metrics <span className="text-xs font-normal text-gray-500">(discrimination · coverage · auditability · robustness · transparency · coherence)</span>
+          </div>
+          {gateCards(allGates)}
+        </div>
+      )}
+
+      {/* Near-duplicate pairs — selectable merge/differentiate */}
+      {qm.nearDuplicatePairs.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Near-duplicate indicator pairs <span className="text-xs font-normal text-gray-500">(select to merge or differentiate — nothing is auto-applied)</span>
+          </div>
+          <div className="space-y-1.5">
+            {qm.nearDuplicatePairs.map((p) => {
+              const key = `${p.measureIdA}::${p.measureIdB}`;
+              const decision = nearDupDecisions[key];
+              return (
+                <div key={key} className="p-2.5 border rounded text-sm border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-gray-900 dark:text-gray-100">
+                      <span className="font-medium">{p.labelA}</span> ↔ <span className="font-medium">{p.labelB}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setNearDupDecisions((s) => ({ ...s, [key]: "accept" }))}
+                        className={`px-2 py-0.5 rounded text-xs border ${decision === "accept" ? "bg-orange-600 text-white border-orange-600" : "border-orange-400 text-orange-700 dark:text-orange-300"}`}
+                      >
+                        Merge / differentiate
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNearDupDecisions((s) => ({ ...s, [key]: "dismiss" }))}
+                        className={`px-2 py-0.5 rounded text-xs border ${decision === "dismiss" ? "bg-gray-600 text-white border-gray-600" : "border-gray-400 text-gray-600 dark:text-gray-300"}`}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                    agreement {(p.agreement * 100).toFixed(0)}% · κ = {p.kappa.toFixed(2)} · n = {p.n}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Per-indicator table */}
+      {qm.perIndicator.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Per-indicator metrics</div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs border border-gray-200 dark:border-gray-700">
+              <thead className="bg-gray-50 dark:bg-gray-900/40 text-gray-600 dark:text-gray-400">
+                <tr>
+                  <th className="px-2 py-1.5 text-left">Indicator</th>
+                  <th className="px-2 py-1.5 text-right">Pass rate</th>
+                  <th className="px-2 py-1.5 text-center">In band</th>
+                  <th className="px-2 py-1.5 text-right">Answerability</th>
+                  <th className="px-2 py-1.5 text-right">Cell stability</th>
+                  <th className="px-2 py-1.5 text-right">κ (run-pair)</th>
+                  <th className="px-2 py-1.5 text-right">Spec completeness</th>
+                </tr>
+              </thead>
+              <tbody>
+                {qm.perIndicator.map((m) => (
+                  <tr key={m.measureId} className="border-t border-gray-200 dark:border-gray-700">
+                    <td className="px-2 py-1.5 text-gray-900 dark:text-gray-100">{m.label}</td>
+                    <td className="px-2 py-1.5 text-right">{(m.passRate * 100).toFixed(0)}%</td>
+                    <td className="px-2 py-1.5 text-center">{m.inInformationBand ? "✓" : "—"}</td>
+                    <td className="px-2 py-1.5 text-right">{(m.answerability * 100).toFixed(0)}%</td>
+                    <td className="px-2 py-1.5 text-right">{fmt(m.cellStability)}</td>
+                    <td className="px-2 py-1.5 text-right">{fmt(m.kappa)}</td>
+                    <td className="px-2 py-1.5 text-right">{fmt(m.specCompleteness)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Iteration history view (Q3) ───
 // Shows how Yes-rate per company changed across iterations, and how many

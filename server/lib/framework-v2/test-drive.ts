@@ -91,7 +91,25 @@ export interface MultiRunIteration {
   iterationNumber: number;
   // measureId → { companyId(string) → verdict } for that iteration.
   // Mirrors framework_v2_iterations.per_measure[measureId].verdictsByCompany.
-  perMeasure: Record<string, { verdictsByCompany: Record<string, string> }>;
+  //
+  // Tier-1 quality-metrics extension (quality-metrics.ts): iterations may
+  // additionally carry per-cell confidence and evidence-fingerprint maps so the
+  // retrieval-stability (Jaccard) and confidence-conditioned stability metrics
+  // can be computed across runs. Both are OPTIONAL and backward-compatible —
+  // legacy iteration rows written before this field existed simply omit them,
+  // and the dependent metrics degrade gracefully to a null/insufficient-data
+  // status. These are persisted copies of already-computed scoring fields
+  // (measure_scores.confidence / evidence_fingerprint), NOT new pipeline capture.
+  perMeasure: Record<
+    string,
+    {
+      verdictsByCompany: Record<string, string>;
+      // companyId(string) → confidence label (e.g. "High"/"Medium"/"Low")
+      confidenceByCompany?: Record<string, string>;
+      // companyId(string) → SHA1 evidence fingerprint of the cited chunk-id set
+      fingerprintsByCompany?: Record<string, string>;
+    }
+  >;
 }
 
 export interface MeasureFlipStat {
