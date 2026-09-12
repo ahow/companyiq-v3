@@ -181,6 +181,11 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
   const [draftJobStartTime, setDraftJobStartTime] = useState<number | null>(null);
   const [repairAttempts, setRepairAttempts] = useState<number>(0);
   const [truncationRecovered, setTruncationRecovered] = useState<boolean>(false);
+  // Honest shortfall reporting: the resolved target the drafter aimed for and
+  // how many category batches (if any) failed to complete.
+  const [targetMeasureCount, setTargetMeasureCount] = useState<number | null>(null);
+  const [failedCategories, setFailedCategories] = useState<number>(0);
+  const [failedCategoryNames, setFailedCategoryNames] = useState<string[]>([]);
   const [testDriveListId, setTestDriveListId] = useState<number | null>(() => {
     try {
       const stored = localStorage.getItem("fw-builder-v2-testDriveListId");
@@ -348,6 +353,13 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
             setRepairAttempts(status.result.repairAttempts);
           }
           setTruncationRecovered(Boolean(status.result.truncationRecovered));
+          setTargetMeasureCount(
+            typeof status.result.targetMeasureCount === "number" ? status.result.targetMeasureCount : null,
+          );
+          setFailedCategories(Number(status.result.failedCategories || 0));
+          setFailedCategoryNames(
+            Array.isArray(status.result.failedCategoryNames) ? status.result.failedCategoryNames : [],
+          );
           setStage("review");
           setDraftJobId(null);
           break;
@@ -743,7 +755,11 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                 warningCount={warningCount}
                 repairAttempts={repairAttempts}
                 truncationRecovered={truncationRecovered}
+                targetMeasureCount={targetMeasureCount}
+                failedCategories={failedCategories}
+                failedCategoryNames={failedCategoryNames}
                 onRedraft={redraftWithCorrections}
+                onRetryDraft={draftFramework}
               />
               {saveGate && (
                 <SaveGatePanel
@@ -945,22 +961,30 @@ function DraftReview({
   onSelectTestDrive,
   onSave,
   onRedraft,
+  onRetryDraft,
   loading,
   measureCount,
   errorCount,
   warningCount,
   repairAttempts,
   truncationRecovered,
+  targetMeasureCount,
+  failedCategories,
+  failedCategoryNames,
 }: {
   draft: any;
   validation: Validation | null;
   onSelectTestDrive: () => void;
   onSave: (productionReady: boolean) => void;
   onRedraft?: () => void;
+  onRetryDraft?: () => void;
   loading: boolean;
   measureCount: number;
   repairAttempts?: number;
   truncationRecovered?: boolean;
+  targetMeasureCount?: number | null;
+  failedCategories?: number;
+  failedCategoryNames?: string[];
   errorCount: number;
   warningCount: number;
 }) {
@@ -1075,11 +1099,47 @@ function DraftReview({
         ))}
       </div>
 
-      {truncationRecovered && (
-        <div className="mt-4 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-800 rounded text-sm text-orange-800 dark:text-orange-200">
-          <strong>Truncation recovered:</strong> The model's response was cut off before all measures were generated. We salvaged the {measureCount} measures that completed. To get a fuller framework, restart with a smaller target measure count (Compact or Balanced).
-        </div>
-      )}
+      {(() => {
+        const target = typeof targetMeasureCount === "number" ? targetMeasureCount : null;
+        const failed = failedCategories || 0;
+        // Only flag a shortfall if we KNOW the target and landed >15% below it,
+        // or a category batch failed / the response was truncated. A draft that
+        // lands within ~15% of the requested size is treated as on-target and
+        // shows no warning at all.
+        const materiallyShort = target != null && measureCount < Math.floor(target * 0.85);
+        if (!truncationRecovered && failed === 0 && !materiallyShort) return null;
+        const reason =
+          failed > 0
+            ? ` because ${failed} categor${failed === 1 ? "y" : "ies"} did not finish generating${
+                failedCategoryNames && failedCategoryNames.length ? ` (${failedCategoryNames.join(", ")})` : ""
+              }.`
+            : truncationRecovered
+            ? " because the model's response was cut off before every measure completed."
+            : ".";
+        return (
+          <div className="mt-4 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-800 rounded text-sm text-orange-800 dark:text-orange-200">
+            <strong>Fewer measures than requested:</strong>{" "}
+            {target != null
+              ? `${measureCount} of the ~${target} measures you asked for were generated`
+              : `${measureCount} measures were generated`}
+            {reason}{" "}
+            This is a transient generation issue — your chosen framework size is fully supported, so you do
+            not need to pick a smaller one. Re-running the draft almost always produces the complete set.
+            {onRetryDraft && (
+              <div className="mt-2">
+                <button
+                  onClick={onRetryDraft}
+                  disabled={loading}
+                  className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+                  title="Re-run the full draft from the same intake. Category drafting runs in parallel batches, so a re-run usually completes every category."
+                >
+                  <RotateCcw className="w-4 h-4" /> Retry draft
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {(errorCount > 0 || warningCount > 0) && (
         <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-800 rounded text-sm text-yellow-800 dark:text-yellow-200">
           <strong>Note:</strong> {errorCount} error{errorCount === 1 ? "" : "s"} and {warningCount} warning{warningCount === 1 ? "" : "s"}{" "}

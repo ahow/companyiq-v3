@@ -11,6 +11,7 @@ import { validateAll, summariseViolations, toStructuredIssues, renderStructuredI
 import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evidence-keyword-distinctiveness.js";
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
+import { resolveTargetCount } from "../lib/framework-v2/target-count.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
@@ -148,10 +149,15 @@ function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft
 
 // Threshold above which we switch to chunked drafting to avoid Claude's
 // per-call output-token ceiling. Configurable via env for tuning.
-// Chunk-drafting threshold. Set conservatively: even 25 measures with rich
-// C1-C10 fields regularly hits Claude's ~32K output-token ceiling in a single
-// call. Anything at or above 20 gets chunked for safety.
-const CHUNKED_DRAFT_THRESHOLD = Number(process.env.FRAMEWORK_V2_CHUNK_THRESHOLD || 15);
+// Chunk-drafting threshold. Set conservatively: single-shot drafting at 24K
+// output tokens truncates around ~16 rich (C1–C11) measures, so single-shot
+// must be reserved for genuinely SMALL frameworks. Anything above this — OR any
+// framework whose target size can't be resolved — is routed to the robust
+// chunked path. Env-overridable for tuning.
+const CHUNKED_DRAFT_THRESHOLD = Number(process.env.FRAMEWORK_V2_CHUNK_THRESHOLD || 12);
+// Max measures expanded per chunked sub-call. Large categories are split into
+// batches of this size so no single expansion call approaches the token cap.
+const CHUNK_MEASURES_PER_CALL = Number(process.env.FRAMEWORK_V2_MEASURES_PER_CALL || 8);
 
 // C11 repair instruction, mirrored from CHUNKED_MEASURES_SYSTEM_PROMPT so repair
 // passes target the degree-word class of error that the initial-draft prompts
@@ -190,11 +196,19 @@ function parseDraftJson(response: string): { ok: true; draft: any } | { ok: fals
 
 // ─── Chunked drafting: skeleton + per-category batches in parallel ───────
 
-async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; truncationRecovered: boolean } | { error: string; raw?: string }> {
+async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string, resolvedTarget?: number): Promise<{ draft: any; truncationRecovered: boolean } | { error: string; raw?: string }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
 
+  // Wire the RESOLVED (normalised integer) target into the intake copy the
+  // skeleton sees, so the skeleton distributes the right number of measures
+  // across categories even when the raw intake field was a range/label string.
+  const skeletonIntake =
+    typeof resolvedTarget === "number"
+      ? { ...(intake as any), targetMeasureCount: resolvedTarget }
+      : intake;
+
   // Phase 1: skeleton (framework metadata + category outlines).
-  const skeletonPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nProduce the framework skeleton now.`;
+  const skeletonPrompt = `Intake artefact (JSON):\n${JSON.stringify(skeletonIntake, null, 2)}\n\nProduce the framework skeleton now.`;
   const skeletonResp = await completeWithFallback(providerName || "claude", {
     system: CHUNKED_SKELETON_SYSTEM_PROMPT,
     prompt: skeletonPrompt,
@@ -211,36 +225,62 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     return { error: `Skeleton phase produced no categories.`, raw: skeletonResp.text };
   }
 
-  // Phase 2: for each category, expand outlines into full measures. Run in parallel.
-  const perCategoryPromises = skeleton.categories.map(async (cat: any, idx: number) => {
-    const outlines = Array.isArray(cat.measureOutlines) ? cat.measureOutlines : [];
-    if (outlines.length === 0) return { categoryName: cat.name, measures: [], skipped: true };
-
+  // Phase 2: for each category, expand outlines into full measures. Run in
+  // parallel. A category with many measures is split into sub-batches of
+  // CHUNK_MEASURES_PER_CALL outlines so no single expansion call approaches the
+  // token cap regardless of framework size — this is what lets Comprehensive
+  // (35–50) frameworks draft without truncating a category.
+  const expandBatch = async (
+    cat: any,
+    idx: number,
+    batchOutlines: any[],
+  ): Promise<{ measures: any[]; failed?: boolean; error?: string; truncationRecovered?: boolean }> => {
     // Slim skeleton reference so the LLM has enough context but not too much.
     const skeletonRef = {
       framework: skeleton.framework,
-      currentCategory: { name: cat.name, purpose: cat.purpose, index: idx + 1, measureOutlines: outlines },
+      currentCategory: { name: cat.name, purpose: cat.purpose, index: idx + 1, measureOutlines: batchOutlines },
       otherCategories: skeleton.categories.filter((_: any, i: number) => i !== idx).map((c: any) => ({ name: c.name, purpose: c.purpose })),
     };
-    const categoryPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nSkeleton reference (JSON):\n${JSON.stringify(skeletonRef, null, 2)}\n\nDraft the full measures for the category "${cat.name}" only. Return the JSON object described in the system prompt.`;
+    const categoryPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nSkeleton reference (JSON):\n${JSON.stringify(skeletonRef, null, 2)}\n\nDraft the full measures for the ${batchOutlines.length} outline(s) listed under the category "${cat.name}" only. Return the JSON object described in the system prompt.`;
     const catResp = await completeWithFallback(providerName || "claude", {
       system: CHUNKED_MEASURES_SYSTEM_PROMPT,
       prompt: categoryPrompt,
-      maxTokens: 16000,
+      maxTokens: 24000,
       temperature: 0.2,
       json: true,
     });
     const catParsed = parseDraftJson(catResp.text);
     if (!catParsed.ok) {
-      // Non-fatal: return an empty category so assembly continues, and record the error.
-      console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" failed: ${catParsed.error}`);
-      return { categoryName: cat.name, measures: [], failed: true, error: catParsed.error };
+      console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" batch failed: ${catParsed.error}`);
+      return { measures: [], failed: true, error: catParsed.error };
     }
     return {
-      categoryName: catParsed.draft?.categoryName || cat.name,
       measures: Array.isArray(catParsed.draft?.measures) ? catParsed.draft.measures : [],
       truncationRecovered: Boolean((catParsed.draft as any)?.__truncationRecovered),
     };
+  };
+
+  const perCategoryPromises = skeleton.categories.map(async (cat: any, idx: number) => {
+    const outlines = Array.isArray(cat.measureOutlines) ? cat.measureOutlines : [];
+    if (outlines.length === 0) return { categoryName: cat.name, measures: [], skipped: true };
+
+    // Split into batches of CHUNK_MEASURES_PER_CALL; expand batches in parallel.
+    const batches: any[][] = [];
+    for (let i = 0; i < outlines.length; i += CHUNK_MEASURES_PER_CALL) {
+      batches.push(outlines.slice(i, i + CHUNK_MEASURES_PER_CALL));
+    }
+    const batchResults = await Promise.all(batches.map((b) => expandBatch(cat, idx, b)));
+
+    // Concatenate measures in outline order; a whole category counts as failed
+    // only if EVERY one of its batches failed (partial success still returns
+    // the measures that completed).
+    const measures = batchResults.flatMap((r) => r.measures);
+    const allFailed = batchResults.length > 0 && batchResults.every((r) => r.failed);
+    const anyTrunc = batchResults.some((r) => r.truncationRecovered);
+    if (allFailed) {
+      return { categoryName: cat.name, measures: [], failed: true, error: batchResults[0]?.error };
+    }
+    return { categoryName: cat.name, measures, truncationRecovered: anyTrunc };
   });
 
   const categoryResults = await Promise.all(perCategoryPromises);
@@ -265,6 +305,12 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     evidenceKeywords: skeleton.evidenceKeywords || [],
   };
   if (anyTruncationRecovered) assembled.__truncationRecovered = true;
+  // Record how many category batches failed outright so the caller can report a
+  // shortfall accurately (and offer Retry) instead of blaming the user's size.
+  if (failedCategories.length > 0) {
+    assembled.__failedCategories = failedCategories.length;
+    assembled.__failedCategoryNames = failedCategories.map((r: any) => r.categoryName);
+  }
 
   const totalMeasures = assembled.categories.reduce((s: number, c: any) => s + (c.measures?.length || 0), 0);
   console.log(`[framework-builder v2] Chunked drafting complete: ${assembled.categories.length} categories, ${totalMeasures} measures, ${failedCategories.length} failed categories.`);
@@ -273,13 +319,16 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
 }
 
 async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; truncationRecovered?: boolean } | { error: string; raw?: string }> {
-  // Route to chunked drafting when the target count exceeds the threshold and
-  // this is a fresh attempt (repair passes always use single-shot with the
-  // prior draft as context).
-  const targetCount = (intake as any).targetMeasureCount;
-  if (!priorAttempt && typeof targetCount === "number" && targetCount > CHUNKED_DRAFT_THRESHOLD) {
-    console.log(`[framework-builder v2] Chunked drafting activated (target=${targetCount}, threshold=${CHUNKED_DRAFT_THRESHOLD}).`);
-    return callChunkedDraftingLLM(intake, providerName);
+  // Route to chunked drafting for fresh attempts unless the target is KNOWN to
+  // be small. Repair passes always use single-shot with the prior draft as
+  // context. Crucially, an UNKNOWN target (undefined — e.g. the intake LLM wrote
+  // a label/range the old numeric gate couldn't parse) now routes to chunked,
+  // not single-shot: single-shot truncates for any realistic framework, so it is
+  // reserved only for a genuinely small, explicitly-resolved target.
+  const target = resolveTargetCount(intake);
+  if (!priorAttempt && (target === undefined || target > CHUNKED_DRAFT_THRESHOLD)) {
+    console.log(`[framework-builder v2] Chunked drafting activated (target=${target ?? "unknown"}, threshold=${CHUNKED_DRAFT_THRESHOLD}).`);
+    return callChunkedDraftingLLM(intake, providerName, target);
   }
   return callSingleShotDraftingLLM(intake, providerName, priorAttempt);
 }
@@ -295,7 +344,7 @@ async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: 
       .join("\n");
     userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nPrior attempt draft (JSON, has validation errors):\n${JSON.stringify(priorAttempt.draft, null, 2)}\n\nViolations to fix (do NOT change measures that are already valid — only edit the fields that trigger these violations):\n${violationSummary}\n\n${C11_REPAIR_CLAUSE}\n\nReturn a corrected framework JSON. Preserve measureId values from the prior attempt. Every construction rule C1–C11 must pass this time.`;
   } else {
-    const tgt = (intake as any).targetMeasureCount;
+    const tgt = resolveTargetCount(intake);
     const countClause = typeof tgt === "number" && tgt > 0
       ? `The user requested approximately ${tgt} measures in total across all categories. Distribute measures roughly evenly across the sub-areas from the intake, weighting more heavily toward higher-priority sub-areas if the user's purpose emphasises them. Do not fall short by more than 15% or exceed by more than 15%.`
       : `Produce approximately 20–30 measures in total across all categories — enough to give balanced coverage but not so many as to become fatiguing to review.`;
@@ -580,7 +629,7 @@ async function repairMeasuresTargeted(
   return patched;
 }
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number } | { error: string; raw?: string }> {
+async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number } | { error: string; raw?: string }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
   if ("error" in first) return first;
@@ -632,6 +681,8 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
 
   const measures = flattenMeasures(draft);
   const truncationRecovered = Boolean((draft as any).__truncationRecovered);
+  const failedCategories = Number((draft as any).__failedCategories || 0);
+  const failedCategoryNames = ((draft as any).__failedCategoryNames as string[] | undefined) || undefined;
   const issuePayload = buildIssuePayload(validation);
   return {
     draft,
@@ -640,6 +691,12 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     summary: summariseViolations(validation.violations),
     repairAttempts,
     truncationRecovered,
+    // Honest reporting so the client can explain any shortfall accurately
+    // instead of blindly telling the user to pick a smaller size.
+    targetMeasureCount: resolveTargetCount(intake),
+    measureCount: measures.length,
+    failedCategories,
+    failedCategoryNames,
     ...issuePayload,
   };
 }
