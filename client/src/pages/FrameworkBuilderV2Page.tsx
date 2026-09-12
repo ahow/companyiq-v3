@@ -1082,7 +1082,10 @@ function DraftReview({
       )}
       {(errorCount > 0 || warningCount > 0) && (
         <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-800 rounded text-sm text-yellow-800 dark:text-yellow-200">
-          <strong>Note:</strong> {errorCount} error{errorCount === 1 ? "" : "s"} and {warningCount} warning{warningCount === 1 ? "" : "s"} remain after the auto-repair passes.
+          <strong>Note:</strong> {errorCount} error{errorCount === 1 ? "" : "s"} and {warningCount} warning{warningCount === 1 ? "" : "s"}{" "}
+          {typeof repairAttempts === "number" && repairAttempts > 0
+            ? `remain after ${repairAttempts} auto-repair pass${repairAttempts === 1 ? "" : "es"}.`
+            : "are present in the initial draft (auto-repair did not run or could not address them)."}
           {" "}To proceed to test-drive or save as production-ready, resolve them by clicking
           <strong className="mx-1">Re-draft with corrections</strong> (re-runs the LLM with the exact
           violation list), or use

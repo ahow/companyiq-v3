@@ -153,6 +153,20 @@ function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft
 // call. Anything at or above 20 gets chunked for safety.
 const CHUNKED_DRAFT_THRESHOLD = Number(process.env.FRAMEWORK_V2_CHUNK_THRESHOLD || 15);
 
+// C11 repair instruction, mirrored from CHUNKED_MEASURES_SYSTEM_PROMPT so repair
+// passes target the degree-word class of error that the initial-draft prompts
+// already forbid. Kept here (not imported) so the two prompt families can drift
+// independently if needed.
+const C11_REPAIR_CLAUSE =
+  `C11 (decidability): Every Yes-condition in fallback_yes_criterion (and any decision text in ` +
+  `scoringGuidance / substantive_definition) must be DECIDABLE from a verbatim quote. A degree/holistic ` +
+  `word (substantive, substantially, systematic, integrated, integration, sufficient, robust, meaningful, ` +
+  `adequate, appropriate, comprehensive, holistic, effective, strong, well-developed) may NOT be the deciding ` +
+  `test — it is not decidable from a quote and causes run-to-run verdict flips. Where a violation flags such a ` +
+  `word, rewrite the offending condition/field as an explicit N-of-M test over NAMED, quote-verifiable ` +
+  `artefacts: "Yes if at least N of the following NAMED artefacts are present in a verbatim quote: (a) ..., ` +
+  `(b) ..., (c) ...", where each artefact is individually checkable from the quote.`;
+
 // Robust JSON extractor + parser used across all drafting phases. Handles
 // fenced ```json blocks, bare JSON, and truncation-recovery.
 function parseDraftJson(response: string): { ok: true; draft: any } | { ok: false; error: string; recovered?: boolean; raw?: string } {
@@ -279,13 +293,13 @@ async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: 
     const violationSummary = priorAttempt.violations
       .map((v: any) => `- [${v.rule}][${v.severity}] ${v.measureId ? `${v.measureId}: ` : ""}${v.message}${v.suggestion ? ` — SUGGESTION: ${v.suggestion}` : ""}`)
       .join("\n");
-    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nPrior attempt draft (JSON, has validation errors):\n${JSON.stringify(priorAttempt.draft, null, 2)}\n\nViolations to fix (do NOT change measures that are already valid — only edit the fields that trigger these violations):\n${violationSummary}\n\nReturn a corrected framework JSON. Preserve measureId values from the prior attempt. Every construction rule C1–C10 must pass this time.`;
+    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nPrior attempt draft (JSON, has validation errors):\n${JSON.stringify(priorAttempt.draft, null, 2)}\n\nViolations to fix (do NOT change measures that are already valid — only edit the fields that trigger these violations):\n${violationSummary}\n\n${C11_REPAIR_CLAUSE}\n\nReturn a corrected framework JSON. Preserve measureId values from the prior attempt. Every construction rule C1–C11 must pass this time.`;
   } else {
     const tgt = (intake as any).targetMeasureCount;
     const countClause = typeof tgt === "number" && tgt > 0
       ? `The user requested approximately ${tgt} measures in total across all categories. Distribute measures roughly evenly across the sub-areas from the intake, weighting more heavily toward higher-priority sub-areas if the user's purpose emphasises them. Do not fall short by more than 15% or exceed by more than 15%.`
       : `Produce approximately 20–30 measures in total across all categories — enough to give balanced coverage but not so many as to become fatiguing to review.`;
-    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C10 exactly. ${countClause} Every measure must comply with C1–C10 — in particular: every measure's substantive_definition MUST include an explicit adjacent-topic exclusion clause naming at least one adjacent topic from the intake list; every measure's fallback_yes_criterion MUST have at least 3 numbered conditions each referencing the topic term or a synonym; every measure MUST have whatConstitutesEvidence AND whatDoesNotConstituteEvidence AND positive_examples (>=2) AND negative_examples (>=2).`;
+    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C11 exactly. ${countClause} Every measure must comply with C1–C11 — in particular: every measure's substantive_definition MUST include an explicit adjacent-topic exclusion clause naming at least one adjacent topic from the intake list; every measure's fallback_yes_criterion MUST have at least 3 numbered conditions each referencing the topic term or a synonym; every measure MUST have whatConstitutesEvidence AND whatDoesNotConstituteEvidence AND positive_examples (>=2) AND negative_examples (>=2).`;
   }
 
   const { text: response } = await completeWithFallback(providerName || "claude", {
@@ -440,6 +454,132 @@ function buildIssuePayload(validation: any): {
   };
 }
 
+/**
+ * Targeted, per-measure repair — the auto-repair primitive used for ALL drafts,
+ * chunked or not.
+ *
+ * Rather than re-sending the whole assembled draft to the LLM (which for a
+ * chunked/25-measure framework blows Claude's 10-min non-streaming limit and
+ * risks re-truncation), this builds a COMPACT prompt containing ONLY the
+ * measures that carry a violation, plus their exact violation messages and the
+ * explicit C11 rewrite instruction. It asks the model to return ONLY the
+ * corrected measures (a JSON array keyed by measureId), then splices those back
+ * into the full draft in place — valid measures are never touched.
+ *
+ * Returns the patched draft on success, or null when nothing could be repaired
+ * (no addressable violations, LLM/parse failure) so the caller can keep the
+ * prior draft and stop the loop.
+ */
+async function repairMeasuresTargeted(
+  intake: IntakeArtefact,
+  draft: any,
+  violations: any[],
+  providerName?: string,
+): Promise<any | null> {
+  const { completeWithFallback } = await import("../lib/ai-providers.js");
+
+  // Group error+warning violations by measureId. Violations without a measureId
+  // (framework-level) can't be targeted per-measure, so they're skipped here —
+  // they surface to the review pane as before.
+  const byMeasure = new Map<string, any[]>();
+  for (const v of violations) {
+    if (v.severity !== "error" && v.severity !== "warning") continue;
+    const id = v.measureId;
+    if (!id) continue;
+    if (!byMeasure.has(id)) byMeasure.set(id, []);
+    byMeasure.get(id)!.push(v);
+  }
+  if (byMeasure.size === 0) return null;
+
+  // Locate each offending measure in the draft by measureId, so we send only
+  // those measures (not the whole framework) to the LLM.
+  const cats = Array.isArray(draft?.categories) ? draft.categories : [];
+  const targetMeasures: any[] = [];
+  for (const c of cats) {
+    const ms = Array.isArray(c?.measures) ? c.measures : [];
+    for (const m of ms) {
+      if (m && byMeasure.has(m.measureId)) targetMeasures.push(m);
+    }
+  }
+  if (targetMeasures.length === 0) return null;
+
+  const violationBlock = Array.from(byMeasure.entries())
+    .map(([id, vs]) => {
+      const lines = vs
+        .map((v: any) => `  - [${v.rule}][${v.severity}] ${v.message}${v.suggestion ? ` — SUGGESTION: ${v.suggestion}` : ""}`)
+        .join("\n");
+      return `${id}:\n${lines}`;
+    })
+    .join("\n\n");
+
+  const userPrompt =
+    `Intake artefact (JSON, for context — topic term, synonyms, adjacent topics):\n${JSON.stringify(intake, null, 2)}\n\n` +
+    `The following measures FAILED validation. Each is given in full, followed by the exact violations to fix:\n\n` +
+    `Measures to repair (JSON array):\n${JSON.stringify(targetMeasures, null, 2)}\n\n` +
+    `Violations, grouped by measureId:\n${violationBlock}\n\n` +
+    `${C11_REPAIR_CLAUSE}\n\n` +
+    `Rewrite ONLY the fields that trigger these violations; leave every other field of each measure unchanged. ` +
+    `Do NOT invent new measures and do NOT drop any. Preserve every measureId EXACTLY. ` +
+    `Return a JSON object of the form {"measures": [ ...corrected measure objects... ]} containing ONLY the ` +
+    `measures listed above (one corrected object per measureId), and nothing else.`;
+
+  let resp: { text: string };
+  try {
+    resp = await completeWithFallback(providerName || "claude", {
+      system: DRAFTING_SYSTEM_PROMPT_HEAD,
+      prompt: userPrompt,
+      maxTokens: 16000,
+      temperature: 0.2,
+      json: true,
+    });
+  } catch (e: any) {
+    console.warn(`[framework-builder v2] Targeted repair LLM call failed: ${e?.message || e}`);
+    return null;
+  }
+
+  const parsed = parseDraftJson(resp.text);
+  if (!parsed.ok) {
+    console.warn(`[framework-builder v2] Targeted repair failed to parse: ${(parsed as { error: string }).error}`);
+    return null;
+  }
+  const corrected = Array.isArray(parsed.draft?.measures)
+    ? parsed.draft.measures
+    : Array.isArray(parsed.draft)
+      ? parsed.draft
+      : null;
+  if (!corrected || corrected.length === 0) {
+    console.warn(`[framework-builder v2] Targeted repair returned no measures.`);
+    return null;
+  }
+
+  // Splice corrected measures back into the full draft by measureId, in place.
+  const correctedById = new Map<string, any>();
+  for (const m of corrected) {
+    if (m && typeof m.measureId === "string") correctedById.set(m.measureId, m);
+  }
+  let replaced = 0;
+  const patched = {
+    ...draft,
+    categories: cats.map((c: any) => ({
+      ...c,
+      measures: (Array.isArray(c?.measures) ? c.measures : []).map((m: any) => {
+        if (m && correctedById.has(m.measureId)) {
+          replaced++;
+          // Force the measureId to survive even if the model altered it.
+          return { ...correctedById.get(m.measureId), measureId: m.measureId };
+        }
+        return m;
+      }),
+    })),
+  };
+  if (replaced === 0) {
+    console.warn(`[framework-builder v2] Targeted repair produced no measureId matches; keeping prior draft.`);
+    return null;
+  }
+  console.log(`[framework-builder v2] Targeted repair replaced ${replaced} measure(s).`);
+  return patched;
+}
+
 async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number } | { error: string; raw?: string }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
@@ -463,32 +603,30 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
 
   let validation: any = validate(draft);
 
-  // Up to 2 repair passes for hard errors. Warnings don't trigger a repair.
+  // Up to MAX_REPAIRS targeted repair passes for hard errors. Warnings don't
+  // trigger a repair.
   //
-  // For chunked drafts (>15 measures), the repair loop is DISABLED because
-  // a single-shot repair prompt containing the full assembled draft exceeds
-  // Claude's 10-min non-streaming limit ("Streaming is required for operations
-  // that may take longer than 10 minutes"). Chunked drafts already run
-  // per-category so per-category repair should be handled separately; for now
-  // we accept that a chunked draft's errors flow to the user's review pane
-  // where they can hit "Re-draft with corrections" for a targeted repair.
+  // This runs for ALL drafts, chunked or not. Previously the loop was DISABLED
+  // for chunked drafts (>15 measures) because the old single-shot repair
+  // re-sent the whole assembled draft, blowing Claude's 10-min non-streaming
+  // limit — which meant a 25-measure framework's C11 errors flowed straight to
+  // the user's review pane as an unrepaired dead end. repairMeasuresTargeted
+  // sends only the offending measures, so the payload stays small and safe for
+  // chunked drafts too.
   let repairAttempts = 0;
   const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_MAX_REPAIRS || 2);
-  const wasChunked = Boolean((first as any).truncationRecovered) || (Array.isArray((draft as any).categories) && (draft as any).categories.some((c: any) => Array.isArray(c.measures) && c.measures.length > 0)) && (intake as any).targetMeasureCount > 15;
   while (
-    !wasChunked &&
     repairAttempts < MAX_REPAIRS &&
     validation.violations.some((v: any) => v.severity === "error")
   ) {
     repairAttempts++;
-    const errors = validation.violations.filter((v: any) => v.severity === "error").slice(0, 30);
-    const repair = await callDraftingLLM(intake, providerName, { draft, violations: errors });
-    if ("error" in repair) {
-      // If the repair pass fails to parse, keep the previous draft and stop.
-      console.warn(`[framework-builder v2] Repair attempt ${repairAttempts} failed to parse; keeping prior draft.`);
+    const patched = await repairMeasuresTargeted(intake, draft, validation.violations, providerName);
+    if (!patched) {
+      // Nothing addressable, or the repair failed to parse — keep prior draft, stop.
+      console.warn(`[framework-builder v2] Repair attempt ${repairAttempts} produced no usable draft; keeping prior draft.`);
       break;
     }
-    draft = repair.draft;
+    draft = patched;
     validation = validate(draft);
   }
 
@@ -554,45 +692,60 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
 
     (async () => {
       try {
-        // Compute current violations from the incoming draft, then hand it to
-        // the auto-repair loop by seeding executeDraft with a starting draft.
-        // Simplest: use callDraftingLLM with priorAttempt = { draft, violations }.
-        const fwDraft = buildFrameworkDraft(draft, intake);
-        let currentValidation: any;
-        try { currentValidation = appendEvidenceKeywordWarnings(validateAll(fwDraft), fwDraft); }
-        catch (e: any) { currentValidation = { passed: false, violations: [{ rule: "internal", severity: "error", message: e?.message }] }; }
-        const errorsFound = (currentValidation.violations || []).filter((v: any) => v.severity === "error" || v.severity === "warning").slice(0, 30);
-        if (errorsFound.length === 0) {
+        // Iterative targeted repair on the incoming draft. We re-validate, then
+        // repair only the offending measures (compact payload — safe for large
+        // chunked drafts, unlike the old full-draft single-shot re-send), up to
+        // MAX_REPAIRS passes. Warnings are surfaced but do not, on their own,
+        // block; error-severity violations drive the loop.
+        const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_MAX_REPAIRS || 2);
+        let currentDraft = draft;
+        let currentFwDraft = buildFrameworkDraft(currentDraft, intake);
+        const revalidate = (fw: FrameworkDraft) => {
+          try { return appendEvidenceKeywordWarnings(validateAll(fw), fw); }
+          catch (e: any) { return { passed: false, violations: [{ rule: "internal", severity: "error", message: e?.message }] }; }
+        };
+        let currentValidation: any = revalidate(currentFwDraft);
+        const hasActionable = (val: any) =>
+          (val.violations || []).some((v: any) => v.severity === "error" || v.severity === "warning");
+        if (!hasActionable(currentValidation)) {
           // Nothing to refine — just return the current draft.
           await db.execute(sql`
             UPDATE framework_v2_jobs
-            SET status = 'succeeded', result = ${JSON.stringify({ draft, measures: fwDraft.measures, validation: currentValidation, summary: "No violations to refine.", repairAttempts: 0 })}::jsonb, updated_at = NOW()
+            SET status = 'succeeded', result = ${JSON.stringify({ draft: currentDraft, measures: currentFwDraft.measures, validation: currentValidation, summary: "No violations to refine.", repairAttempts: 0 })}::jsonb, updated_at = NOW()
             WHERE id = ${jobId}
           `);
           return;
         }
-        // Call the LLM with the exact violation list as a repair prompt.
-        const repairCall = await callSingleShotDraftingLLM(intake, providerName, { draft, violations: errorsFound });
-        if ("error" in repairCall) {
+
+        let repairAttempts = 0;
+        while (repairAttempts < MAX_REPAIRS && hasActionable(currentValidation)) {
+          repairAttempts++;
+          const patched = await repairMeasuresTargeted(intake, currentDraft, currentValidation.violations, providerName);
+          if (!patched) {
+            console.warn(`[framework-builder v2 /draft/refine] repair attempt ${repairAttempts} produced no usable draft; keeping prior draft.`);
+            break;
+          }
+          currentDraft = patched;
+          currentFwDraft = buildFrameworkDraft(currentDraft, intake);
+          currentValidation = revalidate(currentFwDraft);
+        }
+
+        if (repairAttempts === 0) {
+          // Should not happen (hasActionable was true) — but if no pass ran, fail cleanly.
           await db.execute(sql`
             UPDATE framework_v2_jobs
-            SET status = 'failed', error_message = ${repairCall.error}, error_stack = ${repairCall.raw || null}, updated_at = NOW()
+            SET status = 'failed', error_message = ${"Refine could not run a repair pass."}, updated_at = NOW()
             WHERE id = ${jobId}
           `);
           return;
         }
-        // Re-validate the refined draft.
-        const refinedDraft = repairCall.draft;
-        const refinedFwDraft = buildFrameworkDraft(refinedDraft, intake);
-        let refinedValidation: any;
-        try { refinedValidation = appendEvidenceKeywordWarnings(validateAll(refinedFwDraft), refinedFwDraft); }
-        catch (e: any) { refinedValidation = { passed: false, violations: [{ rule: "internal", severity: "error", message: e?.message }] }; }
+
         const result = {
-          draft: refinedDraft,
-          measures: refinedFwDraft.measures,
-          validation: refinedValidation,
-          summary: summariseViolations(refinedValidation.violations),
-          repairAttempts: 1,
+          draft: currentDraft,
+          measures: currentFwDraft.measures,
+          validation: currentValidation,
+          summary: summariseViolations(currentValidation.violations),
+          repairAttempts,
         };
         await db.execute(sql`
           UPDATE framework_v2_jobs
