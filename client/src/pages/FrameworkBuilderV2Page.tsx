@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Sparkles, Loader2, CheckCircle2, XCircle, AlertTriangle, Save, Play, RotateCcw } from "lucide-react";
+import { Send, Sparkles, Loader2, CheckCircle2, XCircle, AlertTriangle, Save, Play, RotateCcw, ClipboardList } from "lucide-react";
 import { api } from "../lib/api";
 
 type Stage = "intake" | "drafting" | "review" | "test-drive" | "saved";
@@ -279,10 +279,19 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
             if (r.state.draft) {
               setDraft(r.state.draft);
               if (r.state.validation) setValidation(r.state.validation);
-              // Resume at review stage so the user lands back in the review panel
-              // (can see their draft, re-draft with corrections, or run test-drive)
-              // instead of the dead-end 'Framework saved' card.
-              setStage("review");
+              // If the user already ran a test-drive (there is a saved results
+              // panel to return to), honor the stored 'saved' stage so the
+              // deep-link lands them on their proposals/results instead of the
+              // review panel. Only fall back to 'review' when there is a draft
+              // but no saved test-drive results to return to (avoids the
+              // dead-end 'Framework saved' card while keeping proposals
+              // reachable). The draft stays loaded either way, so re-draft and
+              // the review panel remain available via the nav button.
+              if (r.state.testDriveListId && r.state.stage === "saved") {
+                setStage("saved");
+              } else {
+                setStage("review");
+              }
             } else if (r.state.stage) {
               setStage(r.state.stage as any);
             } else {
@@ -760,6 +769,8 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                 failedCategoryNames={failedCategoryNames}
                 onRedraft={redraftWithCorrections}
                 onRetryDraft={draftFramework}
+                hasTestDriveResults={!!(savedFrameworkId && testDriveListId)}
+                onViewResults={() => setStage("saved")}
               />
               {saveGate && (
                 <SaveGatePanel
@@ -962,6 +973,8 @@ function DraftReview({
   onSave,
   onRedraft,
   onRetryDraft,
+  onViewResults,
+  hasTestDriveResults,
   loading,
   measureCount,
   errorCount,
@@ -978,6 +991,8 @@ function DraftReview({
   onSave: (productionReady: boolean) => void;
   onRedraft?: () => void;
   onRetryDraft?: () => void;
+  onViewResults?: () => void;
+  hasTestDriveResults?: boolean;
   loading: boolean;
   measureCount: number;
   repairAttempts?: number;
@@ -1153,6 +1168,15 @@ function DraftReview({
         </div>
       )}
       <div className="mt-6 flex gap-2 flex-wrap justify-end">
+        {hasTestDriveResults && onViewResults && (
+          <button
+            onClick={onViewResults}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1 mr-auto"
+            title="This framework already has a test-drive run. Open its results and edit proposals (accept / dismiss)."
+          >
+            <ClipboardList className="w-4 h-4" /> View test-drive results
+          </button>
+        )}
         <button
           onClick={() => onSave(false)}
           disabled={loading}
