@@ -1842,6 +1842,12 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   // after every apply so silently-skipped accepts become visible.
   const [measureEdits, setMeasureEdits] = useState<MeasureEditRow[]>([]);
   const [measureEditsOpen, setMeasureEditsOpen] = useState(false);
+  // Server-computed gate: true when proposals/robustness were computed from the
+  // latest COMPLETED batch — even if the newest batch (shown in live progress) is
+  // cancelled/failed/running. Lets the dashboard render the last good results and
+  // the "Run scoring again" control while the newest run is not completed.
+  const [scoringCompleteSrv, setScoringCompleteSrv] = useState(false);
+  const [latestBatchStatus, setLatestBatchStatus] = useState<string | null>(null);
 
   const fetchMeasureEdits = async () => {
     try {
@@ -1933,6 +1939,8 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       setLabelsInferred(!!r.labelsInferred);
       setFlipStats(r.flipStats || []);
       setQualityMetrics(r.qualityMetrics || null);
+      setScoringCompleteSrv(!!r.scoringComplete);
+      setLatestBatchStatus(r.latestBatchStatus ?? null);
       if (r.scoringComplete) void fetchIterations();
       setError(null);
     } catch (e: any) {
@@ -1981,8 +1989,16 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameworkId, listId]);
 
-  const isRunning = batch && batch.status !== "completed" && batch.status !== "failed";
+  const isRunning = batch && batch.status !== "completed" && batch.status !== "failed" && batch.status !== "cancelled";
   const isComplete = batch?.status === "completed";
+  // Results are ready to render whenever EITHER the newest batch is completed OR
+  // the server computed proposals from the latest completed batch (newest run
+  // cancelled/failed/running). Backward-compatible: old servers omit
+  // scoringComplete → resultsReady collapses to isComplete (unchanged behavior).
+  const resultsReady = isComplete || scoringCompleteSrv;
+  // The newest batch is present but not the source of the shown results (e.g. a
+  // cancelled auto-rescore) — surface a hint and always offer a manual re-score.
+  const staleNewestBatch = resultsReady && !isComplete;
 
   // ITEM 2: auto-continue the multi-run test-drive. Analyze is async and
   // single-active-batch, so we cannot fire N batches at once — instead, each
@@ -2027,18 +2043,23 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
               {batch.failedJobs > 0 && <span className="text-red-600 ml-2">({batch.failedJobs} failed)</span>}
             </div>
           )}
-          {isComplete && (
+          {resultsReady && (
             <button
               onClick={() => void triggerRescore()}
               disabled={rescoring}
               className={`px-3 py-1.5 rounded text-sm font-medium flex items-center gap-1 ${rescoring ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-700"}`}
-              title="Snapshot current results as an iteration, then re-score the same test-drive companies with the current framework definition"
+              title="Runs a fresh scoring pass on the same companies (use this if the last run was cancelled or you want fresh proposals). Snapshots the current results as an iteration first, then re-scores with the current framework definition."
             >
-              {rescoring ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Starting…</> : <><Play className="w-3.5 h-3.5" /> Re-score now</>}
+              {rescoring ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Scoring started…</> : <><Play className="w-3.5 h-3.5" /> Run scoring again</>}
             </button>
           )}
         </div>
       </div>
+      {staleNewestBatch && !rescoring && (
+        <div className="text-xs rounded px-3 py-2 border bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+          Showing proposals from the last completed scoring run{latestBatchStatus ? ` (newest run: ${latestBatchStatus})` : ""}. Use “Run scoring again” for a fresh pass.
+        </div>
+      )}
       {rescoreError && <div className="text-sm text-red-600">Rescore error: {rescoreError}</div>}
 
       {multiRunActive && (
@@ -2097,7 +2118,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       )}
 
       {/* ─── Test-drive flags (incl. multi-run flip diagnostics) ─── */}
-      {isComplete && report && report.flags.length > 0 && (
+      {resultsReady && report && report.flags.length > 0 && (
         <div className="space-y-2">
           <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Test-drive flags ({report.flags.length})
@@ -2133,7 +2154,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       )}
 
       {/* ─── Per-measure run-to-run flip stats (multi-run test-drive) ─── */}
-      {isComplete && flipStats.length > 0 && (
+      {resultsReady && flipStats.length > 0 && (
         <div className="space-y-2">
           <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Run-to-run flip stats <span className="text-xs font-normal text-gray-500">(across {Math.max(...flipStats.map((s) => s.runs))} scoring iterations)</span>
@@ -2171,7 +2192,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       )}
 
       {/* ─── Robustness Criteria Scorecard ─── */}
-      {isComplete && robustness && (
+      {resultsReady && robustness && (
         <div className="space-y-2">
           <div className="flex items-baseline justify-between">
             <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
@@ -2210,7 +2231,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       )}
 
       {/* ─── Tier-1 design-time quality metrics ─── */}
-      {isComplete && qualityMetrics && (
+      {resultsReady && qualityMetrics && (
         <QualityMetricsPanel
           qm={qualityMetrics}
           nearDupDecisions={nearDupDecisions}
@@ -2221,12 +2242,12 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       )}
 
       {/* ─── Iteration history ─── */}
-      {isComplete && iterations.length > 0 && (
+      {resultsReady && iterations.length > 0 && (
         <IterationHistoryView iterations={iterations} />
       )}
 
       {/* ─── Root-cause diagnostic (doc-collection vs framework issues) ─── */}
-      {isComplete && rootCauses && (
+      {resultsReady && rootCauses && (
         <div className="space-y-3">
           <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Root-cause analysis
@@ -2282,7 +2303,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       )}
 
       {/* ─── Cause breakdown + edit proposals ─── */}
-      {isComplete && edits && edits.proposals.length > 0 && (
+      {resultsReady && edits && edits.proposals.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-baseline justify-between">
             <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
@@ -2534,13 +2555,13 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
         </div>
       )}
 
-      {isComplete && report && report.flags.length === 0 && (
+      {resultsReady && report && report.flags.length === 0 && (
         <div className="text-sm text-green-700 dark:text-green-400">
           No calibration flags. The framework's observed Yes rates are within the expected envelope for every measure. Ready for wider testing.
         </div>
       )}
 
-      {isComplete && edits && edits.proposals.length > 0 && (
+      {resultsReady && edits && edits.proposals.length > 0 && (
         <div className="pt-2 border-t border-gray-200 dark:border-gray-700 space-y-2">
           <div className="flex items-center justify-between gap-3">
             <div className="text-xs text-gray-500">
@@ -2628,7 +2649,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       )}
 
       {/* ─── Improvement chat (Stage 2) ─── */}
-      {isComplete && (
+      {resultsReady && (
         <ImprovementChat frameworkId={frameworkId} listId={listId} onApplied={() => void fetchMeasureEdits()} />
       )}
 

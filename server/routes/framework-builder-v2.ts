@@ -24,6 +24,7 @@ import { groupProposalsByPatch, BATCH_REGENERATORS, differentiateMeasureDefiniti
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
 import { recordMeasureEdit } from "../lib/framework-v2/measure-audit.js";
 import { resolveProposalByIdentity } from "../lib/framework-v2/proposal-identity.js";
+import { pickEffectiveBatch } from "../lib/framework-v2/effective-batch.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -1271,6 +1272,8 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
     }
 
     // 1. Batch-run progress.
+    // progressBatch = the newest batch of ANY status — used for live-progress
+    // display (a running/cancelled/failed run still reports its true progress).
     const batchRow = await db.execute(sql`
       SELECT id, status, total_jobs, completed_jobs, failed_jobs, started_at, completed_at
       FROM batch_runs
@@ -1278,7 +1281,29 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       ORDER BY started_at DESC
       LIMIT 1
     `);
-    const batch = (batchRow as any).rows?.[0] || null;
+    const progressBatch = (batchRow as any).rows?.[0] || null;
+
+    // latestCompletedBatch = the most recent COMPLETED batch — used for the
+    // scoringComplete gate and proposal/robustness computation so the dashboard
+    // keeps showing the last good results even when the newest run was
+    // cancelled/failed/still running. Generic: prefers latest completed for every
+    // framework, no hardcoding.
+    const completedBatchRow = await db.execute(sql`
+      SELECT id, status, total_jobs, completed_jobs, failed_jobs, started_at, completed_at
+      FROM batch_runs
+      WHERE framework_id = ${frameworkId} AND list_id = ${listId} AND workspace_id = ${ctx.workspaceId}
+        AND status = 'completed'
+      ORDER BY started_at DESC
+      LIMIT 1
+    `);
+    const latestCompletedBatch = (completedBatchRow as any).rows?.[0] || null;
+
+    // When the newest batch is itself completed, effectiveBatch === progressBatch
+    // (no behavior change for the normal case).
+    const effectiveBatch = pickEffectiveBatch(progressBatch, latestCompletedBatch);
+    // Keep the historic `batch` name pointing at the live-progress batch so the
+    // response's existing progress fields are unchanged.
+    const batch = progressBatch;
 
     // 2. Fetch measure_scores for the list's companies + framework.
     const scoresQuery = await db.execute(sql`
@@ -1406,7 +1431,10 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
 
     // 6. Run flag analysis + 6 robustness criteria + edit proposals
     //    when scoring has completed and there are results.
-    const scoringComplete = batch?.status === "completed" && results.length > 0;
+    // Gate on the EFFECTIVE (latest completed) batch, not the newest one, so a
+    // cancelled/failed/running newest batch does not suppress the last good
+    // proposals. Snapshots below therefore never fire off a non-completed batch.
+    const scoringComplete = effectiveBatch?.status === "completed" && results.length > 0;
     let report: any = null;
     let robustness: any = null;
     let edits: any = null;
@@ -1534,6 +1562,10 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
           }
         : null,
       scoringComplete,
+      // Additive, backward-compatible fields describing which batch the proposals
+      // were computed from vs. the newest batch shown in live progress.
+      proposalsFromBatchId: effectiveBatch?.id ?? null,
+      latestBatchStatus: progressBatch?.status ?? null,
       perCompany,
       report,
       robustness,
