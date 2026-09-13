@@ -25,6 +25,11 @@ import { test } from "node:test";
 import {
   proposeEditForFlag,
   proposeMergeForNearDuplicate,
+  proposeSynonymAddition,
+  proposeAdjacentTopics,
+  proposeAnchorFrameworks,
+  FRAMEWORK_SENTINEL,
+  FRAMEWORK_LEVEL_OPS,
   EMITTABLE_PATCH_OPS,
 } from "./edit-proposer.js";
 import { APPLY_HANDLED_OPS, BATCH_REGENERATORS } from "./edit-applier.js";
@@ -84,6 +89,19 @@ test("E1: emitted patch.op set exactly matches declared EMITTABLE_PATCH_OPS", ()
     }).patch.op,
   );
 
+  // Framework-level builders emit their own ops. Fed a non-empty candidate pool
+  // and the current registered list, each returns exactly one proposal. Values
+  // are placeholders — the op set is what E1 checks, and it is topic-agnostic.
+  for (const p of [
+    proposeSynonymAddition(["x"], []),
+    proposeAdjacentTopics(["y"], [], 2),
+    proposeAnchorFrameworks(["z"], []),
+  ]) {
+    assert.ok(p, "framework-level builder must return a proposal for a non-empty pool");
+    assert.ok(p!.patch && typeof p!.patch.op === "string", "framework-level proposal must carry patch.op");
+    emitted.add(p!.patch.op);
+  }
+
   assert.deepEqual(
     [...emitted].sort(),
     [...EMITTABLE_PATCH_OPS].sort(),
@@ -108,6 +126,46 @@ test("E3: every batch_regenerate op has at least one BATCH_REGENERATORS entry", 
     assert.ok(
       hasRegenerator,
       `op '${op}' is handled as batch_regenerate but no BATCH_REGENERATORS key starts with '${op}::'`,
+    );
+  }
+});
+
+// ─── Framework-level builders (PART A + PART B) ────────────────────────────
+
+test("E4: framework-level builders emit sentinel-scoped, additive proposals", () => {
+  const syn = proposeSynonymAddition(["Alpha", "beta"], ["gamma"]);
+  const adj = proposeAdjacentTopics(["neighbouring area"], [], 3);
+  const anc = proposeAnchorFrameworks(["Some Standard v1"], ["Existing Std"]);
+
+  for (const p of [syn, adj, anc]) {
+    assert.ok(p, "builder must return a proposal for a non-empty pool");
+    // Framework-scoped: sentinel measureId, flagRule === cause (identity uniqueness).
+    assert.equal(p!.measureId, FRAMEWORK_SENTINEL, "framework-level proposals carry the sentinel measureId");
+    assert.equal(p!.flagRule, p!.cause, "flagRule must equal cause so identity resolves per framework-level type");
+    // Additive: patch.value is a non-empty array aggregated into ONE proposal.
+    assert.ok(Array.isArray(p!.patch.value) && p!.patch.value.length > 0, "patch.value is a non-empty array");
+    assert.ok(FRAMEWORK_LEVEL_OPS.includes(p!.patch.op), "op must be a framework-level op");
+    assert.equal(p!.patch.path, p!.fieldPath, "patch.path must match fieldPath (the jsonb column)");
+  }
+
+  // Values are de-duplicated (case-insensitive) and trimmed.
+  const dup = proposeSynonymAddition([" x ", "X", "x", "y"], []);
+  assert.deepEqual(dup!.patch.value, ["x", "y"], "builder de-dupes and trims the candidate pool");
+});
+
+test("E5: framework-level builders return null on an empty candidate pool", () => {
+  assert.equal(proposeSynonymAddition([], ["a"]), null);
+  assert.equal(proposeAdjacentTopics([], [], 5), null);
+  assert.equal(proposeAnchorFrameworks(["   ", ""], []), null, "whitespace-only candidates count as empty");
+});
+
+test("E6: every framework-level op is handled as direct_replace (no LLM on apply)", () => {
+  for (const op of FRAMEWORK_LEVEL_OPS) {
+    assert.ok(EMITTABLE_PATCH_OPS.includes(op), `framework-level op '${op}' must be declared emittable`);
+    assert.equal(
+      APPLY_HANDLED_OPS[op],
+      "direct_replace",
+      `framework-level op '${op}' must apply as a direct jsonb append, not a batch regeneration`,
     );
   }
 });

@@ -16,7 +16,7 @@ import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
-import { proposeEditsForFlags, proposeMergeForNearDuplicate } from "../lib/framework-v2/edit-proposer.js";
+import { proposeEditsForFlags, proposeMergeForNearDuplicate, FRAMEWORK_LEVEL_OPS, FRAMEWORK_SENTINEL } from "../lib/framework-v2/edit-proposer.js";
 import { computeQualityMetrics, coherenceGateMetrics, type MeasureSpecFields, type QualityMetricsReport } from "../lib/framework-v2/quality-metrics.js";
 import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } from "../lib/framework-v2/root-cause-diagnostic.js";
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
@@ -2332,6 +2332,79 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
       }
     }
 
+    // Apply a FRAMEWORK-LEVEL proposal (terminology-gap synonyms, adjacent-topic
+    // registration, anchor-framework coverage). These target a jsonb column on
+    // `frameworks` — never a per-measure field — so they are additive DISTINCT
+    // appends, not column replaces. The whitelist maps each proposer patch.op to
+    // its exact column (a column name cannot be parameterised in SQL, so each op
+    // uses an explicit template). measureId is the framework sentinel and the
+    // audit records the before/after jsonb. Mirrors the existing chat
+    // add_synonyms handler but resolves the values from the proposal's patch and
+    // covers all three framework-level ops generically.
+    async function applyFrameworkLevelProposal(prop: any, applied: any[], skipped: any[]) {
+      const op = prop.patch?.op;
+      const path = prop.patch?.path;
+      const values = Array.isArray(prop.patch?.value)
+        ? prop.patch.value.map((v: any) => (typeof v === "string" ? v.trim() : "")).filter(Boolean)
+        : [];
+      // op → column, kept in lock-step with FRAMEWORK_LEVEL_OPS / the jsonb
+      // columns on `frameworks`. Any op not listed here is rejected (defensive).
+      const columnForOp: Record<string, { col: any; field: string }> = {
+        add_synonyms: { col: sql`topic_synonyms`, field: "topic_synonyms" },
+        add_adjacent_topics: { col: sql`adjacent_topics`, field: "adjacent_topics" },
+        add_anchor_frameworks: { col: sql`anchor_frameworks`, field: "anchor_frameworks" },
+      };
+      const target = columnForOp[op];
+      if (!target) {
+        const reason = `unsupported framework-level op ${op}`;
+        skipped.push({ measureId: FRAMEWORK_SENTINEL, reason });
+        await recordMeasureEdit(db, {
+          workspaceId: ctx.workspaceId, frameworkId, listId, measureId: FRAMEWORK_SENTINEL,
+          field: path || "(unknown)", op: op || null,
+          source: `proposal:${prop.flagRule}`, applied: false, skipReason: reason,
+        });
+        return;
+      }
+      if (values.length === 0) {
+        const reason = "no values supplied";
+        skipped.push({ measureId: FRAMEWORK_SENTINEL, reason });
+        await recordMeasureEdit(db, {
+          workspaceId: ctx.workspaceId, frameworkId, listId, measureId: FRAMEWORK_SENTINEL,
+          field: target.field, op, source: `proposal:${prop.flagRule}`, applied: false, skipReason: reason,
+        });
+        return;
+      }
+      // Read the before-value so the audit row carries the prior list state.
+      let beforeVal: any = null;
+      try {
+        const beforeQ = await db.execute(sql`
+          SELECT ${target.col} AS v FROM frameworks
+          WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId} LIMIT 1
+        `);
+        beforeVal = ((beforeQ as any).rows || [])[0]?.v ?? null;
+      } catch { /* audit before-value is best-effort */ }
+      // Additive DISTINCT jsonb append: keep every existing entry and add the new
+      // values, de-duplicated. Never removes or overwrites an existing entry.
+      await db.execute(sql`
+        UPDATE frameworks
+        SET ${target.col} = (
+          SELECT jsonb_agg(DISTINCT term)
+          FROM (
+            SELECT jsonb_array_elements_text(COALESCE(${target.col}, '[]'::jsonb)) AS term
+            UNION
+            SELECT unnest(${values}::text[]) AS term
+          ) sub
+        )
+        WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
+      `);
+      applied.push({ measureId: FRAMEWORK_SENTINEL, action: prop.action, patch: { op, path: target.field, value: values } });
+      await recordMeasureEdit(db, {
+        workspaceId: ctx.workspaceId, frameworkId, listId, measureId: FRAMEWORK_SENTINEL,
+        field: target.field, op, beforeValue: beforeVal, afterValue: values,
+        source: `proposal:${prop.flagRule}`, applied: true,
+      });
+    }
+
     // Load framework topic context for the LLM (memoised for this request).
     let _fctxCache: FrameworkContext | null = null;
     async function loadFrameworkContext(): Promise<FrameworkContext> {
@@ -2598,6 +2671,11 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         }
         if (prop.patch?.op === "replace") {
           await applyProposal(prop, applied, skipped);
+        } else if (FRAMEWORK_LEVEL_OPS.includes(prop.patch?.op)) {
+          // Framework-level additive ops (add_synonyms / add_adjacent_topics /
+          // add_anchor_frameworks) are applied directly to a jsonb column on
+          // `frameworks`; they never go through LLM regeneration.
+          await applyFrameworkLevelProposal(prop, applied, skipped);
         } else {
           deferredForLLM.push(prop);
         }
@@ -2653,6 +2731,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         const matching = editsBundle.proposals.filter((p) => p.cause === cause);
         for (const prop of matching) {
           if (prop.patch?.op === "replace") await applyProposal(prop, applied, skipped);
+          else if (FRAMEWORK_LEVEL_OPS.includes(prop.patch?.op)) await applyFrameworkLevelProposal(prop, applied, skipped);
           else deferredForLLM.push(prop);
         }
       } else if (action.type === "apply_custom_edit") {

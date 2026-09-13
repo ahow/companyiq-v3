@@ -32,9 +32,13 @@ import { computeRobustnessCriteria, type CompanyLabel } from "./robustness-crite
 import {
   proposeEditsForFlags,
   proposeMergeForNearDuplicate,
+  proposeSynonymAddition,
+  proposeAdjacentTopics,
+  proposeAnchorFrameworks,
   type EditProposal,
   type EditProposalBundle,
 } from "./edit-proposer.js";
+import { mineFrameworkCandidates } from "./framework-candidates.js";
 import {
   computeQualityMetrics,
   coherenceGateMetrics,
@@ -257,9 +261,93 @@ export async function deriveProposalBundle(
     console.warn("[deriveProposalBundle] quality metrics failed (non-fatal):", e?.message);
   }
 
+  // ── Framework-level improvement proposals (ADDITIVE, non-fatal) ──────────
+  // Terminology-gap synonyms (PART A), adjacent-topic registration and
+  // anchor-framework coverage (PART B). These target jsonb columns on
+  // `frameworks`, not per-measure fields, and carry the sentinel measureId
+  // "(framework)". Candidate pools are mined (and memoised) by
+  // mineFrameworkCandidates; here we re-filter each pool against the CURRENTLY
+  // registered list so an apply that already added a value never re-surfaces it,
+  // then build at most one proposal per type (aggregating all values). Appended
+  // to edits.proposals so the results view and apply path see them identically.
+  try {
+    const fwRow = await db.execute(sql`
+      SELECT name, topic_term, topic_synonyms, adjacent_topics, anchor_frameworks
+      FROM frameworks WHERE id = ${frameworkId}
+    `);
+    const fw = (fwRow as any).rows?.[0];
+    if (fw) {
+      const topicTerm = String(fw.topic_term || "");
+      const currentSynonyms = toStringArray(fw.topic_synonyms);
+      const currentAdjacent = toStringArray(fw.adjacent_topics);
+      const currentAnchors = toStringArray(fw.anchor_frameworks);
+
+      // Recurrence of adjacent-topic contamination = number of DISTINCT measures
+      // whose flags cited it. "Multiple measures" is the definitional threshold
+      // for a FRAMEWORK-level (rather than single-measure) adjacent problem, so
+      // we require ≥2 distinct flagged measures. This is derived from the flag
+      // stream — never a hardcoded topic or id.
+      const ADJACENT_FRAMEWORK_RECURRENCE_MIN = 2;
+      const adjacentFlaggedMeasures = new Set(
+        (report.flags || [])
+          .filter((f: any) => f?.rule === "adjacent-topic-contamination" && f?.measureId)
+          .map((f: any) => String(f.measureId)),
+      );
+      const adjacentRecurrence = adjacentFlaggedMeasures.size;
+
+      const mined = await mineFrameworkCandidates(db, frameworkId, listId, workspaceId, {
+        topicTerm,
+        topicSynonyms: currentSynonyms,
+        adjacentTopics: currentAdjacent,
+        anchorFrameworks: currentAnchors,
+        frameworkName: fw.name ? String(fw.name) : undefined,
+      });
+
+      const frameworkProposals: EditProposal[] = [];
+
+      // PART A — terminology-gap synonyms. Re-filter the mined term pool against
+      // the current topic_synonyms + topic_term (cache-staleness guard).
+      const synonymCandidates = filterUnregistered(
+        (mined.terminology || []).map((t) => t.term),
+        [...currentSynonyms, topicTerm],
+      );
+      const synProp = proposeSynonymAddition(synonymCandidates, currentSynonyms);
+      if (synProp) frameworkProposals.push(synProp);
+
+      // PART B(1) — adjacent-topic registration, only when the contamination
+      // recurs across MULTIPLE measures (framework-level, not single-measure).
+      if (adjacentRecurrence >= ADJACENT_FRAMEWORK_RECURRENCE_MIN) {
+        const adjacentCandidates = filterUnregistered(
+          mined.adjacentPhrases || [],
+          [...currentAdjacent, topicTerm, ...currentSynonyms],
+        );
+        const adjProp = proposeAdjacentTopics(adjacentCandidates, currentAdjacent, adjacentRecurrence);
+        if (adjProp) frameworkProposals.push(adjProp);
+      }
+
+      // PART B(2) — anchor-framework coverage (ADD only).
+      const anchorCandidates = filterUnregistered(mined.anchorNames || [], currentAnchors);
+      const anchorProp = proposeAnchorFrameworks(anchorCandidates, currentAnchors);
+      if (anchorProp) frameworkProposals.push(anchorProp);
+
+      if (frameworkProposals.length > 0 && edits) {
+        for (const p of frameworkProposals) {
+          edits.proposals.push(p);
+          (edits.causeBreakdown as Record<string, number>)[p.cause] =
+            ((edits.causeBreakdown as Record<string, number>)[p.cause] || 0) + 1;
+        }
+        edits.totalWithProposals = edits.proposals.length;
+      }
+    }
+  } catch (e: any) {
+    console.warn("[deriveProposalBundle] framework-level proposals failed (non-fatal):", e?.message);
+  }
+
   // The COMPLETE proposal set the apply path resolves against. Edit proposals
   // come FIRST so legacy positional P<idx> indices (which only ever referenced
   // edit proposals) stay stable; near-duplicate merges are appended after.
+  // Framework-level proposals were appended onto edits.proposals above, so they
+  // ride along here automatically (kept together with the edit proposals).
   const allProposals = [...(edits?.proposals || []), ...nearDuplicateEdits];
 
   return {
@@ -279,4 +367,34 @@ export async function deriveProposalBundle(
     nearDuplicateEdits,
     allProposals,
   };
+}
+
+// ─── Framework-level candidate helpers ─────────────────────────────────────
+
+/** Coerce a jsonb column (array | null | garbage) to a clean string[]. */
+function toStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean);
+}
+
+/**
+ * Drop candidates already present in `registered` (case-insensitive, trimmed).
+ * This is the cheap per-call re-filter that keeps memoised candidate pools
+ * correct after an apply has already added some values to the live list.
+ */
+function filterUnregistered(candidates: string[], registered: string[]): string[] {
+  const reg = new Set(
+    (registered || []).map((s) => (typeof s === "string" ? s.trim().toLowerCase() : "")).filter(Boolean),
+  );
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of candidates || []) {
+    const s = typeof raw === "string" ? raw.trim() : "";
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (reg.has(k) || seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
 }

@@ -245,6 +245,24 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v2_iter_fw_list ON framework_v2_iterations(framework_id, list_id, iteration_number)`);
 
+    // Framework Creation v2 mined framework-level candidate cache. Memoizes the
+    // (expensive, LLM-backed) corpus mining for framework-level improvement
+    // proposals per (framework, list, batch). Cached pools are re-filtered against
+    // the framework's CURRENT registered lists on every read, so a stale cache can
+    // only ever over-list candidates that are then filtered out — never mutate a
+    // framework row. Keyed on the batch so a fresh scoring run mines afresh.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS framework_v2_mined_candidates (
+        id SERIAL PRIMARY KEY,
+        framework_id INTEGER NOT NULL,
+        list_id INTEGER NOT NULL,
+        batch_id INTEGER NOT NULL,
+        mined JSONB NOT NULL,                -- {terminology:[{term,companyCount}], adjacentPhrases:[], anchorNames:[]}
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (framework_id, list_id, batch_id)
+      )
+    `);
+
     // Framework Creation v2 truth-check findings. One row per (framework, company, measure)
     // representing the independent Perplexity truth check. Multiple runs replace the
     // prior row so the DB always has the LATEST truth-check for a given cell.

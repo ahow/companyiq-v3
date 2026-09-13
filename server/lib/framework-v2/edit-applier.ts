@@ -324,6 +324,109 @@ CRITICAL RULES:
   return { value, raw: text, provider };
 }
 
+// ─── Framework-level candidate generation (design-time mining) ─────────────
+// These two generators support the framework-level improvement proposals
+// (adjacent_topics, anchor_frameworks). They read a BOUNDED corpus sample and
+// return a list of candidate strings the caller filters against what is already
+// registered and hands to the edit-proposer builders. They are DESIGN-TIME only
+// (results panel / apply derivation), never part of live scoring, and the caller
+// treats any failure as non-fatal (zero candidates). Both are topic-agnostic:
+// the topic, its synonyms and the already-registered lists come from ctx.
+
+/**
+ * From a bounded corpus sample, name the NEIGHBOURING subject areas that sit
+ * next to the framework's topic and are most likely to be mistaken for it
+ * (adjacent-topic contamination). Excludes the topic itself and anything
+ * already registered as an adjacent topic. Returns de-duplicated phrases.
+ */
+export async function generateAdjacentTopicCandidates(
+  corpusSample: string,
+  ctx: FrameworkContext,
+  providerName?: string,
+): Promise<string[]> {
+  if (!corpusSample || !corpusSample.trim()) return [];
+  const already = (ctx.adjacentTopics && ctx.adjacentTopics.length)
+    ? ctx.adjacentTopics.join(", ")
+    : "(none registered yet)";
+  const system = `You are a framework analyst. Given a sample of company disclosures and a TOPIC, identify NEIGHBOURING subject areas ("adjacent topics") that appear in the corpus, are distinct from the topic, and are commonly CONFUSED with it — i.e. text about them could be misread as being about the topic.
+
+Topic: ${ctx.topicTerm}${ctx.topicSynonyms && ctx.topicSynonyms.length ? ` (synonyms: ${ctx.topicSynonyms.join(", ")})` : ""}
+Already-registered adjacent topics (do NOT repeat these): ${already}
+
+CRITICAL RULES:
+1. Return SHORT noun phrases (2-5 words) naming a distinct adjacent subject area, using the corpus's own terminology.
+2. Do NOT return the topic itself, its synonyms, or already-registered adjacent topics.
+3. Only include an adjacent topic if the corpus actually contains text about it. Return at most 8.
+4. Output MUST be valid JSON in exactly this schema, no prose outside it:
+{ "adjacent_topics": ["phrase 1", "phrase 2"] }`;
+
+  try {
+    const { text } = await completeWithFallback(providerName || "claude", {
+      system,
+      prompt: `Corpus sample:\n\n${corpusSample}\n\nReturn JSON only.`,
+      maxTokens: 1200,
+      temperature: 0.2,
+    });
+    const parsed = safeParseJSON(text);
+    return normaliseStringList(parsed?.adjacent_topics);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * From a bounded corpus sample, name the external STANDARDS / FRAMEWORKS /
+ * CERTIFICATIONS that the corpus references for this topic (e.g. named
+ * standards, regulations, certification schemes). Excludes anything already
+ * registered as an anchor framework. Returns de-duplicated names. ADD-only —
+ * this never suggests removing an existing anchor.
+ */
+export async function generateAnchorFrameworkCandidates(
+  corpusSample: string,
+  ctx: FrameworkContext,
+  providerName?: string,
+): Promise<string[]> {
+  if (!corpusSample || !corpusSample.trim()) return [];
+  const system = `You are a framework analyst. Given a sample of company disclosures and a TOPIC, identify the external STANDARDS, FRAMEWORKS, REGULATIONS or CERTIFICATION SCHEMES the corpus explicitly references in connection with this topic. These are named, recognised anchors companies align to.
+
+Topic: ${ctx.topicTerm}${ctx.topicSynonyms && ctx.topicSynonyms.length ? ` (synonyms: ${ctx.topicSynonyms.join(", ")})` : ""}
+
+CRITICAL RULES:
+1. Return the OFFICIAL name (and common acronym if used) of each standard/framework/regulation/certification, exactly as evidenced in the corpus.
+2. Only include a name if it is explicitly present in the sample text. Do NOT invent or infer well-known standards that are not actually cited.
+3. Return at most 8, most-frequently-cited first.
+4. Output MUST be valid JSON in exactly this schema, no prose outside it:
+{ "anchor_frameworks": ["Name 1", "Name 2"] }`;
+
+  try {
+    const { text } = await completeWithFallback(providerName || "claude", {
+      system,
+      prompt: `Corpus sample:\n\n${corpusSample}\n\nReturn JSON only.`,
+      maxTokens: 1200,
+      temperature: 0.1,
+    });
+    const parsed = safeParseJSON(text);
+    return normaliseStringList(parsed?.anchor_frameworks);
+  } catch {
+    return [];
+  }
+}
+
+function normaliseStringList(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    const s = typeof raw === "string" ? raw.trim() : "";
+    if (!s || s.length > 120) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
 // ─── Free-text ("custom") field edit (requirement C) ───────────────────────
 // A user can describe ANY concrete change to a measure in the improvement chat.
 // The change is executed as a single-field regeneration: the LLM rewrites the
@@ -482,4 +585,13 @@ export const APPLY_HANDLED_OPS: Record<string, ApplyHandlerKind> = {
   rewrite_countable: "batch_regenerate",
   broaden_or_redefine: "batch_regenerate",
   merge_or_differentiate: "pair_resolve",
+  // Framework-level additive ops. Each appends mined values to a jsonb column on
+  // `frameworks` (topic_synonyms / adjacent_topics / anchor_frameworks). They are
+  // written directly by applyFrameworkLevelProposal() in the /apply route — a
+  // DISTINCT jsonb append, not a per-measure column write — so they classify as
+  // direct_replace (no LLM regeneration on apply). The candidate MINING that
+  // feeds their patch.value happens at derivation time, not here.
+  add_synonyms: "direct_replace",
+  add_adjacent_topics: "direct_replace",
+  add_anchor_frameworks: "direct_replace",
 };

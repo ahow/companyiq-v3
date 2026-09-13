@@ -2355,7 +2355,11 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <code className="text-xs text-gray-500">{p.measureId}</code>
+                        {p.measureId === "(framework)" ? (
+                          <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300">Framework-level</span>
+                        ) : (
+                          <code className="text-xs text-gray-500">{p.measureId}</code>
+                        )}
                         <span className="px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">{p.cause}</span>
                         <span className="px-1.5 py-0.5 rounded text-xs bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300">{p.action}</span>
                       </div>
@@ -2384,6 +2388,20 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
                       </button>
                     </div>
                   </div>
+                  {/* Framework-level proposals carry mined VALUES (chips) instead of
+                      the per-measure evidence drill-down: their target is a jsonb
+                      column on `frameworks`, so there are no per-company quotes. */}
+                  {p.measureId === "(framework)" && Array.isArray(p.patch?.value) && (p.patch!.value as unknown[]).length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-dashed border-gray-200 dark:border-gray-700">
+                      <div className="text-xs text-gray-500 mb-1">Values to add to <code>{p.fieldPath}</code>:</div>
+                      <div className="flex flex-wrap gap-1">
+                        {(p.patch!.value as unknown[]).map((v, vi) => (
+                          <span key={vi} className="px-2 py-0.5 rounded-full text-xs bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-900/20 dark:text-purple-300 dark:border-purple-800">{String(v)}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {p.measureId !== "(framework)" && (
                   <div className="mt-2 pt-2 border-t border-dashed border-gray-200 dark:border-gray-700">
                     <div className="flex items-center gap-3 flex-wrap">
                       <button
@@ -2572,6 +2590,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
                       </div>
                     )}
                   </div>
+                  )}
                 </div>
               );
             })}

@@ -31,7 +31,8 @@ export type EditCause =
   | "ambiguous-criteria"        // verdict flips run-to-run (residual instability, C11)
   | "non-discriminating"        // measure gives the same verdict to every company
   | "near-duplicate"            // two measures are near-duplicates (merge/differentiate)
-  | "terminology-gap";          // companies use terms not in topicSynonyms
+  | "terminology-gap"           // companies use terms not in topicSynonyms
+  | "anchor-coverage";          // corpus evidences named standards/frameworks not registered as anchor_frameworks
 
 export type EditAction =
   | "broaden-fallback"
@@ -43,15 +44,19 @@ export type EditAction =
   | "rewrite-countable"         // C11: rewrite deciding criteria to a countable N-of-M test
   | "broaden-or-redefine"       // redefine so the measure separates companies
   | "merge-or-differentiate"    // resolve a near-duplicate pair
-  | "add-synonyms";
+  | "add-synonyms"              // append mined terminology-gap terms to topic_synonyms
+  | "add-adjacent-topics"       // register recurring adjacent-contamination phrases as adjacent_topics
+  | "add-anchor-frameworks";    // register corpus-evidenced standards/frameworks as anchor_frameworks
 
 /**
- * Every distinct `patch.op` this module can emit (across proposeEditForFlag and
- * proposeMergeForNearDuplicate). This is the single declared source the apply
- * guardrail test enumerates: the test asserts (a) this list exactly matches the
- * ops actually emitted for representative inputs, and (b) every op here has a
- * wired handler in edit-applier's APPLY_HANDLED_OPS. Keep it in sync when adding
- * a new proposal type.
+ * Every distinct `patch.op` this module can emit (across proposeEditForFlag,
+ * proposeMergeForNearDuplicate, and the framework-level builders
+ * proposeSynonymAddition / proposeAdjacentTopics / proposeAnchorFrameworks).
+ * This is the single declared source the apply guardrail test enumerates: the
+ * test asserts (a) this list exactly matches the ops actually emitted for
+ * representative inputs, and (b) every op here has a wired handler in
+ * edit-applier's APPLY_HANDLED_OPS. Keep it in sync when adding a new proposal
+ * type.
  */
 export const EMITTABLE_PATCH_OPS = [
   "replace",
@@ -61,8 +66,27 @@ export const EMITTABLE_PATCH_OPS = [
   "rewrite_countable",
   "broaden_or_redefine",
   "merge_or_differentiate",
+  // Framework-level (non per-measure) additive ops. Each appends mined values to
+  // a jsonb column on `frameworks` — never a per-measure field. They carry the
+  // sentinel measureId FRAMEWORK_SENTINEL so identity resolution and audit treat
+  // them as framework-scoped rather than tied to any single measure.
+  "add_synonyms",
+  "add_adjacent_topics",
+  "add_anchor_frameworks",
 ] as const;
 export type EmittablePatchOp = (typeof EMITTABLE_PATCH_OPS)[number];
+
+/**
+ * Sentinel measureId for framework-level proposals (terminology-gap synonyms,
+ * adjacent-topic registration, anchor-framework coverage). These edits target a
+ * jsonb column on `frameworks`, not any `framework_measures` row, so they share
+ * one stable, topic-agnostic id across creation, client rendering, identity
+ * resolution and the edit audit.
+ */
+export const FRAMEWORK_SENTINEL = "(framework)";
+
+/** patch.op values that are framework-level (applied to a jsonb column on frameworks). */
+export const FRAMEWORK_LEVEL_OPS = ["add_synonyms", "add_adjacent_topics", "add_anchor_frameworks"] as const;
 
 export interface EditProposal {
   measureId: string;
@@ -282,7 +306,123 @@ export function proposeMergeForNearDuplicate(pair: NearDuplicateInput): EditProp
   };
 }
 
+// ─── Framework-level builders (jsonb columns on `frameworks`) ─────────────
+//
+// These three builders produce framework-SCOPED proposals rather than
+// per-measure ones. Each carries the sentinel measureId FRAMEWORK_SENTINEL and
+// uses flagRule === cause so that identity resolution
+// (${measureId}::${flagRule}) is unique per framework-level type — this is why
+// there is at most ONE proposal per type, aggregating every mined value into a
+// single patch.value array. All three are purely ADDITIVE: they append mined
+// values to a jsonb column and never remove or overwrite existing entries.
+// Callers pass the already-filtered candidate pool (mined values with the
+// currently-registered entries removed); each builder returns null when the
+// filtered pool is empty so no empty card is surfaced.
+
+/**
+ * Terminology-gap → append mined synonyms to `topic_synonyms` (PART A).
+ * `candidates` are terms companies use for the topic that are not already in
+ * topic_synonyms (nor the topic_term itself); `currentSynonyms` is the live
+ * registered list, used only for the human-readable summary.
+ */
+export function proposeSynonymAddition(
+  candidates: string[],
+  currentSynonyms: string[],
+): EditProposal | null {
+  const values = dedupeNonEmpty(candidates);
+  if (values.length === 0) return null;
+  return {
+    measureId: FRAMEWORK_SENTINEL,
+    flagRule: "terminology-gap",
+    cause: "terminology-gap",
+    action: "add-synonyms",
+    fieldPath: "topic_synonyms",
+    currentValueSummary: summariseList(currentSynonyms),
+    proposedValueSummary: `add ${values.length} synonym(s): ${values.join(", ")}`,
+    rationale:
+      "Companies in the corpus refer to this topic using terms not registered as topic_synonyms, so on-topic disclosure is being missed. Register these mined terms so retrieval and scoring recognise them.",
+    patch: { op: "add_synonyms", path: "topic_synonyms", value: values },
+    expectedImpact: "should improve on-topic recall by matching companies' own terminology",
+  };
+}
+
+/**
+ * Adjacent-contamination (recurring across multiple measures) → register mined
+ * adjacent-topic phrases as `adjacent_topics` (PART B). `recurrence` is the
+ * number of DISTINCT measures whose flags cited adjacent-topic contamination;
+ * it drives only the rationale text (the caller decides the threshold).
+ */
+export function proposeAdjacentTopics(
+  candidates: string[],
+  currentAdjacent: string[],
+  recurrence: number,
+): EditProposal | null {
+  const values = dedupeNonEmpty(candidates);
+  if (values.length === 0) return null;
+  return {
+    measureId: FRAMEWORK_SENTINEL,
+    flagRule: "adjacent-contamination",
+    cause: "adjacent-contamination",
+    action: "add-adjacent-topics",
+    fieldPath: "adjacent_topics",
+    currentValueSummary: summariseList(currentAdjacent),
+    proposedValueSummary: `add ${values.length} adjacent topic(s): ${values.join(", ")}`,
+    rationale:
+      `Adjacent-topic contamination recurred across ${recurrence} measures, meaning the same neighbouring subject matter is bleeding into Yes verdicts framework-wide. Register these phrases as adjacent_topics so every measure can exclude them consistently.`,
+    patch: { op: "add_adjacent_topics", path: "adjacent_topics", value: values },
+    expectedImpact: "should suppress cross-measure adjacent-topic contamination framework-wide",
+  };
+}
+
+/**
+ * Anchor coverage → register corpus-evidenced standards/frameworks as
+ * `anchor_frameworks` (PART B). ADD-only: never proposes removing an existing
+ * anchor. `candidates` are named standards/frameworks the corpus evidences that
+ * are not already registered.
+ */
+export function proposeAnchorFrameworks(
+  candidates: string[],
+  currentAnchors: string[],
+): EditProposal | null {
+  const values = dedupeNonEmpty(candidates);
+  if (values.length === 0) return null;
+  return {
+    measureId: FRAMEWORK_SENTINEL,
+    flagRule: "anchor-coverage",
+    cause: "anchor-coverage",
+    action: "add-anchor-frameworks",
+    fieldPath: "anchor_frameworks",
+    currentValueSummary: summariseList(currentAnchors),
+    proposedValueSummary: `add ${values.length} anchor framework(s): ${values.join(", ")}`,
+    rationale:
+      "The corpus repeatedly cites named standards or frameworks that are not registered as anchor_frameworks, so measures cannot credit companies for aligning to them. Register these to widen recognised anchors (additive only — no existing anchor is removed).",
+    patch: { op: "add_anchor_frameworks", path: "anchor_frameworks", value: values },
+    expectedImpact: "should improve credit for disclosures that reference recognised standards",
+  };
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────
+
+function dedupeNonEmpty(arr: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of arr || []) {
+    const s = typeof raw === "string" ? raw.trim() : "";
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+function summariseList(arr: string[]): string {
+  const vals = dedupeNonEmpty(arr || []);
+  if (vals.length === 0) return "none registered";
+  if (vals.length <= 5) return `${vals.length} registered: ${vals.join(", ")}`;
+  return `${vals.length} registered: ${vals.slice(0, 5).join(", ")}…`;
+}
 
 function softenFallbackClause(clause: string): string {
   // Best-effort softening: replace strict conjunctions with permissive ones
