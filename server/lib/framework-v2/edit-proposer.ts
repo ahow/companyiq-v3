@@ -299,12 +299,21 @@ export function proposeEditsForFlags(
 ): EditProposalBundle {
   const proposals: EditProposal[] = [];
   const causeBreakdown: Record<string, number> = {};
+  // De-duplicate genuinely-identical proposals. A measure can carry more than one
+  // flag that routes to the same edit (e.g. both "too-broad" and
+  // "off-expected-broad" produce the same tighten/add-negative-examples proposal),
+  // which would otherwise emit byte-identical cards — inflating the count and, if
+  // applied, running the same patch twice. Collapse on the tuple
+  // (measureId, cause, fieldPath, patch.op), keeping the first occurrence.
+  const seen = new Set<string>();
   for (const flag of flags) {
     const prop = proposeEditForFlag(flag, measuresById[flag.measureId]);
-    if (prop) {
-      proposals.push(prop);
-      causeBreakdown[prop.cause] = (causeBreakdown[prop.cause] || 0) + 1;
-    }
+    if (!prop) continue;
+    const key = `${prop.measureId}::${prop.cause}::${prop.fieldPath}::${prop.patch?.op ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    proposals.push(prop);
+    causeBreakdown[prop.cause] = (causeBreakdown[prop.cause] || 0) + 1;
   }
   return {
     proposals,

@@ -1811,8 +1811,12 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   const [rescoring, setRescoring] = useState(false);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
   // ITEM 2: per-measure run-to-run flip stats + auto-continue guard. The guard
-  // records how many iterations we have already auto-rescored past, so the
-  // auto-continue effect fires at most once per completed batch.
+  // counts how many auto-rescores we have KICKED OFF. Batches ever started =
+  // 1 (initial) + this counter, so we cap it at scoringRunsTarget - 1 to
+  // guarantee exactly scoringRunsTarget batches are scored (no overshoot). We
+  // count started batches rather than iterations.length because the snapshot of
+  // a completed batch lands asynchronously and lags the isComplete transition —
+  // gating on iterations.length alone let the last rescore start one extra batch.
   const [flipStats, setFlipStats] = useState<MeasureFlipStat[]>([]);
   const autoRescoreGuard = useRef(0);
   const [applyingIterate, setApplyingIterate] = useState(false);
@@ -1938,16 +1942,21 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
 
   // ITEM 2: auto-continue the multi-run test-drive. Analyze is async and
   // single-active-batch, so we cannot fire N batches at once — instead, each
-  // time a batch completes and we still have fewer iterations than the target,
-  // kick one rescore (which snapshots the completed batch as an iteration, then
-  // starts a fresh batch). The ref guard ensures we trigger at most once per
-  // recorded iteration, so remounts / extra polls do not double-fire.
+  // time a batch completes we kick one rescore, which starts a fresh batch (the
+  // completed batch is snapshotted server-side when polling observes it).
+  //
+  // Overshoot fix: cap on batches STARTED, not on iterations.length. Batches
+  // ever started = 1 (initial) + autoRescoreGuard.current (rescores kicked off),
+  // so we stop once autoRescoreGuard.current reaches scoringRunsTarget - 1 —
+  // giving exactly scoringRunsTarget batches. The second guard
+  // (autoRescoreGuard.current >= iterations.length) makes us fire at most once
+  // per recorded snapshot, so remounts / extra polls do not double-fire.
   useEffect(() => {
     if (scoringRunsTarget <= 1) return;
     if (!isComplete || rescoring) return;
-    if (iterations.length >= scoringRunsTarget) return;
-    if (autoRescoreGuard.current >= iterations.length + 1) return;
-    autoRescoreGuard.current = iterations.length + 1;
+    if (autoRescoreGuard.current >= scoringRunsTarget - 1) return;
+    if (autoRescoreGuard.current >= iterations.length) return;
+    autoRescoreGuard.current += 1;
     void triggerRescore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isComplete, iterations.length, rescoring, scoringRunsTarget]);
@@ -1991,10 +2000,10 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       {multiRunActive && (
         <div className={`text-sm rounded px-3 py-2 border ${multiRunDone ? "bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-800 text-green-800 dark:text-green-300" : "bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-800 text-blue-800 dark:text-blue-300"}`}>
           {multiRunDone ? (
-            <>Multi-run test-drive complete: {iterationsRecorded} of {scoringRunsTarget} scoring iterations recorded. Per-measure flip stats below.</>
+            <>Multi-run test-drive complete: {iterationsRecorded} scoring iteration{iterationsRecorded === 1 ? "" : "s"} recorded (target {scoringRunsTarget}). Per-measure flip stats below.</>
           ) : (
             <>
-              Multi-run test-drive: {iterationsRecorded} of {scoringRunsTarget} scoring iterations recorded
+              Multi-run test-drive: {iterationsRecorded} scoring iteration{iterationsRecorded === 1 ? "" : "s"} recorded (target {scoringRunsTarget})
               {(rescoring || isRunning) && " — next iteration scoring…"}
               . The same sample is scored repeatedly so the flip detector can measure run-to-run stability. This runs automatically; you can leave and return to this page.
             </>
