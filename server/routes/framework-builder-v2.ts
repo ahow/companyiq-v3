@@ -25,6 +25,7 @@ import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-
 import { recordMeasureEdit } from "../lib/framework-v2/measure-audit.js";
 import { resolveProposalByIdentity } from "../lib/framework-v2/proposal-identity.js";
 import { pickEffectiveBatch } from "../lib/framework-v2/effective-batch.js";
+import { deriveProposalBundle } from "../lib/framework-v2/derive-proposal-bundle.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -1337,45 +1338,10 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
     }
     const results: TestDriveCompanyResult[] = Object.values(byCompany);
 
-    // 4. Fetch measure metadata (expected_yes_rate + full definition for edit proposals).
-    const measureMetaQuery = await db.execute(sql`
-      SELECT measure_id, expected_yes_rate, title, category, substantive_definition,
-             fallback_yes_criterion, positive_examples, negative_examples,
-             min_quote_context_chars
-      FROM framework_measures
-      WHERE framework_id = ${frameworkId}
-    `);
-    const measureRows = ((measureMetaQuery as any).rows || []) as any[];
-    const measureMetadata = measureRows.map((m: any) => ({
-      measureId: m.measure_id,
-      expected_yes_rate: typeof m.expected_yes_rate === "number" ? m.expected_yes_rate : 0.35,
-      title: m.title,
-      // Pillar grouping for within-pillar KR-20 / cross-pillar independence (Tier-1
-      // quality metrics). `category` is the framework_measures pillar column.
-      pillar: m.category || undefined,
-    }));
-    // Full measure definitions keyed by measure_id, for edit-proposal generation.
-    const measuresById: Record<string, any> = {};
-    // Per-measure spec fields for the transparency spec-completeness checklist
-    // (quality-metrics §4.10). Maps existing framework_measures columns onto the
-    // generic checklist slots; borderlineExamples has no column yet (left absent).
-    const measureSpecs: Record<string, MeasureSpecFields> = {};
-    for (const m of measureRows) {
-      measuresById[m.measure_id] = {
-        substantive_definition: m.substantive_definition,
-        fallback_yes_criterion: m.fallback_yes_criterion,
-        positive_examples: m.positive_examples,
-        negative_examples: m.negative_examples,
-        min_quote_context_chars: m.min_quote_context_chars,
-      };
-      measureSpecs[m.measure_id] = {
-        definition: m.substantive_definition,
-        inclusion: m.positive_examples,
-        exclusion: m.negative_examples,
-        evidenceStandard: m.fallback_yes_criterion,
-        // borderlineExamples: no dedicated column yet — leave undefined.
-      };
-    }
+    // 4. Measure metadata (expected_yes_rate, definitions, spec fields) is loaded
+    //    inside deriveProposalBundle() below alongside the flag analysis + edit
+    //    proposals, so the READ path here and the WRITE path in
+    //    /v2/improvement/apply share one derivation and never diverge.
 
     // 4b. Load signal/edge labels from company_lists.test_drive_labels.
     let labels: CompanyLabel[] = [];
@@ -1455,82 +1421,19 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
         console.warn("[framework-builder v2 /test-drive/results] iteration snapshot failed:", e?.message);
       }
 
-      // ITEM 2: build the multi-run flip input from ALL iteration snapshots for
-      // this framework+list. Two or more iterations = the same sample scored
-      // repeatedly; the flip detector compares per-company verdicts across them.
-      let multiRun: MultiRunIteration[] = [];
-      try {
-        const iterRows = await db.execute(sql`
-          SELECT iteration_number, per_measure
-          FROM framework_v2_iterations
-          WHERE framework_id = ${frameworkId} AND list_id = ${listId}
-          ORDER BY iteration_number ASC
-        `);
-        multiRun = ((iterRows as any).rows || []).map((r: any) => ({
-          iterationNumber: Number(r.iteration_number),
-          perMeasure: (r.per_measure && typeof r.per_measure === "object") ? r.per_measure : {},
-        }));
-      } catch (e: any) {
-        console.warn("[framework-builder v2 /test-drive/results] multi-run load failed (non-fatal):", e?.message);
-      }
-      flipStats = computeFlipStats(multiRun);
-
-      report = analyseTestDrive(results, measureMetadata, multiRun);
-
-      // ITEM 3: surface data-sparse companies as an actionable design-time prompt.
-      // Full root-cause corpus analysis is deferred to /v2/improvement/chat (heavy
-      // corpus scan). Here we use a light heuristic that needs no corpus scan: a
-      // company that produced ZERO evidence quotes across every measure is almost
-      // certainly missing source documents rather than genuinely non-disclosing.
-      const sparseCompanies = results
-        .filter((r) => r.measures.length > 0 && r.measures.every((m) => (m.quoteCount || 0) === 0))
-        .map((r) => ({ companyId: r.companyId, companyName: r.companyName, classification: "no-evidence-in-corpus" }));
-      const sparseFlag = buildSparseCorpusFlag(sparseCompanies);
-      if (sparseFlag && report) {
-        report.flags = [sparseFlag, ...(report.flags || [])];
-        report.summary = `${report.summary}\n  • [sparse-corpus] ${sparseFlag.message}`;
-      }
-
-      robustness = computeRobustnessCriteria(results, measureMetadata, labels);
-      edits = proposeEditsForFlags(report.flags || [], measuresById);
-
-      // Tier-1 design-time quality gate (quality-metrics.ts). ADDITIVE and
-      // non-fatal: this augments — never replaces — the 6-criteria robustness
-      // scorecard above. All thresholds are DEFERRED placeholders (see
-      // QUALITY_GATE_THRESHOLDS); N is taken from results.length, never hardcoded.
-      try {
-        qualityMetrics = computeQualityMetrics({
-          results,
-          measureMetadata,
-          multiRun,
-          measureSpecs,
-        });
-        // Fold the coherence GATE metrics (cross-pillar independence, KR-20 band,
-        // contribution balance) into the report's coverage-style gate list so the
-        // UI can render them alongside the other gates.
-        const coherenceGates = coherenceGateMetrics({
-          results,
-          measureMetadata,
-          multiRun,
-          measureSpecs,
-        });
-        (qualityMetrics as any).coherenceGates = coherenceGates;
-        // Near-duplicate pairs become selectable merge/differentiate proposals.
-        // Nothing is auto-applied — the UI presents each pair as accept/dismiss.
-        nearDuplicateEdits = (qualityMetrics.nearDuplicatePairs || []).map((p) =>
-          proposeMergeForNearDuplicate({
-            measureIdA: p.measureIdA,
-            measureIdB: p.measureIdB,
-            labelA: p.labelA,
-            labelB: p.labelB,
-            agreement: p.agreement,
-            kappa: p.kappa,
-            n: p.n,
-          }),
-        );
-      } catch (e: any) {
-        console.warn("[framework-builder v2 /test-drive/results] quality metrics failed (non-fatal):", e?.message);
-      }
+      // Derive the FULL proposal bundle from the single shared function so the
+      // READ path here and the WRITE path in /v2/improvement/apply can never
+      // diverge (multi-run flip analysis, sparse-corpus flag, edit proposals,
+      // quality metrics and near-duplicate merges are all produced there). Called
+      // AFTER snapshotIteration() above so the fresh iteration is included in the
+      // multi-run flip comparison.
+      const bundle = await deriveProposalBundle(db, frameworkId, listId, ctx.workspaceId);
+      flipStats = bundle.flipStats;
+      report = bundle.report;
+      robustness = bundle.robustness;
+      edits = bundle.edits;
+      qualityMetrics = bundle.qualityMetrics;
+      nearDuplicateEdits = bundle.nearDuplicateEdits;
 
       // Top up the snapshot row with robustness (+ rootCauses, still null here;
       // filled lazily by /v2/improvement/chat) that snapshotIteration() itself
@@ -2371,33 +2274,21 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
       return res.status(400).json({ error: "frameworkId and actions[] required" });
     }
 
-    // Re-derive proposals (same data the chat endpoint saw) so we can resolve
-    // P1/P2/P3 references to actual EditProposal objects.
-    const scoresQuery = await db.execute(sql`
-      SELECT ms.company_id, c.name AS company_name, ms.measure_id, ms.verdict
-      FROM measure_scores ms JOIN companies c ON c.id = ms.company_id
-      JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
-      WHERE ms.framework_id = ${frameworkId}
-    `);
-    const scoreRows = ((scoresQuery as any).rows || []) as any[];
-    const byCompany: Record<string, any> = {};
-    for (const r of scoreRows) {
-      const k = String(r.company_id);
-      if (!byCompany[k]) byCompany[k] = { companyId: r.company_id, companyName: r.company_name, measures: [] };
-      byCompany[k].measures.push({ measureId: r.measure_id, verdict: r.verdict || "No" });
-    }
-    const results = Object.values(byCompany) as any[];
-    const measureMetaQuery = await db.execute(sql`
-      SELECT measure_id, expected_yes_rate, substantive_definition, fallback_yes_criterion,
-             positive_examples, negative_examples, min_quote_context_chars
-      FROM framework_measures WHERE framework_id = ${frameworkId}
-    `);
-    const measureRows = ((measureMetaQuery as any).rows || []) as any[];
-    const measureMetadata = measureRows.map((m: any) => ({ measureId: m.measure_id, expected_yes_rate: typeof m.expected_yes_rate === "number" ? m.expected_yes_rate : 0.35 }));
-    const measuresById: Record<string, any> = {};
-    for (const m of measureRows) measuresById[m.measure_id] = m;
-    const report = analyseTestDrive(results as any, measureMetadata);
-    const editsBundle = proposeEditsForFlags(report.flags || [], measuresById);
+    // Re-derive proposals through the SAME shared function the results view uses
+    // so the apply path resolves accepted proposals against the IDENTICAL set.
+    // Before this, the apply path re-derived with a leaner query and NO multi-run
+    // history, so multi-run-only proposals (residual-instability), the
+    // sparse-corpus proposal and near-duplicate merges were absent here and every
+    // accepted one was skipped as "proposal no longer present". deriveProposalBundle
+    // reproduces the full derivation (multi-run flip analysis + sparse flag + edit
+    // proposals + near-duplicate merges), closing that divergence.
+    const bundle = await deriveProposalBundle(db, frameworkId, listId, ctx.workspaceId);
+    const measuresById = bundle.measuresById;
+    const editsBundle = bundle.edits;
+    // The COMPLETE proposal set: edit proposals first (positional P<idx> indices
+    // stay stable), near-duplicate merges appended. apply_edit resolves against
+    // this; apply_all_by_cause stays scoped to the edit proposals only.
+    const allProposals = bundle.allProposals;
 
     // Collect proposals we need LLM regeneration for, then run one batched
     // regeneration call per (op, path) group. This preserves consistency
@@ -2674,7 +2565,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         // its stable identity (measureId + flagRule + patch.op + patch.path).
         // The legacy positional "P<n>" index no longer lines up because the
         // re-derived bundle may be shorter/reordered after rescore.
-        const match = resolveProposalByIdentity(editsBundle.proposals, action.attrs);
+        const match = resolveProposalByIdentity(allProposals, action.attrs);
         const auditSource = `proposal:${action.attrs.flagRule || action.attrs.proposal || "?"}`;
 
         let prop: any = null;
@@ -2695,7 +2586,9 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         } else {
           // status === "no-identity": fully old client sent only positional P<idx>.
           const idx = parseInt(String(action.attrs.proposal || "").replace(/^P/, ""), 10) - 1;
-          prop = editsBundle.proposals[idx];
+          // Positional fallback reads from allProposals; its edit-proposal prefix
+          // is identical to editsBundle.proposals, so legacy P<idx> stays correct.
+          prop = allProposals[idx];
           if (!prop) {
             const reason = "proposal not found";
             skipped.push({ action, reason });
