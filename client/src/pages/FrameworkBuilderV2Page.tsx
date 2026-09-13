@@ -1547,6 +1547,7 @@ interface EditProposal {
   proposedValueSummary: string;
   rationale: string;
   expectedImpact: string;
+  patch?: { op?: string; path?: string; value?: unknown };
 }
 
 interface TruthFinding {
@@ -1855,12 +1856,25 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
     setApplyIterateResult(null);
     setApplyIterateError(null);
     try {
-      // Build one apply_edit action per accepted proposal, referencing its 1-based index.
+      // Build one apply_edit action per accepted proposal. Send the stable
+      // identity tuple (measure + flagRule + patch op/path) so the server can
+      // resolve the proposal against its freshly re-derived bundle regardless of
+      // position. Keep the positional "P<n>" label as a fallback for old servers
+      // and as a human-readable audit label.
       const actions: Array<{ type: string; attrs: Record<string, string> }> = [];
       (edits?.proposals || []).forEach((p, idx) => {
         const key = `${p.measureId}::${p.flagRule}`;
         if (decisions[key] === "accept") {
-          actions.push({ type: "apply_edit", attrs: { proposal: `P${idx + 1}` } });
+          actions.push({
+            type: "apply_edit",
+            attrs: {
+              measure: p.measureId,
+              flagRule: p.flagRule,
+              op: p.patch?.op ?? "",
+              path: p.patch?.path ?? "",
+              proposal: `P${idx + 1}`,
+            },
+          });
         }
       });
       const applyResp = await api.request("/framework-builder/v2/improvement/apply", {

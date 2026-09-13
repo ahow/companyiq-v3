@@ -23,6 +23,7 @@ import { buildImprovementChatSystemPrompt, extractActionsFromReply, type Improve
 import { groupProposalsByPatch, BATCH_REGENERATORS, differentiateMeasureDefinition, regenerateMeasureField, CUSTOM_EDIT_FIELDS, type CustomEditField, type CustomEditMeasure, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
 import { recordMeasureEdit } from "../lib/framework-v2/measure-audit.js";
+import { resolveProposalByIdentity } from "../lib/framework-v2/proposal-identity.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -2637,13 +2638,38 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     const deferredForLLM: any[] = [];
     for (const action of actions) {
       if (action.type === "apply_edit") {
-        const idx = parseInt(String(action.attrs.proposal || "").replace(/^P/, ""), 10) - 1;
-        const prop = editsBundle.proposals[idx];
-        if (!prop) {
-          const reason = "proposal not found";
+        // Resolve the accepted proposal against the FRESHLY re-derived bundle by
+        // its stable identity (measureId + flagRule + patch.op + patch.path).
+        // The legacy positional "P<n>" index no longer lines up because the
+        // re-derived bundle may be shorter/reordered after rescore.
+        const match = resolveProposalByIdentity(editsBundle.proposals, action.attrs);
+        const auditSource = `proposal:${action.attrs.flagRule || action.attrs.proposal || "?"}`;
+
+        let prop: any = null;
+        if (match.status === "matched") {
+          prop = match.proposal;
+        } else if (match.status === "absent") {
+          // Identity was provided but no proposal in the re-derived bundle matches:
+          // the flag no longer fires after rescore, so the proposal is genuinely gone.
+          const reason = "proposal no longer present (flag no longer fires after rescore)";
           skipped.push({ action, reason });
-          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: String(action.attrs.measure || "(unknown)"), field: "(proposal)", op: "apply_edit", source: `proposal:${action.attrs.proposal || "?"}`, applied: false, skipReason: reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: String(action.attrs.measure || "(unknown)"), field: "(proposal)", op: "apply_edit", source: auditSource, applied: false, skipReason: reason });
           continue;
+        } else if (match.status === "ambiguous") {
+          const reason = "ambiguous proposal identity";
+          skipped.push({ action, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: String(action.attrs.measure || "(unknown)"), field: "(proposal)", op: "apply_edit", source: auditSource, applied: false, skipReason: reason });
+          continue;
+        } else {
+          // status === "no-identity": fully old client sent only positional P<idx>.
+          const idx = parseInt(String(action.attrs.proposal || "").replace(/^P/, ""), 10) - 1;
+          prop = editsBundle.proposals[idx];
+          if (!prop) {
+            const reason = "proposal not found";
+            skipped.push({ action, reason });
+            await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: String(action.attrs.measure || "(unknown)"), field: "(proposal)", op: "apply_edit", source: `proposal:${action.attrs.proposal || "?"}`, applied: false, skipReason: reason });
+            continue;
+          }
         }
         if (prop.patch?.op === "replace") {
           await applyProposal(prop, applied, skipped);
