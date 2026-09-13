@@ -194,7 +194,7 @@ export async function initializeDatabase(): Promise<void> {
     // test-drive against the same list, we snapshot the batch's per-measure scores
     // AND the computed robustness scorecard so the improvement panel can show the
     // trend across iterations. Storage grows linearly with iteration count —
-    // acceptable at test-drive scale (10 companies × 20-40 measures per batch).
+    // acceptable at test-drive scale (50 companies × 20-40 measures per batch).
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS framework_v2_iterations (
         id SERIAL PRIMARY KEY,

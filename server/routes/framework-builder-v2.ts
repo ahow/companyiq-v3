@@ -1114,7 +1114,7 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
   }
 });
 
-// ─── POST /v2/test-drive/select — propose 10-company sample ──────────────
+// ─── POST /v2/test-drive/select — propose test-drive sample ──────────────
 
 router.post("/v2/test-drive/select", async (req: Request, res: Response) => {
   try {
@@ -1132,7 +1132,9 @@ router.post("/v2/test-drive/select", async (req: Request, res: Response) => {
     const { text: response } = await completeWithFallback(providerName || "claude", {
       system,
       prompt: user,
-      maxTokens: 3000,
+      // Sized for a TEST_DRIVE_SAMPLE_SIZE (50) company JSON array; 3000 was
+      // enough only for the old 10-company sample and would truncate at 50.
+      maxTokens: 12000,
       temperature: 0.2,
       json: true,
     });
@@ -1152,7 +1154,7 @@ router.post("/v2/test-drive/select", async (req: Request, res: Response) => {
 
 // ─── POST /v2/test-drive/run — create companies + list, kick off scoring ───
 // Frontend calls this AFTER /v2/save (which returns a frameworkId) and
-// /v2/test-drive/select (which returned the 10 candidate companies).
+// /v2/test-drive/select (which returned the candidate companies).
 // The endpoint:
 //   1. Ensures each proposed company exists in the workspace (create if missing)
 //   2. Creates a new company list "Test-drive: <framework name>"

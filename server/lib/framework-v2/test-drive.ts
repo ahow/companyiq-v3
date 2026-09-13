@@ -1,16 +1,17 @@
 /**
- * Framework Creation v2 — 10-Company Test-Drive Stage
+ * Framework Creation v2 — Test-Drive Stage
  *
- * Before a framework is finalised, it is scored against a stratified 10-company
- * sample to surface framework flaws that Stage 5 validation cannot detect.
+ * Before a framework is finalised, it is scored against a stratified sample of
+ * TEST_DRIVE_SAMPLE_SIZE companies to surface framework flaws that Stage 5
+ * validation cannot detect.
  *
  * Test-drive is orchestrated as follows:
- *   1. LLM proposes 10 candidate companies with rationale (this module does the
- *      LLM call).
+ *   1. LLM proposes TEST_DRIVE_SAMPLE_SIZE candidate companies with rationale
+ *      (this module does the LLM call).
  *   2. User can override.
  *   3. Companies are enqueued for scoring via the existing pipeline.
- *   4. When all 10 complete, this module aggregates results and applies flag
- *      rules to identify measures needing review.
+ *   4. When all sampled companies complete, this module aggregates results and
+ *      applies flag rules to identify measures needing review.
  *   5. The LLM then proposes a specific fix for every flagged measure.
  *   6. User accepts, rejects, or customises the fixes.
  *   7. Fixes trigger re-draft of affected measures. Loop until user confirms.
@@ -18,6 +19,16 @@
 
 import type { MeasureResult } from "../analyzer.js";
 import { DEGREE_WORDS } from "./rules.js";
+
+// ─── Module constants ────────────────────────────────────────────────────
+
+/**
+ * Number of companies in a test-drive sample. Sizing this larger gives the flag
+ * rules a more statistically meaningful base and keeps the sample well
+ * stratified across sectors, geographies and cap tiers. Referenced everywhere a
+ * sample count is needed — do not hard-code the number elsewhere.
+ */
+export const TEST_DRIVE_SAMPLE_SIZE = 50;
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -216,36 +227,45 @@ export function buildSampleSelectionPrompt(req: TestDriveSampleRequest): {
 } {
   const isSectorSpecific = req.sectorScope.startsWith("specific:");
   const sectorName = isSectorSpecific ? req.sectorScope.slice("specific:".length).trim() : "";
+  const n = TEST_DRIVE_SAMPLE_SIZE;
+
+  // Stratification minimums scale with the sample size so a larger sample stays
+  // well spread and preserves the signal (known-discloser) vs edge-case split.
+  const minSectors = Math.max(8, Math.round(n * 0.16)); // ≥8 sectors at n=50
+  const minSignal = Math.round(n * 0.3); // ~30% known disclosers → 15 at n=50
+  const minEdge = Math.round(n * 0.2); // ~20% edge cases → 10 at n=50
+
   const modeInstruction = isSectorSpecific
-    ? `The framework is sector-specific to ${sectorName}. Select 10 companies from ${sectorName}.`
-    : `The framework is sector-agnostic. Select 10 companies representative of the global equity market — mix sectors, market caps, and geographies.`;
+    ? `The framework is sector-specific to ${sectorName}. Select ${n} companies from ${sectorName}.`
+    : `The framework is sector-agnostic. Select ${n} companies representative of the global equity market — mix sectors, market caps, and geographies.`;
 
   return {
-    system: `You are selecting a test-drive sample of 10 companies for a CompanyIQ framework.
+    system: `You are selecting a test-drive sample of ${n} companies for a CompanyIQ framework.
 
 Requirements:
 ${modeInstruction}
-- Cover ≥5 sectors (if sector-agnostic)
-- Cover ≥3 geographies (Americas, Europe, Asia-Pacific)
+- Cover ≥${minSectors} sectors (if sector-agnostic)
+- Cover ≥3 geographies — span all major regions (Americas, Europe, Asia-Pacific)
 - Cover ≥2 market cap tiers (large cap and mid cap)
-- Include ≥3 companies you know from research are likely to disclose on this topic (signal companies) — mark isKnownDiscloser: true
-- Include ≥2 companies where the topic is peripheral (edge cases) — mark isKnownDiscloser: false
+- Include ≥${minSignal} companies you know from research are likely to disclose on this topic (signal companies) — mark isKnownDiscloser: true
+- Include ≥${minEdge} companies where the topic is peripheral (edge cases) — mark isKnownDiscloser: false
 
-Return a JSON array of exactly 10 companies, each with: name, ticker (if known), sector, country, rationale (1 sentence), isKnownDiscloser (bool).`,
+Return a JSON array of exactly ${n} companies, each with: name, ticker (if known), sector, country, rationale (1 sentence), isKnownDiscloser (bool).`,
     user: `Topic: ${req.topicTerm}
 Topic synonyms: ${req.topicSynonyms.join(", ")}
 Framework: ${req.frameworkName}
 ${req.stage1ResearchSummary ? `\nResearch context:\n${req.stage1ResearchSummary.slice(0, 2000)}` : ""}
 
-Return a JSON array of 10 companies.`,
+Return a JSON array of ${n} companies.`,
   };
 }
 
 // ─── Flag analysis rules ─────────────────────────────────────────────────
 
 const FLAG_THRESHOLDS = {
-  TOO_NARROW_YES_COUNT: 0,
-  TOO_BROAD_YES_COUNT: 10,
+  TOO_NARROW_YES_COUNT: 0, // fired for zero companies → too narrow (sample-size agnostic)
+  // "too broad" means the measure fired for EVERY scored company, so it is
+  // compared to totalCompanies at runtime rather than a fixed count.
   OFF_EXPECTED_MULTIPLIER: 2, // observed vs expected off by 2× triggers flag
   OFF_EXPECTED_MIN_EXPECTED: 0.20, // only flag if expected_yes_rate >= this
   OFF_EXPECTED_MAX_EXPECTED_FOR_BROAD: 0.80, // only flag broad if expected <= this
@@ -355,8 +375,8 @@ export function analyseTestDrive(
       });
     }
 
-    // Rule: too broad
-    if (yesCount === FLAG_THRESHOLDS.TOO_BROAD_YES_COUNT) {
+    // Rule: too broad — fired for EVERY scored company (sample-size agnostic).
+    if (totalCompanies > 0 && yesCount === totalCompanies) {
       flags.push({
         measureId: meta.measureId,
         rule: "too-broad",
@@ -482,7 +502,7 @@ export function detectTerminologyGaps(
   // ── Hard resource bounds ────────────────────────────────────────────────
   // This function previously had no caps and mined every phrase around every
   // occurrence of every known term across the full concatenated corpus. On a
-  // real test-drive (10 companies × up to ~1MB each × ~20 synonyms, each
+  // real test-drive (TEST_DRIVE_SAMPLE_SIZE companies × up to ~1MB each × ~20 synonyms, each
   // appearing hundreds of times) that allocated millions of phrase strings and
   // exhausted the Node heap (OOM crash). Every value below is a hard ceiling so
   // the worst case is a few tens of thousands of allocations, not millions.

@@ -1386,7 +1386,7 @@ function TestDriveReview({
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-6">
       <h2 className="text-xl font-semibold mb-4">Proposed test-drive sample</h2>
       <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        The LLM proposed 10 companies for a test-drive scoring run — a mix of
+        The LLM proposed 50 companies for a test-drive scoring run — a mix of
         <strong className="mx-1">signal companies</strong> (companies the LLM expects to score high because they
         are known to disclose on this topic) and
         <strong className="mx-1">edge cases</strong> (companies where the topic is peripheral, expected to
@@ -2012,7 +2012,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
 
       {batch && isRunning && (
         <div className="text-sm text-gray-600 dark:text-gray-400">
-          Scoring runs asynchronously. Progress updates every 30 seconds. Typical time for 10 companies × 25 measures: 15–30 minutes.
+          Scoring runs asynchronously. Progress updates every 30 seconds. Typical time for 50 companies × 25 measures: 1–2.5 hours.
         </div>
       )}
 

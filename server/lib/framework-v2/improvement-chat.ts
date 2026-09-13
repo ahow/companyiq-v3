@@ -94,7 +94,7 @@ export function buildImprovementChatSystemPrompt(ctx: ImprovementChatContext): s
         .join("\n")
     : "  (none)";
 
-  return `You are a framework-improvement consultant. The user has just tested a CompanyIQ v2 framework called "${ctx.frameworkName}" on 10 sample companies. Your job is to help them understand the results and decide what to do next.
+  return `You are a framework-improvement consultant. The user has just tested a CompanyIQ v2 framework called "${ctx.frameworkName}" on ${ctx.perCompanySummary.length} sample companies. Your job is to help them understand the results and decide what to do next.
 
 TEST-DRIVE OUTCOME:
 - Robustness criteria passed: ${ctx.passedRobustnessCriteria}/${ctx.totalRobustnessCriteria}
