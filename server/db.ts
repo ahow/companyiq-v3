@@ -10,10 +10,22 @@ if (!process.env.DATABASE_URL) {
 }
 
 // PG pool size is environment-driven so we can scale worker replicas safely.
-// Railway Postgres has max_connections=100; with N worker replicas the total
-// pool demand is N * PG_POOL_MAX (plus the app service). Keep N*PG_POOL_MAX
-// comfortably under ~90. e.g. 8 replicas * 10 = 80. Each replica only runs
-// WORKER_CONCURRENCY jobs at a time, so 10 connections/replica is ample.
+// When DATABASE_URL points DIRECTLY at Postgres, total demand is N * PG_POOL_MAX
+// (plus the app), so PG_POOL_MAX must be kept small enough that N*PG_POOL_MAX
+// stays under the server's connection cap. When DATABASE_URL points at a
+// PgBouncer pooler in TRANSACTION mode (see deploy/pgbouncer/), the pooler
+// multiplexes many client connections onto a small set of real server
+// connections, so each replica can keep a modest local pool (e.g. PG_POOL_MAX~5)
+// without threatening the cap — the pooler is what makes higher replica counts
+// safe.
+//
+// Transaction-pooling compatibility: this app is safe under transaction pooling.
+// node-postgres issues no server-side prepared statements by default (drizzle's
+// node-postgres driver does not use them), we hold no session-scoped SET across
+// queries, use no LISTEN/NOTIFY, and the one advisory-lock consumer
+// (server/reconciler.ts) uses a TRANSACTION-scoped lock inside an explicit
+// transaction rather than a session-scoped one. Keep it this way: do not
+// introduce session-level state that must persist across separate pool queries.
 const PG_POOL_MAX = parseInt(process.env.PG_POOL_MAX || "20", 10);
 
 export const pool = new Pool({
