@@ -150,20 +150,36 @@ type ReconcileStats = {
  */
 export async function reconcileOnce(): Promise<ReconcileStats> {
   const empty: ReconcileStats = { syncedCompleted: 0, recovered: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0, skipped: true };
-  // Advisory locks are DATABASE-GLOBAL: whoever holds the key (on any connection)
-  // blocks all other holders. We therefore hold the lock on a single dedicated
-  // client for the whole pass (so lock + unlock are guaranteed same-connection,
-  // safe under a pooled driver), while the pass itself uses the shared pool.
+  // Advisory locks are DATABASE-GLOBAL: whoever holds the key blocks all other
+  // holders, giving us cross-replica leader election. This must stay correct
+  // under PgBouncer TRANSACTION pooling, where a client's "session" is NOT
+  // pinned to one server connection between statements — so a SESSION-level
+  // pg_advisory_lock taken on one statement would be stranded on whichever
+  // server connection happened to serve it and could never be released by a
+  // later statement (the lock would leak until that server connection closes).
+  // Instead we open ONE explicit transaction and take a TRANSACTION-scoped lock:
+  // the open transaction pins a single server connection for its whole duration
+  // (so the lock is genuinely held while the pass runs), and the lock releases
+  // automatically on COMMIT/ROLLBACK. The pass itself keeps using the shared
+  // pool — the lock is database-global, so it gates other replicas regardless of
+  // which connection does the work. Correct under transaction pooling, session
+  // pooling, and direct connections alike.
   const client = await pool.connect();
+  let inTxn = false;
   let got = false;
   try {
-    const r = await client.query("SELECT pg_try_advisory_lock($1) AS got", [RECONCILE_LOCK_KEY]);
+    await client.query("BEGIN");
+    inTxn = true;
+    const r = await client.query("SELECT pg_try_advisory_xact_lock($1) AS got", [RECONCILE_LOCK_KEY]);
     got = r.rows?.[0]?.got === true;
     if (!got) return empty; // another replica is the leader for this tick
     return await reconcilePass();
   } finally {
-    if (got) {
-      try { await client.query("SELECT pg_advisory_unlock($1)", [RECONCILE_LOCK_KEY]); } catch { /* connection may be gone; lock auto-releases on disconnect */ }
+    if (inTxn) {
+      // Ending the transaction releases the xact-scoped advisory lock and never
+      // leaves an open transaction (which would pin a pooled connection).
+      try { await client.query(got ? "COMMIT" : "ROLLBACK"); }
+      catch { try { await client.query("ROLLBACK"); } catch { /* connection may be gone; lock auto-releases on disconnect */ } }
     }
     client.release();
   }
