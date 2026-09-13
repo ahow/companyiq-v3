@@ -144,6 +144,39 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS r3_1_exception_metrics BOOLEAN NOT NULL DEFAULT false`);
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS r3_1_exception_coverage BOOLEAN NOT NULL DEFAULT false`);
 
+    // Framework Builder v2 edit-audit (observability). `updated_at` is nullable
+    // and set on every measure write going forward; pre-audit rows deliberately
+    // stay NULL rather than being backfilled with a misleading now(), so a NULL
+    // means "never edited through the audited apply loop".
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`);
+
+    // ─── Measure Edits (append-only edit-audit log) ─────────────────────────
+    // One row per attempted field change in the /v2/improvement/apply loop.
+    // `applied=true` rows carry before/after; `applied=false` rows carry a
+    // skip_reason so silently-skipped accepts (e.g. an LLM batch returning no
+    // updates) leave a durable, per-measure trace. Purely additive; the apply
+    // flow never depends on this table existing (audit writes are defensive).
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS measure_edits (
+        id BIGSERIAL PRIMARY KEY,
+        workspace_id INTEGER,
+        framework_id INTEGER NOT NULL,
+        list_id INTEGER,
+        measure_id TEXT NOT NULL,
+        field TEXT NOT NULL,
+        op TEXT,
+        before_value TEXT,
+        after_value TEXT,
+        source TEXT NOT NULL,
+        applied BOOLEAN NOT NULL,
+        skip_reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS measure_edits_framework_idx ON measure_edits(framework_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS measure_edits_measure_idx ON measure_edits(measure_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS measure_edits_created_idx ON measure_edits(created_at DESC)`);
+
     // ─── Framework v2 async jobs ─────────────────────────────────────────────
     // Sprint 10 P4 fix: /v2/draft LLM call runs ~4 minutes, exceeding mobile
     // browser socket timeouts. We now dispatch as an async job and let the

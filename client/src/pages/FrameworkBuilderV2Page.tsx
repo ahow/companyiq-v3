@@ -1660,6 +1660,21 @@ interface IterationSnapshot {
   rootCauses: RootCauseReport | null;
 }
 
+// One row of the measure edit-audit log (server: measure-audit.ts / GET
+// /v2/measure-edits). applied=false rows carry a skipReason.
+interface MeasureEditRow {
+  id: number;
+  measureId: string;
+  field: string;
+  op: string | null;
+  beforeValue: string | null;
+  afterValue: string | null;
+  source: string;
+  applied: boolean;
+  skipReason: string | null;
+  createdAt: string;
+}
+
 // ─── Tier-1 design-time quality metrics (server: quality-metrics.ts) ────────
 // These mirror the QualityMetricsReport shapes. MAXIMISE metrics are reported to
 // steer improvement; GATE metrics are judged against DEFERRED placeholder
@@ -1822,6 +1837,17 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   const [applyingIterate, setApplyingIterate] = useState(false);
   const [applyIterateResult, setApplyIterateResult] = useState<string | null>(null);
   const [applyIterateError, setApplyIterateError] = useState<string | null>(null);
+  // Recent edit-audit rows for this framework/list (observability). Refreshed
+  // after every apply so silently-skipped accepts become visible.
+  const [measureEdits, setMeasureEdits] = useState<MeasureEditRow[]>([]);
+  const [measureEditsOpen, setMeasureEditsOpen] = useState(false);
+
+  const fetchMeasureEdits = async () => {
+    try {
+      const r = await api.request(`/framework-builder/v2/measure-edits?frameworkId=${frameworkId}&listId=${listId}&limit=200`);
+      setMeasureEdits(r.edits || []);
+    } catch { /* non-fatal — audit is observability-only */ }
+  };
 
   const applyAcceptedAndIterate = async () => {
     if (applyingIterate || acceptedCount === 0) return;
@@ -1843,6 +1869,8 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       });
       const summary = summariseApplyResult(applyResp);
       setApplyIterateResult(`${summary} Now starting a fresh test-drive…`);
+      // Refresh the edit-audit so any silently-skipped accepts are visible.
+      void fetchMeasureEdits();
       // Kick off a re-score against the updated framework
       await triggerRescore();
       setApplyIterateResult(`${summary} Started a fresh iteration — watch the counter above.`);
@@ -1922,6 +1950,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       setLoading(true);
       await fetchStatus();
       setLoading(false);
+      void fetchMeasureEdits();
       if (cancelled) return;
       intervalId = setInterval(async () => {
         if (cancelled) return;
@@ -2517,9 +2546,76 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
         </div>
       )}
 
+      {/* ─── Recent edits (edit-audit) ─── */}
+      {measureEdits.length > 0 && (
+        <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+          <div className="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-200">
+            <button onClick={() => setMeasureEditsOpen((o) => !o)} className="flex items-center gap-2">
+              <span>{measureEditsOpen ? "▾" : "▸"}</span>
+              Recent edits
+              <span className="text-xs font-normal text-gray-500">
+                ({measureEdits.length} logged
+                {(() => {
+                  const skippedN = measureEdits.filter((e) => !e.applied).length;
+                  return skippedN > 0 ? `, ${skippedN} skipped` : "";
+                })()})
+              </span>
+            </button>
+            <button
+              onClick={() => void fetchMeasureEdits()}
+              className="text-xs font-normal text-purple-600 hover:underline"
+              title="Refresh the edit-audit log"
+            >
+              refresh
+            </button>
+          </div>
+          {measureEditsOpen && (
+            <div className="mt-2 max-h-72 overflow-auto rounded border border-gray-200 dark:border-gray-700">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 dark:bg-gray-900 text-gray-500 sticky top-0">
+                  <tr>
+                    <th className="text-left px-2 py-1 font-medium">Measure</th>
+                    <th className="text-left px-2 py-1 font-medium">Field</th>
+                    <th className="text-left px-2 py-1 font-medium">Op</th>
+                    <th className="text-left px-2 py-1 font-medium">Outcome</th>
+                    <th className="text-left px-2 py-1 font-medium">Source</th>
+                    <th className="text-left px-2 py-1 font-medium">When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {measureEdits.map((e) => (
+                    <tr
+                      key={e.id}
+                      className={`border-t border-gray-100 dark:border-gray-800 ${e.applied ? "" : "bg-amber-50 dark:bg-amber-950/30"}`}
+                    >
+                      <td className="px-2 py-1 font-mono">{e.measureId}</td>
+                      <td className="px-2 py-1">{e.field}</td>
+                      <td className="px-2 py-1 text-gray-500">{e.op || "—"}</td>
+                      <td className="px-2 py-1">
+                        {e.applied ? (
+                          <span className="text-green-700 dark:text-green-400">applied</span>
+                        ) : (
+                          <span className="text-amber-700 dark:text-amber-400" title={e.skipReason || "skipped"}>
+                            skipped{e.skipReason ? `: ${e.skipReason}` : ""}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-gray-500 font-mono">{e.source}</td>
+                      <td className="px-2 py-1 text-gray-500 whitespace-nowrap">
+                        {e.createdAt ? new Date(e.createdAt).toLocaleString() : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ─── Improvement chat (Stage 2) ─── */}
       {isComplete && (
-        <ImprovementChat frameworkId={frameworkId} listId={listId} />
+        <ImprovementChat frameworkId={frameworkId} listId={listId} onApplied={() => void fetchMeasureEdits()} />
       )}
 
       <div className="text-xs text-gray-500">
@@ -2899,7 +2995,7 @@ function IterationHistoryView({ iterations }: { iterations: IterationSnapshot[] 
   );
 }
 
-function ImprovementChat({ frameworkId, listId }: { frameworkId: number; listId: number }) {
+function ImprovementChat({ frameworkId, listId, onApplied }: { frameworkId: number; listId: number; onApplied?: () => void }) {
   const [turns, setTurns] = useState<ChatTurn[]>([
     { role: "assistant", content: "I've analysed your test-drive results. Ask me anything about the framework issues, doc-collection failures, or specific proposals — or type 'summarise findings' for an overview." },
   ]);
@@ -2941,6 +3037,8 @@ function ImprovementChat({ frameworkId, listId }: { frameworkId: number; listId:
       setApplyResult(summary);
       // Echo the definite outcome back into the transcript (requirement D).
       setTurns((t) => [...t, { role: "assistant", content: `✓ ${summary}` }]);
+      // Refresh the edit-audit so any silently-skipped accepts become visible.
+      onApplied?.();
     } catch (e: any) {
       setApplyResult(`Failed: ${e?.message || e}`);
     } finally {

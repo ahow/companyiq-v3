@@ -22,6 +22,7 @@ import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } fro
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import { groupProposalsByPatch, BATCH_REGENERATORS, differentiateMeasureDefinition, regenerateMeasureField, CUSTOM_EDIT_FIELDS, type CustomEditField, type CustomEditMeasure, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
+import { recordMeasureEdit } from "../lib/framework-v2/measure-audit.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -1838,6 +1839,61 @@ router.get("/v2/iterations", requireWorkspace, async (req: Request, res: Respons
   }
 });
 
+// ─── GET /v2/measure-edits ── read the edit-audit log ──
+// Returns the most recent measure-edit audit rows for a framework (optionally
+// scoped to a list), newest first. `applied=false` rows carry a skip_reason so
+// the UI can flag silently-skipped accepts. Defensive: if the audit table does
+// not exist yet, returns an empty list rather than 500.
+router.get("/v2/measure-edits", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+    const frameworkId = Number(req.query.frameworkId);
+    if (!frameworkId) return res.status(400).json({ error: "frameworkId required" });
+    const listIdRaw = req.query.listId;
+    const listId = listIdRaw !== undefined && listIdRaw !== "" ? Number(listIdRaw) : null;
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 200;
+
+    try {
+      const rows = await db.execute(sql`
+        SELECT id, workspace_id, framework_id, list_id, measure_id, field, op,
+               before_value, after_value, source, applied, skip_reason, created_at
+        FROM measure_edits
+        WHERE framework_id = ${frameworkId}
+          ${listId !== null ? sql`AND list_id = ${listId}` : sql``}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${limit}
+      `);
+      return res.json({
+        edits: ((rows as any).rows || []).map((r: any) => ({
+          id: Number(r.id),
+          workspaceId: r.workspace_id,
+          frameworkId: r.framework_id,
+          listId: r.list_id,
+          measureId: r.measure_id,
+          field: r.field,
+          op: r.op,
+          beforeValue: r.before_value,
+          afterValue: r.after_value,
+          source: r.source,
+          applied: r.applied,
+          skipReason: r.skip_reason,
+          createdAt: r.created_at,
+        })),
+      });
+    } catch (inner: any) {
+      // Table missing / transient error — audit is observability-only, so never
+      // surface a 500 for the read path.
+      console.warn("[framework-builder v2 /measure-edits] read failed (returning empty):", inner?.message || inner);
+      return res.json({ edits: [] });
+    }
+  } catch (err: any) {
+    console.error("[framework-builder v2 /measure-edits] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
 // ─── POST /v2/rescore ── fire fresh batch against the same list ──
 // Iteration snapshots are created by /v2/test-drive/results the FIRST time it
 // observes a completed batch — not here. Snapshotting at rescore-start would
@@ -2315,14 +2371,38 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     // across measures AND keeps latency O(1) rather than O(N).
     async function applyProposal(prop: any, applied: any[], skipped: any[]) {
       if (prop.patch?.op === "replace") {
-        const col = prop.patch.path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
-                    prop.patch.path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
-        if (!col) { skipped.push({ measureId: prop.measureId, reason: `unsupported patch path ${prop.patch.path}` }); return; }
+        const path = prop.patch.path;
+        const col = path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
+                    path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
+        if (!col) {
+          const reason = `unsupported patch path ${path}`;
+          skipped.push({ measureId: prop.measureId, reason });
+          await recordMeasureEdit(db, {
+            workspaceId: ctx.workspaceId, frameworkId, listId, measureId: prop.measureId,
+            field: path || "(unknown)", op: prop.patch?.op || null,
+            source: `proposal:${prop.flagRule}`, applied: false, skipReason: reason,
+          });
+          return;
+        }
+        // Read the before-value so the audit row carries the prior state.
+        let beforeValue: any = null;
+        try {
+          const beforeQ = await db.execute(sql`
+            SELECT ${col} AS v FROM framework_measures
+            WHERE framework_id = ${frameworkId} AND measure_id = ${prop.measureId} LIMIT 1
+          `);
+          beforeValue = ((beforeQ as any).rows || [])[0]?.v ?? null;
+        } catch { /* audit before-value is best-effort */ }
         await db.execute(sql`
-          UPDATE framework_measures SET ${col} = ${prop.patch.value}
+          UPDATE framework_measures SET ${col} = ${prop.patch.value}, updated_at = NOW()
           WHERE framework_id = ${frameworkId} AND measure_id = ${prop.measureId}
         `);
         applied.push({ measureId: prop.measureId, action: prop.action, patch: prop.patch });
+        await recordMeasureEdit(db, {
+          workspaceId: ctx.workspaceId, frameworkId, listId, measureId: prop.measureId,
+          field: path, op: prop.patch.op, beforeValue, afterValue: prop.patch.value,
+          source: `proposal:${prop.flagRule}`, applied: true,
+        });
       } else {
         // LLM regeneration paths get grouped into batches; caller processes them.
       }
@@ -2375,17 +2455,17 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     async function persistMeasureField(measureId: string, field: CustomEditField, value: any): Promise<boolean> {
       switch (field) {
         case "substantive_definition":
-          await db.execute(sql`UPDATE framework_measures SET substantive_definition = ${value} WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+          await db.execute(sql`UPDATE framework_measures SET substantive_definition = ${value}, updated_at = NOW() WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
         case "fallback_yes_criterion":
-          await db.execute(sql`UPDATE framework_measures SET fallback_yes_criterion = ${value} WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+          await db.execute(sql`UPDATE framework_measures SET fallback_yes_criterion = ${value}, updated_at = NOW() WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
         case "positive_examples":
-          await db.execute(sql`UPDATE framework_measures SET positive_examples = ${JSON.stringify(value)}::jsonb WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+          await db.execute(sql`UPDATE framework_measures SET positive_examples = ${JSON.stringify(value)}::jsonb, updated_at = NOW() WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
         case "negative_examples":
-          await db.execute(sql`UPDATE framework_measures SET negative_examples = ${JSON.stringify(value)}::jsonb WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+          await db.execute(sql`UPDATE framework_measures SET negative_examples = ${JSON.stringify(value)}::jsonb, updated_at = NOW() WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
         case "expected_yes_rate":
-          await db.execute(sql`UPDATE framework_measures SET expected_yes_rate = ${value} WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+          await db.execute(sql`UPDATE framework_measures SET expected_yes_rate = ${value}, updated_at = NOW() WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
         case "min_quote_context_chars":
-          await db.execute(sql`UPDATE framework_measures SET min_quote_context_chars = ${value} WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+          await db.execute(sql`UPDATE framework_measures SET min_quote_context_chars = ${value}, updated_at = NOW() WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
         default:
           return false;
       }
@@ -2428,49 +2508,125 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
           negative_examples: Array.isArray(m.negative_examples) ? m.negative_examples : [],
         }));
 
+        // Derive the audited field/op generically from the group key
+        // ("<op>::<path>") and the before-state + provenance from the group's
+        // own proposals — no framework/measure-specific branching.
+        const [groupOp, groupField] = groupKey.split("::");
+        const beforeById: Record<string, MeasureBefore> = {};
+        for (const m of measuresForLLM) beforeById[m.measureId] = m;
+        const flagRuleById: Record<string, string> = {};
+        for (const p of groupProps) flagRuleById[p.measureId] = p.flagRule;
+        const auditSource = (measureId: string) => `proposal:${flagRuleById[measureId] || groupOp}`;
+        const beforeFieldValue = (measureId: string): any => {
+          const b = beforeById[measureId];
+          if (!b) return null;
+          if (groupField === "positive_examples") return b.positive_examples;
+          if (groupField === "negative_examples") return b.negative_examples;
+          if (groupField === "fallback_yes_criterion") return b.fallback_yes_criterion;
+          return b.substantive_definition;
+        };
+
         let result: { updates: any[]; provider: string } | null = null;
         const regenerator = BATCH_REGENERATORS[groupKey];
         if (!regenerator) {
-          for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: `not applied: no regenerator wired for group '${groupKey}'` });
+          for (const p of groupProps) {
+            const reason = `not applied: no regenerator wired for group '${groupKey}'`;
+            skipped.push({ measureId: p.measureId, reason });
+            await recordMeasureEdit(db, {
+              workspaceId: ctx.workspaceId, frameworkId, listId, measureId: p.measureId,
+              field: groupField || "(unknown)", op: groupOp || null,
+              beforeValue: beforeFieldValue(p.measureId),
+              source: auditSource(p.measureId), applied: false, skipReason: reason,
+            });
+          }
           continue;
         }
         try {
           result = await regenerator(measuresForLLM, fctx);
         } catch (e: any) {
-          for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: `LLM regeneration failed: ${e?.message || e}` });
+          const reason = `LLM regeneration failed: ${e?.message || e}`;
+          for (const p of groupProps) {
+            skipped.push({ measureId: p.measureId, reason });
+            await recordMeasureEdit(db, {
+              workspaceId: ctx.workspaceId, frameworkId, listId, measureId: p.measureId,
+              field: groupField || "(unknown)", op: groupOp || null,
+              beforeValue: beforeFieldValue(p.measureId),
+              source: auditSource(p.measureId), applied: false, skipReason: reason,
+            });
+          }
           continue;
         }
 
         if (!result || !result.updates || !result.updates.length) {
-          for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: "LLM returned no updates" });
+          // CRITICAL: an LLM batch returning zero updates is exactly the silent
+          // skip we are auditing. One row per measure so all affected measures
+          // leave a durable trace, not just an in-memory count.
+          const reason = "LLM returned no updates";
+          for (const p of groupProps) {
+            skipped.push({ measureId: p.measureId, reason });
+            await recordMeasureEdit(db, {
+              workspaceId: ctx.workspaceId, frameworkId, listId, measureId: p.measureId,
+              field: groupField || "(unknown)", op: groupOp || null,
+              beforeValue: beforeFieldValue(p.measureId),
+              source: auditSource(p.measureId), applied: false, skipReason: reason,
+            });
+          }
           continue;
         }
         for (const u of result.updates) {
-          // Persist each field the LLM produced
+          // Persist each field the LLM produced, auditing before/after per field.
+          const before = beforeById[u.measureId];
           if (u.substantive_definition) {
             await db.execute(sql`
-              UPDATE framework_measures SET substantive_definition = ${u.substantive_definition}
+              UPDATE framework_measures SET substantive_definition = ${u.substantive_definition}, updated_at = NOW()
               WHERE framework_id = ${frameworkId} AND measure_id = ${u.measureId}
             `);
+            await recordMeasureEdit(db, {
+              workspaceId: ctx.workspaceId, frameworkId, listId, measureId: u.measureId,
+              field: "substantive_definition", op: groupOp || null,
+              beforeValue: before?.substantive_definition ?? null, afterValue: u.substantive_definition,
+              source: auditSource(u.measureId), applied: true,
+            });
           }
           if (Array.isArray(u.positive_examples) && u.positive_examples.length) {
             await db.execute(sql`
-              UPDATE framework_measures SET positive_examples = ${JSON.stringify(u.positive_examples)}::jsonb
+              UPDATE framework_measures SET positive_examples = ${JSON.stringify(u.positive_examples)}::jsonb, updated_at = NOW()
               WHERE framework_id = ${frameworkId} AND measure_id = ${u.measureId}
             `);
+            await recordMeasureEdit(db, {
+              workspaceId: ctx.workspaceId, frameworkId, listId, measureId: u.measureId,
+              field: "positive_examples", op: groupOp || null,
+              beforeValue: before?.positive_examples ?? null, afterValue: u.positive_examples,
+              source: auditSource(u.measureId), applied: true,
+            });
           }
           if (Array.isArray(u.negative_examples) && u.negative_examples.length) {
             await db.execute(sql`
-              UPDATE framework_measures SET negative_examples = ${JSON.stringify(u.negative_examples)}::jsonb
+              UPDATE framework_measures SET negative_examples = ${JSON.stringify(u.negative_examples)}::jsonb, updated_at = NOW()
               WHERE framework_id = ${frameworkId} AND measure_id = ${u.measureId}
             `);
+            await recordMeasureEdit(db, {
+              workspaceId: ctx.workspaceId, frameworkId, listId, measureId: u.measureId,
+              field: "negative_examples", op: groupOp || null,
+              beforeValue: before?.negative_examples ?? null, afterValue: u.negative_examples,
+              source: auditSource(u.measureId), applied: true,
+            });
           }
           applied.push({ measureId: u.measureId, action: `regenerated:${groupKey}`, source: "llm" });
         }
         // Any group proposal without a returned update:
         const returnedIds = new Set(result.updates.map((u: any) => u.measureId));
         for (const p of groupProps) {
-          if (!returnedIds.has(p.measureId)) skipped.push({ measureId: p.measureId, reason: "LLM did not return update for this measureId" });
+          if (!returnedIds.has(p.measureId)) {
+            const reason = "LLM did not return update for this measureId";
+            skipped.push({ measureId: p.measureId, reason });
+            await recordMeasureEdit(db, {
+              workspaceId: ctx.workspaceId, frameworkId, listId, measureId: p.measureId,
+              field: groupField || "(unknown)", op: groupOp || null,
+              beforeValue: beforeFieldValue(p.measureId),
+              source: auditSource(p.measureId), applied: false, skipReason: reason,
+            });
+          }
         }
       }
     }
@@ -2483,7 +2639,12 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
       if (action.type === "apply_edit") {
         const idx = parseInt(String(action.attrs.proposal || "").replace(/^P/, ""), 10) - 1;
         const prop = editsBundle.proposals[idx];
-        if (!prop) { skipped.push({ action, reason: "proposal not found" }); continue; }
+        if (!prop) {
+          const reason = "proposal not found";
+          skipped.push({ action, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: String(action.attrs.measure || "(unknown)"), field: "(proposal)", op: "apply_edit", source: `proposal:${action.attrs.proposal || "?"}`, applied: false, skipReason: reason });
+          continue;
+        }
         if (prop.patch?.op === "replace") {
           await applyProposal(prop, applied, skipped);
         } else {
@@ -2497,6 +2658,13 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         // de-duplicated against existing entries (case preserved as supplied).
         const newTerms = String(action.attrs.terms || "").split(",").map((t: string) => t.trim()).filter(Boolean);
         if (newTerms.length > 0) {
+          // Framework-level edit (topic_synonyms lives on frameworks, not
+          // framework_measures) — audited under a generic sentinel measure id.
+          let beforeSyn: any = null;
+          try {
+            const synQ = await db.execute(sql`SELECT topic_synonyms FROM frameworks WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId} LIMIT 1`);
+            beforeSyn = ((synQ as any).rows || [])[0]?.topic_synonyms ?? null;
+          } catch { /* best-effort */ }
           await db.execute(sql`
             UPDATE frameworks
             SET topic_synonyms = (
@@ -2510,8 +2678,18 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
             WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
           `);
           applied.push({ action: "add_synonyms", terms: newTerms });
+          await recordMeasureEdit(db, {
+            workspaceId: ctx.workspaceId, frameworkId, listId, measureId: "(framework)",
+            field: "topic_synonyms", op: "add_synonyms", beforeValue: beforeSyn, afterValue: newTerms,
+            source: "add_synonyms", applied: true,
+          });
         } else {
           skipped.push({ action, reason: "no terms supplied" });
+          await recordMeasureEdit(db, {
+            workspaceId: ctx.workspaceId, frameworkId, listId, measureId: "(framework)",
+            field: "topic_synonyms", op: "add_synonyms", source: "add_synonyms",
+            applied: false, skipReason: "no terms supplied",
+          });
         }
       } else if (action.type === "rescore_now") {
         // Trigger fresh scoring via the existing /analyze route contract.
@@ -2532,26 +2710,48 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         const measureId = String(action.attrs.measure || "").trim();
         const field = String(action.attrs.field || "").trim() as CustomEditField;
         const instruction = String(action.attrs.instruction || "").trim();
-        if (!measureId) { skipped.push({ action, reason: "not applied: missing 'measure' id" }); continue; }
-        if (!(CUSTOM_EDIT_FIELDS as readonly string[]).includes(field)) {
-          skipped.push({ action, reason: `not applied: field '${field}' is not editable (allowed: ${CUSTOM_EDIT_FIELDS.join(", ")})` });
+        if (!measureId) {
+          const reason = "not applied: missing 'measure' id";
+          skipped.push({ action, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: "(unknown)", field: field || "(unknown)", op: "custom_edit", source: "custom_edit", applied: false, skipReason: reason });
           continue;
         }
-        if (!instruction) { skipped.push({ action, reason: "not applied: missing 'instruction'" }); continue; }
+        if (!(CUSTOM_EDIT_FIELDS as readonly string[]).includes(field)) {
+          const reason = `not applied: field '${field}' is not editable (allowed: ${CUSTOM_EDIT_FIELDS.join(", ")})`;
+          skipped.push({ action, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId, field: field || "(unknown)", op: "custom_edit", source: "custom_edit", applied: false, skipReason: reason });
+          continue;
+        }
+        if (!instruction) {
+          const reason = "not applied: missing 'instruction'";
+          skipped.push({ action, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId, field, op: "custom_edit", source: "custom_edit", applied: false, skipReason: reason });
+          continue;
+        }
         const measure = await loadMeasure(measureId);
-        if (!measure) { skipped.push({ action, reason: `not applied: measure '${measureId}' not found` }); continue; }
+        if (!measure) {
+          const reason = `not applied: measure '${measureId}' not found`;
+          skipped.push({ action, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId, field, op: "custom_edit", source: "custom_edit", applied: false, skipReason: reason });
+          continue;
+        }
         try {
           const fctx = await loadFrameworkContext();
           const before = fieldValueOf(measure, field);
           const { value: after } = await regenerateMeasureField(measure, field, instruction, fctx);
           if (after == null || (Array.isArray(after) && after.length === 0)) {
-            skipped.push({ measureId, action: "apply_custom_edit", field, reason: "not applied: LLM returned no usable value for this field" });
+            const reason = "not applied: LLM returned no usable value for this field";
+            skipped.push({ measureId, action: "apply_custom_edit", field, reason });
+            await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId, field, op: "custom_edit", beforeValue: before, source: "custom_edit", applied: false, skipReason: reason });
             continue;
           }
           await persistMeasureField(measureId, field, after);
           applied.push({ measureId, action: "custom_edit", field, instruction, before, after, source: "llm" });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId, field, op: "custom_edit", beforeValue: before, afterValue: after, source: "custom_edit", applied: true });
         } catch (e: any) {
-          skipped.push({ measureId, action: "apply_custom_edit", field, reason: `not applied: regeneration failed: ${e?.message || e}` });
+          const reason = `not applied: regeneration failed: ${e?.message || e}`;
+          skipped.push({ measureId, action: "apply_custom_edit", field, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId, field, op: "custom_edit", source: "custom_edit", applied: false, skipReason: reason });
         }
       } else if (action.type === "merge_or_differentiate") {
         // Resolve a near-duplicate pair. mode="differentiate" (default) rewrites
@@ -2562,10 +2762,20 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         const measureAId = String(action.attrs.measureA || action.attrs.measure || "").trim();
         const measureBId = String(action.attrs.measureB || "").trim();
         const mode = (String(action.attrs.mode || "differentiate").trim().toLowerCase() === "merge") ? "merge" : "differentiate";
-        if (!measureAId || !measureBId) { skipped.push({ action, reason: "not applied: both 'measureA' and 'measureB' required" }); continue; }
+        if (!measureAId || !measureBId) {
+          const reason = "not applied: both 'measureA' and 'measureB' required";
+          skipped.push({ action, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureAId || "(unknown)", field: "substantive_definition", op: mode, source: mode, applied: false, skipReason: reason });
+          continue;
+        }
         const mA = await loadMeasure(measureAId);
         const mB = await loadMeasure(measureBId);
-        if (!mA || !mB) { skipped.push({ action, reason: `not applied: measure(s) not found (${!mA ? measureAId : ""}${!mA && !mB ? ", " : ""}${!mB ? measureBId : ""})` }); continue; }
+        if (!mA || !mB) {
+          const reason = `not applied: measure(s) not found (${!mA ? measureAId : ""}${!mA && !mB ? ", " : ""}${!mB ? measureBId : ""})`;
+          skipped.push({ action, reason });
+          await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureAId, field: "substantive_definition", op: mode, source: mode, applied: false, skipReason: reason });
+          continue;
+        }
         if (mode === "merge") {
           try {
             await db.execute(sql`DELETE FROM measure_scores WHERE framework_id = ${frameworkId} AND measure_id = ${measureBId}`);
@@ -2573,23 +2783,38 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
             const cntQ = await db.execute(sql`SELECT COUNT(*)::int AS n FROM framework_measures WHERE framework_id = ${frameworkId}`);
             const remaining = ((cntQ as any).rows || [])[0]?.n ?? null;
             applied.push({ action: "merge", keptMeasureId: measureAId, retiredMeasureId: measureBId, remainingMeasureCount: remaining });
+            // Audited against the retired measure — it is the row that changed
+            // (deleted). before = its prior definition, after = null.
+            await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureBId, field: "(measure)", op: "merge", beforeValue: mB.substantive_definition, afterValue: null, source: `merge:kept=${measureAId}`, applied: true });
           } catch (e: any) {
-            skipped.push({ action, reason: `not applied: merge failed: ${e?.message || e}` });
+            const reason = `not applied: merge failed: ${e?.message || e}`;
+            skipped.push({ action, reason });
+            await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureBId, field: "(measure)", op: "merge", source: `merge:kept=${measureAId}`, applied: false, skipReason: reason });
           }
         } else {
           try {
             const fctx = await loadFrameworkContext();
             const before = mA.substantive_definition;
             const { value: after } = await differentiateMeasureDefinition(mA, mB, fctx);
-            if (!after) { skipped.push({ action, reason: "not applied: LLM returned no differentiated definition" }); continue; }
+            if (!after) {
+              const reason = "not applied: LLM returned no differentiated definition";
+              skipped.push({ action, reason });
+              await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureAId, field: "substantive_definition", op: "differentiate", beforeValue: before, source: `differentiate:against=${measureBId}`, applied: false, skipReason: reason });
+              continue;
+            }
             await persistMeasureField(measureAId, "substantive_definition", after);
             applied.push({ measureId: measureAId, action: "differentiate", against: measureBId, before, after, source: "llm" });
+            await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureAId, field: "substantive_definition", op: "differentiate", beforeValue: before, afterValue: after, source: `differentiate:against=${measureBId}`, applied: true });
           } catch (e: any) {
-            skipped.push({ action, reason: `not applied: differentiate failed: ${e?.message || e}` });
+            const reason = `not applied: differentiate failed: ${e?.message || e}`;
+            skipped.push({ action, reason });
+            await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureAId, field: "substantive_definition", op: "differentiate", source: `differentiate:against=${measureBId}`, applied: false, skipReason: reason });
           }
         }
       } else {
-        skipped.push({ action, reason: `not applied: unknown action type '${action.type}'` });
+        const reason = `not applied: unknown action type '${action.type}'`;
+        skipped.push({ action, reason });
+        await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: String(action?.attrs?.measure || "(unknown)"), field: "(action)", op: String(action?.type || "unknown"), source: "action", applied: false, skipReason: reason });
       }
     }
 
