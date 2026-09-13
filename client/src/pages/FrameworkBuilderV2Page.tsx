@@ -1841,10 +1841,11 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
         method: "POST",
         body: JSON.stringify({ frameworkId, listId, actions }),
       });
-      setApplyIterateResult(`Applied ${applyResp.appliedCount} edit${applyResp.appliedCount === 1 ? "" : "s"}; ${applyResp.skippedCount} skipped. Now starting a fresh test-drive…`);
+      const summary = summariseApplyResult(applyResp);
+      setApplyIterateResult(`${summary} Now starting a fresh test-drive…`);
       // Kick off a re-score against the updated framework
       await triggerRescore();
-      setApplyIterateResult(`Applied ${applyResp.appliedCount} edit${applyResp.appliedCount === 1 ? "" : "s"} and started iteration — watch the counter above.`);
+      setApplyIterateResult(`${summary} Started a fresh iteration — watch the counter above.`);
     } catch (e: any) {
       setApplyIterateError(e?.message || String(e));
     } finally {
@@ -2171,6 +2172,8 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
           qm={qualityMetrics}
           nearDupDecisions={nearDupDecisions}
           setNearDupDecisions={setNearDupDecisions}
+          frameworkId={frameworkId}
+          listId={listId}
         />
       )}
 
@@ -2530,6 +2533,20 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
 interface ChatAction { type: string; attrs: Record<string, string> }
 interface ChatTurn { role: "user" | "assistant"; content: string; actions?: ChatAction[] }
 
+// Turn an /improvement/apply response into a single user-legible line that
+// always states what was applied AND why anything was skipped (requirement D:
+// no silent no-ops — every action reports a definite outcome).
+function summariseApplyResult(resp: any): string {
+  const applied = resp?.appliedCount ?? (resp?.applied?.length || 0);
+  const skipped = resp?.skippedCount ?? (resp?.skipped?.length || 0);
+  let s = `Applied ${applied} change${applied === 1 ? "" : "s"}, ${skipped} skipped.`;
+  const reasons: string[] = (resp?.skipped || []).map((k: any) => k?.reason).filter(Boolean);
+  if (reasons.length) {
+    s += " Skipped: " + reasons.slice(0, 5).join("; ") + (reasons.length > 5 ? ` (+${reasons.length - 5} more)` : "");
+  }
+  return s;
+}
+
 // ─── Tier-1 design-time quality metrics panel ───
 // Renders the MAXIMISE metrics (reliability, coherence redundancy), the GATE
 // metrics (discrimination, coverage, auditability, robustness, transparency,
@@ -2541,11 +2558,35 @@ function QualityMetricsPanel({
   qm,
   nearDupDecisions,
   setNearDupDecisions,
+  frameworkId,
+  listId,
 }: {
   qm: QualityMetricsReport;
   nearDupDecisions: Record<string, "accept" | "dismiss">;
   setNearDupDecisions: React.Dispatch<React.SetStateAction<Record<string, "accept" | "dismiss">>>;
+  frameworkId: number;
+  listId: number;
 }) {
+  // Per-pair apply status (requirement D: every merge/differentiate reports a
+  // definite, user-legible outcome — never a silent selection).
+  const [nearDupResult, setNearDupResult] = useState<Record<string, string>>({});
+  const [nearDupBusy, setNearDupBusy] = useState<Record<string, boolean>>({});
+  const applyNearDup = async (key: string, measureA: string, measureB: string, mode: "merge" | "differentiate") => {
+    setNearDupBusy((s) => ({ ...s, [key]: true }));
+    setNearDupResult((s) => ({ ...s, [key]: "" }));
+    try {
+      const resp = await api.request("/framework-builder/v2/improvement/apply", {
+        method: "POST",
+        body: JSON.stringify({ frameworkId, listId, actions: [{ type: "merge_or_differentiate", attrs: { measureA, measureB, mode } }] }),
+      });
+      setNearDupResult((s) => ({ ...s, [key]: summariseApplyResult(resp) }));
+      setNearDupDecisions((s) => ({ ...s, [key]: "accept" }));
+    } catch (e: any) {
+      setNearDupResult((s) => ({ ...s, [key]: `Failed: ${e?.message || "error"}` }));
+    } finally {
+      setNearDupBusy((s) => ({ ...s, [key]: false }));
+    }
+  };
   const fmt = (v: number | null, digits = 2): string => (v == null ? "—" : v.toFixed(digits));
   const dimLabel: Record<string, string> = {
     reliability: "Reliability",
@@ -2678,6 +2719,8 @@ function QualityMetricsPanel({
             {qm.nearDuplicatePairs.map((p) => {
               const key = `${p.measureIdA}::${p.measureIdB}`;
               const decision = nearDupDecisions[key];
+              const busy = nearDupBusy[key];
+              const result = nearDupResult[key];
               return (
                 <div key={key} className="p-2.5 border rounded text-sm border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800">
                   <div className="flex items-center justify-between gap-2">
@@ -2687,13 +2730,23 @@ function QualityMetricsPanel({
                     <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
-                        onClick={() => setNearDupDecisions((s) => ({ ...s, [key]: "accept" }))}
-                        className={`px-2 py-0.5 rounded text-xs border ${decision === "accept" ? "bg-orange-600 text-white border-orange-600" : "border-orange-400 text-orange-700 dark:text-orange-300"}`}
+                        disabled={busy}
+                        onClick={() => applyNearDup(key, p.measureIdA, p.measureIdB, "merge")}
+                        className="px-2 py-0.5 rounded text-xs border border-orange-400 text-orange-700 dark:text-orange-300 disabled:opacity-50"
                       >
-                        Merge / differentiate
+                        {busy ? "…" : "Merge"}
                       </button>
                       <button
                         type="button"
+                        disabled={busy}
+                        onClick={() => applyNearDup(key, p.measureIdA, p.measureIdB, "differentiate")}
+                        className="px-2 py-0.5 rounded text-xs border border-orange-400 text-orange-700 dark:text-orange-300 disabled:opacity-50"
+                      >
+                        {busy ? "…" : "Differentiate"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
                         onClick={() => setNearDupDecisions((s) => ({ ...s, [key]: "dismiss" }))}
                         className={`px-2 py-0.5 rounded text-xs border ${decision === "dismiss" ? "bg-gray-600 text-white border-gray-600" : "border-gray-400 text-gray-600 dark:text-gray-300"}`}
                       >
@@ -2704,6 +2757,8 @@ function QualityMetricsPanel({
                   <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
                     agreement {(p.agreement * 100).toFixed(0)}% · κ = {p.kappa.toFixed(2)} · n = {p.n}
                   </div>
+                  {result && <div className="mt-1 text-xs font-medium text-orange-800 dark:text-orange-300">{result}</div>}
+                  {decision === "dismiss" && !result && <div className="mt-1 text-xs text-gray-500">Dismissed — no change applied.</div>}
                 </div>
               );
             })}
@@ -2882,7 +2937,10 @@ function ImprovementChat({ frameworkId, listId }: { frameworkId: number; listId:
         method: "POST",
         body: JSON.stringify({ frameworkId, listId, actions: [action] }),
       });
-      setApplyResult(`Applied ${resp.appliedCount} action${resp.appliedCount === 1 ? "" : "s"}, ${resp.skippedCount} skipped.`);
+      const summary = summariseApplyResult(resp);
+      setApplyResult(summary);
+      // Echo the definite outcome back into the transcript (requirement D).
+      setTurns((t) => [...t, { role: "assistant", content: `✓ ${summary}` }]);
     } catch (e: any) {
       setApplyResult(`Failed: ${e?.message || e}`);
     } finally {
@@ -2915,6 +2973,8 @@ function ImprovementChat({ frameworkId, listId }: { frameworkId: number; listId:
                     {a.type === "escalate_to_corpus" && `Fix corpus for ${a.attrs.company}`}
                     {a.type === "ignore_measure" && `Ignore ${a.attrs.measure}`}
                     {a.type === "rescore_now" && `Re-score now`}
+                    {a.type === "apply_custom_edit" && `Apply edit: ${a.attrs.measure} · ${a.attrs.field}`}
+                    {a.type === "merge_or_differentiate" && `${a.attrs.mode === "merge" ? "Merge" : "Differentiate"}: ${a.attrs.measureA} ↔ ${a.attrs.measureB}`}
                   </button>
                 ))}
               </div>

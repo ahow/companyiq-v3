@@ -20,7 +20,7 @@ import { proposeEditsForFlags, proposeMergeForNearDuplicate } from "../lib/frame
 import { computeQualityMetrics, coherenceGateMetrics, type MeasureSpecFields, type QualityMetricsReport } from "../lib/framework-v2/quality-metrics.js";
 import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } from "../lib/framework-v2/root-cause-diagnostic.js";
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
-import { batchTightenDefinitions, batchAppendExclusions, batchRegenerateExamples, groupProposalsByPatch, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
+import { groupProposalsByPatch, BATCH_REGENERATORS, differentiateMeasureDefinition, regenerateMeasureField, CUSTOM_EDIT_FIELDS, type CustomEditField, type CustomEditMeasure, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
@@ -2328,21 +2328,84 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
       }
     }
 
-    async function runBatchedRegenerations(proposals: any[], applied: any[], skipped: any[]) {
-      if (!proposals.length) return;
-      const groups = groupProposalsByPatch(proposals);
-      // Load framework topic context for the LLM.
+    // Load framework topic context for the LLM (memoised for this request).
+    let _fctxCache: FrameworkContext | null = null;
+    async function loadFrameworkContext(): Promise<FrameworkContext> {
+      if (_fctxCache) return _fctxCache;
       const fwRow = await db.execute(sql`
         SELECT name, topic_term, topic_synonyms, adjacent_topics FROM frameworks
         WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
       `);
       const fw = ((fwRow as any).rows || [])[0] || {};
-      const fctx: FrameworkContext = {
+      _fctxCache = {
         topicTerm: fw.topic_term || "",
         topicSynonyms: Array.isArray(fw.topic_synonyms) ? fw.topic_synonyms : [],
         adjacentTopics: Array.isArray(fw.adjacent_topics) ? fw.adjacent_topics : [],
         frameworkName: fw.name || "",
       };
+      return _fctxCache;
+    }
+
+    // Fetch a single measure's editable fields, or null if it does not exist.
+    async function loadMeasure(measureId: string): Promise<CustomEditMeasure | null> {
+      const q = await db.execute(sql`
+        SELECT measure_id, title, substantive_definition, fallback_yes_criterion,
+               positive_examples, negative_examples, expected_yes_rate, min_quote_context_chars
+        FROM framework_measures
+        WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}
+        LIMIT 1
+      `);
+      const row = ((q as any).rows || [])[0];
+      if (!row) return null;
+      return {
+        measureId: row.measure_id,
+        title: row.title,
+        substantive_definition: row.substantive_definition || "",
+        fallback_yes_criterion: row.fallback_yes_criterion || "",
+        positive_examples: Array.isArray(row.positive_examples) ? row.positive_examples : [],
+        negative_examples: Array.isArray(row.negative_examples) ? row.negative_examples : [],
+        expected_yes_rate: typeof row.expected_yes_rate === "number" ? row.expected_yes_rate : undefined,
+        min_quote_context_chars: typeof row.min_quote_context_chars === "number" ? row.min_quote_context_chars : undefined,
+      };
+    }
+
+    // Persist ONE custom-edit field value to the correct column. Arrays go to
+    // jsonb; scalars to their typed columns. Returns false if the field is
+    // unknown (defensive — the caller validates against CUSTOM_EDIT_FIELDS).
+    async function persistMeasureField(measureId: string, field: CustomEditField, value: any): Promise<boolean> {
+      switch (field) {
+        case "substantive_definition":
+          await db.execute(sql`UPDATE framework_measures SET substantive_definition = ${value} WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+        case "fallback_yes_criterion":
+          await db.execute(sql`UPDATE framework_measures SET fallback_yes_criterion = ${value} WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+        case "positive_examples":
+          await db.execute(sql`UPDATE framework_measures SET positive_examples = ${JSON.stringify(value)}::jsonb WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+        case "negative_examples":
+          await db.execute(sql`UPDATE framework_measures SET negative_examples = ${JSON.stringify(value)}::jsonb WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+        case "expected_yes_rate":
+          await db.execute(sql`UPDATE framework_measures SET expected_yes_rate = ${value} WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+        case "min_quote_context_chars":
+          await db.execute(sql`UPDATE framework_measures SET min_quote_context_chars = ${value} WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`); return true;
+        default:
+          return false;
+      }
+    }
+
+    function fieldValueOf(m: CustomEditMeasure, field: CustomEditField): any {
+      switch (field) {
+        case "positive_examples": return m.positive_examples;
+        case "negative_examples": return m.negative_examples;
+        case "fallback_yes_criterion": return m.fallback_yes_criterion;
+        case "expected_yes_rate": return m.expected_yes_rate;
+        case "min_quote_context_chars": return m.min_quote_context_chars;
+        default: return m.substantive_definition;
+      }
+    }
+
+    async function runBatchedRegenerations(proposals: any[], applied: any[], skipped: any[]) {
+      if (!proposals.length) return;
+      const groups = groupProposalsByPatch(proposals);
+      const fctx = await loadFrameworkContext();
       for (const [groupKey, groupProps] of Object.entries(groups)) {
         const measureIds = groupProps.map((p: any) => p.measureId);
         // Fetch current measures for the LLM context. Drizzle's sql`` template
@@ -2366,19 +2429,13 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         }));
 
         let result: { updates: any[]; provider: string } | null = null;
+        const regenerator = BATCH_REGENERATORS[groupKey];
+        if (!regenerator) {
+          for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: `not applied: no regenerator wired for group '${groupKey}'` });
+          continue;
+        }
         try {
-          if (groupKey === "tighten_definition::substantive_definition") {
-            result = await batchTightenDefinitions(measuresForLLM, fctx);
-          } else if (groupKey === "append_exclusion::substantive_definition") {
-            result = await batchAppendExclusions(measuresForLLM, fctx);
-          } else if (groupKey === "regenerate_examples::positive_examples") {
-            result = await batchRegenerateExamples(measuresForLLM, fctx, "positive");
-          } else if (groupKey === "regenerate_examples::negative_examples") {
-            result = await batchRegenerateExamples(measuresForLLM, fctx, "negative");
-          } else {
-            for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: `no regenerator for group '${groupKey}'` });
-            continue;
-          }
+          result = await regenerator(measuresForLLM, fctx);
         } catch (e: any) {
           for (const p of groupProps) skipped.push({ measureId: p.measureId, reason: `LLM regeneration failed: ${e?.message || e}` });
           continue;
@@ -2469,8 +2526,70 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
           if (prop.patch?.op === "replace") await applyProposal(prop, applied, skipped);
           else deferredForLLM.push(prop);
         }
+      } else if (action.type === "apply_custom_edit") {
+        // Generic free-text edit: regenerate ONE field of ONE measure per the
+        // user's described change. Guarantees a described edit always executes.
+        const measureId = String(action.attrs.measure || "").trim();
+        const field = String(action.attrs.field || "").trim() as CustomEditField;
+        const instruction = String(action.attrs.instruction || "").trim();
+        if (!measureId) { skipped.push({ action, reason: "not applied: missing 'measure' id" }); continue; }
+        if (!(CUSTOM_EDIT_FIELDS as readonly string[]).includes(field)) {
+          skipped.push({ action, reason: `not applied: field '${field}' is not editable (allowed: ${CUSTOM_EDIT_FIELDS.join(", ")})` });
+          continue;
+        }
+        if (!instruction) { skipped.push({ action, reason: "not applied: missing 'instruction'" }); continue; }
+        const measure = await loadMeasure(measureId);
+        if (!measure) { skipped.push({ action, reason: `not applied: measure '${measureId}' not found` }); continue; }
+        try {
+          const fctx = await loadFrameworkContext();
+          const before = fieldValueOf(measure, field);
+          const { value: after } = await regenerateMeasureField(measure, field, instruction, fctx);
+          if (after == null || (Array.isArray(after) && after.length === 0)) {
+            skipped.push({ measureId, action: "apply_custom_edit", field, reason: "not applied: LLM returned no usable value for this field" });
+            continue;
+          }
+          await persistMeasureField(measureId, field, after);
+          applied.push({ measureId, action: "custom_edit", field, instruction, before, after, source: "llm" });
+        } catch (e: any) {
+          skipped.push({ measureId, action: "apply_custom_edit", field, reason: `not applied: regeneration failed: ${e?.message || e}` });
+        }
+      } else if (action.type === "merge_or_differentiate") {
+        // Resolve a near-duplicate pair. mode="differentiate" (default) rewrites
+        // measureA's substantive_definition to test a distinct artefact from
+        // measureB; mode="merge" retires measureB (keeping measureA), deleting
+        // its framework_measures row and its measure_scores rows so counts stay
+        // consistent. Human-selected; neither branch auto-deletes without intent.
+        const measureAId = String(action.attrs.measureA || action.attrs.measure || "").trim();
+        const measureBId = String(action.attrs.measureB || "").trim();
+        const mode = (String(action.attrs.mode || "differentiate").trim().toLowerCase() === "merge") ? "merge" : "differentiate";
+        if (!measureAId || !measureBId) { skipped.push({ action, reason: "not applied: both 'measureA' and 'measureB' required" }); continue; }
+        const mA = await loadMeasure(measureAId);
+        const mB = await loadMeasure(measureBId);
+        if (!mA || !mB) { skipped.push({ action, reason: `not applied: measure(s) not found (${!mA ? measureAId : ""}${!mA && !mB ? ", " : ""}${!mB ? measureBId : ""})` }); continue; }
+        if (mode === "merge") {
+          try {
+            await db.execute(sql`DELETE FROM measure_scores WHERE framework_id = ${frameworkId} AND measure_id = ${measureBId}`);
+            await db.execute(sql`DELETE FROM framework_measures WHERE framework_id = ${frameworkId} AND measure_id = ${measureBId}`);
+            const cntQ = await db.execute(sql`SELECT COUNT(*)::int AS n FROM framework_measures WHERE framework_id = ${frameworkId}`);
+            const remaining = ((cntQ as any).rows || [])[0]?.n ?? null;
+            applied.push({ action: "merge", keptMeasureId: measureAId, retiredMeasureId: measureBId, remainingMeasureCount: remaining });
+          } catch (e: any) {
+            skipped.push({ action, reason: `not applied: merge failed: ${e?.message || e}` });
+          }
+        } else {
+          try {
+            const fctx = await loadFrameworkContext();
+            const before = mA.substantive_definition;
+            const { value: after } = await differentiateMeasureDefinition(mA, mB, fctx);
+            if (!after) { skipped.push({ action, reason: "not applied: LLM returned no differentiated definition" }); continue; }
+            await persistMeasureField(measureAId, "substantive_definition", after);
+            applied.push({ measureId: measureAId, action: "differentiate", against: measureBId, before, after, source: "llm" });
+          } catch (e: any) {
+            skipped.push({ action, reason: `not applied: differentiate failed: ${e?.message || e}` });
+          }
+        }
       } else {
-        skipped.push({ action, reason: `unknown action type '${action.type}'` });
+        skipped.push({ action, reason: `not applied: unknown action type '${action.type}'` });
       }
     }
 

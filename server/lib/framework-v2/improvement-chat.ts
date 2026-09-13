@@ -128,7 +128,7 @@ CRITICAL RULES FOR YOUR REPLIES:
 2. If the user asks about a company classified as "doc-collection-failure", explain that framework edits will not help — the fix is retrieval. Do not propose a measure edit for it.
 3. If the user asks about a measure classified as "collection-attributable", explain that the current test-drive cannot judge it — we need a company with strong disclosure on that sub-topic first.
 4. Keep answers focused. If the user asks "why did Ambev score 0", one paragraph is enough.
-5. When you want the user to take a concrete action, emit a structured action block. Do not describe an action in prose without emitting the block.
+5. NEVER describe an edit or change in prose without emitting an executable action block for it in the same reply. If the user describes a concrete change to a measure (e.g. "make measure X stricter", "add a negative example about Y to measure Z", "lower the expected yes rate on measure W", "reword the fallback for measure V"), you MUST emit an <action type="apply_custom_edit" .../> block that carries that change — do not merely explain what you would do. If a proposal already covers the change, emit apply_edit for it instead. Every described change must map to exactly one executable action block.
 6. If you see terminology gap candidates, explain they represent terms companies actually use for this topic that are NOT in the framework's topicSynonyms. Suggest the user add the most relevant ones to improve BM25 retrieval. Emit an <action type="add_synonyms" terms="term1,term2,term3" /> block when suggesting additions.
 7. If vehicle mismatches are present, explain that the evidence for a measure was found in document types the framework did not anticipate. Suggest the user consider updating disclosure_vehicles in the measure to include these types, if they are legitimate sources. Use the measure edit system (Re-draft with corrections) to update the measure definition to accept additional vehicle types.
 8. If a measure carries a "residual-instability" flag, its verdict changed run-to-run on identical evidence. This is an AMBIGUOUS-DESIGN defect — do NOT suggest re-scoring more times or averaging; live scoring stays single-shot. The fix is to rewrite the deciding criteria to be countable and quote-verifiable (C11): replace degree words with an explicit N-of-M test over named artefacts. Steer the user to Re-draft that measure with a countable rule.
@@ -144,14 +144,30 @@ Emit each action on its own line, exactly as:
   <action type="ignore_measure" measure="1.6-remuneration-linkage" reason="genuine non-disclosure" />
   <action type="add_synonyms" terms="nature-related risk,biodiversity net gain" />
   <action type="rescore_now" />
+  <action type="apply_custom_edit" measure="1.6-remuneration-linkage" field="substantive_definition" instruction="require a named board committee AND a dated review cycle" />
+  <action type="merge_or_differentiate" measureA="2.1-policy" measureB="2.4-policy-statement" mode="differentiate" />
 
-Emit blocks ONLY when the user should decide something. Every attribute must reference a real ID from the data above. Do not emit blocks in the middle of your prose — put them at the end.
+apply_custom_edit — use for ANY concrete change the user describes that is not already an available proposal. Attributes:
+  • measure     — the target measure id (must be a real id from the data above)
+  • field       — exactly one of: substantive_definition, fallback_yes_criterion, positive_examples, negative_examples, expected_yes_rate, min_quote_context_chars
+  • instruction — a plain-English description of the change to make to that field
+merge_or_differentiate — resolve a near-duplicate measure pair. Attributes: measureA, measureB, and mode="differentiate" (rewrite measureA to test a distinct artefact) or mode="merge" (retire measureB, keep measureA).
+
+Emit blocks ONLY when the user should decide something, OR whenever the user has described a concrete change (then the block is required, not optional). Every attribute must reference a real ID from the data above. Do not emit blocks in the middle of your prose — put them at the end.
 
 Reply in plain English. Be direct. If the framework is broadly healthy but the user is confused about one measure or company, focus on that one.`;
 }
 
 export interface ExtractedAction {
-  type: "apply_edit" | "apply_all_by_cause" | "escalate_to_corpus" | "ignore_measure" | "add_synonyms" | "rescore_now";
+  type:
+    | "apply_edit"
+    | "apply_all_by_cause"
+    | "escalate_to_corpus"
+    | "ignore_measure"
+    | "add_synonyms"
+    | "rescore_now"
+    | "apply_custom_edit"
+    | "merge_or_differentiate";
   attrs: Record<string, string>;
 }
 
@@ -162,7 +178,11 @@ export interface ExtractedAction {
  */
 export function extractActionsFromReply(text: string): { displayText: string; actions: ExtractedAction[] } {
   const actions: ExtractedAction[] = [];
-  const actionRe = /<action\s+([^/>]*?)\s*\/>/g;
+  // Capture everything up to the self-closing "/>". We must NOT exclude "/"
+  // from the attribute span (free-text instruction="…" values legitimately
+  // contain slashes, e.g. "and/or"); only ">" is excluded so the match stops
+  // at the tag close.
+  const actionRe = /<action\s+([^>]*?)\s*\/>/g;
   let cleaned = text;
   let m: RegExpExecArray | null;
   while ((m = actionRe.exec(text)) !== null) {

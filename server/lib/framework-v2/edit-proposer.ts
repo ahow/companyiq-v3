@@ -45,6 +45,25 @@ export type EditAction =
   | "merge-or-differentiate"    // resolve a near-duplicate pair
   | "add-synonyms";
 
+/**
+ * Every distinct `patch.op` this module can emit (across proposeEditForFlag and
+ * proposeMergeForNearDuplicate). This is the single declared source the apply
+ * guardrail test enumerates: the test asserts (a) this list exactly matches the
+ * ops actually emitted for representative inputs, and (b) every op here has a
+ * wired handler in edit-applier's APPLY_HANDLED_OPS. Keep it in sync when adding
+ * a new proposal type.
+ */
+export const EMITTABLE_PATCH_OPS = [
+  "replace",
+  "regenerate_examples",
+  "tighten_definition",
+  "append_exclusion",
+  "rewrite_countable",
+  "broaden_or_redefine",
+  "merge_or_differentiate",
+] as const;
+export type EmittablePatchOp = (typeof EMITTABLE_PATCH_OPS)[number];
+
 export interface EditProposal {
   measureId: string;
   flagRule: string;
