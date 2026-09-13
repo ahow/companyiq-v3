@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { gateEvidence } from "./evidence-gate";
+import { gateEvidence, parsePackSegments } from "./evidence-gate";
 
 let pass = 0;
 let fail = 0;
@@ -202,6 +202,39 @@ test("(k) backward compatible: no segments supplied behaves exactly as before", 
   });
   assert.equal(r.gate.quotesValid, 1);
   assert.equal(r.score, 1);
+});
+
+// ---- Task C: parsePackSegments (pack → per-document segments) ----
+const REAL_PACK = `intro preamble\n\n--- DOCUMENT: Kering Universal Registration Document 2023 [https://example.com/urd] ---\n\n${IN_PACK_SENTENCE}\n\n--- DOCUMENT: Kering Climate Report 2023 [https://example.com/climate] ---\n\n${SECOND_IN_PACK_SENTENCE}`;
+
+test("(l) parsePackSegments splits a pack on DOCUMENT headers into per-doc segments", () => {
+  const segs = parsePackSegments(REAL_PACK);
+  assert.equal(segs.length, 2, "two documents parsed");
+  assert.equal(segs[0].id, "Kering Universal Registration Document 2023");
+  assert.equal(segs[1].id, "Kering Climate Report 2023");
+  assert.ok(segs[0].text.includes(IN_PACK_SENTENCE), "seg 0 carries its own text");
+  assert.ok(segs[1].text.includes(SECOND_IN_PACK_SENTENCE), "seg 1 carries its own text");
+  assert.ok(!segs[0].text.includes(SECOND_IN_PACK_SENTENCE), "seg 0 does not leak into seg 1 text");
+});
+
+test("(m) parsePackSegments returns [] for a pack with no DOCUMENT headers", () => {
+  assert.deepEqual(parsePackSegments(PACK_TEXT), []);
+  assert.deepEqual(parsePackSegments(""), []);
+});
+
+test("(n) end-to-end: parsed segments catch a misattributed quote", () => {
+  const segs = parsePackSegments(REAL_PACK);
+  const r = gateEvidence({
+    originalScore: 1,
+    // Quote text is from DOC A but claims DOC B → attribution fail.
+    quotes: [{ text: IN_PACK_SENTENCE, source: "Kering Climate Report 2023" }],
+    packText: REAL_PACK,
+    positiveExamples: [POSITIVE_EXAMPLE],
+    negativeExamples: [],
+    documentSegments: segs,
+  });
+  assert.equal(r.score, 0, "misattributed quote downgraded via parsed segments");
+  assert.ok(r.gate.failures[0].reasons.includes("source-attribution"));
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

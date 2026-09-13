@@ -21,6 +21,7 @@ import {
   getConfiguredFallbackOrder,
   type ProviderFailureClass,
 } from "./provider-resilience.js";
+import { noteRateLimited, noteProviderSuccess } from "./adaptive-concurrency.js";
 
 // ─── Key Collection Helper ───────────────────────────────────────────────────
 
@@ -773,10 +774,12 @@ export async function completeScoring(
               resumeProvider(primary.name, "auto");
               console.warn(`[AI:scoring] Credit breaker CLEARED for ${primary.name} — primary call succeeded`);
             }
+            noteProviderSuccess();
             return { text, provider: primary.name, model: primary.model };
           } catch (error: any) {
             const failureClass = classifyProviderError(error);
             lastFailureClass = failureClass;
+            if (failureClass === "rate_limited") noteRateLimited();
             const isCredit = failureClass === "quota_exhausted";
             const msg = `${primary.name}(try ${attempt + 1}/${effectiveRetries})[${failureClass}]: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
             errors.push(msg);
@@ -837,9 +840,11 @@ export async function completeScoring(
       try {
         const text = await fallback.complete(opts);
         console.warn(`[AI:scoring] PRIMARY ${providerName} EXHAUSTED — graded by fallback ${fallback.name} (auditable variance source)`);
+        noteProviderSuccess();
         return { text, provider: fallback.name, model: fallback.model };
       } catch (error: any) {
         const fbClass = classifyProviderError(error);
+        if (fbClass === "rate_limited") noteRateLimited();
         errors.push(`${fallback.name}[${fbClass}]: ${error.message || 'unknown error'}`);
         lastFailureClass = fbClass;
         if (fbClass === "quota_exhausted") {

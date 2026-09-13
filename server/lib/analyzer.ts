@@ -14,7 +14,7 @@ import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
-import { gateEvidence, type EvidenceGateResult } from "./evidence-gate.js";
+import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { createHash } from "crypto";
 import { jsonrepair } from "jsonrepair";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -2935,6 +2935,18 @@ async function scoreWithCascade(opts: {
     (process.env.RETRIEVAL_EVIDENCE_GATE || "").toLowerCase(),
   );
   const gateStrictStrip = (process.env.RETRIEVAL_GATE_STRICT_STRIP || "true").toLowerCase() !== "false";
+  // Task C: per-document source attribution. When on (default), quotes must trace
+  // to the SPECIFIC document their source names, not just anywhere in the pack.
+  // RETRIEVAL_SOURCE_ATTRIBUTION=0|false disables it (kill-switch). Segments are
+  // parsed ONCE here (evidenceText is constant for this cascade call) and reused
+  // for every stage's gate; an empty parse (no DOCUMENT headers) is a no-op that
+  // preserves pack-wide provenance behaviour exactly.
+  const sourceAttributionEnabled = !["0", "false"].includes(
+    (process.env.RETRIEVAL_SOURCE_ATTRIBUTION || "").toLowerCase(),
+  );
+  const gateSegments: DocumentSegment[] = sourceAttributionEnabled
+    ? parsePackSegments(evidenceText)
+    : [];
 
   // Apply the gate to a single model's parsed output. Runs for EVERY stage
   // (both primaries and the arbiter) BEFORE its score enters the cascade
@@ -2949,9 +2961,12 @@ async function scoreWithCascade(opts: {
       positiveExamples: (measure as any).positiveExamples || [],
       negativeExamples: (measure as any).negativeExamples || [],
       strictStrip: gateStrictStrip,
-      // Source-attribution (Task C) is additive: production does not yet thread
-      // per-document pack segments, so omitting documentSegments keeps behaviour
-      // exactly as before while the capability is available for callers that do.
+      // Source-attribution (Task C): thread the per-document pack segments parsed
+      // above so a quote must trace to the SPECIFIC document its source names.
+      // When the kill-switch is off (or the pack has no DOCUMENT headers),
+      // gateSegments is [] and the gate falls back to pack-wide provenance.
+      sourceAttribution: sourceAttributionEnabled,
+      documentSegments: gateSegments,
     });
     result.quotes = keptQuotes;
     if (gate.downgraded) {

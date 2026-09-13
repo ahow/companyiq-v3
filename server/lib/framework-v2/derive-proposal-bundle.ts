@@ -35,6 +35,8 @@ import {
   proposeSynonymAddition,
   proposeAdjacentTopics,
   proposeAnchorFrameworks,
+  proposeExpectedYesRateRecalibration,
+  proposeNonDiscriminatingRetire,
   type EditProposal,
   type EditProposalBundle,
 } from "./edit-proposer.js";
@@ -343,6 +345,90 @@ export async function deriveProposalBundle(
     console.warn("[deriveProposalBundle] framework-level proposals failed (non-fatal):", e?.message);
   }
 
+  // ── Per-measure calibration / annotation proposals (ADDITIVE, non-fatal) ──
+  // Feature 1: expected_yes_rate recalibration — when a measure's OBSERVED Yes-rate
+  // across the scored companies diverges from its configured expected_yes_rate
+  // beyond tolerance, propose recalibrating to the observed rate.
+  // Feature 2: non-discriminating measure — when a measure hands the SAME verdict
+  // to every scored company, surface a soft redefine/retire proposal (sets a
+  // boolean annotation only; never deletes the measure).
+  //
+  // Both are derived from the cross-company verdict distribution the per-flag
+  // proposer never sees, and both share a minimum-sample guardrail so a handful of
+  // companies can never trigger a recalibration or retire recommendation. Every
+  // threshold is env-tunable and each feature has an independent kill-switch.
+  // GENERIC: nothing here references a framework, company, topic or numeric id.
+  try {
+    const recalEnabled = envFlag("EXPECTED_YES_RATE_RECALIBRATION_ENABLED", true);
+    const nonDiscrimEnabled = envFlag("NON_DISCRIMINATING_PROPOSALS_ENABLED", true);
+    if ((recalEnabled || nonDiscrimEnabled) && edits) {
+      // Minimum scored companies before EITHER proposal may fire (guardrail).
+      const minSample = envInt("PROPOSAL_MIN_SAMPLE_COMPANIES", 8, 1);
+      // Absolute tolerance on |observed − expected| before recalibration proposes.
+      const tolerance = envFloat("EXPECTED_YES_RATE_TOLERANCE", 0.2, 0, 1);
+      const expectedByMeasure: Record<string, number> = {};
+      for (const m of measureMetadata) expectedByMeasure[m.measureId] = m.expected_yes_rate;
+
+      // Aggregate the per-company verdicts into per-measure Yes-rate + verdict set.
+      const perMeasure: Record<string, { yes: number; total: number; verdicts: Set<string> }> = {};
+      for (const company of results) {
+        for (const mv of company.measures || []) {
+          const id = String(mv.measureId);
+          const verdict = String(mv.verdict || "").trim();
+          if (!verdict) continue; // only companies with a real scored verdict count
+          if (!perMeasure[id]) perMeasure[id] = { yes: 0, total: 0, verdicts: new Set() };
+          perMeasure[id].total += 1;
+          perMeasure[id].verdicts.add(verdict);
+          if (verdict === "Yes") perMeasure[id].yes += 1;
+        }
+      }
+
+      const calibrationProposals: EditProposal[] = [];
+      for (const [measureId, agg] of Object.entries(perMeasure)) {
+        if (agg.total < minSample) continue;          // guardrail: too few companies
+        if (agg.total === 0) continue;                // no valid scored companies
+        const nonDiscriminating = agg.verdicts.size === 1;
+
+        // Feature 2 — non-discriminating (same verdict for every company).
+        if (nonDiscrimEnabled && nonDiscriminating) {
+          const onlyVerdict = [...agg.verdicts][0] || "";
+          calibrationProposals.push(proposeNonDiscriminatingRetire(measureId, agg.total, onlyVerdict));
+        }
+
+        // Feature 1 — expected_yes_rate drift. Skip non-discriminating measures:
+        // recalibrating a measure that returns one verdict for everyone is
+        // meaningless (the retire proposal above is the correct action instead).
+        if (recalEnabled && !nonDiscriminating) {
+          const observed = agg.yes / agg.total;
+          const expected = typeof expectedByMeasure[measureId] === "number" ? expectedByMeasure[measureId] : 0.35;
+          if (Math.abs(observed - expected) > tolerance) {
+            calibrationProposals.push(
+              proposeExpectedYesRateRecalibration(measureId, expected, observed, agg.total),
+            );
+          }
+        }
+      }
+
+      // Append onto edits.proposals so the results view and apply path see them
+      // identically (they ride along in allProposals below). De-dupe defensively
+      // on the same identity tuple proposeEditsForFlags uses.
+      const existing = new Set(
+        edits.proposals.map((p) => `${p.measureId}::${p.cause}::${p.fieldPath}::${p.patch?.op ?? ""}`),
+      );
+      for (const p of calibrationProposals) {
+        const key = `${p.measureId}::${p.cause}::${p.fieldPath}::${p.patch?.op ?? ""}`;
+        if (existing.has(key)) continue;
+        existing.add(key);
+        edits.proposals.push(p);
+        (edits.causeBreakdown as Record<string, number>)[p.cause] =
+          ((edits.causeBreakdown as Record<string, number>)[p.cause] || 0) + 1;
+      }
+      edits.totalWithProposals = edits.proposals.length;
+    }
+  } catch (e: any) {
+    console.warn("[deriveProposalBundle] calibration/annotation proposals failed (non-fatal):", e?.message);
+  }
+
   // The COMPLETE proposal set the apply path resolves against. Edit proposals
   // come FIRST so legacy positional P<idx> indices (which only ever referenced
   // edit proposals) stay stable; near-duplicate merges are appended after.
@@ -367,6 +453,33 @@ export async function deriveProposalBundle(
     nearDuplicateEdits,
     allProposals,
   };
+}
+
+// ─── Env helpers (generic, defensively-clamped) ────────────────────────────
+
+/** Boolean env flag. Truthy unless explicitly "false"/"0"/"no"/"off". */
+function envFlag(name: string, dflt: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === "") return dflt;
+  return !/^(false|0|no|off)$/i.test(raw.trim());
+}
+
+/** Integer env with a default and a lower bound (invalid → default). */
+function envInt(name: string, dflt: number, min: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === "") return dflt;
+  const n = parseInt(String(raw), 10);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.max(min, n);
+}
+
+/** Float env with a default clamped to [min,max] (invalid → default). */
+function envFloat(name: string, dflt: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === "") return dflt;
+  const n = parseFloat(String(raw));
+  if (!Number.isFinite(n)) return dflt;
+  return Math.min(max, Math.max(min, n));
 }
 
 // ─── Framework-level candidate helpers ─────────────────────────────────────

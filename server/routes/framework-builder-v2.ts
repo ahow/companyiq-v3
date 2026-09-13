@@ -16,7 +16,7 @@ import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
-import { proposeEditsForFlags, proposeMergeForNearDuplicate, FRAMEWORK_LEVEL_OPS, FRAMEWORK_SENTINEL } from "../lib/framework-v2/edit-proposer.js";
+import { proposeEditsForFlags, proposeMergeForNearDuplicate, FRAMEWORK_LEVEL_OPS, DIRECT_MEASURE_OPS, FRAMEWORK_SENTINEL } from "../lib/framework-v2/edit-proposer.js";
 import { computeQualityMetrics, coherenceGateMetrics, type MeasureSpecFields, type QualityMetricsReport } from "../lib/framework-v2/quality-metrics.js";
 import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } from "../lib/framework-v2/root-cause-diagnostic.js";
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
@@ -2294,16 +2294,35 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     // regeneration call per (op, path) group. This preserves consistency
     // across measures AND keeps latency O(1) rather than O(N).
     async function applyProposal(prop: any, applied: any[], skipped: any[]) {
-      if (prop.patch?.op === "replace") {
+      const op = prop.patch?.op;
+      // Direct per-measure column writes (no LLM regeneration): the legacy
+      // "replace" ops plus the calibration/annotation ops set_expected_yes_rate
+      // (Feature 1) and flag_non_discriminating (Feature 2). Each op maps to an
+      // explicit column and coerces its value; anything else falls through to the
+      // batched LLM regeneration path handled by the caller.
+      if (DIRECT_MEASURE_OPS.includes(op)) {
         const path = prop.patch.path;
-        const col = path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
-                    path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
-        if (!col) {
-          const reason = `unsupported patch path ${path}`;
+        let col: any = null;
+        let value: any = prop.patch.value;
+        if (op === "replace") {
+          col = path === "fallback_yes_criterion" ? sql`fallback_yes_criterion` :
+                path === "min_quote_context_chars" ? sql`min_quote_context_chars` : null;
+        } else if (op === "set_expected_yes_rate") {
+          col = sql`expected_yes_rate`;
+          // Clamp to a valid probability defensively (builder already clamps).
+          const n = typeof value === "number" ? value : parseFloat(String(value));
+          value = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : null;
+        } else if (op === "flag_non_discriminating") {
+          // SOFT, non-destructive annotation — never deletes/disables the measure.
+          col = sql`flagged_non_discriminating`;
+          value = true;
+        }
+        if (!col || value === null) {
+          const reason = !col ? `unsupported patch path ${path}` : `invalid value for ${op}`;
           skipped.push({ measureId: prop.measureId, reason });
           await recordMeasureEdit(db, {
             workspaceId: ctx.workspaceId, frameworkId, listId, measureId: prop.measureId,
-            field: path || "(unknown)", op: prop.patch?.op || null,
+            field: path || "(unknown)", op: op || null,
             source: `proposal:${prop.flagRule}`, applied: false, skipReason: reason,
           });
           return;
@@ -2318,13 +2337,13 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
           beforeValue = ((beforeQ as any).rows || [])[0]?.v ?? null;
         } catch { /* audit before-value is best-effort */ }
         await db.execute(sql`
-          UPDATE framework_measures SET ${col} = ${prop.patch.value}, updated_at = NOW()
+          UPDATE framework_measures SET ${col} = ${value}, updated_at = NOW()
           WHERE framework_id = ${frameworkId} AND measure_id = ${prop.measureId}
         `);
-        applied.push({ measureId: prop.measureId, action: prop.action, patch: prop.patch });
+        applied.push({ measureId: prop.measureId, action: prop.action, patch: { ...prop.patch, value } });
         await recordMeasureEdit(db, {
           workspaceId: ctx.workspaceId, frameworkId, listId, measureId: prop.measureId,
-          field: path, op: prop.patch.op, beforeValue, afterValue: prop.patch.value,
+          field: path, op, beforeValue, afterValue: value,
           source: `proposal:${prop.flagRule}`, applied: true,
         });
       } else {
@@ -2669,7 +2688,9 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
             continue;
           }
         }
-        if (prop.patch?.op === "replace") {
+        if (DIRECT_MEASURE_OPS.includes(prop.patch?.op)) {
+          // Direct per-measure column writes: "replace" + the calibration/
+          // annotation ops (set_expected_yes_rate, flag_non_discriminating).
           await applyProposal(prop, applied, skipped);
         } else if (FRAMEWORK_LEVEL_OPS.includes(prop.patch?.op)) {
           // Framework-level additive ops (add_synonyms / add_adjacent_topics /
@@ -2730,7 +2751,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         const cause = action.attrs.cause;
         const matching = editsBundle.proposals.filter((p) => p.cause === cause);
         for (const prop of matching) {
-          if (prop.patch?.op === "replace") await applyProposal(prop, applied, skipped);
+          if (DIRECT_MEASURE_OPS.includes(prop.patch?.op)) await applyProposal(prop, applied, skipped);
           else if (FRAMEWORK_LEVEL_OPS.includes(prop.patch?.op)) await applyFrameworkLevelProposal(prop, applied, skipped);
           else deferredForLLM.push(prop);
         }

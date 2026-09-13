@@ -29,6 +29,7 @@ import {
   type ProviderPauseState,
 } from "./lib/provider-resilience.js";
 import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
+import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -1271,6 +1272,42 @@ export function startWorker(workerId?: string): Worker {
       console.warn("[Worker] Health check error (non-fatal): " + err.message);
     }
   }, HEALTH_CHECK_INTERVAL);
+
+  // Adaptive worker-concurrency controller. GENERIC and env-tunable: when
+  // ADAPTIVE_CONCURRENCY_ENABLED is on, poll provider back-pressure signals on a
+  // timer and adjust the live BullMQ concurrency between ADAPTIVE_CONCURRENCY_MIN
+  // and WORKER_CONCURRENCY. When disabled, the worker keeps the fixed configured
+  // concurrency (MAX_CONCURRENT) and this controller is never consulted.
+  const adaptiveConfig = loadAdaptiveConfig();
+  let adaptiveInterval: NodeJS.Timeout | null = null;
+  if (adaptiveConfig.enabled) {
+    let currentConcurrency = MAX_CONCURRENT;
+    adaptiveInterval = setInterval(() => {
+      if (!worker) { if (adaptiveInterval) clearInterval(adaptiveInterval); return; }
+      try {
+        const snapshot = getSignalSnapshot(adaptiveConfig.windowMs);
+        const decision = decideConcurrency(currentConcurrency, snapshot, adaptiveConfig);
+        if (decision.changed) {
+          // BullMQ supports adjusting concurrency on a live worker.
+          (worker as any).concurrency = decision.concurrency;
+          currentConcurrency = decision.concurrency;
+          console.log("[Worker] Adaptive concurrency → " + decision.concurrency + " (" + decision.reason + ")");
+        }
+      } catch (err: any) {
+        console.warn("[Worker] Adaptive concurrency tick error (non-fatal): " + err.message);
+      }
+    }, adaptiveConfig.tickMs);
+    console.log("[Worker] Adaptive concurrency ENABLED (min=" + adaptiveConfig.min + ", max=" + adaptiveConfig.max + ", window=" + adaptiveConfig.windowMs + "ms, tick=" + adaptiveConfig.tickMs + "ms)");
+  }
+
+  // Ensure the adaptive ticker is torn down whenever the health check restarts
+  // the worker (it nulls `worker`, which the ticker detects and self-clears; this
+  // is a belt-and-braces clear on the explicit close path).
+  const originalClose = worker.close.bind(worker);
+  (worker as any).close = async (...args: any[]) => {
+    if (adaptiveInterval) { clearInterval(adaptiveInterval); adaptiveInterval = null; }
+    return originalClose(...args);
+  };
 
   console.log("[Worker] Started with concurrency=" + MAX_CONCURRENT + ", timeout=" + JOB_TIMEOUT + "ms, maxRetries=" + MAX_RETRY_ATTEMPTS);
   return worker;

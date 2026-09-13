@@ -143,6 +143,11 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS disclosure_vehicles JSONB`);
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS r3_1_exception_metrics BOOLEAN NOT NULL DEFAULT false`);
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS r3_1_exception_coverage BOOLEAN NOT NULL DEFAULT false`);
+    // Sprint 10 (Feature 2): SOFT annotation for a measure that gave the same
+    // verdict to every scored company. Set by an accepted non-discriminating
+    // proposal to surface the measure for redefine/retire review. Additive and
+    // non-destructive — the measure is never deleted or disabled. Default false.
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS flagged_non_discriminating BOOLEAN NOT NULL DEFAULT false`);
 
     // Framework Builder v2 edit-audit (observability). `updated_at` is nullable
     // and set on every measure write going forward; pre-audit rows deliberately

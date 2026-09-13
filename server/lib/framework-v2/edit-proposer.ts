@@ -30,6 +30,7 @@ export type EditCause =
   | "insufficient-context"      // quotes lack surrounding context
   | "ambiguous-criteria"        // verdict flips run-to-run (residual instability, C11)
   | "non-discriminating"        // measure gives the same verdict to every company
+  | "expected-yes-rate-drift"   // observed Yes-rate diverges from configured expected_yes_rate
   | "near-duplicate"            // two measures are near-duplicates (merge/differentiate)
   | "terminology-gap"           // companies use terms not in topicSynonyms
   | "anchor-coverage";          // corpus evidences named standards/frameworks not registered as anchor_frameworks
@@ -41,6 +42,7 @@ export type EditAction =
   | "add-negative-examples"
   | "raise-min-context"
   | "recalibrate-expected-rate"
+  | "retire-non-discriminating" // flag a zero-discrimination measure for redefine/retire (soft, non-destructive)
   | "rewrite-countable"         // C11: rewrite deciding criteria to a countable N-of-M test
   | "broaden-or-redefine"       // redefine so the measure separates companies
   | "merge-or-differentiate"    // resolve a near-duplicate pair
@@ -66,6 +68,13 @@ export const EMITTABLE_PATCH_OPS = [
   "rewrite_countable",
   "broaden_or_redefine",
   "merge_or_differentiate",
+  // Per-measure calibration/annotation ops written straight to a framework_measures
+  // column in the /apply route (direct_replace, no LLM regeneration). set_expected_yes_rate
+  // recalibrates the configured expected Yes-rate to the observed rate; flag_non_discriminating
+  // sets a SOFT boolean annotation flagging a zero-discrimination measure for review — it
+  // NEVER deletes or disables the measure.
+  "set_expected_yes_rate",
+  "flag_non_discriminating",
   // Framework-level (non per-measure) additive ops. Each appends mined values to
   // a jsonb column on `frameworks` — never a per-measure field. They carry the
   // sentinel measureId FRAMEWORK_SENTINEL so identity resolution and audit treat
@@ -87,6 +96,16 @@ export const FRAMEWORK_SENTINEL = "(framework)";
 
 /** patch.op values that are framework-level (applied to a jsonb column on frameworks). */
 export const FRAMEWORK_LEVEL_OPS = ["add_synonyms", "add_adjacent_topics", "add_anchor_frameworks"] as const;
+
+/**
+ * patch.op values written STRAIGHT to a `framework_measures` column in the /apply
+ * route (no LLM regeneration, no batching). "replace" covers the legacy
+ * mechanical replaces (fallback_yes_criterion / min_quote_context_chars);
+ * set_expected_yes_rate recalibrates expected_yes_rate; flag_non_discriminating
+ * sets the soft flagged_non_discriminating annotation. The apply router treats
+ * every op in this list as a direct measure-column write.
+ */
+export const DIRECT_MEASURE_OPS = ["replace", "set_expected_yes_rate", "flag_non_discriminating"] as const;
 
 export interface EditProposal {
   measureId: string;
@@ -303,6 +322,83 @@ export function proposeMergeForNearDuplicate(pair: NearDuplicateInput): EditProp
       value: { measureIdA: pair.measureIdA, measureIdB: pair.measureIdB },
     },
     expectedImpact: "should reduce within-pillar redundancy without losing coverage",
+  };
+}
+
+// ─── Calibration / annotation builders (direct framework_measures writes) ───
+//
+// These two builders are NOT flag-switch branches of proposeEditForFlag; they
+// are derived directly from the aggregated per-measure Yes-rate statistics in
+// deriveProposalBundle (which has the cross-company verdict distribution the
+// per-flag proposer never sees). Both are per-measure and apply as direct column
+// writes. Fully generic: every value is passed in — no framework, company, topic
+// or id is referenced.
+
+/**
+ * expected_yes_rate recalibration (Feature 1). When a measure's OBSERVED Yes-rate
+ * across the test-drive companies diverges from its configured `expected_yes_rate`
+ * beyond tolerance, propose replacing the configured rate with the observed one so
+ * downstream off-expected flagging calibrates against reality. Non-destructive: it
+ * only updates a calibration number, never the measure's logic. The caller is
+ * responsible for the sample-size / discrimination / clamp guardrails; this
+ * builder assumes `observedRate` is already a valid probability in [0,1].
+ */
+export function proposeExpectedYesRateRecalibration(
+  measureId: string,
+  currentRate: number,
+  observedRate: number,
+  sampleSize: number,
+): EditProposal {
+  const clamped = Math.min(1, Math.max(0, observedRate));
+  return {
+    measureId,
+    // Distinct flagRule so identity resolution + the client decision key never
+    // collide with the broaden_or_redefine "no-differentiation" proposal a
+    // non-discriminating measure may also carry. Drives audit source
+    // `proposal:expected-yes-rate`.
+    flagRule: "expected-yes-rate",
+    cause: "expected-yes-rate-drift",
+    action: "recalibrate-expected-rate",
+    fieldPath: "expected_yes_rate",
+    currentValueSummary: `configured ${(currentRate * 100).toFixed(0)}%`,
+    proposedValueSummary: `observed ${(clamped * 100).toFixed(0)}% (n=${sampleSize})`,
+    rationale:
+      `Across ${sampleSize} scored companies this measure returned Yes ${(clamped * 100).toFixed(0)}% of the time, but its configured expected_yes_rate is ${(currentRate * 100).toFixed(0)}%. ` +
+      `The off-expected flagging calibrates against expected_yes_rate, so a stale value mislabels a correctly-behaving measure. Recalibrate expected_yes_rate to the observed rate.`,
+    patch: { op: "set_expected_yes_rate", path: "expected_yes_rate", value: clamped },
+    expectedImpact: "should stop off-expected flags firing on a measure that is actually behaving as observed",
+  };
+}
+
+/**
+ * Non-discriminating measure → recommend redefine/retire (Feature 2). Distinct
+ * from the broaden_or_redefine proposal (which rewrites substantive_definition):
+ * this surfaces the softer "flag it for review" option that sets a NON-DESTRUCTIVE
+ * boolean annotation (flagged_non_discriminating) — the measure is never deleted
+ * or disabled. `verdict` is the single verdict every company received; `sampleSize`
+ * is the number of scored companies (guardrail enforced by the caller).
+ */
+export function proposeNonDiscriminatingRetire(
+  measureId: string,
+  sampleSize: number,
+  verdict: string,
+): EditProposal {
+  return {
+    measureId,
+    // Distinct flagRule from the "no-differentiation" broaden proposal so both
+    // can co-exist for the same measure. Drives audit source
+    // `proposal:non-discriminating`.
+    flagRule: "non-discriminating",
+    cause: "non-discriminating",
+    action: "retire-non-discriminating",
+    fieldPath: "flagged_non_discriminating",
+    currentValueSummary: `every one of ${sampleSize} companies scored "${verdict}"`,
+    proposedValueSummary: "flag for redefine-or-retire review (soft annotation, measure not deleted)",
+    rationale:
+      `This measure returned "${verdict}" for all ${sampleSize} scored companies, so it adds no discriminating signal to the framework. ` +
+      `Flag it for review so it can be redefined around a discriminating artefact or retired. This sets a soft annotation only — the measure is never deleted or disabled automatically.`,
+    patch: { op: "flag_non_discriminating", path: "flagged_non_discriminating", value: true },
+    expectedImpact: "surfaces a zero-information measure for human redefine/retire without destructive change",
   };
 }
 

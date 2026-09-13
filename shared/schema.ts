@@ -216,6 +216,12 @@ export const frameworkMeasures = pgTable("framework_measures", {
   disclosureVehicles: jsonb("disclosure_vehicles").$type<string[]>(),
   r31ExceptionMetrics: boolean("r3_1_exception_metrics").notNull().default(false),
   r31ExceptionCoverage: boolean("r3_1_exception_coverage").notNull().default(false),
+  // Sprint 10 (Feature 2): SOFT annotation flagging a measure that gave the same
+  // verdict to every scored company (zero discriminating power). Set by an
+  // accepted non-discriminating proposal so the measure is surfaced for
+  // redefine/retire review. Non-destructive — the measure is never deleted or
+  // disabled; this flag only marks it for attention. Default false.
+  flaggedNonDiscriminating: boolean("flagged_non_discriminating").notNull().default(false),
 }, (table) => ({
   frameworkIdx: index("measures_framework_idx").on(table.frameworkId),
 }));

@@ -225,6 +225,37 @@ export function resolveDocumentSegment(
 }
 
 /**
+ * Task C — parse an assembled evidence pack into per-document segments.
+ *
+ * GENERIC: relies only on the pack's own delimiter convention
+ *   `--- DOCUMENT: <title> [<url>] ---`
+ * (the same header emitted when packs are built). Each segment's text is the
+ * span from its header to the next header (or end of pack), and its id is the
+ * document title (falling back to the url when the title is empty). Returns [] if
+ * the pack contains no such headers, so callers can safely pass the result to
+ * gateEvidence (empty segments = pack-wide provenance, i.e. no behaviour change).
+ */
+export function parsePackSegments(packText: string): DocumentSegment[] {
+  if (!packText) return [];
+  const headerPattern = /--- DOCUMENT: (.+?) \[(.+?)\] ---/g;
+  const headers: Array<{ title: string; url: string; startIdx: number }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = headerPattern.exec(packText)) !== null) {
+    headers.push({ title: (m[1] || "").trim(), url: (m[2] || "").trim(), startIdx: m.index });
+  }
+  if (headers.length === 0) return [];
+  const segments: DocumentSegment[] = [];
+  for (let i = 0; i < headers.length; i++) {
+    const start = headers[i].startIdx;
+    const end = i + 1 < headers.length ? headers[i + 1].startIdx : packText.length;
+    const id = headers[i].title || headers[i].url;
+    if (!id) continue;
+    segments.push({ id, text: packText.slice(start, end) });
+  }
+  return segments;
+}
+
+/**
  * Run the full gate on a model's output for a single measure.
  * Pure & synchronous. Returns the (possibly downgraded) binary score, a
  * per-llmResult gate record, and the quotes to keep (strict-strip aware).

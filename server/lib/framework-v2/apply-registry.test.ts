@@ -28,8 +28,11 @@ import {
   proposeSynonymAddition,
   proposeAdjacentTopics,
   proposeAnchorFrameworks,
+  proposeExpectedYesRateRecalibration,
+  proposeNonDiscriminatingRetire,
   FRAMEWORK_SENTINEL,
   FRAMEWORK_LEVEL_OPS,
+  DIRECT_MEASURE_OPS,
   EMITTABLE_PATCH_OPS,
 } from "./edit-proposer.js";
 import { APPLY_HANDLED_OPS, BATCH_REGENERATORS } from "./edit-applier.js";
@@ -102,6 +105,18 @@ test("E1: emitted patch.op set exactly matches declared EMITTABLE_PATCH_OPS", ()
     emitted.add(p!.patch.op);
   }
 
+  // Per-measure calibration/annotation builders (Feature 1 + Feature 2) emit
+  // their own direct-write ops. Values are placeholders — E1 only checks the op
+  // set, which is topic-agnostic.
+  for (const p of [
+    proposeExpectedYesRateRecalibration("m", 0.35, 0.8, 12),
+    proposeNonDiscriminatingRetire("m", 12, "No"),
+  ]) {
+    assert.ok(p, "calibration/annotation builder must return a proposal");
+    assert.ok(p!.patch && typeof p!.patch.op === "string", "calibration proposal must carry patch.op");
+    emitted.add(p!.patch.op);
+  }
+
   assert.deepEqual(
     [...emitted].sort(),
     [...EMITTABLE_PATCH_OPS].sort(),
@@ -168,4 +183,37 @@ test("E6: every framework-level op is handled as direct_replace (no LLM on apply
       `framework-level op '${op}' must apply as a direct jsonb append, not a batch regeneration`,
     );
   }
+});
+
+test("E7: direct-measure ops (calibration/annotation) apply as direct_replace, no LLM", () => {
+  // Every op the apply router treats as a direct per-measure column write must be
+  // declared emittable AND handled as direct_replace (never batch-regenerated).
+  for (const op of DIRECT_MEASURE_OPS) {
+    assert.ok(EMITTABLE_PATCH_OPS.includes(op), `direct-measure op '${op}' must be declared emittable`);
+    assert.equal(
+      APPLY_HANDLED_OPS[op],
+      "direct_replace",
+      `direct-measure op '${op}' must apply as a direct column write, not a batch regeneration`,
+    );
+  }
+  // The two Sprint-10 calibration/annotation builders emit exactly the new ops.
+  const recal = proposeExpectedYesRateRecalibration("m", 0.35, 0.9, 10);
+  assert.equal(recal.patch.op, "set_expected_yes_rate");
+  assert.equal(recal.patch.path, "expected_yes_rate");
+  assert.ok(DIRECT_MEASURE_OPS.includes(recal.patch.op), "recalibration op must be a direct-measure op");
+  // Builder clamps the observed rate into a valid probability.
+  const clampedHigh = proposeExpectedYesRateRecalibration("m", 0.35, 1.7, 10).patch.value;
+  const clampedLow = proposeExpectedYesRateRecalibration("m", 0.35, -0.4, 10).patch.value;
+  assert.equal(clampedHigh, 1, "observed rate above 1 clamps to 1");
+  assert.equal(clampedLow, 0, "observed rate below 0 clamps to 0");
+
+  const retire = proposeNonDiscriminatingRetire("m", 12, "No");
+  assert.equal(retire.patch.op, "flag_non_discriminating");
+  assert.equal(retire.patch.path, "flagged_non_discriminating");
+  assert.equal(retire.patch.value, true, "retire proposal sets the soft flag to true (never deletes)");
+  assert.ok(DIRECT_MEASURE_OPS.includes(retire.patch.op), "retire op must be a direct-measure op");
+  // Distinct flagRule from the broaden_or_redefine no-differentiation proposal so
+  // both can co-exist for the same measure without an identity/decision collision.
+  const broaden = proposeEditForFlag(flag("no-differentiation"), { substantive_definition: "d" });
+  assert.notEqual(retire.flagRule, broaden!.flagRule, "retire flagRule must differ from the broaden proposal's");
 });

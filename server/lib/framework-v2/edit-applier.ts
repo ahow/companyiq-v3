@@ -585,6 +585,12 @@ export const APPLY_HANDLED_OPS: Record<string, ApplyHandlerKind> = {
   rewrite_countable: "batch_regenerate",
   broaden_or_redefine: "batch_regenerate",
   merge_or_differentiate: "pair_resolve",
+  // Per-measure calibration/annotation ops. Written straight to a
+  // framework_measures column by applyProposal() in the /apply route (no LLM
+  // regeneration): set_expected_yes_rate updates expected_yes_rate to the observed
+  // rate; flag_non_discriminating sets the soft flagged_non_discriminating boolean.
+  set_expected_yes_rate: "direct_replace",
+  flag_non_discriminating: "direct_replace",
   // Framework-level additive ops. Each appends mined values to a jsonb column on
   // `frameworks` (topic_synonyms / adjacent_topics / anchor_frameworks). They are
   // written directly by applyFrameworkLevelProposal() in the /apply route — a
