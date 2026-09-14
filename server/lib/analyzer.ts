@@ -855,6 +855,7 @@ async function detectAndResolvContradiction(opts: {
       json: true,
       maxTokens: 500,
       temperature: 0,
+      callType: "arbiter",
     });
 
     const tieResult = extractAndParseJSON(text);

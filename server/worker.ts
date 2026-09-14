@@ -30,6 +30,7 @@ import {
 } from "./lib/provider-resilience.js";
 import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
 import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
+import { runWithLlmContext } from "./lib/llm-usage.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -316,29 +317,37 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     // records genuine work even when aggregate counters remain unchanged.
     let result: PipelineResult;
     try {
-      result = await Promise.race([
-        runAnalysisPipeline({
-          company,
-          framework,
-          measures,
-          workspaceId,
-          batchId,
-          cancelCheck,
-          skipFetch,
-          sourceBatchId,
-          // 42-F: Share circuit-breaker state across all companies in the batch
-          batchFetchState: (() => {
-            if (!batchFetchStates.has(batchId)) batchFetchStates.set(batchId, newBatchFetchState());
-            return batchFetchStates.get(batchId)!;
-          })(),
-        }),
-        new Promise<PipelineResult>((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms")),
-            JOB_TIMEOUT
-          )
-        ),
-      ]);
+      // Attribution context for LLM token/cost logging. Propagated implicitly
+      // via AsyncLocalStorage to every LLM call made anywhere in the pipeline,
+      // so usage events are tagged with this job's workspace/batch/company/
+      // framework without threading params through every function. Tolerant —
+      // if logging is disabled or context is missing, nothing breaks.
+      result = await runWithLlmContext(
+        { workspaceId, batchId, companyId, frameworkId, callType: "scoring" },
+        () => Promise.race([
+          runAnalysisPipeline({
+            company,
+            framework,
+            measures,
+            workspaceId,
+            batchId,
+            cancelCheck,
+            skipFetch,
+            sourceBatchId,
+            // 42-F: Share circuit-breaker state across all companies in the batch
+            batchFetchState: (() => {
+              if (!batchFetchStates.has(batchId)) batchFetchStates.set(batchId, newBatchFetchState());
+              return batchFetchStates.get(batchId)!;
+            })(),
+          }),
+          new Promise<PipelineResult>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms")),
+              JOB_TIMEOUT
+            )
+          ),
+        ])
+      );
     } finally {
       clearInterval(heartbeatTimer);
     }

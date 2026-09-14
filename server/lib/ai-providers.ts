@@ -22,6 +22,7 @@ import {
   type ProviderFailureClass,
 } from "./provider-resilience.js";
 import { noteRateLimited, noteProviderSuccess } from "./adaptive-concurrency.js";
+import { recordLlmUsage } from "./llm-usage.js";
 
 // ─── Key Collection Helper ───────────────────────────────────────────────────
 
@@ -91,6 +92,11 @@ export interface AIProvider {
     maxTokens?: number;
     json?: boolean;
     temperature?: number;
+    // Optional usage sink: called synchronously with the raw provider usage
+    // object on a successful response (before returning), so callers can log
+    // token/cost usage without changing the string return contract. Tolerant —
+    // providers that don't expose usage simply never call it.
+    onUsage?: (rawUsage: any) => void;
   }): Promise<string>;
 }
 
@@ -126,6 +132,7 @@ class ClaudeProvider implements AIProvider {
     maxTokens?: number;
     json?: boolean;
     temperature?: number;
+    onUsage?: (rawUsage: any) => void;
   }): Promise<string> {
     if (this.apiKeys.length === 0) throw new Error("Claude not configured");
     // Try each available key once; rotate on rate-limit (429) or auth (401) errors
@@ -147,6 +154,7 @@ class ClaudeProvider implements AIProvider {
           system: opts.system,
           messages: [{ role: "user", content: opts.prompt }],
         });
+        try { opts.onUsage?.(response.usage); } catch { /* usage sink must never break scoring */ }
         const block = response.content[0];
         if (block.type === "text") return block.text;
         throw new Error("Unexpected response type from Claude");
@@ -238,6 +246,7 @@ class OpenAICompatibleProvider implements AIProvider {
     json?: boolean;
     temperature?: number;
     seed?: number;
+    onUsage?: (rawUsage: any) => void;
   }): Promise<string> {
     const body: any = {
       model: this.model,
@@ -282,6 +291,7 @@ class OpenAICompatibleProvider implements AIProvider {
             timeout: 120000,
           }
         );
+        try { opts.onUsage?.(response.data?.usage); } catch { /* usage sink must never break scoring */ }
         return response.data.choices[0].message.content;
       } catch (error: any) {
         lastError = error;
@@ -322,6 +332,7 @@ class GeminiProvider implements AIProvider {
     maxTokens?: number;
     json?: boolean;
     temperature?: number;
+    onUsage?: (rawUsage: any) => void;
   }): Promise<string> {
     if (!this.apiKey) throw new Error("Gemini not configured");
 
@@ -346,6 +357,7 @@ class GeminiProvider implements AIProvider {
       { timeout: 180000 }
     );
 
+    try { opts.onUsage?.(response.data?.usageMetadata); } catch { /* usage sink must never break scoring */ }
     return response.data.candidates[0].content.parts[0].text;
   }
 }
@@ -715,7 +727,7 @@ export function getIndependentTieBreakerProvider(primaryName: string): AIProvide
 
 export async function completeWithFallback(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string }
 ): Promise<{ text: string; provider: string }> {
   // Gate every LLM call (primary + fallbacks) through the global semaphore so
   // total in-flight requests never exceed LLM_MAX_CONCURRENCY for this process.
@@ -741,7 +753,7 @@ export async function completeWithFallback(
 // many times the same provider is retried before any fallback.
 export async function completeScoring(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string }
 ): Promise<{ text: string; provider: string; model: string }> {
   await acquireLlmSlot();
   try {
@@ -766,7 +778,8 @@ export async function completeScoring(
       if (allowPrimary) {
         for (let attempt = 0; attempt < effectiveRetries; attempt++) {
           try {
-            const text = await primary.complete(opts);
+            let capturedUsage: any = null;
+            const text = await primary.complete({ ...opts, onUsage: (u) => { capturedUsage = u; } });
             // Success: clear any credit breaker/alert for this provider (recovery).
             if (isProviderTripped(primary.name)) {
               resetProvider(primary.name);
@@ -775,6 +788,7 @@ export async function completeScoring(
               console.warn(`[AI:scoring] Credit breaker CLEARED for ${primary.name} — primary call succeeded`);
             }
             noteProviderSuccess();
+            recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType: opts.callType ?? "scoring" });
             return { text, provider: primary.name, model: primary.model };
           } catch (error: any) {
             const failureClass = classifyProviderError(error);
@@ -838,9 +852,11 @@ export async function completeScoring(
 
     for (const fallback of fallbackChain) {
       try {
-        const text = await fallback.complete(opts);
+        let capturedUsage: any = null;
+        const text = await fallback.complete({ ...opts, onUsage: (u) => { capturedUsage = u; } });
         console.warn(`[AI:scoring] PRIMARY ${providerName} EXHAUSTED — graded by fallback ${fallback.name} (auditable variance source)`);
         noteProviderSuccess();
+        recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType: opts.callType ?? "scoring" });
         return { text, provider: fallback.name, model: fallback.model };
       } catch (error: any) {
         const fbClass = classifyProviderError(error);
@@ -868,13 +884,15 @@ export async function completeScoring(
 
 async function completeWithFallbackInner(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string }
 ): Promise<{ text: string; provider: string }> {
   const errors: string[] = [];
   const primary = getProvider(providerName);
   if (primary?.isAvailable()) {
     try {
-      const text = await primary.complete(opts);
+      let capturedUsage: any = null;
+      const text = await primary.complete({ ...opts, onUsage: (u) => { capturedUsage = u; } });
+      recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType: opts.callType });
       return { text, provider: primary.name };
     } catch (error: any) {
       const msg = `${primary.name}: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
@@ -888,7 +906,9 @@ async function completeWithFallbackInner(
   const fallbacks = getFallbackProviders(providerName);
   for (const fallback of fallbacks) {
     try {
-      const text = await fallback.complete(opts);
+      let capturedUsage: any = null;
+      const text = await fallback.complete({ ...opts, onUsage: (u) => { capturedUsage = u; } });
+      recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType: opts.callType });
       return { text, provider: fallback.name };
     } catch (error: any) {
       const msg = `${fallback.name}: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;

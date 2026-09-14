@@ -1262,6 +1262,51 @@ apiRouter.get("/results", async (req: Request, res: Response) => {
   }
 });
 
+// Aggregate LLM token + cost totals for a saved result, resolved via its batch.
+// Reads the llm_usage_events table populated during the run (see lib/llm-usage.ts).
+// Defined BEFORE "/results/:id" so the literal sub-path takes precedence.
+apiRouter.get("/results/:id/cost", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id." });
+    // Resolve the batch this result belongs to (workspace-scoped).
+    const resRows = (await db
+      .execute(sql`SELECT batch_id FROM analysis_results WHERE id = ${id} AND workspace_id = ${workspaceId}`)
+      .then((x: any) => x.rows)) as any[];
+    if (!resRows || resRows.length === 0) return res.status(404).json({ error: "Result not found." });
+    const batchId = resRows[0].batch_id;
+    if (batchId == null) {
+      return res.json({ resultId: id, batchId: null, totals: null, byModel: [], note: "Result has no batch_id; cost not attributable." });
+    }
+    const totalRows = (await db
+      .execute(sql`
+        SELECT
+          COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+          COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+          SUM(input_cost_usd) AS input_cost_usd,
+          SUM(output_cost_usd) AS output_cost_usd,
+          SUM(total_cost_usd) AS total_cost_usd,
+          COUNT(*)::bigint AS call_count
+        FROM llm_usage_events WHERE batch_id = ${batchId}`)
+      .then((x: any) => x.rows)) as any[];
+    const byModelRows = (await db
+      .execute(sql`
+        SELECT model, provider, call_type,
+          COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+          SUM(total_cost_usd) AS total_cost_usd,
+          COUNT(*)::bigint AS call_count
+        FROM llm_usage_events WHERE batch_id = ${batchId}
+        GROUP BY model, provider, call_type
+        ORDER BY SUM(total_cost_usd) DESC NULLS LAST`)
+      .then((x: any) => x.rows)) as any[];
+    res.json({ resultId: id, batchId, totals: totalRows[0] || null, byModel: byModelRows });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Full single result (includes results_data). Used on demand for CSV export.
 apiRouter.get("/results/:id", async (req: Request, res: Response) => {
   try {

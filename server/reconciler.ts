@@ -37,6 +37,7 @@ import { db, pool } from "./db.js";
 import { sql } from "drizzle-orm";
 import * as storage from "./storage.js";
 import { getQueue } from "./queue.js";
+import { isResurrectEligible, ORPHAN_REJECTION_REASON } from "./lib/reconcile-resurrect.js";
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 const RECONCILE_INTERVAL_MS = parseInt(process.env.RECONCILE_INTERVAL_MS || "300000", 10); // 5 min
@@ -64,6 +65,20 @@ const RECONCILE_ENABLED = !/^(false|0|no|off)$/i.test(process.env.RECONCILE_ENAB
 // only proceeds on the ONE replica that wins this transaction-scoped advisory
 // lock; the others skip the pass entirely. Arbitrary stable 32-bit key.
 const RECONCILE_LOCK_KEY = parseInt(process.env.RECONCILE_LOCK_KEY || "918273645", 10);
+// ── Resurrect-orphaned-failure sweep (§1.5) tunables ──
+// On a server restart, startup-cleanup.ts fails in-flight jobs with a fixed
+// orphan signature and cancels their batches with ORPHAN_REJECTION_REASON. Those
+// failures are purely mechanical, so this bounded sweep resurrects them (sync to
+// completed if results already exist, else re-enqueue). User-cancelled batches
+// carry a different rejection_reason and are never touched.
+const RESURRECT_ORPHANED_ENABLED = !/^(false|0|no|off)$/i.test(process.env.RESURRECT_ORPHANED_ENABLED || "true");
+// Only resurrect jobs whose last progress is within this many minutes of now, so
+// we never revive ancient orphan rows from long-past restarts.
+const RESURRECT_WINDOW_MIN = parseInt(process.env.RESURRECT_WINDOW_MIN || "120", 10);
+// Per-company resurrect attempt cap, tracked in discoveryDiagnostics.resurrect.
+const RESURRECT_MAX = parseInt(process.env.RESURRECT_MAX || "3", 10);
+// Per-cycle bound on how many orphan rows a single pass will resurrect.
+const RESURRECT_BATCH_LIMIT = parseInt(process.env.RESURRECT_BATCH_LIMIT || "50", 10);
 
 let running = false;
 let timer: NodeJS.Timeout | null = null;
@@ -135,6 +150,7 @@ async function flagForQa(company: any, reason: string): Promise<void> {
 type ReconcileStats = {
   syncedCompleted: number;
   recovered: number;
+  resurrected: number;
   exhaustedFailed: number;
   qaFlagged: number;
   batchesClosed: number;
@@ -149,7 +165,7 @@ type ReconcileStats = {
  * thundering herd of duplicate re-examinations.
  */
 export async function reconcileOnce(): Promise<ReconcileStats> {
-  const empty: ReconcileStats = { syncedCompleted: 0, recovered: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0, skipped: true };
+  const empty: ReconcileStats = { syncedCompleted: 0, recovered: 0, resurrected: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0, skipped: true };
   // Advisory locks are DATABASE-GLOBAL: whoever holds the key (on any connection)
   // blocks all other holders. We therefore hold the lock on a single dedicated
   // client for the whole pass (so lock + unlock are guaranteed same-connection,
@@ -170,7 +186,7 @@ export async function reconcileOnce(): Promise<ReconcileStats> {
 }
 
 async function reconcilePass(): Promise<ReconcileStats> {
-  const stats: ReconcileStats = { syncedCompleted: 0, recovered: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0 };
+  const stats: ReconcileStats = { syncedCompleted: 0, recovered: 0, resurrected: 0, exhaustedFailed: 0, qaFlagged: 0, batchesClosed: 0 };
   const live = await liveQueueCompanyIds();
 
   // ── 0) Stale-claim reaper: release orphaned `claimed` jobs back to `pending`
@@ -314,6 +330,96 @@ async function reconcilePass(): Promise<ReconcileStats> {
     if (enq) {
       stats.recovered++;
       console.log(`[Reconciler] Auto-recovered company ${companyId} (${row.name}) -> batch ${enq.batchId} (attempt ${diag.reconcile.count}/${RECONCILE_MAX})`);
+    }
+  }
+
+  // ── 1.5) Resurrect orphaned-by-restart failures (bounded).
+  //       startup-cleanup.ts fails in-flight jobs with a fixed orphan signature
+  //       (last_error ~ "...orphaned") and cancels their batches with
+  //       ORPHAN_REJECTION_REASON. Those failures are purely mechanical, so we
+  //       resurrect the most recent orphan job per company: if results already
+  //       exist, sync to completed; otherwise re-enqueue (bounded per company by
+  //       RESURRECT_MAX, per cycle by RESURRECT_BATCH_LIMIT, and by recency via
+  //       RESURRECT_WINDOW_MIN). User-cancelled batches carry a DIFFERENT
+  //       rejection_reason and are never matched. Kill switch:
+  //       RESURRECT_ORPHANED_ENABLED=false.
+  if (RESURRECT_ORPHANED_ENABLED) {
+    const orphanFailures = await db.execute(sql`
+      SELECT c.id AS company_id, c.workspace_id, c.name,
+             j.id AS job_id, j.framework_id, j.status AS job_status,
+             j.last_error, j.last_progress_at,
+             b.rejection_reason
+      FROM companies c
+      JOIN analysis_jobs j ON j.company_id = c.id
+      JOIN batch_runs b ON b.id = j.batch_id
+      WHERE j.status = 'failed'
+        AND j.last_error ILIKE '%orphaned%'
+        AND b.rejection_reason = ${ORPHAN_REJECTION_REASON}
+        AND COALESCE(j.last_progress_at, 'epoch') > NOW() - INTERVAL '${sql.raw(String(RESURRECT_WINDOW_MIN))} minutes'
+        AND j.id = (SELECT MAX(id) FROM analysis_jobs j2 WHERE j2.company_id = c.id)
+      ORDER BY j.id DESC
+      LIMIT ${sql.raw(String(RESURRECT_BATCH_LIMIT))}
+    `);
+
+    const now = new Date();
+    for (const row of orphanFailures.rows as any[]) {
+      const companyId = Number(row.company_id);
+      const frameworkId = Number(row.framework_id);
+      const jobId = row.job_id != null ? Number(row.job_id) : null;
+
+      // Pure predicate re-check (defence in depth against SQL drift): confirms
+      // failed + orphan last_error + orphan rejection_reason + within window.
+      const eligible = isResurrectEligible(
+        {
+          status: String(row.job_status),
+          lastError: row.last_error != null ? String(row.last_error) : null,
+          rejectionReason: row.rejection_reason != null ? String(row.rejection_reason) : null,
+          lastProgressAt: row.last_progress_at ?? null,
+        },
+        { windowMin: RESURRECT_WINDOW_MIN },
+        now,
+      );
+      if (!eligible) continue;
+
+      // Skip anything still genuinely in-flight on the queue or already re-queued.
+      if (live.has(companyId)) continue;
+      if (await hasActiveDbJob(companyId)) continue;
+
+      const company = await storage.getCompanyById(companyId, Number(row.workspace_id));
+      if (!company) continue;
+
+      // Results already present => this was a lost status-write; just sync.
+      if (await hasMeasureScores(companyId, frameworkId)) {
+        await syncCompleted(companyId, jobId);
+        stats.syncedCompleted++;
+        console.log(`[Reconciler] Resurrect: synced company ${companyId} (${row.name}) to completed (results already present)`);
+        continue;
+      }
+
+      // Genuinely incomplete => bounded re-enqueue.
+      const diag = getDiag(company);
+      const res = diag.resurrect || { count: 0 };
+      if ((res.count || 0) >= RESURRECT_MAX) continue; // budget exhausted; leave for §1/QA paths
+
+      // Persist the incremented resurrect counter BEFORE enqueue
+      // (enqueueReexamination preserves discoveryDiagnostics).
+      diag.resurrect = {
+        count: (res.count || 0) + 1,
+        lastAt: new Date().toISOString(),
+        reason: "resurrected orphaned-by-restart failure",
+      };
+      await storage.updateCompany(companyId, company.workspaceId, { discoveryDiagnostics: diag } as any);
+
+      const enq = await storage.enqueueReexamination({
+        companyId,
+        companyName: company.name,
+        frameworkId,
+        workspaceId: company.workspaceId,
+      });
+      if (enq) {
+        stats.resurrected++;
+        console.log(`[Reconciler] Resurrected orphaned company ${companyId} (${row.name}) -> batch ${enq.batchId} (attempt ${diag.resurrect.count}/${RESURRECT_MAX})`);
+      }
     }
   }
 
@@ -464,16 +570,16 @@ export function startReconciler(): void {
     console.log("[Reconciler] Disabled via RECONCILE_ENABLED=false; not scheduling any passes.");
     return;
   }
-  console.log(`[Reconciler] Starting (interval=${RECONCILE_INTERVAL_MS}ms, stuckThreshold=${STUCK_THRESHOLD_MIN}min, maxAttempts=${RECONCILE_MAX}, lockKey=${RECONCILE_LOCK_KEY})`);
+  console.log(`[Reconciler] Starting (interval=${RECONCILE_INTERVAL_MS}ms, stuckThreshold=${STUCK_THRESHOLD_MIN}min, maxAttempts=${RECONCILE_MAX}, lockKey=${RECONCILE_LOCK_KEY}, resurrect=${RESURRECT_ORPHANED_ENABLED ? `on(window=${RESURRECT_WINDOW_MIN}min,max=${RESURRECT_MAX},limit=${RESURRECT_BATCH_LIMIT})` : "off"})`);
   const tick = async () => {
     if (running) return; // never overlap passes within THIS replica
     running = true;
     try {
       const s = await reconcileOnce();
       if (s.skipped) return; // another replica is the leader for this tick
-      const total = s.syncedCompleted + s.recovered + s.exhaustedFailed + s.qaFlagged + s.batchesClosed;
+      const total = s.syncedCompleted + s.recovered + s.resurrected + s.exhaustedFailed + s.qaFlagged + s.batchesClosed;
       if (total > 0) {
-        console.log(`[Reconciler] pass done: synced=${s.syncedCompleted} recovered=${s.recovered} exhausted=${s.exhaustedFailed} qaFlagged=${s.qaFlagged} batchesClosed=${s.batchesClosed}`);
+        console.log(`[Reconciler] pass done: synced=${s.syncedCompleted} recovered=${s.recovered} resurrected=${s.resurrected} exhausted=${s.exhaustedFailed} qaFlagged=${s.qaFlagged} batchesClosed=${s.batchesClosed}`);
       }
     } catch (e: any) {
       console.error(`[Reconciler] pass error (non-fatal): ${e?.message}`);

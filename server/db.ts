@@ -954,6 +954,36 @@ export async function initializeDatabase(): Promise<void> {
     // Add metadata column to system_alerts for structured pause state
     await db.execute(sql`ALTER TABLE system_alerts ADD COLUMN IF NOT EXISTS metadata JSONB`);
 
+    // ─── LLM Usage Events (token + cost logging) ───────────────────────
+    // One row per LLM call. Attribution columns are all NULLABLE so a call made
+    // without full context still logs cleanly. Cost columns are NULLABLE too
+    // (unknown model → cost null, tokens still recorded).
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS llm_usage_events (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER,
+        batch_id INTEGER,
+        company_id INTEGER,
+        framework_id INTEGER,
+        model TEXT,
+        provider TEXT,
+        call_type TEXT,
+        prompt_tokens INTEGER NOT NULL DEFAULT 0,
+        completion_tokens INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        input_cost_usd NUMERIC,
+        output_cost_usd NUMERIC,
+        total_cost_usd NUMERIC,
+        created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_batch ON llm_usage_events(batch_id)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_company ON llm_usage_events(company_id)
+    `);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 
