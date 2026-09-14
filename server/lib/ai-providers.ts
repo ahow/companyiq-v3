@@ -618,6 +618,26 @@ function initProviders() {
   });
   providers.set("mistral-or", mistralOr);
 
+  // ─── Mistral Medium via OpenRouter (cheaper cascade secondary) ───────────
+  // Cheaper secondary intended to replace mistral-or/mistral-large in the
+  // cascade: Mistral Medium lists ~ $0.40 in / $2.00 out per 1M tokens on
+  // OpenRouter vs mistral-large's ~ $2.00 / $6.00. Same OpenRouter route/key as
+  // the other openrouter providers (direct Railway → OpenRouter, never via
+  // Abacus). The model id `mistralai/mistral-medium-3.1` was chosen from
+  // OpenRouter's live catalogue. Wired into scoring by setting the
+  // workspace_settings cascade_secondary value to "mistral-medium".
+  const mistralMedium = new OpenAICompatibleProvider({
+    name: "mistral-medium",
+    model: "mistralai/mistral-medium-3.1",
+    family: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    seed: 42,
+    maxOutputTokens: 8192,
+    extraHeaders: openrouterHeaders,
+  });
+  providers.set("mistral-medium", mistralMedium);
+
   // Kimi (moonshot supports up to 4K output tokens)
   // KIMI_API_KEY must be set via environment variable
   const kimi = new OpenAICompatibleProvider({
@@ -642,6 +662,16 @@ export function getProvider(name: string): AIProvider | undefined {
 
 export function getAvailableProviders(): AIProvider[] {
   return Array.from(providers.values()).filter((p) => p.isAvailable());
+}
+
+/**
+ * Returns the names of every registered provider (the keys of the provider
+ * registry), sorted alphabetically. Generic — no framework/company knowledge;
+ * this is just the wired provider registry, used to populate model dropdowns so
+ * they always reflect what is actually available for scoring.
+ */
+export function listProviderNames(): string[] {
+  return Array.from(providers.keys()).sort();
 }
 
 /**

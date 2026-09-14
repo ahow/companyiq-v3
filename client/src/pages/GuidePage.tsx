@@ -51,7 +51,7 @@ export default function GuidePage() {
             { href: "#dashboard", label: "Dashboard", icon: BarChart3 },
             { href: "#lists", label: "Company Lists", icon: FolderOpen },
             { href: "#framework", label: "Framework Management", icon: Building2 },
-            { href: "#ai-builder", label: "AI Framework Builder", icon: Sparkles },
+            { href: "#framework-builder-v2", label: "Framework Builder v2", icon: Sparkles },
             { href: "#results", label: "Results & Export", icon: ClipboardCheck },
             { href: "#settings", label: "Settings", icon: Settings },
             { href: "#diagnostics", label: "Diagnostics", icon: Activity },
@@ -252,32 +252,38 @@ export default function GuidePage() {
         </p>
       </section>
 
-      {/* AI Framework Builder */}
-      <section id="ai-builder" className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
+      {/* Framework Builder v2 */}
+      <section id="framework-builder-v2" className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
         <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-blue-600" />
-          AI Framework Builder
+          Framework Builder v2
         </h2>
         <p className="text-gray-700">
-          The AI Builder provides a conversational interface for creating entirely new assessment frameworks from scratch.
-          Describe what you want to assess, and the AI will generate a complete framework with categories, measures,
-          scoring guidance, search templates, and trusted source suggestions.
+          Framework Builder v2 is a conversational, section-by-section workspace for creating entirely new assessment
+          frameworks. Describe what you want to assess and the builder helps you shape categories, measures, scoring
+          guidance, search templates, and trusted source suggestions — saving your progress as a resumable draft as you go.
         </p>
 
         <h3 className="text-lg font-medium text-gray-800 mt-4">How to Use</h3>
         <ol className="list-decimal list-inside space-y-2 text-gray-700">
-          <li>Navigate to the <strong>AI Builder</strong> page</li>
+          <li>Open the <strong>Framework Builder v2</strong> page (or click <strong>Create with v2 builder</strong> from the Framework page)</li>
           <li>Describe your assessment topic (e.g., "I want to assess companies on their financed emissions and portfolio carbon footprint")</li>
-          <li>Optionally <strong>upload reference files</strong> (PDF, DOCX, XLSX, TXT) using the paperclip button — the AI will use these to inform the framework design</li>
-          <li>The AI may ask clarifying questions about scope, industry focus, or specific areas of interest</li>
-          <li>Once it has enough information, it generates the complete framework as a JSON draft</li>
-          <li>Review the draft in the preview panel — it shows categories, measures, and suggested trusted sources</li>
-          <li>Click <strong>Save & Activate</strong> to create the framework and make it available for analysis</li>
+          <li>Optionally <strong>upload reference files</strong> (PDF, DOCX, XLSX, TXT) so the builder can use them to inform the design</li>
+          <li>Work through the framework section by section, refining categories, measures, and scoring guidance</li>
+          <li>Your work is saved as a <strong>resumable draft</strong> — you can leave and continue later from the Framework page</li>
+          <li>When ready, save and activate the framework to make it available for analysis</li>
         </ol>
+
+        <h3 className="text-lg font-medium text-gray-800 mt-4">Resuming a Draft</h3>
+        <p className="text-gray-700">
+          Any framework you started in the v2 builder appears in the <strong>Available Frameworks</strong> table on the
+          Framework page with a <strong>Continue in v2 builder</strong> action, so you can pick up an in-progress draft
+          exactly where you left off.
+        </p>
 
         <h3 className="text-lg font-medium text-gray-800 mt-4">File Upload</h3>
         <p className="text-gray-700">
-          You can upload reference documents to help the AI design a more targeted framework. Supported formats:
+          You can upload reference documents to help design a more targeted framework. Supported formats:
         </p>
         <ul className="list-disc list-inside space-y-1 text-gray-700">
           <li><strong>PDF</strong> — Annual reports, regulatory guidance, existing questionnaires</li>
@@ -285,16 +291,13 @@ export default function GuidePage() {
           <li><strong>Excel (.xlsx, .csv)</strong> — Lists of questions, scoring criteria</li>
           <li><strong>Text (.txt, .md, .json)</strong> — Any structured or unstructured reference material</li>
         </ul>
-        <p className="text-sm text-gray-600 mt-2">
-          Files are text-extracted server-side and included as context for the AI. Maximum 100K characters per file.
-        </p>
 
         <h3 className="text-lg font-medium text-gray-800 mt-4">Trusted Source Suggestions</h3>
         <p className="text-gray-700">
-          The AI automatically suggests relevant trusted sources based on the framework topic. These are drawn from a
-          catalog of 120+ disclosure platforms across categories including regulatory filings, ESG ratings, voluntary
-          reporting frameworks, and industry-specific databases. When you save the framework, any new sources are added
-          to the global trusted sources list for future use.
+          The builder can suggest relevant trusted sources based on the framework topic, drawn from a catalog of
+          disclosure platforms across regulatory filings, ESG ratings, voluntary reporting frameworks, and
+          industry-specific databases. When you save the framework, any new sources are added to the global trusted
+          sources list for future use.
         </p>
       </section>
 
@@ -540,8 +543,8 @@ export default function GuidePage() {
 
           <div className="bg-green-50 border border-green-200 rounded p-3">
             <p className="text-sm text-green-800">
-              <strong>Upload reference documents to the AI Builder</strong> — If you have an existing questionnaire or
-              regulatory guidance document, upload it when creating a framework. The AI will use it to generate more
+              <strong>Upload reference documents to the v2 builder</strong> — If you have an existing questionnaire or
+              regulatory guidance document, upload it when creating a framework. The builder will use it to produce more
               accurate and relevant measures.
             </p>
           </div>

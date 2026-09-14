@@ -11,6 +11,34 @@ interface DashboardPageProps {
   onViewCompany: (id: number) => void;
 }
 
+// localStorage keys for the dashboard's persisted list/framework selection.
+const DASH_SELECTED_LIST_KEY = "dash-selected-list-id";
+const DASH_SELECTED_FRAMEWORK_KEY = "dash-selected-framework-id";
+
+/** Read a persisted numeric id from localStorage, returning null if absent or
+ * unparseable. Safe in non-browser/SSR contexts (no window). */
+function readStoredId(key: string): number | null {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist (or clear when null) a numeric id in localStorage. Best-effort. */
+function writeStoredId(key: string, id: number | null): void {
+  try {
+    if (typeof window === "undefined") return;
+    if (id == null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, String(id));
+  } catch {
+    /* ignore storage failures (private mode, quota) */
+  }
+}
+
 // ── Status-indicator helpers ────────────────────────────────────────────────
 /** Human-readable elapsed/started label, e.g. "started 12:04 (8m ago)". */
 function formatStarted(startedAt?: string | null): string {
@@ -37,8 +65,17 @@ function formatEta(etaSeconds?: number | null): string {
 export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  const [selectedList, setSelectedList] = useState<number | null>(null);
-  const [selectedFramework, setSelectedFramework] = useState<number | null>(null);
+  // Persist the dashboard's list/framework selection across reloads. Purely
+  // presentational — these ids only filter what the dashboard shows and pick the
+  // framework for a run; they never touch query keys, mutations, or scoring. The
+  // lazy initialiser rehydrates the last selection so the dropdowns survive a
+  // refresh; a guard effect below discards any stored id that no longer exists.
+  const [selectedList, setSelectedList] = useState<number | null>(() =>
+    readStoredId(DASH_SELECTED_LIST_KEY),
+  );
+  const [selectedFramework, setSelectedFramework] = useState<number | null>(() =>
+    readStoredId(DASH_SELECTED_FRAMEWORK_KEY),
+  );
   const [showAddModal, setShowAddModal] = useState(false);
   const [newCompany, setNewCompany] = useState({ name: "", isin: "", sector: "", country: "", domain: "" });
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -131,6 +168,30 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     queryKey: ["frameworks"],
     queryFn: api.getFrameworks,
   });
+
+  // Persist the current selection so it survives a page reload.
+  useEffect(() => {
+    writeStoredId(DASH_SELECTED_LIST_KEY, selectedList);
+  }, [selectedList]);
+  useEffect(() => {
+    writeStoredId(DASH_SELECTED_FRAMEWORK_KEY, selectedFramework);
+  }, [selectedFramework]);
+
+  // Guard against a rehydrated id that no longer exists (list/framework deleted
+  // since the last visit). Only run once the relevant query has returned rows so
+  // we never clear a valid selection just because data hasn't loaded yet.
+  useEffect(() => {
+    if (selectedList != null && lists.length > 0 &&
+        !lists.some((l: any) => l.id === selectedList)) {
+      setSelectedList(null);
+    }
+  }, [lists, selectedList]);
+  useEffect(() => {
+    if (selectedFramework != null && frameworks.length > 0 &&
+        !frameworks.some((f: any) => f.id === selectedFramework)) {
+      setSelectedFramework(null);
+    }
+  }, [frameworks, selectedFramework]);
 
   const companies = companiesData?.companies || [];
   const stats = companiesData?.stats || { total: 0, completed: 0, avgScore: 0 };

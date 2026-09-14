@@ -4,7 +4,6 @@ import {
   BarChart3,
   List,
   FileText,
-  Sparkles,
   Settings,
   LogOut,
   FlaskConical,
@@ -36,7 +35,6 @@ const PRIMARY: NavItem[] = [
 
 const FRAMEWORKS_GROUP: NavItem[] = [
   { id: "framework", label: "Framework", icon: FileText },
-  { id: "ai-builder", label: "AI Builder", icon: Sparkles },
   { id: "framework-builder-v2", label: "Framework Builder v2", icon: Layers },
 ];
 

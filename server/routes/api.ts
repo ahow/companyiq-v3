@@ -10,7 +10,7 @@ import {
   resumeProvider,
   getConfiguredFallbackOrder,
 } from "../lib/provider-resilience.js";
-import { getAvailableProviders, getProviderStatus } from "../lib/ai-providers.js";
+import { getAvailableProviders, getProviderStatus, listProviderNames } from "../lib/ai-providers.js";
 import { resetProvider as resetCreditBreaker, isProviderTripped, clearCreditAlert } from "../lib/credit-breaker.js";
 import { detectScoreAnomalies } from "../lib/anomaly-detection.js";
 import { db } from "../db.js";
@@ -815,6 +815,20 @@ apiRouter.post("/system/alerts/resume", async (req: Request, res: Response) => {
     const { kind } = req.body || {};
     await storage.clearSystemAlert(kind || "credit_exhaustion");
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Registered Provider Names Endpoint ─────────────────────────────────────
+// Generic read-only endpoint returning the names of every provider wired into
+// the provider registry (ai-providers.ts). No framework/company knowledge — it
+// simply reflects what is actually available for scoring, so the Settings UI
+// can populate the cascade / provider dropdowns from the live registry instead
+// of a hardcoded list that drifts out of sync.
+apiRouter.get("/providers", async (_req: Request, res: Response) => {
+  try {
+    res.json({ providers: listProviderNames() });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

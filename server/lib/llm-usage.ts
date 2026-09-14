@@ -103,6 +103,11 @@ const DEFAULT_PRICE_TABLE: PriceTable = {
   // Mistral — public list price estimate (mistral-large ~ $2.00 in / $6.00 out
   // per 1M tokens). Override via LLM_PRICE_TABLE_JSON for negotiated rates.
   "mistral-large": { inputPerMillion: 2.0, outputPerMillion: 6.0 },
+  // mistral-medium (e.g. mistralai/mistral-medium-3.1) ~ $0.40 in / $2.00 out
+  // per 1M tokens. Key is longer/more-specific than the generic "mistral" key,
+  // so lookupPrice's longest-substring-wins rule resolves "mistral-medium-3.1"
+  // to this entry rather than the generic "mistral" fallback.
+  "mistral-medium": { inputPerMillion: 0.4, outputPerMillion: 2.0 },
   "mistral": { inputPerMillion: 2.0, outputPerMillion: 6.0 },
   // OpenAI GPT-5 — public list price estimate ($1.25 in / $10.00 out per 1M
   // tokens). Override via LLM_PRICE_TABLE_JSON for negotiated rates.

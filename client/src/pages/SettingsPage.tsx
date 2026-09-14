@@ -57,6 +57,15 @@ function PipelineSettings() {
     queryFn: api.getSettings,
   });
 
+  // Registered provider names come straight from the backend registry
+  // (GET /api/providers), so the cascade dropdowns always reflect what is
+  // actually wired for scoring rather than a hardcoded list that drifts.
+  const { data: providersData } = useQuery({
+    queryKey: ["providers"],
+    queryFn: () => api.request("/providers"),
+  });
+  const providerNames: string[] = providersData?.providers || [];
+
   const setSettingMutation = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) => api.setSetting(key, value),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
@@ -73,8 +82,116 @@ function PipelineSettings() {
     setSettingMutation.mutate({ key, value });
   };
 
+  // Derive which scoring path is actually live, mirroring the backend precedence
+  // in analyzer.ts: the cross-model cascade runs only inside ensemble scoring, so
+  // it needs BOTH ensemble_scoring and scoring_cascade on; otherwise ensemble
+  // (classic) applies when ensemble_scoring is on; otherwise a single pass runs.
+  const ensembleOn = settings?.ensemble_scoring === "true";
+  const cascadeOn = settings?.scoring_cascade === "true";
+  const activeScoringPath = cascadeOn
+    ? "Cross-model cascade"
+    : ensembleOn
+      ? "Classic ensemble"
+      : "Single pass";
+  // Cascade is configured but cannot run because ensemble scoring is off.
+  const cascadeInactiveNeedsEnsemble = cascadeOn && !ensembleOn;
+
+  // Provider <option> list sourced from the live registry. Falls back to any
+  // currently-stored value so a saved setting is never silently dropped from the
+  // dropdown even if the registry response hasn't loaded yet.
+  const providerOptions = (current?: string): string[] => {
+    const names = [...providerNames];
+    if (current && !names.includes(current)) names.unshift(current);
+    return names;
+  };
+
   return (
     <div className="space-y-6">
+      {/* Active scoring path indicator */}
+      <div className="bg-white rounded-lg border p-4 flex items-center justify-between">
+        <div>
+          <div className="font-medium text-gray-900">Active scoring path</div>
+          <div className="text-sm text-gray-500">
+            The path currently used to score each measure, derived from the toggles below.
+          </div>
+        </div>
+        <div className="text-right">
+          <span
+            className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${
+              cascadeOn && ensembleOn
+                ? "bg-purple-100 text-purple-700"
+                : ensembleOn
+                  ? "bg-blue-100 text-blue-700"
+                  : "bg-gray-100 text-gray-700"
+            }`}
+          >
+            {activeScoringPath}
+          </span>
+          {cascadeInactiveNeedsEnsemble && (
+            <div className="text-xs text-amber-600 mt-1 max-w-xs">
+              Cascade is selected but inactive — turn on Ensemble Scoring for the cascade to run.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Cross-model Cascade */}
+      <div className="bg-white rounded-lg border p-6">
+        <h2 className="font-semibold text-gray-900 mb-1">Cross-model Cascade</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          When the cascade is active, each measure is scored by the primary model, cross-checked by the
+          secondary model, and disagreements are resolved by the arbiter. Providers are populated from the
+          live provider registry. The cascade runs only when both Ensemble Scoring and the cascade are enabled.
+        </p>
+
+        {/* Cascade Enabled Toggle */}
+        <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg mb-3">
+          <div>
+            <div className="font-medium text-gray-900">Cross-model Cascade</div>
+            <div className="text-sm text-gray-500">Use a primary → secondary → arbiter cascade instead of classic ensemble</div>
+          </div>
+          <button
+            onClick={() => toggleSetting("scoring_cascade", settings?.scoring_cascade || "false")}
+            className="flex items-center"
+          >
+            {cascadeOn ? (
+              <ToggleRight className="w-8 h-8 text-green-600" />
+            ) : (
+              <ToggleLeft className="w-8 h-8 text-gray-400" />
+            )}
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          {([
+            { key: "cascade_primary", label: "Primary", help: "First model to score each measure" },
+            { key: "cascade_secondary", label: "Secondary", help: "Independent cross-check of the primary" },
+            { key: "cascade_arbiter", label: "Arbiter", help: "Resolves disagreements between primary and secondary" },
+          ] as const).map((row) => (
+            <div key={row.key} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <div className="w-28">
+                <div className="text-sm font-medium text-gray-700">{row.label}</div>
+                <div className="text-xs text-gray-400">{row.help}</div>
+              </div>
+              <select
+                value={settings?.[row.key] || ""}
+                onChange={(e) => updateSetting(row.key, e.target.value)}
+                disabled={!cascadeOn}
+                className="flex-1 px-3 py-1.5 border rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-400"
+              >
+                <option value="">— not set —</option>
+                {providerOptions(settings?.[row.key]).map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+        {!cascadeOn && (
+          <div className="text-xs text-gray-400 mt-2">Inactive while the cascade is off.</div>
+        )}
+      </div>
+
       {/* Scoring Configuration */}
       <div className="bg-white rounded-lg border p-6">
         <h2 className="font-semibold text-gray-900 mb-4">Scoring Configuration</h2>
@@ -149,16 +266,23 @@ function PipelineSettings() {
             </select>
           </div>
 
-          {/* Primary Scoring Provider */}
+          {/* Primary Scoring Provider — only used on the single-pass path (when
+              ensemble scoring is off). Disabled otherwise so it can't mislead. */}
           <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
             <div>
               <div className="font-medium text-gray-900">Primary Scoring Provider</div>
-              <div className="text-sm text-gray-500">Main LLM used for scoring</div>
+              <div className="text-sm text-gray-500">Main LLM used for scoring on the single-pass path</div>
+              {ensembleOn && (
+                <div className="text-xs text-amber-600 mt-1">
+                  Inactive while ensemble scoring is active
+                </div>
+              )}
             </div>
             <select
               value={settings?.scoring_provider || "deepseek"}
               onChange={(e) => updateSetting("scoring_provider", e.target.value)}
-              className="px-3 py-1.5 border rounded-lg text-sm"
+              disabled={ensembleOn}
+              className="px-3 py-1.5 border rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-400"
             >
               <option value="deepseek">DeepSeek</option>
               <option value="claude">Claude</option>
@@ -169,13 +293,20 @@ function PipelineSettings() {
         </div>
       </div>
 
-      {/* Ensemble LLM Configuration */}
-      {settings?.ensemble_scoring === "true" && (
+      {/* Ensemble LLM Configuration — the classic-ensemble providers. Only used
+          when ensemble scoring is on AND the cascade is off; when the cascade is
+          on, these are bypassed, so the controls are disabled with a note. */}
+      {ensembleOn && (
         <div className="bg-white rounded-lg border p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Ensemble LLM Providers</h2>
           <p className="text-sm text-gray-500 mb-4">
-            Configure which LLMs are used in ensemble scoring. Each measure is scored by all providers, and the result passes if any provider finds evidence.
+            Configure which LLMs are used in classic ensemble scoring. Each measure is scored by all providers, and the result passes if any provider finds evidence.
           </p>
+          {cascadeOn && (
+            <div className="text-xs text-amber-600 mb-3">
+              Inactive while the cascade is active — the cascade uses the Primary / Secondary / Arbiter models above.
+            </div>
+          )}
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
               <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
@@ -183,7 +314,8 @@ function PipelineSettings() {
                 <select
                   value={settings?.[`pipeline_llm_${i}`] || (i === 1 ? "deepseek" : i === 2 ? "claude" : "gemini")}
                   onChange={(e) => updateSetting(`pipeline_llm_${i}`, e.target.value)}
-                  className="flex-1 px-3 py-1.5 border rounded-lg text-sm"
+                  disabled={cascadeOn}
+                  className="flex-1 px-3 py-1.5 border rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-400"
                 >
                   <option value="deepseek">DeepSeek</option>
                   <option value="claude">Claude (Sonnet)</option>

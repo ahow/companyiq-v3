@@ -303,6 +303,14 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
 
   const linkedSourceIds: number[] = (framework?.trustedSourceIds as number[]) || [];
 
+  // Merge v2 resumable drafts into the single "Available Frameworks" table:
+  // a lookup by frameworkId lets each matching row render an inline "Continue in
+  // v2 builder" action, and any draft with no matching framework row is surfaced
+  // as an appended row so an in-progress build is never lost.
+  const v2DraftById = new Map(v2Drafts.map((d) => [d.frameworkId, d]));
+  const frameworkIds = new Set((frameworks || []).map((f: any) => f.id));
+  const orphanV2Drafts = v2Drafts.filter((d) => !frameworkIds.has(d.frameworkId));
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -327,88 +335,109 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
         </div>
       </div>
 
-      {/* v2 Drafts — resumable frameworks built via the v2 builder */}
-      {v2Drafts.length > 0 && onContinueV2Framework && (
-        <div className="bg-white rounded-lg border">
-          <div className="p-4 border-b flex items-center justify-between">
-            <h2 className="font-semibold text-gray-700">v2 Frameworks (resumable)</h2>
-            <span className="text-xs text-gray-500">Continue an in-progress v2 build or return to a test-drive result.</span>
-          </div>
-          <div className="divide-y">
-            {v2Drafts.map((d) => {
-              const stage = d.state?.stage as string | undefined;
-              const hasTest = !!d.state?.testDriveListId;
-              return (
-                <div key={d.frameworkId} className="flex items-center justify-between p-3 hover:bg-purple-50">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-gray-900 truncate">{d.frameworkName}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      {stage ? `stage: ${stage}` : "no saved stage"}
-                      {hasTest ? ` · test-drive list #${d.state.testDriveListId}` : ""}
-                      {d.updatedAt ? ` · updated ${new Date(d.updatedAt).toLocaleString()}` : ""}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onContinueV2Framework(d.frameworkId)}
-                    className="ml-3 flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" /> Continue in v2 builder
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Framework List */}
+      {/* Framework List — single table; v2 resumable drafts are surfaced inline
+          via a "Continue in v2 builder" action on their matching row. */}
       <div className="bg-white rounded-lg border">
         <div className="p-4 border-b">
           <h2 className="font-semibold text-gray-700">Available Frameworks</h2>
         </div>
         <div className="divide-y">
-          {frameworks?.map((f: any) => (
-            <div
-              key={f.id}
-              className={`px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50 ${
-                activeFrameworkId === f.id ? "bg-blue-50 border-l-2 border-l-blue-600" : ""
-              }`}
-              onClick={() => setSelectedFrameworkId(f.id)}
-            >
-              <div>
-                <span className="font-medium text-gray-900">{f.name}</span>
-                {f.isActive && (
-                  <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
-                    active
-                  </span>
-                )}
-                {f.isShared && (
-                  <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
-                    shared
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {!f.isActive && (
+          {frameworks?.map((f: any) => {
+            const draft = v2DraftById.get(f.id);
+            const stage = draft?.state?.stage as string | undefined;
+            const hasTest = !!draft?.state?.testDriveListId;
+            return (
+              <div
+                key={f.id}
+                className={`px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50 ${
+                  activeFrameworkId === f.id ? "bg-blue-50 border-l-2 border-l-blue-600" : ""
+                }`}
+                onClick={() => setSelectedFrameworkId(f.id)}
+              >
+                <div className="min-w-0">
+                  <span className="font-medium text-gray-900">{f.name}</span>
+                  {f.isActive && (
+                    <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                      active
+                    </span>
+                  )}
+                  {f.isShared && (
+                    <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
+                      shared
+                    </span>
+                  )}
+                  {draft && (
+                    <>
+                      <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
+                        v2 draft
+                      </span>
+                      <div className="text-xs text-gray-500 mt-0.5">
+                        {stage ? `stage: ${stage}` : "no saved stage"}
+                        {hasTest ? ` · test-drive list #${draft.state.testDriveListId}` : ""}
+                        {draft.updatedAt ? ` · updated ${new Date(draft.updatedAt).toLocaleString()}` : ""}
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {draft && onContinueV2Framework && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onContinueV2Framework(f.id); }}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" /> Continue in v2 builder
+                    </button>
+                  )}
+                  {!f.isActive && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); activateMutation.mutate(f.id); }}
+                      className="text-xs text-green-600 hover:text-green-800 font-medium flex items-center gap-1"
+                    >
+                      <Star className="w-3 h-3" /> Activate
+                    </button>
+                  )}
                   <button
-                    onClick={(e) => { e.stopPropagation(); activateMutation.mutate(f.id); }}
-                    className="text-xs text-green-600 hover:text-green-800 font-medium flex items-center gap-1"
+                    onClick={(e) => { e.stopPropagation(); handleDeleteFramework(f.id); }}
+                    className="text-xs text-red-400 hover:text-red-600"
                   >
-                    <Star className="w-3 h-3" /> Activate
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {/* v2 drafts with no matching framework row are still surfaced so an
+              in-progress build is never lost. */}
+          {orphanV2Drafts.map((d) => {
+            const stage = d.state?.stage as string | undefined;
+            const hasTest = !!d.state?.testDriveListId;
+            return (
+              <div key={`orphan-${d.frameworkId}`} className="px-4 py-3 flex items-center justify-between hover:bg-purple-50">
+                <div className="min-w-0">
+                  <span className="font-medium text-gray-900">{d.frameworkName}</span>
+                  <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
+                    v2 draft
+                  </span>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    {stage ? `stage: ${stage}` : "no saved stage"}
+                    {hasTest ? ` · test-drive list #${d.state.testDriveListId}` : ""}
+                    {d.updatedAt ? ` · updated ${new Date(d.updatedAt).toLocaleString()}` : ""}
+                  </div>
+                </div>
+                {onContinueV2Framework && (
+                  <button
+                    onClick={() => onContinueV2Framework(d.frameworkId)}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> Continue in v2 builder
                   </button>
                 )}
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDeleteFramework(f.id); }}
-                  className="text-xs text-red-400 hover:text-red-600"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
               </div>
-            </div>
-          ))}
-          {(!frameworks || frameworks.length === 0) && (
+            );
+          })}
+          {(!frameworks || frameworks.length === 0) && orphanV2Drafts.length === 0 && (
             <div className="p-8 text-center text-gray-400 text-sm">
-              No frameworks yet. Create one manually or use the AI Builder.
+              No frameworks yet. Create one manually or use the v2 builder.
             </div>
           )}
         </div>

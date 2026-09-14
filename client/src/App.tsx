@@ -8,7 +8,6 @@ import FrameworkPage from "./pages/FrameworkPage";
 import ListsPage from "./pages/ListsPage";
 import ResultsPage from "./pages/ResultsPage";
 import SettingsPage from "./pages/SettingsPage";
-import AIBuilderPage from "./pages/AIBuilderPage";
 import FrameworkBuilderV2Page from "./pages/FrameworkBuilderV2Page";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import DomainsPage from "./pages/DomainsPage";
@@ -44,7 +43,6 @@ type Page =
   | "lists"
   | "results"
   | "settings"
-  | "ai-builder"
   | "framework-builder-v2"
   | "diagnostics"
   | "domains"
@@ -126,7 +124,6 @@ export default function App() {
           {page === "lists" && <ListsPage />}
           {page === "results" && <ResultsPage />}
           {page === "settings" && <SettingsPage />}
-          {page === "ai-builder" && <AIBuilderPage />}
           {page === "framework-builder-v2" && <FrameworkBuilderV2Page onGoToFrameworks={() => navigate("framework")} />}
           {page === "diagnostics" && <DiagnosticsPage />}
           {page === "domains" && <DomainsPage />}

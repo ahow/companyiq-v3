@@ -220,3 +220,28 @@ test("computeCost prices provider-prefixed production models from stored tokens"
     resetPriceTableCache();
   }
 });
+
+test("lookupPrice resolves mistral-medium to its own price, not the generic mistral fallback", () => {
+  const prev = process.env.LLM_PRICE_TABLE_JSON;
+  try {
+    if (prev !== undefined) delete process.env.LLM_PRICE_TABLE_JSON;
+    resetPriceTableCache();
+    const table = loadPriceTable();
+    // mistralai/mistral-medium-3.1 normalises to "mistral-medium-3.1". Both the
+    // "mistral" (len 7) and "mistral-medium" (len 14) keys are substrings; the
+    // longest-substring-wins rule must pick "mistral-medium" (0.40 / 2.00), NOT
+    // the generic "mistral" fallback (2.00 / 6.00).
+    const p = lookupPrice("mistralai/mistral-medium-3.1", table);
+    assert.ok(p, "mistralai/mistral-medium-3.1 should be priced");
+    assert.ok(Math.abs((p?.inputPerMillion ?? -1) - 0.4) < 1e-9);
+    assert.ok(Math.abs((p?.outputPerMillion ?? -1) - 2.0) < 1e-9);
+    // The generic mistral key still resolves to the large-tier fallback.
+    const generic = lookupPrice("mistralai/mistral-large", table);
+    assert.ok(Math.abs((generic?.inputPerMillion ?? -1) - 2.0) < 1e-9);
+    assert.ok(Math.abs((generic?.outputPerMillion ?? -1) - 6.0) < 1e-9);
+  } finally {
+    if (prev === undefined) delete process.env.LLM_PRICE_TABLE_JSON;
+    else process.env.LLM_PRICE_TABLE_JSON = prev;
+    resetPriceTableCache();
+  }
+});
