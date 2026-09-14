@@ -2378,6 +2378,12 @@ async function runAnalyzePhase(opts: {
         modelId: (m as any)._gradedBy || null,
         promptHash: getPromptHash(settings.scoring_mode || "binary"),
         pipelineVersion: getPipelineVersion(),
+
+        // Change C/D: persist rationale↔score consistency flags for design-time
+        // re-adjudication (never affects the numeric score/verdict).
+        rationaleScoreInconsistent: (m as any).rationaleScoreInconsistent === true,
+        inconsistencyReason: (m as any).inconsistencyReason ?? null,
+        needsReadjudication: (m as any).needsReadjudication === true,
       };
     })
   );

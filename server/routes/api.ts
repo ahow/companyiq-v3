@@ -18,6 +18,7 @@ import { sql } from "drizzle-orm";
 import { assertProductionFingerprint, computeRecoveryLabels, deploymentFingerprintFromEnvironment, isTerminalLifecycleState, type DeploymentFingerprint } from "../lib/reliability.js";
 import { analyzeCompanyMeasures } from "../lib/analyzer.js";
 import { loadPriceTable, lookupPrice, computeCost } from "../lib/llm-usage.js";
+import { runMeasureDesignDiagnostic } from "../lib/measure-design-diagnostic.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -2331,6 +2332,28 @@ apiRouter.post("/diagnostic/analyze-subset", async (req: Request, res: Response)
       totalScore: analysis.scorePercentage,
       measures: report,
     });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message, stack: (error.stack || "").split("\n").slice(0, 5) });
+  }
+});
+
+// ─── Measure-design diagnostic (Change E) ────────────────────────────────────
+// GENERIC, framework-agnostic design-time diagnostic. SURFACES findings only —
+// performs NO writes and NO auto-edits. Read-only.
+//   GET /api/measure-design-diagnostic?frameworkId=<id>&batchIds=<id,id,...>
+// batchIds is optional: 0 => pre-test only; 1 => pre+post; >=2 => pre+post+multi-run.
+apiRouter.get("/measure-design-diagnostic", async (req: Request, res: Response) => {
+  try {
+    const frameworkId = parseInt(String(req.query.frameworkId ?? ""), 10);
+    if (!frameworkId || Number.isNaN(frameworkId)) {
+      return res.status(400).json({ error: "frameworkId query param is required" });
+    }
+    const batchIds = String(req.query.batchIds ?? "")
+      .split(",")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    const report = await runMeasureDesignDiagnostic({ frameworkId, batchIds });
+    res.json(report);
   } catch (error: any) {
     res.status(500).json({ error: error.message, stack: (error.stack || "").split("\n").slice(0, 5) });
   }

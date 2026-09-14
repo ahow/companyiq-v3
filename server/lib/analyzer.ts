@@ -15,6 +15,7 @@ import { corpusSourceTypes } from "./discovery.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
+import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
 import { createHash } from "crypto";
 import { jsonrepair } from "jsonrepair";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -110,6 +111,17 @@ export interface MeasureResult {
     downgraded: boolean;
     failures: EvidenceGateResult["failures"];
   };
+  // Change C: in-completion bidirectional self-check emitted by the model within
+  // the SAME scoring completion (no extra live LLM call). "Yes" = the model
+  // affirms its rationale/evidenceSummary supports the emitted numeric score.
+  rationaleConsistencyCheck?: "Yes" | "No" | null;
+  consistencyNote?: string | null;
+  // Change D: deterministic, generic, bidirectional post-hoc consistency flags.
+  // Set when the rationale and the emitted score/verdict disagree. These NEVER
+  // alter the score/verdict — they route the cell to DESIGN-TIME re-adjudication.
+  rationaleScoreInconsistent?: boolean;
+  inconsistencyReason?: string | null;
+  needsReadjudication?: boolean;
 }
 
 export interface AnalysisResult {
@@ -312,6 +324,15 @@ function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | 
     v2Block += `\n\nFALLBACK YES CRITERION (if primary evidence is weak, fall back to this — ANY numbered condition below being satisfied triggers Yes):\n${m.fallbackYesCriterion}`;
   }
 
+  // Change A: GENERIC exclusion-precedence rule. Applies to EVERY measure of
+  // EVERY framework (never gated on a measure/framework id). Resolves the class
+  // of rubric conflict where the substantive definition / what-constitutes-
+  // evidence WHITELISTS a qualifying instance while an exclusion could ALSO match
+  // generic/aspirational language in the same evidence, and the rubric gives no
+  // precedence. The anchor is per-measure content (the blocks assembled above);
+  // this rule only tells the scorer HOW to reconcile them.
+  v2Block += `\n\nPRECEDENCE (how to reconcile the guidance above): An exclusion disqualifies a Yes ONLY when its disqualifying condition holds AND no specific, named, on-topic qualifying instance (as defined by this measure's substantive definition / what-constitutes-evidence) is present in the evidence. A specific, named qualifying instance is NOT defeated by generic, aspirational, or general-policy language appearing elsewhere in the same evidence. Assess whether a qualifying instance exists FIRST; apply exclusions only to the residual.`;
+
   // C3: quote-context requirement
   const minCtx = typeof m.minQuoteContextChars === "number" ? m.minQuoteContextChars : null;
   const quoteContextInstr = minCtx && minCtx >= 100
@@ -338,6 +359,15 @@ function buildBaseRatePriorBlock(measure: FrameworkMeasure): string {
   return `\n\nCALIBRATION — DISCLOSURE BASE RATE:
 Across the universe of large-cap listed companies to which this framework applies, approximately ${pct}% would score Yes on this measure. This reflects current disclosure practice on the topic, not an aspiration. Use it to calibrate the evidentiary bar: apply the same evidentiary standard whether disclosure on this topic is common (higher base rate) or rare (lower). Do not default to No when concrete evidence is present just because you expect the answer to usually be No; do not lower the bar for evidence quality just because you expect the answer to usually be Yes.`;
 }
+
+// Change C: in-completion bidirectional self-check. Emitted INSIDE the same
+// scoring completion — NO extra live LLM call. Framework/measure-agnostic.
+const SELF_CHECK_INSTRUCTION = `SELF-CHECK BEFORE RETURNING (do this within this single response — do not make another call):
+After deciding your score, verdict, and evidenceSummary, verify that your rationale and your numeric score agree in BOTH directions:
+- An affirmative rationale (stating that the required thing exists / is disclosed / is in place) must NOT accompany a No/0 score.
+- A negative or absent-evidence rationale (stating the required thing is missing / not disclosed / insufficient) must NOT accompany a Yes/1 score.
+If they disagree, correct whichever is wrong so that the final score, verdict, and evidenceSummary you emit are mutually consistent.
+Then set "rationaleConsistencyCheck" to "Yes" if (after any correction) they agree, or "No" if a residual disagreement remains, and give a one-line "consistencyNote".`;
 
 export function buildBinaryScoringPrompt(opts: {
   companyName: string;
@@ -389,16 +419,33 @@ ${terminologyBlock}`;
 
   let scoringGuidance = "";
   if (measure.scoringGuidance) {
-    // scoringGuidance is stored as text in DB — it may be a JSON string or plain text
-    let sg: any;
+    // Change B: scoring_guidance is stored as text — it may be structured JSON
+    // (an object with yes/no/partial buckets) or PLAIN PROSE. Previously, plain
+    // prose was mis-assigned to sg.yes, which dumped potentially No-triggering
+    // prose under the "- Yes:" bullet. Now: parse to a usable object OR render the
+    // prose verbatim under a NEUTRAL heading with no Yes/No/Partial bucketing.
+    let sg: any = null;
+    let plainProse: string | null = null;
     try {
-      sg = typeof measure.scoringGuidance === "string" 
-        ? JSON.parse(measure.scoringGuidance) 
+      const parsed = typeof measure.scoringGuidance === "string"
+        ? JSON.parse(measure.scoringGuidance)
         : measure.scoringGuidance;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        sg = parsed;
+      } else {
+        // Parsed to a bare string/number/array — not a usable guidance object.
+        plainProse = String(measure.scoringGuidance);
+      }
     } catch {
-      // If it's not valid JSON, treat as plain text guidance
-      sg = { yes: measure.scoringGuidance, no: "", partial: "" };
+      // Not valid JSON → treat as plain prose (do NOT bucket under Yes).
+      plainProse = typeof measure.scoringGuidance === "string"
+        ? measure.scoringGuidance
+        : String(measure.scoringGuidance);
     }
+    if (plainProse !== null) {
+      scoringGuidance = `\nScoring guidance:\n${plainProse}`;
+    }
+    if (sg) {
     scoringGuidance = `\nScoring guidance:\n- Yes: ${sg.yes || "Clear evidence present"}\n- No: ${sg.no || "No evidence found"}\n- Partial: ${sg.partial || "Some evidence but incomplete"}`;
     // Add explicit exclusions if present in the template
     if (sg.explicit_exclusions && Array.isArray(sg.explicit_exclusions) && sg.explicit_exclusions.length > 0) {
@@ -427,6 +474,7 @@ ${terminologyBlock}`;
     if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
       scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
+    }
   }
 
   // Sprint 10 P2: v2 field integration (framework-measure-level and framework-level)
@@ -444,6 +492,8 @@ ${scoringGuidance}${v2Block}${quoteContextInstr}
 EVIDENCE TEXT:
 ${evidenceText || "[No relevant evidence found in the document corpus]"}
 
+${SELF_CHECK_INSTRUCTION}
+
 Evaluate this measure and return a JSON object with exactly these fields:
 {
   "score": 0 or 1,
@@ -451,7 +501,9 @@ Evaluate this measure and return a JSON object with exactly these fields:
   "confidence": "High" | "Medium" | "Low",
   "evidenceSummary": "One paragraph explaining your assessment",
   "quotes": [{"text": "verbatim quote from evidence", "source": "exact document title from --- DOCUMENT: <title> [url] --- header"}],
-  "verdictNuance": "optional caveats or notes" or null
+  "verdictNuance": "optional caveats or notes" or null,
+  "rationaleConsistencyCheck": "Yes" | "No",
+  "consistencyNote": "one line: how you verified rationale and score agree"
 }`;
 
   return { system, prompt };
@@ -516,14 +568,29 @@ ${terminologyBlock}`;
 
   let scoringGuidance = "";
   if (measure.scoringGuidance) {
-    let sg: any;
+    // Change B: parse to a usable guidance object OR render plain prose verbatim
+    // under a NEUTRAL heading (never mis-bucketed under "- Yes"). Same logic as
+    // the binary path.
+    let sg: any = null;
+    let plainProse: string | null = null;
     try {
-      sg = typeof measure.scoringGuidance === "string"
+      const parsed = typeof measure.scoringGuidance === "string"
         ? JSON.parse(measure.scoringGuidance)
         : measure.scoringGuidance;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        sg = parsed;
+      } else {
+        plainProse = String(measure.scoringGuidance);
+      }
     } catch {
-      sg = { yes: measure.scoringGuidance, no: "", partial: "" };
+      plainProse = typeof measure.scoringGuidance === "string"
+        ? measure.scoringGuidance
+        : String(measure.scoringGuidance);
     }
+    if (plainProse !== null) {
+      scoringGuidance = `\nScoring guidance:\n${plainProse}`;
+    }
+    if (sg) {
     scoringGuidance = `\nScoring guidance:\n- Yes (1): ${sg.yes || "Clear evidence fully satisfying the requirement"}\n- Partial (0.5): ${sg.partial || "Some evidence but incomplete or indirect"}\n- No (0): ${sg.no || "No evidence found"}`;
     if (sg.explicit_exclusions && Array.isArray(sg.explicit_exclusions) && sg.explicit_exclusions.length > 0) {
       scoringGuidance += `\n\nEXPLICIT EXCLUSIONS (do NOT score Yes if only this evidence exists):\n${sg.explicit_exclusions.map((e: string) => `- ${e}`).join("\n")}`;
@@ -542,6 +609,7 @@ ${terminologyBlock}`;
     if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
       scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
+    }
   }
 
   // Sprint 10 P2: v2 field integration (identical to binary path).
@@ -559,6 +627,8 @@ ${scoringGuidance}${v2Block}${quoteContextInstr}
 EVIDENCE TEXT:
 ${evidenceText || "[No relevant evidence found in the document corpus]"}
 
+${SELF_CHECK_INSTRUCTION}
+
 Evaluate this measure and return a JSON object with exactly these fields:
 {
   "score": 0 or 0.5 or 1,
@@ -566,7 +636,9 @@ Evaluate this measure and return a JSON object with exactly these fields:
   "confidence": "High" | "Medium" | "Low",
   "evidenceSummary": "One paragraph explaining your assessment",
   "quotes": [{"text": "verbatim quote from evidence", "source": "exact document title from --- DOCUMENT: <title> [url] --- header"}],
-  "verdictNuance": "optional caveats or notes" or null
+  "verdictNuance": "optional caveats or notes" or null,
+  "rationaleConsistencyCheck": "Yes" | "No",
+  "consistencyNote": "one line: how you verified rationale and score agree"
 }`;
 
   return { system, prompt };
@@ -814,68 +886,49 @@ export function normalizeQuoteSources(
 
 // ─── Contradiction Detection + Tie-Breaker ───────────────────────────────────
 
-async function detectAndResolvContradiction(opts: {
+// Change D: DETERMINISTIC, GENERIC, BIDIRECTIONAL post-hoc consistency detector.
+//
+// This REPLACES the former live tie-breaker override. The old behaviour fired a
+// SECOND live LLM call on a No verdict whose rationale matched one of five
+// hardcoded phrases and then OVERRODE the score→1 / verdict→Yes. That coupled a
+// design-time rubric defect to a live, per-cell, non-deterministic mutation.
+//
+// The new behaviour:
+//   • Makes NO LLM call (fully deterministic; safe for the seeded scoring path).
+//   • Detects rationale↔score disagreement in BOTH directions, using generic
+//     lexical cue families + the model's own in-completion self-check (Change C).
+//   • NEVER changes the score or verdict — it only sets flags that route the cell
+//     to DESIGN-TIME re-adjudication (rationaleScoreInconsistent /
+//     inconsistencyReason / needsReadjudication).
+function applyRationaleConsistencyFlags(opts: {
   measure: FrameworkMeasure;
   result: MeasureResult;
-  evidenceText: string;
-  primaryProvider: string;
-}): Promise<MeasureResult> {
-  const { measure, result, evidenceText, primaryProvider } = opts;
+}): MeasureResult {
+  const { measure, result } = opts;
 
-  // Only check NO verdicts with evidence that might suggest YES
-  if (result.verdict !== "No") return result;
-  if (!result.evidenceSummary) return result;
+  const detection = detectRationaleScoreInconsistency({
+    score: result.score,
+    verdict: result.verdict,
+    rationale: result.evidenceSummary,
+    modelConsistencyCheck: result.rationaleConsistencyCheck ?? null,
+    consistencyNote: result.consistencyNote ?? null,
+  });
 
-  // Check for affirmative language in a NO verdict's rationale
-  const affirmativePatterns = [
-    /the company has implemented/i,
-    /names the .* committee as responsible/i,
-    /explicitly describes/i,
-    /the .* report states/i,
-    /evidence of .* oversight/i,
-  ];
-
-  const hasContradiction = affirmativePatterns.some((p) => p.test(result.evidenceSummary));
-  if (!hasContradiction) return result;
-
-  // Get independent tie-breaker
-  const tieBreaker = getIndependentTieBreakerProvider(primaryProvider);
-  if (!tieBreaker) {
-    console.warn(`[TieBreak] No independent provider available, keeping original verdict`);
-    return result;
+  if (!detection.inconsistent) {
+    return { ...result, rationaleScoreInconsistent: false, needsReadjudication: false };
   }
 
-  console.log(`[TieBreak] Contradiction detected for ${measure.measureId}, consulting ${tieBreaker.name}`);
+  console.log(
+    `[ConsistencyFlag] ${measure.measureId}: rationale↔score inconsistency (${detection.directions.join(",")}) — flagged for design-time re-adjudication (score/verdict UNCHANGED)`
+  );
 
-  try {
-    // I45: Deterministic tie-breaker call — temperature=0, no random inputs
-    const { text } = await completeWithFallback(tieBreaker.name, {
-      system: "You are an independent reviewer. Given a measure and evidence, determine if the evidence supports a YES or NO verdict. Return JSON: {\"verdict\": \"Yes\"|\"No\", \"reason\": \"brief explanation\"}",
-      prompt: `Measure: ${measure.title}\nDefinition: ${measure.definition}\n\nEvidence:\n${evidenceText.slice(0, 8000)}\n\nDoes this evidence support a YES verdict for this measure?`,
-      json: true,
-      maxTokens: 500,
-      temperature: 0,
-      callType: "arbiter",
-    });
-
-    const tieResult = extractAndParseJSON(text);
-    if (tieResult.verdict === "Yes") {
-      console.log(`[TieBreak] OVERRIDE: ${measure.measureId} changed from No to Yes`);
-      return {
-        ...result,
-        score: 1,
-        verdict: "Yes",
-        confidence: "Medium",
-        verdictNuance: `Tie-breaker override: ${tieResult.reason}`,
-      };
-    } else {
-      console.log(`[TieBreak] CONFIRM: ${measure.measureId} remains No`);
-      return result;
-    }
-  } catch (error: any) {
-    console.warn(`[TieBreak] Failed: ${error.message}, keeping original`);
-    return result;
-  }
+  return {
+    ...result,
+    // Score and verdict are intentionally left UNCHANGED.
+    rationaleScoreInconsistent: true,
+    inconsistencyReason: detection.reason,
+    needsReadjudication: true,
+  };
 }
 
 // ─── Document Summarization ──────────────────────────────────────────────────
@@ -2092,12 +2145,12 @@ export async function analyzeCompanyMeasures(opts: {
         measureResult.quotes = normalizeQuoteSources(measureResult.quotes, finalEvidence);
       }
 
-      // Contradiction detection + tie-breaker
-      measureResult = await detectAndResolvContradiction({
+      // Change D: deterministic bidirectional rationale↔score consistency check.
+      // No LLM call, no score/verdict override — sets flags for design-time
+      // re-adjudication only.
+      measureResult = applyRationaleConsistencyFlags({
         measure,
         result: measureResult,
-        evidenceText: finalEvidence,
-        primaryProvider: scoringProvider,
       });
 
       // Layer D — Honest coverage signal. Previously hardcoded to null, which let
@@ -2775,6 +2828,12 @@ async function scoreSingleMeasurePass(opts: {
       verdict: finalVerdict,
       verdictNuance: finalNuance,
       displayOrder: measure.displayOrder,
+      // Change C: capture the model's in-completion self-check (no extra call).
+      rationaleConsistencyCheck:
+        parsed.rationaleConsistencyCheck === "Yes" || parsed.rationaleConsistencyCheck === "No"
+          ? parsed.rationaleConsistencyCheck
+          : null,
+      consistencyNote: typeof parsed.consistencyNote === "string" ? parsed.consistencyNote : null,
       _gradedBy: gradedBy,
       _p3Trace: p3Trace.length > 0 ? p3Trace : undefined,
     } as MeasureResult & { _gradedBy?: string; _p3Trace?: string[] };
@@ -3027,6 +3086,7 @@ async function scoreWithCascade(opts: {
       ...canonical,
       quotes: uniqueQuotes,
       confidence: "High",
+      ...propagateConsistencySignal([stage1, stage2]),
       _gradedBy: `${primary}+${secondary}`,
       _cascade: { stage: "agreed", providers: [primary, secondary], votes: [s1, s2] },
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
@@ -3051,6 +3111,7 @@ async function scoreWithCascade(opts: {
       quotes: uniqueQuotes,
       confidence: "Review-required",
       verdictNuance: `Three-way split: ${primary}=${verdictLabel(s1)}, ${secondary}=${verdictLabel(s2)}, ${arbiter}=${verdictLabel(s3)}. Analyst review recommended.`,
+      ...propagateConsistencySignal([stage1, stage2, stage3]),
       _gradedBy: `${primary}+${secondary}+${arbiter}(3-way)`,
       _cascade: { stage: "3-way", providers: [primary, secondary, arbiter], votes },
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
@@ -3080,6 +3141,7 @@ async function scoreWithCascade(opts: {
     confidence: "Medium",
     verdictNuance: canonical.verdictNuance
       || `Arbiter (${arbiter}) sided with ${arbiterSidedWith} on this verdict.`,
+    ...propagateConsistencySignal([stage1, stage2, stage3]),
     _gradedBy: `${primary}+${secondary}+${arbiter}(arbiter→${arbiterSidedWith})`,
     _cascade: {
       stage: "arbiter",
@@ -3088,6 +3150,30 @@ async function scoreWithCascade(opts: {
       arbiterSidedWith,
     },
   } as MeasureResult & { _gradedBy?: string; _cascade?: any };
+}
+
+// Change D: propagate the model self-check across cascade participants onto the
+// merged/canonical result. The cascade picks the canonical cell by quote richness,
+// not by consistency, so a participant that self-flagged "No" could otherwise be
+// silently dropped. We surface the worst-case signal so the post-merge
+// deterministic detector (applyRationaleConsistencyFlags) sees it. Score/verdict
+// are never touched here.
+function propagateConsistencySignal(participants: MeasureResult[]): {
+  rationaleConsistencyCheck: "Yes" | "No" | null;
+  consistencyNote: string | null;
+} {
+  const flagged = participants.find((r) => r.rationaleConsistencyCheck === "No");
+  if (flagged) {
+    return {
+      rationaleConsistencyCheck: "No",
+      consistencyNote: flagged.consistencyNote ?? null,
+    };
+  }
+  const anyYes = participants.find((r) => r.rationaleConsistencyCheck === "Yes");
+  return {
+    rationaleConsistencyCheck: anyYes ? "Yes" : null,
+    consistencyNote: anyYes?.consistencyNote ?? null,
+  };
 }
 
 function verdictLabel(score: number): string {

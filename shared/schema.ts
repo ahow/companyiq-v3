@@ -294,6 +294,12 @@ export const measureScores = pgTable("measure_scores", {
   modelId: text("model_id"),              // e.g. "deepseek-chat", "gpt-4o-mini"
   promptHash: text("prompt_hash"),         // SHA-256 of the scoring prompt template
   pipelineVersion: text("pipeline_version"), // git SHA or semantic version tag
+  // Change C/D: deterministic rationale↔score consistency flags. These NEVER
+  // alter the score/verdict — they route a cell to DESIGN-TIME re-adjudication
+  // when the natural-language rationale disagrees with the numeric score.
+  rationaleScoreInconsistent: boolean("rationale_score_inconsistent").notNull().default(false),
+  inconsistencyReason: text("inconsistency_reason"),
+  needsReadjudication: boolean("needs_readjudication").notNull().default(false),
   displayOrder: integer("display_order").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({

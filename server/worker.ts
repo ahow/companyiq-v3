@@ -1138,6 +1138,11 @@ function buildFullMeasureScores(allMeasures: any[], scores: any[]): any[] {
         confidence: s.confidence || "Low",
         evidenceSummary: s.evidenceSummary || undefined,
         quotes: s.quotes || [],
+        // Change C/D: surface consistency flags into the persisted snapshot so the
+        // design-time diagnostic can read them per stored cell.
+        rationaleScoreInconsistent: s.rationaleScoreInconsistent === true,
+        inconsistencyReason: s.inconsistencyReason ?? undefined,
+        needsReadjudication: s.needsReadjudication === true,
       };
     }
     // Back-filled: measure was not scored for this company (no data) — include it
