@@ -4,6 +4,7 @@ import {
   parseUsage,
   computeCost,
   lookupPrice,
+  normalizeModelName,
   loadPriceTable,
   resetPriceTableCache,
   type PriceTable,
@@ -133,6 +134,86 @@ test("loadPriceTable ignores malformed env JSON (falls back to defaults)", () =>
     process.env.LLM_PRICE_TABLE_JSON = "{not valid json";
     const table = loadPriceTable();
     assert.ok(table["deepseek"]); // defaults intact
+  } finally {
+    if (prev === undefined) delete process.env.LLM_PRICE_TABLE_JSON;
+    else process.env.LLM_PRICE_TABLE_JSON = prev;
+    resetPriceTableCache();
+  }
+});
+
+// ─── normalizeModelName: generic provider-prefix stripping ───────────────────
+
+test("normalizeModelName strips a single provider namespace segment", () => {
+  assert.equal(normalizeModelName("mistralai/mistral-large"), "mistral-large");
+  assert.equal(normalizeModelName("openai/gpt-5"), "gpt-5");
+  assert.equal(normalizeModelName("anthropic/claude-sonnet-4-5"), "claude-sonnet-4-5");
+  assert.equal(normalizeModelName("x-ai/grok-2"), "grok-2");
+});
+
+test("normalizeModelName keeps only the last segment for nested namespaces", () => {
+  assert.equal(normalizeModelName("a/b/c/deepseek-chat"), "deepseek-chat");
+});
+
+test("normalizeModelName leaves bare model names and trims whitespace", () => {
+  assert.equal(normalizeModelName("gpt-5"), "gpt-5");
+  assert.equal(normalizeModelName("  deepseek-chat  "), "deepseek-chat");
+  assert.equal(normalizeModelName(""), "");
+  assert.equal(normalizeModelName(null as any), "");
+  assert.equal(normalizeModelName(undefined as any), "");
+});
+
+// ─── lookupPrice: normalisation resolves provider-prefixed names ─────────────
+
+test("lookupPrice resolves provider-prefixed names via normalisation", () => {
+  const table: PriceTable = {
+    "mistral-large": { inputPerMillion: 2.0, outputPerMillion: 6.0 },
+    "gpt-5": { inputPerMillion: 1.25, outputPerMillion: 10.0 },
+  };
+  const m = lookupPrice("mistralai/mistral-large", table);
+  assert.ok(m);
+  assert.equal(m!.outputPerMillion, 6.0);
+  const g = lookupPrice("openai/gpt-5", table);
+  assert.ok(g);
+  assert.equal(g!.inputPerMillion, 1.25);
+});
+
+// ─── Default table now prices the previously-unpriced production models ──────
+
+test("loadPriceTable prices mistral-large and gpt-5 by default (incl. provider prefix)", () => {
+  const prev = process.env.LLM_PRICE_TABLE_JSON;
+  try {
+    if (prev !== undefined) delete process.env.LLM_PRICE_TABLE_JSON;
+    resetPriceTableCache();
+    const table = loadPriceTable();
+    // Real production model ids carried a provider prefix and were NULL-costed.
+    const mistral = lookupPrice("mistralai/mistral-large", table);
+    assert.ok(mistral, "mistralai/mistral-large should now be priced");
+    const gpt = lookupPrice("openai/gpt-5", table);
+    assert.ok(gpt, "openai/gpt-5 should now be priced");
+  } finally {
+    if (prev === undefined) delete process.env.LLM_PRICE_TABLE_JSON;
+    else process.env.LLM_PRICE_TABLE_JSON = prev;
+    resetPriceTableCache();
+  }
+});
+
+// ─── Read-time recompute: cost derived from tokens × current default table ───
+
+test("computeCost prices provider-prefixed production models from stored tokens", () => {
+  const prev = process.env.LLM_PRICE_TABLE_JSON;
+  try {
+    if (prev !== undefined) delete process.env.LLM_PRICE_TABLE_JSON;
+    resetPriceTableCache();
+    const table = loadPriceTable();
+    // 1M in / 1M out against mistral-large defaults (2.0 in, 6.0 out) = 8.0
+    const usage = parseUsage({ prompt_tokens: 1_000_000, completion_tokens: 1_000_000 });
+    const cost = computeCost(usage, "mistralai/mistral-large", table);
+    assert.ok(Math.abs((cost.inputCostUsd ?? -1) - 2.0) < 1e-9);
+    assert.ok(Math.abs((cost.outputCostUsd ?? -1) - 6.0) < 1e-9);
+    assert.ok(Math.abs((cost.totalCostUsd ?? -1) - 8.0) < 1e-9);
+    // gpt-5 defaults (1.25 in, 10.0 out) → 11.25 for 1M/1M
+    const gptCost = computeCost(usage, "openai/gpt-5", table);
+    assert.ok(Math.abs((gptCost.totalCostUsd ?? -1) - 11.25) < 1e-9);
   } finally {
     if (prev === undefined) delete process.env.LLM_PRICE_TABLE_JSON;
     else process.env.LLM_PRICE_TABLE_JSON = prev;

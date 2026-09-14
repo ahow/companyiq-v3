@@ -1,10 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Search, Play, Square, Plus, Upload, Download, BarChart3,
   RotateCcw, ExternalLink, Trash2, Loader2, CheckCircle2, XCircle,
-  Clock, AlertCircle
+  Clock, AlertCircle, MoreHorizontal, ChevronDown, ChevronRight
 } from "lucide-react";
 
 interface DashboardPageProps {
@@ -45,6 +45,25 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const [reviewExpanded, setReviewExpanded] = useState(false);
   const [anomalyExpanded, setAnomalyExpanded] = useState(false);
   const [selectedAnomalyIds, setSelectedAnomalyIds] = useState<Set<number>>(new Set());
+  // Presentational: secondary run actions live behind a "More" menu; the company
+  // table can be collapsed. Neither affects scoring, mutations or query keys.
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+  const [tableExpanded, setTableExpanded] = useState(true);
+
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) setMoreMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMoreMenuOpen(false); };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreMenuOpen]);
 
   const { data: companiesData, isLoading } = useQuery({
     queryKey: ["companies"],
@@ -662,56 +681,97 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
               onChange={(e) => setSelectedFramework(e.target.value ? parseInt(e.target.value) : null)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm bg-white"
             >
-              {activeFramework && <option value="">{activeFramework.name} (active)</option>}
+              {activeFramework ? (
+                <option value="">{activeFramework.name} (active)</option>
+              ) : (
+                // No active framework: show a real placeholder so the selector
+                // isn't silently empty — the user must explicitly pick one.
+                <option value="" disabled>Select a framework…</option>
+              )}
               {frameworks.filter((f: any) => !f.isActive).map((f: any) => (
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {/* Primary action — single prominent Analyze button. */}
             <button
               onClick={handleAnalyze}
               disabled={batchStatus?.running || companies.length === 0}
-              className="flex items-center gap-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               title={`Analyze ${selectedList ? "selected list" : "all companies"} with ${effectiveFrameworkName || "active framework"} (full discovery + scoring)`}
             >
               <Play className="w-4 h-4" /> Analyze
             </button>
-            <button
-              onClick={handleRescore}
-              disabled={batchStatus?.running || companies.length === 0}
-              className="flex items-center gap-1 px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Re-score using existing evidence (no re-fetch — deterministic, fast, cheap)"
-            >
-              <RotateCcw className="w-4 h-4" /> Re-score
-            </button>
-            <button
-              onClick={handleReset}
-              disabled={batchStatus?.running || companies.length === 0}
-              className="flex items-center gap-1 px-3 py-2 text-sm bg-amber-50 border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              title={selectedList ? "Reset all companies in selected list (clear scores, keep cached documents)" : "Reset all companies (clear scores, keep cached documents)"}
-            >
-              <RotateCcw className="w-4 h-4" /> {selectedList ? "Reset List" : "Reset All"}
-            </button>
-            <button
-              onClick={() => {
-                const target = selectedList
-                  ? `all companies in "${lists.find((l: any) => l.id === selectedList)?.name || "this list"}"`
-                  : `ALL ${companies.length} companies`;
-                if (confirm(`FULL RESET ${target}?\n\nThis will purge ALL documents (including previously fetched ones), scores, and diagnostics. Every company will start from scratch on next analysis.`)) {
-                  if (selectedList) {
-                    fullResetListMutation.mutate(selectedList);
-                  } else {
-                    fullResetAllMutation.mutate();
-                  }
-                }
-              }}
-              disabled={batchStatus?.running || companies.length === 0}
-              className="flex items-center gap-1 px-3 py-2 text-sm bg-red-50 border border-red-300 text-red-700 rounded-lg hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              title={selectedList ? "Full reset: purge ALL documents and start from scratch" : "Full reset: purge ALL documents for all companies"}
-            >
-              <Trash2 className="w-4 h-4" /> Full Reset
-            </button>
+            {/* Secondary run actions grouped behind a More menu to declutter. */}
+            <div className="relative" ref={moreMenuRef}>
+              <button
+                type="button"
+                onClick={() => setMoreMenuOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+                className="flex items-center gap-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                title="More actions"
+              >
+                <MoreHorizontal className="w-4 h-4" /> More
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${moreMenuOpen ? "rotate-180" : ""}`} />
+              </button>
+              {moreMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 mt-1 min-w-[15rem] rounded-md border border-gray-200 bg-white shadow-lg py-1 z-50"
+                >
+                  <button
+                    role="menuitem"
+                    onClick={() => { setMoreMenuOpen(false); handleRescore(); }}
+                    disabled={batchStatus?.running || companies.length === 0}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-sm text-left text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Re-score using existing evidence (no re-fetch — deterministic, fast, cheap)"
+                  >
+                    <RotateCcw className="w-4 h-4 text-green-600" /> Re-score (no re-fetch)
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => { setMoreMenuOpen(false); handleReset(); }}
+                    disabled={batchStatus?.running || companies.length === 0}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-sm text-left text-amber-700 hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={selectedList ? "Reset all companies in selected list (clear scores, keep cached documents)" : "Reset all companies (clear scores, keep cached documents)"}
+                  >
+                    <RotateCcw className="w-4 h-4" /> {selectedList ? "Reset List" : "Reset All"}
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      const target = selectedList
+                        ? `all companies in "${lists.find((l: any) => l.id === selectedList)?.name || "this list"}"`
+                        : `ALL ${companies.length} companies`;
+                      if (confirm(`FULL RESET ${target}?\n\nThis will purge ALL documents (including previously fetched ones), scores, and diagnostics. Every company will start from scratch on next analysis.`)) {
+                        if (selectedList) {
+                          fullResetListMutation.mutate(selectedList);
+                        } else {
+                          fullResetAllMutation.mutate();
+                        }
+                      }
+                    }}
+                    disabled={batchStatus?.running || companies.length === 0}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-sm text-left text-red-700 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={selectedList ? "Full reset: purge ALL documents and start from scratch" : "Full reset: purge ALL documents for all companies"}
+                  >
+                    <Trash2 className="w-4 h-4" /> Full Reset
+                  </button>
+                  <div className="my-1 border-t border-gray-100" />
+                  <button
+                    role="menuitem"
+                    onClick={() => { setMoreMenuOpen(false); handleExport(); }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-sm text-left text-gray-700 hover:bg-gray-100"
+                    title="Export companies as CSV"
+                  >
+                    <Download className="w-4 h-4" /> Export CSV
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {/* Off-peak scheduling toggle */}
@@ -849,12 +909,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
           >
             <Upload className="w-4 h-4" /> Import
           </button>
-          <button
-            onClick={handleExport}
-            className="flex items-center gap-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-          >
-            <Download className="w-4 h-4" /> Export
-          </button>
+          {/* Export moved into the run bar's "More" menu (secondary action). */}
         </div>
         <input
           ref={fileInputRef}
@@ -868,8 +923,24 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
         />
       </div>
 
-      {/* Company Table */}
+      {/* Company Table (collapsible via progressive disclosure) */}
       <div className="bg-white rounded-lg border overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setTableExpanded((v) => !v)}
+          aria-expanded={tableExpanded}
+          className="flex w-full items-center justify-between px-4 py-3 text-left border-b bg-gray-50 hover:bg-gray-100"
+        >
+          <span className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+            {tableExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            Companies
+            <span className="text-xs font-normal text-gray-400">
+              ({filteredCompanies.length}{search ? ` of ${companies.length}` : ""})
+            </span>
+          </span>
+          <span className="text-xs text-gray-400">{tableExpanded ? "Hide" : "Show"}</span>
+        </button>
+        {tableExpanded && (
         <table className="w-full">
           <thead className="bg-gray-50 border-b">
             <tr>
@@ -965,6 +1036,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
             )}
           </tbody>
         </table>
+        )}
       </div>
 
       {/* Add Company Modal */}

@@ -17,6 +17,7 @@ import { db } from "../db.js";
 import { sql } from "drizzle-orm";
 import { assertProductionFingerprint, computeRecoveryLabels, deploymentFingerprintFromEnvironment, isTerminalLifecycleState, type DeploymentFingerprint } from "../lib/reliability.js";
 import { analyzeCompanyMeasures } from "../lib/analyzer.js";
+import { loadPriceTable, lookupPrice, computeCost } from "../lib/llm-usage.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -395,7 +396,12 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
 
       const isin = findCol(row, "ISIN", "isin", "Type", "type", "Identifier", "ID");
       const sector = findCol(row, "LEVEL2 SECTOR NAME", "LEVEL3 SECTOR NAME", "sector", "Sector", "SECTOR", "Industry", "industry");
-      const country = findCol(row, "GEOGRAPHIC DESCR.", "GEOGRAPHIC DESCR", "country", "Country", "COUNTRY", "Geography", "Region");
+      // "cntry" and "domicile" are GENERIC fallbacks: some issuer files spell the
+      // country column without the 'o' (e.g. ISSUER_CNTRY_DOMICILE), which the
+      // "country" candidates never substring-match. Both tokens are distinctive
+      // enough to only hit a domicile/country column, and are tried after the
+      // explicit country tokens so a plain "Country" header still wins first.
+      const country = findCol(row, "GEOGRAPHIC DESCR.", "GEOGRAPHIC DESCR", "country", "Country", "COUNTRY", "cntry", "domicile", "Geography", "Region");
       const domain = findCol(row, "domain", "Domain", "DOMAIN", "website", "Website", "URL", "url");
 
       // Finding 1 fix: dedup on IDENTITY (normalized ISIN) first, then fall back to
@@ -1265,6 +1271,15 @@ apiRouter.get("/results", async (req: Request, res: Response) => {
 // Aggregate LLM token + cost totals for a saved result, resolved via its batch.
 // Reads the llm_usage_events table populated during the run (see lib/llm-usage.ts).
 // Defined BEFORE "/results/:id" so the literal sub-path takes precedence.
+//
+// Cost is RECOMPUTED at read-time from the stored token counts × the CURRENT
+// price table (built-in defaults + LLM_PRICE_TABLE_JSON overrides). We do NOT
+// simply sum the stored *_cost_usd columns, because those were frozen at
+// write-time — any event whose model was unpriced when it ran (or whose price
+// has since changed) would otherwise be under-counted. Recomputing here means
+// price-table fixes apply retroactively with no DB backfill. Models the current
+// table still cannot price are surfaced explicitly (unpricedModels + count) so
+// the total is never silently wrong.
 apiRouter.get("/results/:id/cost", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
@@ -1277,31 +1292,90 @@ apiRouter.get("/results/:id/cost", async (req: Request, res: Response) => {
     if (!resRows || resRows.length === 0) return res.status(404).json({ error: "Result not found." });
     const batchId = resRows[0].batch_id;
     if (batchId == null) {
-      return res.json({ resultId: id, batchId: null, totals: null, byModel: [], note: "Result has no batch_id; cost not attributable." });
+      return res.json({
+        resultId: id,
+        batchId: null,
+        totals: null,
+        byModel: [],
+        unpricedModels: [],
+        unpricedModelCount: 0,
+        note: "Result has no batch_id; cost not attributable.",
+      });
     }
-    const totalRows = (await db
-      .execute(sql`
-        SELECT
-          COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
-          COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
-          COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
-          SUM(input_cost_usd) AS input_cost_usd,
-          SUM(output_cost_usd) AS output_cost_usd,
-          SUM(total_cost_usd) AS total_cost_usd,
-          COUNT(*)::bigint AS call_count
-        FROM llm_usage_events WHERE batch_id = ${batchId}`)
-      .then((x: any) => x.rows)) as any[];
+    // Pull raw token sums grouped by model/provider/call_type. Cost is derived
+    // below from these tokens, NOT read from the stored cost columns.
     const byModelRows = (await db
       .execute(sql`
         SELECT model, provider, call_type,
+          COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
           COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
-          SUM(total_cost_usd) AS total_cost_usd,
           COUNT(*)::bigint AS call_count
         FROM llm_usage_events WHERE batch_id = ${batchId}
-        GROUP BY model, provider, call_type
-        ORDER BY SUM(total_cost_usd) DESC NULLS LAST`)
+        GROUP BY model, provider, call_type`)
       .then((x: any) => x.rows)) as any[];
-    res.json({ resultId: id, batchId, totals: totalRows[0] || null, byModel: byModelRows });
+
+    const priceTable = loadPriceTable();
+    const unpricedSet = new Set<string>();
+    let grandInput = 0, grandOutput = 0, grandTotalCost = 0;
+    let grandPromptTokens = 0, grandCompletionTokens = 0, grandTotalTokens = 0, grandCalls = 0;
+
+    const byModel = byModelRows.map((r: any) => {
+      const promptTokens = Number(r.prompt_tokens) || 0;
+      const completionTokens = Number(r.completion_tokens) || 0;
+      const totalTokens = Number(r.total_tokens) || 0;
+      const callCount = Number(r.call_count) || 0;
+      const model = r.model || "";
+      const priced = lookupPrice(model, priceTable) != null;
+      if (!priced && model) unpricedSet.add(model);
+      // Recompute cost from tokens × current price table (null if unpriced).
+      const cost = computeCost(
+        { promptTokens, completionTokens, totalTokens },
+        model,
+        priceTable
+      );
+      grandPromptTokens += promptTokens;
+      grandCompletionTokens += completionTokens;
+      grandTotalTokens += totalTokens;
+      grandCalls += callCount;
+      grandInput += cost.inputCostUsd ?? 0;
+      grandOutput += cost.outputCostUsd ?? 0;
+      grandTotalCost += cost.totalCostUsd ?? 0;
+      return {
+        model,
+        provider: r.provider,
+        callType: r.call_type,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        callCount,
+        priced,
+        inputCostUsd: cost.inputCostUsd,
+        outputCostUsd: cost.outputCostUsd,
+        totalCostUsd: cost.totalCostUsd,
+      };
+    });
+    // Highest-cost models first; unpriced (0) sink to the bottom.
+    byModel.sort((a, b) => (b.totalCostUsd ?? 0) - (a.totalCostUsd ?? 0));
+
+    const unpricedModels = Array.from(unpricedSet).sort();
+    res.json({
+      resultId: id,
+      batchId,
+      totals: {
+        prompt_tokens: grandPromptTokens,
+        completion_tokens: grandCompletionTokens,
+        total_tokens: grandTotalTokens,
+        call_count: grandCalls,
+        input_cost_usd: grandInput,
+        output_cost_usd: grandOutput,
+        total_cost_usd: grandTotalCost,
+      },
+      byModel,
+      unpricedModels,
+      unpricedModelCount: unpricedModels.length,
+      costComplete: unpricedModels.length === 0,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

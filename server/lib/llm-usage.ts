@@ -100,6 +100,13 @@ const DEFAULT_PRICE_TABLE: PriceTable = {
   "claude-opus": { inputPerMillion: 15.0, outputPerMillion: 75.0 },
   "claude": { inputPerMillion: 3.0, outputPerMillion: 15.0 },
   "anthropic": { inputPerMillion: 3.0, outputPerMillion: 15.0 },
+  // Mistral — public list price estimate (mistral-large ~ $2.00 in / $6.00 out
+  // per 1M tokens). Override via LLM_PRICE_TABLE_JSON for negotiated rates.
+  "mistral-large": { inputPerMillion: 2.0, outputPerMillion: 6.0 },
+  "mistral": { inputPerMillion: 2.0, outputPerMillion: 6.0 },
+  // OpenAI GPT-5 — public list price estimate ($1.25 in / $10.00 out per 1M
+  // tokens). Override via LLM_PRICE_TABLE_JSON for negotiated rates.
+  "gpt-5": { inputPerMillion: 1.25, outputPerMillion: 10.0 },
 };
 
 let cachedTable: PriceTable | null = null;
@@ -148,12 +155,31 @@ export function resetPriceTableCache(): void {
 }
 
 /**
- * Look up the price for a model name. Exact (lowercased) match first, otherwise
- * the longest table key that is a substring of the model name. Unknown → null.
+ * Normalise a model name for price lookup. Providers frequently prefix the model
+ * id with a namespace segment (e.g. "mistralai/mistral-large", "openai/gpt-5",
+ * "anthropic/claude-sonnet-4-5", "x-ai/grok-2"). The price table is keyed on the
+ * bare model name, so we strip the provider namespace GENERICALLY: split on "/"
+ * and keep the last segment. This is provider-agnostic — no hardcoded provider
+ * list — so any "<provider>/<model>" form resolves to "<model>". Leading/trailing
+ * whitespace is trimmed. Non-string input → "".
+ */
+export function normalizeModelName(model: string): string {
+  if (!model || typeof model !== "string") return "";
+  const trimmed = model.trim();
+  const slash = trimmed.lastIndexOf("/");
+  return (slash >= 0 ? trimmed.slice(slash + 1) : trimmed).trim();
+}
+
+/**
+ * Look up the price for a model name. The name is first normalised (provider
+ * namespace stripped). Exact (lowercased) match first, otherwise the longest
+ * table key that is a substring of the model name. Unknown → null.
  */
 export function lookupPrice(model: string, table: PriceTable): ModelPrice | null {
   if (!model || typeof model !== "string") return null;
-  const m = model.toLowerCase();
+  const normalized = normalizeModelName(model);
+  if (!normalized) return null;
+  const m = normalized.toLowerCase();
   if (table[m]) return table[m];
   let best: { keyLen: number; price: ModelPrice } | null = null;
   for (const [key, price] of Object.entries(table)) {
