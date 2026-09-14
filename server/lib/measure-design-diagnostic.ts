@@ -246,7 +246,7 @@ export function analyzeMeasureDefinition(measure: DiagnosticMeasure): PreTestFin
 
 // ─── Stored-cell extraction from analysis_results ───────────────────────────
 
-interface StoredCell {
+export interface StoredCell {
   companyId?: number | string;
   measureId: string;
   verdict?: string | null;
@@ -474,6 +474,97 @@ export interface RunDiagnosticOptions {
 }
 
 /**
+ * Inputs for the PURE, DB-free diagnostic orchestrator. Callers that already
+ * hold measures + stored cells (e.g. the Framework Builder v2 draft path, which
+ * has in-memory measures with no framework id yet, and the test-drive results
+ * path, which reads from measure_scores / framework_v2_iterations rather than
+ * analysis_results) build these parts themselves and get an identical report
+ * shape without a second DB round-trip. No LLM, no writes.
+ */
+export interface DiagnosticParts {
+  frameworkId: number;
+  frameworkName: string | null;
+  measures: DiagnosticMeasure[];
+  /**
+   * One entry per completed run (batch / test-drive iteration); each is that
+   * run's stored cells. Empty / omitted = pre-test only. ≥2 non-empty runs
+   * enable the multi-run flip-rate comparison.
+   */
+  runs?: StoredCell[][];
+  /** Optional provenance echoed into the report (e.g. batch ids used). */
+  batchIds?: number[];
+}
+
+/**
+ * PURE orchestrator: runs pre-test static analysis over the supplied measures,
+ * post-test signals over the aggregated cells, and multi-run flip-rate over the
+ * per-run cell maps (only when ≥2 non-empty runs exist), then assembles the
+ * flagged-measure ranking and human summary. Performs NO DB reads/writes and NO
+ * LLM calls — it is a deterministic function of its inputs.
+ */
+export function buildDiagnosticReport(parts: DiagnosticParts): DiagnosticReport {
+  const { frameworkId, frameworkName, measures } = parts;
+  const runs = Array.isArray(parts.runs) ? parts.runs : [];
+  const batchIds = Array.isArray(parts.batchIds) ? parts.batchIds : [];
+
+  const titles = new Map<string, string>();
+  for (const m of measures) {
+    if (m && typeof m.measureId === "string") titles.set(m.measureId, m.title || "");
+  }
+
+  // PRE-TEST (always) — static, lexical, LLM-free.
+  const preTest: PreTestFinding[] = [];
+  for (const m of measures) preTest.push(...analyzeMeasureDefinition(m));
+
+  // POST-TEST + MULTI-RUN (only from runs that actually carry cells).
+  let postTest: PostTestSignal[] = [];
+  let multiRun: MultiRunSignal[] = [];
+
+  const runsWithData = runs.filter((r) => Array.isArray(r) && r.length > 0);
+  if (runsWithData.length > 0) {
+    // Aggregate ALL cells across runs per measure for the post-test signals.
+    const allCellsByMeasure = new Map<string, StoredCell[]>();
+    for (const cells of runsWithData) {
+      for (const c of cells) {
+        const arr = allCellsByMeasure.get(c.measureId) || [];
+        arr.push(c);
+        allCellsByMeasure.set(c.measureId, arr);
+      }
+    }
+    postTest = computePostTestSignals(allCellsByMeasure, titles);
+
+    // MULTI-RUN: one measure→cells map per run, only if ≥2 runs have data.
+    if (runsWithData.length >= 2) {
+      const perRun: Array<Map<string, StoredCell[]>> = [];
+      for (const cells of runsWithData) {
+        const byMeasure = new Map<string, StoredCell[]>();
+        for (const c of cells) {
+          const arr = byMeasure.get(c.measureId) || [];
+          arr.push(c);
+          byMeasure.set(c.measureId, arr);
+        }
+        perRun.push(byMeasure);
+      }
+      multiRun = computeMultiRunSignals(perRun, titles);
+    }
+  }
+
+  const flaggedMeasures = buildFlaggedMeasures(preTest, postTest, multiRun);
+  const base: Omit<DiagnosticReport, "humanSummary"> = {
+    frameworkId,
+    frameworkName,
+    generatedAt: new Date().toISOString(),
+    batchIds,
+    measuresAnalyzed: measures.length,
+    preTest,
+    postTest,
+    multiRun,
+    flaggedMeasures,
+  };
+  return { ...base, humanSummary: buildHumanSummary(base) };
+}
+
+/**
  * Run the full diagnostic against a framework, optionally incorporating stored
  * batch results. Reads through the app's existing db layer (server/db.ts).
  * Returns a structured report; performs NO writes and NO auto-edits.
@@ -491,19 +582,8 @@ export async function runMeasureDesignDiagnostic(opts: RunDiagnosticOptions): Pr
     .from(frameworkMeasures)
     .where(eq(frameworkMeasures.frameworkId, frameworkId));
 
-  const titles = new Map<string, string>();
-  for (const m of measures) titles.set(m.measureId, m.title || "");
-
-  // PRE-TEST (always).
-  const preTest: PreTestFinding[] = [];
-  for (const m of measures) {
-    preTest.push(...analyzeMeasureDefinition(m as unknown as DiagnosticMeasure));
-  }
-
-  // POST-TEST + MULTI-RUN (only if batches supplied).
-  let postTest: PostTestSignal[] = [];
-  let multiRun: MultiRunSignal[] = [];
-
+  // Assemble per-batch stored-cell runs (only if batches supplied).
+  const runs: StoredCell[][] = [];
   if (batchIds.length > 0) {
     const resultRows = await db
       .select()
@@ -518,49 +598,17 @@ export async function runMeasureDesignDiagnostic(opts: RunDiagnosticOptions): Pr
       const existing = cellsPerBatch.get(row.batchId) || [];
       cellsPerBatch.set(row.batchId, existing.concat(cells));
     }
-
-    // POST-TEST: aggregate ALL cells across the supplied batches per measure.
-    const allCellsByMeasure = new Map<string, StoredCell[]>();
-    for (const cells of cellsPerBatch.values()) {
-      for (const c of cells) {
-        const arr = allCellsByMeasure.get(c.measureId) || [];
-        arr.push(c);
-        allCellsByMeasure.set(c.measureId, arr);
-      }
-    }
-    postTest = computePostTestSignals(allCellsByMeasure, titles);
-
-    // MULTI-RUN: one measure→cells map per batch, only if ≥2 batches have data.
-    if (cellsPerBatch.size >= 2) {
-      const runs: Array<Map<string, StoredCell[]>> = [];
-      for (const cells of cellsPerBatch.values()) {
-        const byMeasure = new Map<string, StoredCell[]>();
-        for (const c of cells) {
-          const arr = byMeasure.get(c.measureId) || [];
-          arr.push(c);
-          byMeasure.set(c.measureId, arr);
-        }
-        runs.push(byMeasure);
-      }
-      multiRun = computeMultiRunSignals(runs, titles);
-    }
+    for (const cells of cellsPerBatch.values()) runs.push(cells);
   }
 
-  const flaggedMeasures = buildFlaggedMeasures(preTest, postTest, multiRun);
-
-  const base: Omit<DiagnosticReport, "humanSummary"> = {
+  // Delegate all analysis to the PURE orchestrator (no further DB / LLM).
+  return buildDiagnosticReport({
     frameworkId,
     frameworkName,
-    generatedAt: new Date().toISOString(),
+    measures: measures as unknown as DiagnosticMeasure[],
+    runs,
     batchIds,
-    measuresAnalyzed: measures.length,
-    preTest,
-    postTest,
-    multiRun,
-    flaggedMeasures,
-  };
-
-  return { ...base, humanSummary: buildHumanSummary(base) };
+  });
 }
 
 // Re-export the guidance audit for callers that only want the (c) check.

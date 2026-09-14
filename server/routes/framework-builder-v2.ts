@@ -26,6 +26,7 @@ import { recordMeasureEdit } from "../lib/framework-v2/measure-audit.js";
 import { resolveProposalByIdentity } from "../lib/framework-v2/proposal-identity.js";
 import { pickEffectiveBatch } from "../lib/framework-v2/effective-batch.js";
 import { deriveProposalBundle } from "../lib/framework-v2/derive-proposal-bundle.js";
+import { buildDiagnosticReport, type DiagnosticMeasure, type StoredCell, type DiagnosticReport } from "../lib/measure-design-diagnostic.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -634,7 +635,7 @@ async function repairMeasuresTargeted(
   return patched;
 }
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number } | { error: string; raw?: string }> {
+async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport } | { error: string; raw?: string }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
   if ("error" in first) return first;
@@ -702,6 +703,10 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     measureCount: measures.length,
     failedCategories,
     failedCategoryNames,
+    // STATIC design diagnostic over the just-drafted measures (LLM-free). The
+    // builder surfaces these as REVIEW items so design defects are tackled
+    // BEFORE the draft is proposed as ready. Advisory only — never auto-applied.
+    designDiagnostic: buildDraftDesignDiagnostic(draft, intake),
     ...issuePayload,
   };
 }
@@ -773,7 +778,7 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
           // Nothing to refine — just return the current draft.
           await db.execute(sql`
             UPDATE framework_v2_jobs
-            SET status = 'succeeded', result = ${JSON.stringify({ draft: currentDraft, measures: currentFwDraft.measures, validation: currentValidation, summary: "No violations to refine.", repairAttempts: 0 })}::jsonb, updated_at = NOW()
+            SET status = 'succeeded', result = ${JSON.stringify({ draft: currentDraft, measures: currentFwDraft.measures, validation: currentValidation, summary: "No violations to refine.", repairAttempts: 0, designDiagnostic: buildDraftDesignDiagnostic(currentDraft, intake) })}::jsonb, updated_at = NOW()
             WHERE id = ${jobId}
           `);
           return;
@@ -808,6 +813,7 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
           validation: currentValidation,
           summary: summariseViolations(currentValidation.violations),
           repairAttempts,
+          designDiagnostic: buildDraftDesignDiagnostic(currentDraft, intake),
         };
         await db.execute(sql`
           UPDATE framework_v2_jobs
@@ -1309,7 +1315,8 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
     // 2. Fetch measure_scores for the list's companies + framework.
     const scoresQuery = await db.execute(sql`
       SELECT ms.company_id, c.name AS company_name, ms.measure_id, ms.verdict,
-             ms.confidence, ms.quotes, ms.verdict_nuance, ms.score
+             ms.confidence, ms.quotes, ms.verdict_nuance, ms.score,
+             ms.rationale_score_inconsistent
       FROM measure_scores ms
       JOIN companies c ON c.id = ms.company_id
       JOIN company_list_members clm ON clm.company_id = c.id AND clm.list_id = ${listId}
@@ -1408,6 +1415,7 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
     let flipStats: any[] = [];
     let qualityMetrics: QualityMetricsReport | null = null;
     let nearDuplicateEdits: any[] = [];
+    let designDiagnostic: DiagnosticReport | null = null;
     if (scoringComplete) {
       // Snapshot this batch FIRST so its verdicts are persisted as an iteration
       // row before we build the multi-run flip input — otherwise the current
@@ -1451,6 +1459,23 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       } catch (e: any) {
         console.warn("[framework-builder v2 /test-drive/results] iteration top-up failed:", e?.message);
       }
+
+      // POST-TEST design diagnostic — read-only over stored results (the
+      // measure_scores rows already fetched + the snapshotted iterations). NO
+      // re-scoring, NO worker call, NO LLM. Surfaced for REVIEW alongside the
+      // proposals; advisory only, never auto-applied. Multi-run flip rate
+      // auto-populates once a re-test produces a second iteration.
+      try {
+        designDiagnostic = await buildTestDriveDesignDiagnostic(
+          frameworkId,
+          listId,
+          (report as any)?.frameworkName ?? null,
+          rows,
+          snapIterationNumber,
+        );
+      } catch (e: any) {
+        console.warn("[framework-builder v2 /test-drive/results] design diagnostic failed (non-fatal):", e?.message);
+      }
     }
 
     return res.json({
@@ -1479,6 +1504,7 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       labelsInferred,
       qualityMetrics, // Tier-1 design-time quality gate (MAXIMISE + GATE metrics, Q composite)
       nearDuplicateEdits, // selectable merge/differentiate proposals for near-duplicate pairs
+      designDiagnostic, // POST-TEST measure-design diagnostic (read-only, advisory) — null until scoring completes
     });
   } catch (err: any) {
     console.error("[framework-builder v2 /test-drive/results] error:", err);
@@ -2968,6 +2994,127 @@ function flattenMeasures(draft: any): any[] {
     for (const m of ms) out.push(m);
   }
   return out;
+}
+
+// ─── Design-diagnostic mapping (in-memory draft → DiagnosticMeasure) ──────
+// Draft measures arrive from the LLM with the same mixed snake_case/camelCase
+// field names the /v2/save route reads (see createFrameworkMeasure mapping).
+// This normalises them into the diagnostic's DiagnosticMeasure shape so the
+// STATIC pre-test analyzer (LLM-free) can run before a draft is proposed.
+export function draftMeasureToDiagnostic(m: any, fallbackId: string): DiagnosticMeasure {
+  const asText = (v: any): string | null | undefined =>
+    typeof v === "string" ? v : Array.isArray(v) ? v.join("\n") : v == null ? v : String(v);
+  return {
+    measureId: (typeof m?.measureId === "string" && m.measureId) || fallbackId,
+    title: m?.title ?? null,
+    definition: m?.definition ?? null,
+    primaryAssessmentTarget: m?.primary_assessment_target ?? m?.primaryAssessmentTarget ?? null,
+    substantiveDefinition: m?.substantive_definition ?? m?.substantiveDefinition ?? null,
+    whatConstitutesEvidence: asText(m?.whatConstitutesEvidence ?? m?.what_constitutes_evidence),
+    whatDoesNotConstituteEvidence: asText(m?.whatDoesNotConstituteEvidence ?? m?.what_does_not_constitute_evidence),
+    fallbackYesCriterion: m?.fallback_yes_criterion ?? m?.fallbackYesCriterion ?? null,
+    positiveExamples: m?.positive_examples ?? m?.positiveExamples ?? null,
+    negativeExamples: m?.negative_examples ?? m?.negativeExamples ?? null,
+    scoringGuidance:
+      typeof m?.scoringGuidance === "string" ? m.scoringGuidance : m?.scoringGuidance ?? null,
+  };
+}
+
+// Run the STATIC (pre-test only) design diagnostic over an in-memory draft.
+// No DB, no LLM — purely lexical over the just-drafted measures. Returns the
+// diagnostic report so the builder can surface design defects for REVIEW BEFORE
+// proposing the draft as ready. Advisory only; never auto-applied.
+export function buildDraftDesignDiagnostic(draft: any, intake: IntakeArtefact): DiagnosticReport {
+  const raw = flattenMeasures(draft);
+  const measures: DiagnosticMeasure[] = raw.map((m, i) =>
+    draftMeasureToDiagnostic(m, `${i + 1}`),
+  );
+  return buildDiagnosticReport({
+    frameworkId: 0, // no persisted framework id yet at draft time
+    frameworkName: draft?.framework?.name || intake.topic || null,
+    measures,
+    runs: [], // pre-test only — no scoring has happened yet
+  });
+}
+
+// Run the design diagnostic over a COMPLETED test-drive: static pre-test over
+// the framework's measure definitions, post-test signals over the just-completed
+// batch's stored cells (measure_scores — carrying the deterministic
+// rationale-score inconsistency flag), and run-to-run flip rate across every
+// snapshotted iteration for this framework+list. Read-only over stored results:
+// NO re-scoring, NO worker call, NO LLM. `currentRows` are the measure_scores
+// rows already fetched by the results route; `currentIterationNumber` is the
+// snapshot just written for this batch (excluded from the reconstructed prior
+// runs so it is not counted twice).
+async function buildTestDriveDesignDiagnostic(
+  frameworkId: number,
+  listId: number,
+  frameworkName: string | null,
+  currentRows: any[],
+  currentIterationNumber?: number,
+): Promise<DiagnosticReport> {
+  const asText = (v: any): string | null =>
+    typeof v === "string" ? v : Array.isArray(v) ? v.join("\n") : v == null ? null : String(v);
+
+  // 1. Measure definitions → DiagnosticMeasure[] (static pre-test inputs).
+  const mq = await db.execute(sql`
+    SELECT measure_id, title, definition, primary_assessment_target,
+           substantive_definition, what_constitutes_evidence,
+           what_does_not_constitute_evidence, fallback_yes_criterion,
+           positive_examples, negative_examples, scoring_guidance
+    FROM framework_measures WHERE framework_id = ${frameworkId}
+    ORDER BY category_number, display_order
+  `);
+  const measures: DiagnosticMeasure[] = (((mq as any).rows || []) as any[]).map((m) => ({
+    measureId: String(m.measure_id),
+    title: m.title ?? null,
+    definition: m.definition ?? null,
+    primaryAssessmentTarget: m.primary_assessment_target ?? null,
+    substantiveDefinition: m.substantive_definition ?? null,
+    whatConstitutesEvidence: asText(m.what_constitutes_evidence),
+    whatDoesNotConstituteEvidence: asText(m.what_does_not_constitute_evidence),
+    fallbackYesCriterion: m.fallback_yes_criterion ?? null,
+    positiveExamples: m.positive_examples ?? null,
+    negativeExamples: m.negative_examples ?? null,
+    scoringGuidance: asText(m.scoring_guidance),
+  }));
+
+  // 2. Just-completed batch cells (only these carry the inconsistency flag).
+  const currentCells: StoredCell[] = (currentRows || []).map((r) => ({
+    companyId: r.company_id,
+    measureId: String(r.measure_id),
+    verdict: r.verdict ?? null,
+    confidence: r.confidence ?? null,
+    score: typeof r.score === "number" ? r.score : null,
+    rationaleScoreInconsistent: r.rationale_score_inconsistent === true,
+  }));
+
+  // 3. Prior iterations reconstructed from snapshots (exclude current batch's).
+  const iterQ = await db.execute(sql`
+    SELECT iteration_number, per_measure FROM framework_v2_iterations
+    WHERE framework_id = ${frameworkId} AND list_id = ${listId}
+    ORDER BY iteration_number ASC
+  `);
+  const priorRuns: StoredCell[][] = [];
+  for (const it of (((iterQ as any).rows || []) as any[])) {
+    if (currentIterationNumber && Number(it.iteration_number) === currentIterationNumber) continue;
+    const perMeasure = (it.per_measure || {}) as Record<string, any>;
+    const cells: StoredCell[] = [];
+    for (const [measureId, agg] of Object.entries(perMeasure)) {
+      const verdicts = (agg?.verdictsByCompany || {}) as Record<string, string>;
+      const confs = (agg?.confidenceByCompany || {}) as Record<string, string>;
+      for (const [cid, verdict] of Object.entries(verdicts)) {
+        cells.push({ companyId: cid, measureId, verdict: verdict ?? null, confidence: confs[cid] ?? null });
+      }
+    }
+    if (cells.length > 0) priorRuns.push(cells);
+  }
+
+  // Current run first, then priors. Post-test aggregates across runs; multi-run
+  // flip rate needs ≥2 non-empty runs (auto-enabled once a re-test exists).
+  const runs: StoredCell[][] = [currentCells, ...priorRuns];
+
+  return buildDiagnosticReport({ frameworkId, frameworkName, measures, runs, batchIds: [] });
 }
 
 export default router;

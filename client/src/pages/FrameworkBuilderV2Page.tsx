@@ -90,6 +90,10 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
   const [robustnessGate, setRobustnessGate] = useState<RobustnessGate | null>(null);
   const [draft, setDraft] = useState<any>(null);
   const [validation, setValidation] = useState<Validation | null>(null);
+  // PRE-DRAFT design diagnostic (static, LLM-free) attached to every draft
+  // result. Surfaced for REVIEW in the builder before the draft is proposed as
+  // ready. Advisory only — never auto-applied.
+  const [designDiagnostic, setDesignDiagnostic] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [testDriveCompanies, setTestDriveCompanies] = useState<TestDriveCandidate[] | null>(null);
   const [savedFrameworkId, setSavedFrameworkId] = useState<number | null>(() => {
@@ -279,6 +283,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
             if (r.state.draft) {
               setDraft(r.state.draft);
               if (r.state.validation) setValidation(r.state.validation);
+              if (r.state.designDiagnostic) setDesignDiagnostic(r.state.designDiagnostic);
               // If the user already ran a test-drive (there is a saved results
               // panel to return to), honor the stored 'saved' stage so the
               // deep-link lands them on their proposals/results instead of the
@@ -358,6 +363,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
         if (status?.status === "succeeded" && status?.result) {
           setDraft(status.result.draft);
           setValidation(status.result.validation);
+          setDesignDiagnostic(status.result.designDiagnostic || null);
           if (typeof status.result.repairAttempts === "number") {
             setRepairAttempts(status.result.repairAttempts);
           }
@@ -443,6 +449,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
         if (status?.status === "succeeded" && status?.result) {
           setDraft(status.result.draft);
           setValidation(status.result.validation);
+          setDesignDiagnostic(status.result.designDiagnostic || null);
           if (typeof status.result.repairAttempts === "number") setRepairAttempts(status.result.repairAttempts);
           setStage("review");
           setDraftJobId(null);
@@ -578,6 +585,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     setRobustnessGate(null);
     setDraft(null);
     setValidation(null);
+    setDesignDiagnostic(null);
     setError(null);
     setTestDriveCompanies(null);
     setSavedFrameworkId(null);
@@ -756,6 +764,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
               <DraftReview
                 draft={draft}
                 validation={validation}
+                designDiagnostic={designDiagnostic}
                 onSelectTestDrive={selectTestDriveSample}
                 onSave={saveFramework}
                 loading={loading}
@@ -966,9 +975,107 @@ function RobustnessPanel({ gate, intake }: { gate: RobustnessGate | null; intake
   );
 }
 
+// ─── Design diagnostic (measure-design defect review) ─────────────────────
+// Renders the read-only, advisory design diagnostic in the builder. Used at
+// TWO points: PRE-DRAFT (static pre-test only, before a draft is proposed as
+// ready) and POST-TEST (pre-test + stored-result signals + run-to-run flip
+// rate). Findings are REVIEW items only — never auto-applied.
+function DesignDiagnosticPanel({ report, mode }: { report: any; mode: "pre-draft" | "post-test" }) {
+  if (!report) return null;
+  const flagged: any[] = Array.isArray(report.flaggedMeasures) ? report.flaggedMeasures : [];
+  const preTest: any[] = Array.isArray(report.preTest) ? report.preTest : [];
+  const postTest: any[] = Array.isArray(report.postTest) ? report.postTest : [];
+  const multiRun: any[] = Array.isArray(report.multiRun) ? report.multiRun : [];
+  const heading = mode === "pre-draft" ? "Design review — before you accept this draft" : "Design review — post-test signals";
+  const subtitle =
+    mode === "pre-draft"
+      ? "Static checks over the drafted measure definitions. Advisory only — nothing is changed automatically. Resolve these before proposing the framework as ready."
+      : "Read-only signals over the stored test-drive results. Advisory only — nothing is changed automatically.";
+  const flippedRanking = [...multiRun].filter((m) => (m.flipRate || 0) > 0).sort((a, b) => (b.flipRate || 0) - (a.flipRate || 0));
+  const nothing = flagged.length === 0 && preTest.length === 0 && postTest.length === 0 && multiRun.length === 0;
+  return (
+    <div className="mb-4 border rounded-lg dark:border-gray-700 bg-indigo-50/60 dark:bg-indigo-900/10 p-4">
+      <div className="flex items-center gap-2 mb-1">
+        <AlertTriangle className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+        <h4 className="font-semibold text-indigo-900 dark:text-indigo-200">{heading}</h4>
+      </div>
+      <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">{subtitle}</p>
+      {report.humanSummary && (
+        <pre className="text-xs whitespace-pre-wrap text-gray-700 dark:text-gray-300 mb-3 font-sans">{report.humanSummary}</pre>
+      )}
+      {nothing && (
+        <div className="text-sm text-green-700 dark:text-green-400">No design defects detected.</div>
+      )}
+      {flagged.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-gray-700 dark:text-gray-300">
+            Flagged measures (ranked by instability){mode === "pre-draft" ? "" : " — including run-to-run signals"}:
+          </div>
+          {flagged.map((f) => (
+            <div key={f.measureId} className="border rounded p-2.5 text-sm bg-white dark:bg-gray-800 dark:border-gray-700">
+              <div className="flex items-center gap-2 flex-wrap">
+                <code className="text-xs font-mono px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">{f.measureId}</code>
+                <span className="font-medium">{f.title || ""}</span>
+                {typeof f.instabilityScore === "number" && (
+                  <span className="ml-auto text-xs text-gray-500">instability {(f.instabilityScore * 100).toFixed(0)}%</span>
+                )}
+              </div>
+              {Array.isArray(f.patterns) && f.patterns.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {f.patterns.map((p: string) => (
+                    <span key={p} className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">{p}</span>
+                  ))}
+                </div>
+              )}
+              {Array.isArray(f.suggestedClarifications) && f.suggestedClarifications.length > 0 && (
+                <ul className="mt-1.5 list-disc list-inside text-xs text-gray-700 dark:text-gray-300 space-y-0.5">
+                  {f.suggestedClarifications.map((c: string, i: number) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              )}
+              {mode === "post-test" && f.evidence?.postTest && (
+                <div className="mt-1.5 text-[11px] text-gray-500">
+                  verdicts: {JSON.stringify(f.evidence.postTest.verdictDistribution || {})}
+                  {typeof f.evidence.postTest.rationaleInconsistentRate === "number" && (
+                    <> · rationale↔score inconsistent {(f.evidence.postTest.rationaleInconsistentRate * 100).toFixed(0)}%</>
+                  )}
+                  {typeof f.evidence.postTest.lowConfidenceRate === "number" && (
+                    <> · low-confidence {(f.evidence.postTest.lowConfidenceRate * 100).toFixed(0)}%</>
+                  )}
+                </div>
+              )}
+              {mode === "post-test" && f.evidence?.multiRun && typeof f.evidence.multiRun.flipRate === "number" && (
+                <div className="mt-1 text-[11px] text-red-600 dark:text-red-400">
+                  run-to-run flip rate {(f.evidence.multiRun.flipRate * 100).toFixed(0)}% across {f.evidence.multiRun.companiesCompared} companies
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {mode === "post-test" && flippedRanking.length > 0 && (
+        <div className="mt-3">
+          <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Run-to-run flip ranking:</div>
+          <ol className="list-decimal list-inside text-xs text-gray-700 dark:text-gray-300 space-y-0.5">
+            {flippedRanking.map((m) => (
+              <li key={m.measureId}>
+                <code className="font-mono">{m.measureId}</code> {m.title ? `— ${m.title} ` : ""}
+                <span className="text-red-600 dark:text-red-400">{((m.flipRate || 0) * 100).toFixed(0)}% flip</span>
+                {typeof m.companiesCompared === "number" && <> ({m.companiesCompared} companies)</>}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DraftReview({
   draft,
   validation,
+  designDiagnostic,
   onSelectTestDrive,
   onSave,
   onRedraft,
@@ -987,6 +1094,7 @@ function DraftReview({
 }: {
   draft: any;
   validation: Validation | null;
+  designDiagnostic?: any;
   onSelectTestDrive: () => void;
   onSave: (productionReady: boolean) => void;
   onRedraft?: () => void;
@@ -1044,6 +1152,10 @@ function DraftReview({
           )}
         </div>
       )}
+
+      {/* PRE-DRAFT design diagnostic — surfaced for REVIEW before the draft is
+          proposed as ready. Static, LLM-free, advisory only. */}
+      <DesignDiagnosticPanel report={designDiagnostic} mode="pre-draft" />
 
       <div className="space-y-2 max-h-[45vh] overflow-y-auto">
         {(draft.categories || []).map((cat: any) => (
@@ -1791,6 +1903,9 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   const [edits, setEdits] = useState<{ proposals: EditProposal[]; causeBreakdown: Record<string, number>; totalFlags: number; totalWithProposals: number } | null>(null);
   const [rootCauses, setRootCauses] = useState<RootCauseReport | null>(null);
   const [qualityMetrics, setQualityMetrics] = useState<QualityMetricsReport | null>(null);
+  // POST-TEST measure-design diagnostic (read-only, advisory) — populated once
+  // scoring completes. Multi-run flip section auto-appears after a re-test.
+  const [postTestDiagnostic, setPostTestDiagnostic] = useState<any>(null);
   // Near-duplicate accept/dismiss selections, keyed by "<measureIdA>::<measureIdB>".
   const [nearDupDecisions, setNearDupDecisions] = useState<Record<string, "accept" | "dismiss">>({});
   const [labelsInferred, setLabelsInferred] = useState(false);
@@ -1963,6 +2078,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       setLabelsInferred(!!r.labelsInferred);
       setFlipStats(r.flipStats || []);
       setQualityMetrics(r.qualityMetrics || null);
+      setPostTestDiagnostic(r.designDiagnostic || null);
       setScoringCompleteSrv(!!r.scoringComplete);
       setLatestBatchStatus(r.latestBatchStatus ?? null);
       if (r.scoringComplete) void fetchIterations();
@@ -2175,6 +2291,11 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
             ))}
           </div>
         </div>
+      )}
+
+      {/* ─── POST-TEST design diagnostic (read-only, advisory) ─── */}
+      {resultsReady && postTestDiagnostic && (
+        <DesignDiagnosticPanel report={postTestDiagnostic} mode="post-test" />
       )}
 
       {/* ─── Per-measure run-to-run flip stats (multi-run test-drive) ─── */}
