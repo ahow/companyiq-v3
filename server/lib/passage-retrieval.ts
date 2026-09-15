@@ -1043,8 +1043,11 @@ const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_
 // Raised 20 -> 24 so the enlarged, self-sizing BM25 reserve (below) cannot starve
 // the topic floor / score-fill stages: the reserve may now claim up to
 // BM25_RESERVE_CHUNKS slots, so topK must leave headroom for topic + fill chunks.
-const EVIDENCE_TOP_K = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "30", 10);
-const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "30000", 10);
+// B3 (retrieval recall): defaults raised (top-k 30→45, max-chars 30000→45000) to
+// favour recall so genuinely on-topic evidence is less likely to be cut before
+// scoring. Still env-overridable; kept consistent with passage-rescore.ts / analyzer.ts.
+const EVIDENCE_TOP_K = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "45", 10);
+const EVIDENCE_MAX_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "45000", 10);
 
 // REVIEWER FIX v3d rec #1 (augment-not-displace): for regulatory-filing measures
 // (9.x / risk-factor), the forced Item 1A chunk(s) are added on a DEDICATED extra
@@ -1247,14 +1250,38 @@ export function buildEvidencePackForMeasure(opts: {
     };
   });
 
-  // Primary ranking by blended score (desc), with deterministic tie-breaking
-  // by (documentIndex, sequenceInDoc) so equal-score passages resolve identically each run.
+  // Primary ranking by blended score (desc), with deterministic tie-breaking by a
+  // STABLE content key (documentUrl, documentIndex, sequenceInDoc, idx) so equal-score
+  // passages resolve identically each run regardless of the input array order (which
+  // can shift run-to-run as documents are re-fetched). B2 (retrieval determinism).
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     const aChunk = chunks[a.idx], bChunk = chunks[b.idx];
+    const aUrl = (aChunk.docUrl || "").toLowerCase(), bUrl = (bChunk.docUrl || "").toLowerCase();
+    if (aUrl !== bUrl) return aUrl < bUrl ? -1 : 1;
     if (aChunk.docIndex !== bChunk.docIndex) return aChunk.docIndex - bChunk.docIndex;
     return (aChunk.seqInDoc ?? a.idx) - (bChunk.seqInDoc ?? b.idx);
   });
+
+  // B2 (retrieval determinism): deterministically drop near-identical chunks BEFORE
+  // top-k selection so that duplicated/boilerplate passages (common when the same
+  // document is fetched more than once, or shared headers/footers repeat across
+  // filings) do not crowd out distinct evidence and do not make the pack composition
+  // depend on which duplicate happened to sort first. We keep the FIRST occurrence in
+  // the already-stable ranking (highest score, then stable key) and drop later ones
+  // whose normalized text matches. GENERIC — purely content-based, no framework or
+  // company specifics.
+  const normalizeForDedup = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+  const seenChunkText = new Set<string>();
+  const dedupedScored = scored.filter((item) => {
+    const key = normalizeForDedup(item.text);
+    if (key.length === 0) return true; // never drop empty-normalized entries on this basis
+    if (seenChunkText.has(key)) return false;
+    seenChunkText.add(key);
+    return true;
+  });
+  scored.length = 0;
+  scored.push(...dedupedScored);
 
   // ─── Selection with per-document budgeting (Layer C) + topic floor (Layer B)
   const perDocCount = new Map<number, number>();

@@ -3164,6 +3164,11 @@ export async function searchCompanyDocuments(opts: {
   peerCompanyNames?: string[]; // Fix C: workspace-derived peer list for anti-contamination
   companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
   evidenceKeywords?: string[]; // Instruction 46: aggregated from measures
+  /** B4: per-measure authored qualifyingInstance phrases, aggregated across the
+   *  framework. UNIONed into the query-expansion set so retrieval targets the
+   *  specific evidence a Yes requires. Optional — absent for prose-only /
+   *  un-tightened frameworks, in which case the generic query set is used. */
+  qualifyingInstances?: string[];
   /** PR 1 · Change 1b: enable retrievalV2 ranking penalties (subsidiary /
    *  vintage / press-page). Threaded down to the ComputeOpts used by the
    *  layered ranker. Off by default — pre-1b behaviour is preserved. */
@@ -3192,6 +3197,7 @@ async function searchCompanyDocumentsInner(opts: {
   peerCompanyNames?: string[];
   companyRow?: any; // 40-G: full company row for cached FIGI/domain fields
   evidenceKeywords?: string[]; // Instruction 46: aggregated from measures
+  qualifyingInstances?: string[]; // B4: forwarded from searchCompanyDocuments
   /** PR 1 · Change 1b: forwarded from searchCompanyDocuments. */
   retrievalV2?: boolean;
 }): Promise<DiscoveryResult> {
@@ -3261,17 +3267,20 @@ async function searchCompanyDocumentsInner(opts: {
   }
 
   // ── Instruction 46: Framework-driven query expansion ────────────────────
-  if (issuerProfile && (opts.evidenceKeywords?.length || topicPhrases.length > 0)) {
+  if (issuerProfile && (opts.evidenceKeywords?.length || opts.qualifyingInstances?.length || topicPhrases.length > 0)) {
     try {
       queryExpansionResult = expandQueries({
         profile: issuerProfile,
         evidenceKeywords: opts.evidenceKeywords || [],
         requiredDocTypes: ((framework as any).requiredDocTypes as string[] | null) || [],
         topicPhrases,
+        // B4: UNION qualifyingInstance-derived queries with the generic set. Empty
+        // for prose-only frameworks → generic-only (backward compatible).
+        qualifyingInstances: opts.qualifyingInstances || [],
         maxTotal: 20,
       });
       diagBuilder.setQueryExpansion(queryExpansionResult);
-      console.log(`[${companyName}] Query expansion: ${queryExpansionResult.diagnostics.totalGenerated} queries generated (evKw=${queryExpansionResult.diagnostics.evidenceKeywordQueries}, reportType=${queryExpansionResult.diagnostics.reportTypeQueries})`);
+      console.log(`[${companyName}] Query expansion: ${queryExpansionResult.diagnostics.totalGenerated} queries generated (evKw=${queryExpansionResult.diagnostics.evidenceKeywordQueries}, reportType=${queryExpansionResult.diagnostics.reportTypeQueries}, qualInst=${queryExpansionResult.diagnostics.qualifyingInstanceQueries})`);
     } catch (qeErr: any) {
       console.warn(`[${companyName}] Query expansion failed (non-fatal): ${qeErr?.message}`);
     }

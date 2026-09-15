@@ -549,6 +549,13 @@ WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON bloc
             "yes": "Specific evidence that must be present for a YES verdict. Name exact document types, committee names, policy elements, metric types, etc. Be explicit about what form the evidence must take.",
             "no": "What absence or condition constitutes a NO. Be specific about what was searched for and not found.",
             "partial": "What constitutes partial compliance — evidence exists but is incomplete or indirect. Give specific examples of partial evidence.",
+            "qualifyingInstance": "POSITIVE definition of what SPECIFICALLY counts as satisfying THIS measure — e.g. a named programme/policy/system, a quantified commitment, or a dated milestone. Describe the SHAPE of a qualifying instance for this measure's exact requirement; do not restate the topic generally.",
+            "disqualifiers": ["Generic or boilerplate mention of the topic with no specific instance", "Aspirational or forward-looking intent ('we aim to', 'we plan to') without a named, in-place instance", "The topic named in passing (e.g. a risk factor) without the specific qualifying instance this measure requires"],
+            "anchors": {
+              "yes": "ONE short worked example of a disclosure that clearly SATISFIES this measure (name why it qualifies). Exactly one canonical Yes.",
+              "no": "ONE short worked example that looks superficially relevant but FAILS this measure (name the specific reason it fails). Exactly one canonical No."
+            },
+            "yesRequiresQuote": "State the Yes-requires-a-verbatim-quote rule for THIS measure in one sentence: a Yes is permissible only when a verbatim quote from the evidence contains the qualifying instance above.",
             "explicit_exclusions": ["Alliance/initiative membership alone (e.g., NZBA, SBTi) without company-specific target", "Intensity-only targets when absolute targets are required", "Targets for 'energy' sector without explicit mention of oil and gas"],
             "required_evidence_type": "Must be an explicit, quantified target with base year, target year, and percentage reduction stated in company's own disclosure (not inferred from alliance membership)",
             "temporal_note": "Score based on most recent disclosure only. If target has been withdrawn or company has left the relevant alliance, score No regardless of historical commitment."
@@ -582,6 +589,10 @@ NOTE ON FRAMEWORK-LEVEL DISCOVERY FIELDS (ALL SEVEN FIELDS ARE MANDATORY FOR A H
 9. "dataPatterns" (array of strings): 5-10 regex fragments that prove the topic's actual DATA is present in a document's text (specific figures, standard names, target phrasings for THIS topic). These distinguish a topic-relevant report with real data from a landing page or generic mention. E.g., for climate: ["scope\\s*[123]", "financed.?emission", "\\bMtCO2", "PCAF"]; for slavery: ["modern.?slavery.?(?:act|statement)", "forced.?labo"]; for tax: ["country.?by.?country", "effective.?tax.?rate"].
 
 NOTE ON SCORING GUIDANCE FIELDS:
+- "qualifyingInstance" (string, MANDATORY): The POSITIVE, per-measure definition of what SPECIFICALLY counts as satisfying THIS measure — a named programme/policy/system, a quantified commitment, or a dated milestone, expressed for this measure's exact requirement. This is the single most important field for precision: the scorer requires a verbatim evidence quote containing an instance of this kind before it may award Yes. Do NOT restate the topic in general terms — describe the concrete SHAPE a qualifying instance takes. Derive it from the measure's own definition; never copy a generic template.
+- "disqualifiers" (array of strings, MANDATORY): Generic, aspirational, or forward-looking mentions — and the topic being named without the specific qualifying instance — that must NOT score Yes on their own. These are the negative mirror of qualifyingInstance. Be specific to this measure.
+- "anchors" (object with "yes" and "no", MANDATORY): EXACTLY ONE canonical worked Yes example and EXACTLY ONE canonical worked No example, each 1-2 short sentences naming why it qualifies / fails. Do NOT author a Partial anchor. These render to the scorer as illustrative-only calibration anchors (never quotable).
+- "yesRequiresQuote" (string, MANDATORY): One sentence stating, for this measure, that a Yes is permissible only when a verbatim quote from the supplied evidence contains the qualifyingInstance. This is a precondition the scorer applies before awarding any Yes.
 - "explicit_exclusions" (array of strings): List specific types of evidence that should NOT be accepted as sufficient. This is the most powerful tool for preventing false positives.
 - "required_evidence_type" (string): Describe the specific FORM the evidence must take. E.g., "Must be a standalone published policy document, not merely a statement within an annual report."
 - "temporal_note" (string): Instructions about time-sensitivity. E.g., "Must reflect current commitments. Evidence from reports older than 2 years should be treated with Low confidence unless confirmed in recent disclosures."
@@ -597,6 +608,7 @@ IMPORTANT RULES:
 - Each scoringGuidance.yes entry MUST be at least 50 words (increased from 30)
 - Each scoringGuidance.no entry MUST be at least 30 words
 - Each scoringGuidance.partial entry MUST be at least 40 words with specific examples
+- Each measure's scoringGuidance MUST include a per-measure "qualifyingInstance" (positive definition of what specifically counts), a "disqualifiers" array (generic/aspirational/forward-looking mentions that do NOT count), an "anchors" object with EXACTLY ONE "yes" and EXACTLY ONE "no" worked example (NEVER author a Partial anchor), and a "yesRequiresQuote" sentence. Derive ALL of these from THIS measure's definition — never reuse a generic template across measures.
 - Include explicit_exclusions for EVERY measure where there is any risk of false positives
 - Include temporal_note for any measure involving targets, commitments, or policies that could change over time
 - Include evidenceKeywords for every measure. STRICT COUNT: minimum 10, maximum 15 per measure. Verify the count before you emit each measure. Fewer than 10 is a validation failure.
@@ -611,6 +623,7 @@ QUALITY CHECKLIST (mention this to the user when appropriate):
 - [ ] Topic description is 200+ words covering scope, evidence types, standards, exclusions, and definitional boundaries
 - [ ] Each measure has a definition of 80+ words with explicit boundary conditions
 - [ ] Each measure has specific scoringGuidance for yes/no/partial (yes: 50+ words, partial: 40+ words with examples)
+- [ ] Each measure's scoringGuidance has a per-measure qualifyingInstance, disqualifiers[], anchors {yes, no} (exactly one Yes + one No, NO Partial anchor), and a yesRequiresQuote sentence — all derived from that measure's definition
 - [ ] Explicit exclusions are defined for measures where false positives are likely
 - [ ] Temporal notes are included for any time-sensitive measures (targets, commitments, policies)
 - [ ] Required evidence types are specified where the FORM of evidence matters

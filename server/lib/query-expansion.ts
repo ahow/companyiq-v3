@@ -18,7 +18,7 @@ import type { IssuerProfile } from "./issuer-profile.js";
 
 export interface ExpandedQuery {
   query: string;
-  source: "evidence-keyword" | "report-type" | "disclosure-standard" | "local-language" | "year-variant" | "alias-cross" | "registry";
+  source: "evidence-keyword" | "report-type" | "disclosure-standard" | "local-language" | "year-variant" | "alias-cross" | "registry" | "qualifying-instance";
   priority: number; // lower = higher priority
 }
 
@@ -30,6 +30,7 @@ export interface QueryExpansionResult {
     localLanguageQueries: number;
     yearVariantQueries: number;
     aliasCrossQueries: number;
+    qualifyingInstanceQueries: number;
     totalGenerated: number;
   };
 }
@@ -243,6 +244,58 @@ function expandTransliterations(
   return queries;
 }
 
+// ─── Qualifying-Instance Expansion (B4) ─────────────────────────────────────
+
+/**
+ * B4 — Generate queries from each measure's authored `qualifyingInstance` (the
+ * positive definition of what actually counts as a Yes: a named programme/policy/
+ * system, a quantified commitment, or a dated milestone). These are the most
+ * targeted retrieval queries because they describe the specific evidence a Yes
+ * requires, not just the topic. UNIONed with the generic queries in expandQueries;
+ * when no structured guidance is present the array is empty and retrieval falls
+ * back to the generic query set unchanged.
+ *
+ * GENERIC: the qualifyingInstance strings are framework-authored (stored per
+ * measure in the DB) — this code hardcodes no framework/measure/company specifics.
+ * Deterministic: same inputs → same output.
+ */
+function expandFromQualifyingInstances(
+  profile: IssuerProfile,
+  qualifyingInstances: string[],
+  maxQueries: number = 12,
+): ExpandedQuery[] {
+  if (!qualifyingInstances || qualifyingInstances.length === 0) return [];
+
+  const queries: ExpandedQuery[] = [];
+  const primaryName = profile.figiName || profile.legalName;
+
+  // Normalize + de-duplicate the qualifying-instance phrases. Collapse whitespace,
+  // strip embedded quotes (they would break the quoted issuer-name query), and cap
+  // length so a long definition still forms a usable search phrase.
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const raw of qualifyingInstances) {
+    if (typeof raw !== "string") continue;
+    const phrase = raw.replace(/["""]/g, " ").replace(/\s+/g, " ").trim().slice(0, 140);
+    if (phrase.length < 4) continue;
+    const key = phrase.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(phrase);
+  }
+
+  for (const phrase of cleaned.slice(0, maxQueries)) {
+    queries.push({
+      query: `"${primaryName}" ${phrase}`,
+      source: "qualifying-instance",
+      // Highest priority: the qualifying instance is the exact evidence a Yes needs.
+      priority: -22,
+    });
+  }
+
+  return queries;
+}
+
 // ─── Main Expansion Function ────────────────────────────────────────────────
 
 /**
@@ -255,6 +308,10 @@ export function expandQueries(opts: {
   evidenceKeywords: string[];
   requiredDocTypes: string[];
   topicPhrases: string[];
+  // B4: per-measure authored qualifyingInstance phrases (aggregated across the
+  // framework). Optional — when absent/empty, the query set is exactly the generic
+  // set (backward compatible with prose-only / un-tightened frameworks).
+  qualifyingInstances?: string[];
   maxTotal?: number;
 }): QueryExpansionResult {
   const maxTotal = opts.maxTotal || 40;
@@ -264,9 +321,12 @@ export function expandQueries(opts: {
   const localLangQueries = expandLocalLanguage(opts.profile, opts.topicPhrases);
   const yearVariantQueries = expandYearVariants(opts.profile, opts.topicPhrases);
   const translitQueries = expandTransliterations(opts.profile, opts.topicPhrases, opts.evidenceKeywords);
+  // B4: UNION the qualifyingInstance-derived queries with the generic set above.
+  const qualifyingInstanceQueries = expandFromQualifyingInstances(opts.profile, opts.qualifyingInstances || []);
 
   // Combine all, sort by priority, deduplicate, and cap
   const allQueries = [
+    ...qualifyingInstanceQueries,
     ...evidenceKwQueries,
     ...reportTypeQueries,
     ...localLangQueries,
@@ -296,6 +356,7 @@ export function expandQueries(opts: {
       localLanguageQueries: localLangQueries.length,
       yearVariantQueries: yearVariantQueries.length,
       aliasCrossQueries: evidenceKwQueries.filter(q => q.source === "alias-cross").length,
+      qualifyingInstanceQueries: qualifyingInstanceQueries.length,
       totalGenerated: final.length,
     },
   };

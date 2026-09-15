@@ -16,6 +16,7 @@ import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
+import { extractGuidanceObject, stripStructuredGuidanceBlock } from "./framework-guidance-audit.js";
 import { createHash } from "crypto";
 import { jsonrepair } from "jsonrepair";
 import type { Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -333,6 +334,59 @@ function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | 
   // this rule only tells the scorer HOW to reconcile them.
   v2Block += `\n\nPRECEDENCE (how to reconcile the guidance above): An exclusion disqualifies a Yes ONLY when its disqualifying condition holds AND no specific, named, on-topic qualifying instance (as defined by this measure's substantive definition / what-constitutes-evidence) is present in the evidence. A specific, named qualifying instance is NOT defeated by generic, aspirational, or general-policy language appearing elsewhere in the same evidence. Assess whether a qualifying instance exists FIRST; apply exclusions only to the residual.`;
 
+  // ─── Rubric tightening (A1/A2/A3) — per-measure STRUCTURED guidance ─────────
+  // GENERIC. The framework builder authors, per measure, a positive definition of
+  // what counts (qualifyingInstance), the generic/aspirational mentions that do
+  // NOT count (disqualifiers), exactly one canonical Yes + one canonical No worked
+  // example (anchors), and (optionally) the Yes-requires-a-verbatim-quote rule
+  // line (yesRequiresQuote). These live INSIDE this measure's scoring_guidance —
+  // pure JSON, a ```json fence appended to prose, or a trailing {...} blob — so we
+  // parse them the same tolerant way the audit does. Absent fields are simply
+  // omitted, keeping prose-only / legacy measures byte-identical to before. NOTHING
+  // here is framework/measure/company-specific; all content comes from the DB.
+  const sgObj = extractGuidanceObject(m.scoringGuidance);
+  const qualifyingInstance = sgObj && typeof sgObj.qualifyingInstance === "string" && sgObj.qualifyingInstance.trim().length > 0
+    ? sgObj.qualifyingInstance.trim()
+    : "";
+  const disqualifiers = sgObj && Array.isArray(sgObj.disqualifiers)
+    ? sgObj.disqualifiers.filter((d: any) => typeof d === "string" && d.trim().length > 0).map((d: string) => d.trim())
+    : [];
+  const anchorYes = sgObj && sgObj.anchors && typeof sgObj.anchors === "object" && typeof sgObj.anchors.yes === "string"
+    ? sgObj.anchors.yes.trim()
+    : "";
+  const anchorNo = sgObj && sgObj.anchors && typeof sgObj.anchors === "object" && typeof sgObj.anchors.no === "string"
+    ? sgObj.anchors.no.trim()
+    : "";
+  const authoredYesRule = sgObj && typeof sgObj.yesRequiresQuote === "string" && sgObj.yesRequiresQuote.trim().length > 0
+    ? sgObj.yesRequiresQuote.trim()
+    : "";
+
+  if (qualifyingInstance) {
+    v2Block += `\n\nQUALIFYING INSTANCE (what specifically counts as satisfying THIS measure — a Yes REQUIRES a concrete instance of this kind, evidenced in the corpus):\n${qualifyingInstance}`;
+  }
+  if (disqualifiers.length > 0) {
+    v2Block += `\n\nDISQUALIFIERS (these do NOT satisfy the measure on their own — generic, aspirational, or forward-looking mentions; the topic named without a specific qualifying instance):\n${disqualifiers.map((d: string) => `- ${d}`).join("\n")}`;
+  }
+  // A3: render ONLY the canonical Yes and canonical No worked examples. Never a
+  // Partial anchor. Fenced as illustrative-only so they cannot be echoed as quotes.
+  if (anchorYes || anchorNo) {
+    v2Block += `\n\nWORKED EXAMPLES (calibration anchors — ILLUSTRATIVE ONLY; NEVER quote, paraphrase, or cite these as a company's disclosure):`;
+    if (anchorYes) v2Block += `\n- Canonical YES: ${anchorYes}`;
+    if (anchorNo) v2Block += `\n- Canonical NO: ${anchorNo}`;
+  }
+
+  // A2: Yes-requires-a-verbatim-quote PRECONDITION. Rendered as prompt text only —
+  // NO post-hoc override, NO extra LLM call. ALWAYS emitted (generic), so it binds
+  // even on prose-only / legacy measures. Precedence for the qualifying basis
+  // named in the precondition: authored qualifyingInstance → substantive
+  // definition → a generic on-topic-instance clause.
+  const yesQuoteBasis = qualifyingInstance
+    || (typeof m.substantiveDefinition === "string" && m.substantiveDefinition.trim().length > 0 ? m.substantiveDefinition.trim() : "")
+    || "a specific, named, on-topic instance that satisfies this measure";
+  const yesRuleLine = authoredYesRule
+    || `A "Yes" is permissible ONLY when at least one VERBATIM quote copied from the supplied evidence contains ${yesQuoteBasis}. If the evidence contains no such verbatim quote, you MUST NOT score Yes. Generic, aspirational, or forward-looking language — or the topic being named without a specific qualifying instance — does NOT meet this bar.`;
+  v2Block += `\n\nYES REQUIRES A VERBATIM QUOTE (precondition — evaluate this BEFORE assigning any Yes):\n${yesRuleLine}`;
+
   // C3: quote-context requirement
   const minCtx = typeof m.minQuoteContextChars === "number" ? m.minQuoteContextChars : null;
   const quoteContextInstr = minCtx && minCtx >= 100
@@ -443,7 +497,16 @@ ${terminologyBlock}`;
         : String(measure.scoringGuidance);
     }
     if (plainProse !== null) {
-      scoringGuidance = `\nScoring guidance:\n${plainProse}`;
+      // Change B + rubric-tightening: prose may have an appended structured block
+      // (a ```json fence or trailing {...}) carrying the qualifyingInstance /
+      // disqualifiers / anchors / yesRequiresQuote. Those render via
+      // buildV2GuidanceBlock — strip them here so raw JSON is not dumped into the
+      // human-readable "Scoring guidance" prose. If only the block was present,
+      // omit the prose heading entirely.
+      const cleaned = stripStructuredGuidanceBlock(plainProse);
+      if (cleaned.length > 0) {
+        scoringGuidance = `\nScoring guidance:\n${cleaned}`;
+      }
     }
     if (sg) {
     scoringGuidance = `\nScoring guidance:\n- Yes: ${sg.yes || "Clear evidence present"}\n- No: ${sg.no || "No evidence found"}\n- Partial: ${sg.partial || "Some evidence but incomplete"}`;
@@ -511,7 +574,7 @@ Evaluate this measure and return a JSON object with exactly these fields:
 
 // ─── Partial Scoring Prompt ─────────────────────────────────────────────────
 
-function buildPartialScoringPrompt(opts: {
+export function buildPartialScoringPrompt(opts: {
   companyName: string;
   measure: FrameworkMeasure;
   evidenceText: string;
@@ -588,7 +651,12 @@ ${terminologyBlock}`;
         : String(measure.scoringGuidance);
     }
     if (plainProse !== null) {
-      scoringGuidance = `\nScoring guidance:\n${plainProse}`;
+      // Change B + rubric-tightening: strip any appended structured block from the
+      // prose (rendered via buildV2GuidanceBlock) so raw JSON is not dumped here.
+      const cleaned = stripStructuredGuidanceBlock(plainProse);
+      if (cleaned.length > 0) {
+        scoringGuidance = `\nScoring guidance:\n${cleaned}`;
+      }
     }
     if (sg) {
     scoringGuidance = `\nScoring guidance:\n- Yes (1): ${sg.yes || "Clear evidence fully satisfying the requirement"}\n- Partial (0.5): ${sg.partial || "Some evidence but incomplete or indirect"}\n- No (0): ${sg.no || "No evidence found"}`;
@@ -1882,8 +1950,11 @@ export async function analyzeCompanyMeasures(opts: {
         // I74: pass through env-driven budgets rather than hardcoding, so
         // RETRIEVAL_EVIDENCE_MAX_CHARS / RETRIEVAL_EVIDENCE_TOP_K govern both
         // the initial pack builder and the rescorer.
-        const _rescBudgetChars = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "30000", 10);
-        const _rescBudgetChunks = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "30", 10);
+        // B3 (retrieval recall): defaults raised (top-k 30→45, max-chars 30000→45000)
+        // to favour recall so genuinely on-topic evidence is less likely to be cut
+        // before scoring. Still env-overridable.
+        const _rescBudgetChars = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "45000", 10);
+        const _rescBudgetChunks = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "45", 10);
         evidencePacks = await rescorePacksForCategory(evidencePacks as any, categoryMeasures, combinedText, _rescBudgetChars, _rescBudgetChunks, topicPrimaryDocUrls);
       }
     } else {
@@ -2262,6 +2333,27 @@ export async function analyzeCompanyMeasures(opts: {
         } catch (deepErr: any) {
           console.warn(`[${companyName}] Deep-read pass failed for ${measure.measureId}: ${deepErr.message}`);
           // Keep the original result on any failure.
+        }
+      }
+
+      // B3 (evidence-vs-qualification signal): distinguish a "No" reached with
+      // essentially ZERO on-topic evidence from a "No" reached against evidence
+      // that WAS retrieved but did not qualify. Both are legitimately scored "No",
+      // but they mean very different things to a reviewer: the former is an
+      // evidence-gap (the corpus surfaced no topic content for this measure), the
+      // latter is a genuine substantive judgement. We surface this ONLY through the
+      // existing verdictNuance mechanism — NO score change, NO verdict change, NO
+      // extra LLM call. Abstained cells already carry their own nuance and are
+      // excluded from the denominator, so we skip them here. GENERIC: keyed purely
+      // on the coverage label + verdict, never on any framework/measure specifics.
+      if (
+        measureResult.verdict === "No" &&
+        !measureResult.abstained &&
+        measureResult.coverage === "none"
+      ) {
+        const gapNote = "[Evidence gap: No reached with essentially zero on-topic evidence retrieved — the corpus surfaced no topic-relevant content for this measure, so this is a data-availability No rather than a substantive No against qualifying evidence.]";
+        if (!(measureResult.verdictNuance || "").includes("Evidence gap:")) {
+          measureResult.verdictNuance = ((measureResult.verdictNuance || "").trim() + " " + gapNote).trim();
         }
       }
 

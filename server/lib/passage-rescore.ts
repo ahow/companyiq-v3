@@ -81,12 +81,32 @@ interface Candidate {
   llm?: number;        // LLM-assigned evidence score 0..10 (assigned after rescoring)
 }
 
+// B2 (retrieval determinism): a STABLE total-ordering key for a chunk, used as a
+// tie-break so that equal primary scores never leave the final order dependent on
+// the input array order (which can shift run-to-run as docs are re-fetched). Key
+// is (docUrl, docIndex, seqInDoc, text) — all content-stable, GENERIC.
+export function stableChunkKey(chunk: Chunk, idx: number): string {
+  return [
+    (chunk.docUrl || "").toLowerCase(),
+    String(chunk.docIndex ?? 0).padStart(6, "0"),
+    String(chunk.seqInDoc ?? 0).padStart(6, "0"),
+    String(idx).padStart(6, "0"),
+  ].join("\u0000");
+}
+export function compareStableByChunk(a: { chunk: Chunk; idx: number }, b: { chunk: Chunk; idx: number }): number {
+  const ka = stableChunkKey(a.chunk, a.idx);
+  const kb = stableChunkKey(b.chunk, b.idx);
+  return ka < kb ? -1 : ka > kb ? 1 : 0;
+}
+
 // Score all chunks with BM25 for the given measure and return top-N candidates.
 function selectTopBM25Candidates(chunks: Chunk[], bm25Index: BM25Index, measure: FrameworkMeasure, topN: number): Candidate[] {
   const queryText = [measure.title || "", measure.definition || "", ...((measure as any).evidenceKeywords || [])].join(" ");
   const q = tokenize(queryText);
   const scored: Candidate[] = chunks.map((chunk, idx) => ({ idx, chunk, bm25: bm25Score(q, idx, bm25Index) }));
-  scored.sort((a, b) => b.bm25 - a.bm25);
+  // B2: primary by BM25 desc, then STABLE tie-break so equal scores are ordered
+  // deterministically regardless of input array order.
+  scored.sort((a, b) => (b.bm25 - a.bm25) || compareStableByChunk(a, b));
   return scored.slice(0, topN).filter(c => c.bm25 > 0 || c.chunk.text.length > 0);
 }
 
@@ -230,8 +250,11 @@ function buildSmallTopicPrimaryFullDocs(chunks: Chunk[], topicPrimaryDocUrls: st
 // LLM call fails, returns the original pack unchanged.
 // I74: pack budgets are env-tunable so we can test wider packs without a code
 // change. Defaults match passage-retrieval.ts's EVIDENCE_MAX_CHARS/TOP_K.
-const RESCORE_DEFAULT_BUDGET_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "30000", 10);
-const RESCORE_DEFAULT_BUDGET_CHUNKS = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "30", 10);
+// B3 (retrieval recall): defaults raised (top-k 30→45, max-chars 30000→45000) to
+// favour recall so on-topic evidence is less likely to be cut before scoring. Still
+// env-overridable and kept consistent with passage-retrieval.ts / analyzer.ts.
+const RESCORE_DEFAULT_BUDGET_CHARS = parseInt(process.env.RETRIEVAL_EVIDENCE_MAX_CHARS || "45000", 10);
+const RESCORE_DEFAULT_BUDGET_CHUNKS = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "45", 10);
 
 export async function rescorePackWithLLM(
   pack: EvidencePack,
@@ -278,7 +301,9 @@ export async function rescorePackWithLLM(
     return { c, final, llm };
   });
 
-  blended.sort((a, b) => b.final - a.final);
+  // B2: primary by blended score desc, then STABLE tie-break (docUrl/docIndex/
+  // seqInDoc/idx) so equal blended scores never depend on input array order.
+  blended.sort((a, b) => (b.final - a.final) || compareStableByChunk(a.c, b.c));
 
   // I71: Full-document access for small topic-primary docs. Rank candidate TP
   // docs by the max LLM score of any of their chunks in the candidate pool —
@@ -301,7 +326,9 @@ export async function rescorePackWithLLM(
   const fullDocsRanked = Array.from(fullDocs.entries())
     .map(([docIndex, info]) => ({ docIndex, info, bestLLM: perDocMaxLLM.get(docIndex) ?? -1, bestBlended: perDocMaxBlended.get(docIndex) ?? -1 }))
     .filter(x => x.bestLLM >= 4) // only include if LLM believes at least one chunk is meaningfully relevant
-    .sort((a, b) => (b.bestBlended - a.bestBlended))
+    // B2: primary by best blended desc, then stable tie-break on docIndex so
+    // equal scores are ordered deterministically.
+    .sort((a, b) => (b.bestBlended - a.bestBlended) || (a.docIndex - b.docIndex))
     .slice(0, FULL_DOC_MAX_PER_MEASURE);
 
   // Build the new pack text respecting budgets. Full docs first (they are the

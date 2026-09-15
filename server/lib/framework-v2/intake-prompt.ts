@@ -193,9 +193,22 @@ The following clauses MUST appear in every measure's substantive_definition and 
 
    > "Evidence may be disclosed in any vehicle — annual report, sustainability report, dedicated policy document, code-of-conduct section, KPI table, or entity website — provided content substantively matches this measure."
 
-3. scoringGuidance MUST end with this canonical quote-context instruction:
+3. scoringGuidance MUST contain this canonical quote-context instruction (in its prose portion):
 
    > "When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context."
+
+3b. RUBRIC-TIGHTENING STRUCTURED GUIDANCE (append to EVERY measure's scoringGuidance). After the prose scoringGuidance above, append a fenced code block containing a JSON object with these four PER-MEASURE fields, derived from THIS measure's own definition (never a generic template):
+
+   \`\`\`json
+   {
+     "qualifyingInstance": "Positive definition of what SPECIFICALLY counts as satisfying THIS measure — a named programme/policy/system, a quantified commitment, or a dated milestone, phrased for this measure's exact requirement.",
+     "disqualifiers": ["Generic or boilerplate mention of the topic with no specific instance", "Aspirational or forward-looking intent without a named, in-place instance", "The topic named in passing without the specific qualifying instance this measure requires"],
+     "anchors": { "yes": "ONE short worked example that clearly SATISFIES this measure (say why).", "no": "ONE short worked example that superficially looks relevant but FAILS (say why)." },
+     "yesRequiresQuote": "A Yes is permissible only when a verbatim quote from the evidence contains the qualifyingInstance above."
+   }
+   \`\`\`
+
+   Rules for this block: "anchors" has EXACTLY ONE "yes" and EXACTLY ONE "no" — NEVER author a Partial anchor. All four fields are mandatory and specific to this measure. The prose scoringGuidance (including the canonical quote-context sentence) still comes first; this fenced JSON block is appended as its final content. The scorer parses this block generically; it is stored inside scoring_guidance.
 
 4. whatDoesNotConstituteEvidence MUST include at least one of these substantive-rejection phrases (choose the one that fits): "aspirational statements without specific programmes"; "generic environmental language without <TOPIC>-specificity"; "third-party or industry initiatives without company action"; "management-level activities only without board or governance sign-off"; "adjacent-topic references without <TOPIC> attribution".
 
@@ -437,9 +450,22 @@ The following clauses MUST appear in every measure. Insert them VERBATIM, append
 
    > "Evidence may be disclosed in any vehicle — annual report, sustainability report, dedicated policy document, code-of-conduct section, KPI table, or entity website — provided content substantively matches this measure."
 
-3. Every scoringGuidance MUST end with:
+3. Every scoringGuidance MUST contain (in its prose portion):
 
    > "When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context."
+
+3b. RUBRIC-TIGHTENING STRUCTURED GUIDANCE — append to EVERY measure's scoringGuidance, after the prose above, a fenced \`\`\`json block with four PER-MEASURE fields derived from THIS measure's definition (never a generic template):
+
+   \`\`\`json
+   {
+     "qualifyingInstance": "Positive definition of what SPECIFICALLY counts as satisfying THIS measure — a named programme/policy/system, a quantified commitment, or a dated milestone.",
+     "disqualifiers": ["Generic/boilerplate mention with no specific instance", "Aspirational or forward-looking intent without a named, in-place instance", "Topic named in passing without the required qualifying instance"],
+     "anchors": { "yes": "ONE worked example that clearly SATISFIES this measure (say why).", "no": "ONE worked example that superficially looks relevant but FAILS (say why)." },
+     "yesRequiresQuote": "A Yes is permissible only when a verbatim quote from the evidence contains the qualifyingInstance above."
+   }
+   \`\`\`
+
+   "anchors" has EXACTLY ONE "yes" and ONE "no" — NEVER a Partial anchor. All four fields mandatory and measure-specific. The prose scoringGuidance (with the canonical quote-context sentence) comes first; this JSON block is appended last.
 
 4. Every whatDoesNotConstituteEvidence MUST include at least one substantive-rejection phrase (choose one): "aspirational statements without specific programmes", "generic environmental language without topic-specificity", "third-party or industry initiatives without company action", "management-level activities only without board or governance sign-off", or "adjacent-topic references without topic attribution".
 

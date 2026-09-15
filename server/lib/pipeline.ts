@@ -35,6 +35,7 @@ import {
 import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError } from "./processor.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
+import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
 import { classifyProvenance, provenanceToSourceType, type IrTenantBinding } from "./provenance.js";
@@ -174,18 +175,28 @@ async function runFetchPhase(opts: {
     .filter((n: string) => n && n.length >= 4);
 
   // Instruction 46: Aggregate evidenceKeywords from framework measures for query expansion
+  // B4: also aggregate each measure's authored qualifyingInstance (from structured
+  // scoring guidance) so retrieval can target the specific evidence a Yes requires.
+  // Both are GENERIC: purely framework-authored content read from the DB.
   let aggregatedEvidenceKeywords: string[] = [];
+  let aggregatedQualifyingInstances: string[] = [];
   try {
     const fwMeasures = await storage.getFrameworkMeasures(framework.id);
     const kwSet = new Set<string>();
+    const qiSet = new Set<string>();
     for (const m of fwMeasures) {
       for (const kw of ((m as any).evidenceKeywords || [])) {
         if (typeof kw === "string" && kw.trim().length >= 3) kwSet.add(kw.trim().toLowerCase());
       }
+      // B4: parse structured guidance (tolerant of prose-only guidance → null).
+      const g = extractGuidanceObject((m as any).scoringGuidance);
+      const qi = g && typeof g.qualifyingInstance === "string" ? g.qualifyingInstance.trim() : "";
+      if (qi.length >= 4) qiSet.add(qi);
     }
     aggregatedEvidenceKeywords = Array.from(kwSet).slice(0, 40);
+    aggregatedQualifyingInstances = Array.from(qiSet).slice(0, 40);
   } catch (ekErr: any) {
-    console.warn(`[${companyName}] Failed to aggregate evidenceKeywords: ${ekErr?.message}`);
+    console.warn(`[${companyName}] Failed to aggregate evidenceKeywords/qualifyingInstances: ${ekErr?.message}`);
   }
 
   const discoveryResult: DiscoveryResult = await searchCompanyDocuments({
@@ -204,6 +215,7 @@ async function runFetchPhase(opts: {
     peerCompanyNames,
     companyRow: company, // 40-G: pass full row for cached domain family + FIGI fields
     evidenceKeywords: aggregatedEvidenceKeywords, // Instruction 46
+    qualifyingInstances: aggregatedQualifyingInstances, // B4: qualifyingInstance-derived queries (UNIONed with generic set)
     // PR 1 · Change 1b: forward the retrieval_v2 workspace flag so the
     // ranker can apply subsidiary/vintage/press-page penalties. Same read
     // pattern used by the 1a latest-primary-disclosure verification below.
