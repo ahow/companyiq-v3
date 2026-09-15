@@ -21,6 +21,7 @@ import { computeQualityMetrics, coherenceGateMetrics, type MeasureSpecFields, ty
 import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } from "../lib/framework-v2/root-cause-diagnostic.js";
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import { groupProposalsByPatch, BATCH_REGENERATORS, differentiateMeasureDefinition, regenerateMeasureField, CUSTOM_EDIT_FIELDS, type CustomEditField, type CustomEditMeasure, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
+import { mergeStructuredIntoScoringGuidance } from "../lib/framework-v2/structured-guidance.js";
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
 import { recordMeasureEdit } from "../lib/framework-v2/measure-audit.js";
 import { resolveProposalByIdentity } from "../lib/framework-v2/proposal-identity.js";
@@ -2472,7 +2473,8 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     async function loadMeasure(measureId: string): Promise<CustomEditMeasure | null> {
       const q = await db.execute(sql`
         SELECT measure_id, title, substantive_definition, fallback_yes_criterion,
-               positive_examples, negative_examples, expected_yes_rate, min_quote_context_chars
+               positive_examples, negative_examples, expected_yes_rate, min_quote_context_chars,
+               scoring_guidance
         FROM framework_measures
         WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}
         LIMIT 1
@@ -2488,6 +2490,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         negative_examples: Array.isArray(row.negative_examples) ? row.negative_examples : [],
         expected_yes_rate: typeof row.expected_yes_rate === "number" ? row.expected_yes_rate : undefined,
         min_quote_context_chars: typeof row.min_quote_context_chars === "number" ? row.min_quote_context_chars : undefined,
+        scoring_guidance: typeof row.scoring_guidance === "string" ? row.scoring_guidance : (row.scoring_guidance == null ? "" : String(row.scoring_guidance)),
       };
     }
 
@@ -2536,7 +2539,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         const measureIdSet = new Set(measureIds);
         const allMeasuresQ = await db.execute(sql`
           SELECT measure_id, title, substantive_definition, fallback_yes_criterion,
-                 positive_examples, negative_examples
+                 positive_examples, negative_examples, scoring_guidance
           FROM framework_measures
           WHERE framework_id = ${frameworkId}
         `);
@@ -2548,6 +2551,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
           fallback_yes_criterion: m.fallback_yes_criterion || "",
           positive_examples: Array.isArray(m.positive_examples) ? m.positive_examples : [],
           negative_examples: Array.isArray(m.negative_examples) ? m.negative_examples : [],
+          scoring_guidance: typeof m.scoring_guidance === "string" ? m.scoring_guidance : (m.scoring_guidance == null ? "" : String(m.scoring_guidance)),
         }));
 
         // Derive the audited field/op generically from the group key
@@ -2653,6 +2657,27 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
               beforeValue: before?.negative_examples ?? null, afterValue: u.negative_examples,
               source: auditSource(u.measureId), applied: true,
             });
+          }
+          // Freshly authored structured scoring_guidance (the refine path now
+          // authors the same qualifyingInstance/disqualifiers/anchors/yesRequiresQuote
+          // fields the create/intake paths do). Merge additively onto the measure's
+          // existing scoring_guidance so prior guidance is never blanked; only
+          // persist when the merge actually changed something.
+          if (u.scoring_guidance) {
+            const beforeGuidance = before?.scoring_guidance ?? null;
+            const mergedGuidance = mergeStructuredIntoScoringGuidance(beforeGuidance, u.scoring_guidance);
+            if (mergedGuidance && mergedGuidance !== (beforeGuidance ?? "")) {
+              await db.execute(sql`
+                UPDATE framework_measures SET scoring_guidance = ${mergedGuidance}, updated_at = NOW()
+                WHERE framework_id = ${frameworkId} AND measure_id = ${u.measureId}
+              `);
+              await recordMeasureEdit(db, {
+                workspaceId: ctx.workspaceId, frameworkId, listId, measureId: u.measureId,
+                field: "scoring_guidance", op: groupOp || null,
+                beforeValue: beforeGuidance, afterValue: mergedGuidance,
+                source: auditSource(u.measureId), applied: true,
+              });
+            }
           }
           applied.push({ measureId: u.measureId, action: `regenerated:${groupKey}`, source: "llm" });
         }
@@ -2815,7 +2840,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         try {
           const fctx = await loadFrameworkContext();
           const before = fieldValueOf(measure, field);
-          const { value: after } = await regenerateMeasureField(measure, field, instruction, fctx);
+          const { value: after, scoringGuidance } = await regenerateMeasureField(measure, field, instruction, fctx);
           if (after == null || (Array.isArray(after) && after.length === 0)) {
             const reason = "not applied: LLM returned no usable value for this field";
             skipped.push({ measureId, action: "apply_custom_edit", field, reason });
@@ -2825,6 +2850,17 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
           await persistMeasureField(measureId, field, after);
           applied.push({ measureId, action: "custom_edit", field, instruction, before, after, source: "llm" });
           await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId, field, op: "custom_edit", beforeValue: before, afterValue: after, source: "custom_edit", applied: true });
+          // When the deciding criteria were rewritten, the same call also re-authored
+          // the structured scoring_guidance. Merge it additively onto the measure's
+          // existing scoring_guidance (never blanking prior guidance) and persist.
+          if (field === "substantive_definition" && scoringGuidance) {
+            const beforeGuidance = measure.scoring_guidance ?? null;
+            const mergedGuidance = mergeStructuredIntoScoringGuidance(beforeGuidance, scoringGuidance);
+            if (mergedGuidance && mergedGuidance !== (beforeGuidance ?? "")) {
+              await db.execute(sql`UPDATE framework_measures SET scoring_guidance = ${mergedGuidance}, updated_at = NOW() WHERE framework_id = ${frameworkId} AND measure_id = ${measureId}`);
+              await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId, field: "scoring_guidance", op: "custom_edit", beforeValue: beforeGuidance, afterValue: mergedGuidance, source: "custom_edit", applied: true });
+            }
+          }
         } catch (e: any) {
           const reason = `not applied: regeneration failed: ${e?.message || e}`;
           skipped.push({ measureId, action: "apply_custom_edit", field, reason });
@@ -2872,7 +2908,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
           try {
             const fctx = await loadFrameworkContext();
             const before = mA.substantive_definition;
-            const { value: after } = await differentiateMeasureDefinition(mA, mB, fctx);
+            const { value: after, scoringGuidance } = await differentiateMeasureDefinition(mA, mB, fctx);
             if (!after) {
               const reason = "not applied: LLM returned no differentiated definition";
               skipped.push({ action, reason });
@@ -2882,6 +2918,16 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
             await persistMeasureField(measureAId, "substantive_definition", after);
             applied.push({ measureId: measureAId, action: "differentiate", against: measureBId, before, after, source: "llm" });
             await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureAId, field: "substantive_definition", op: "differentiate", beforeValue: before, afterValue: after, source: `differentiate:against=${measureBId}`, applied: true });
+            // Persist the co-authored structured scoring_guidance additively onto
+            // measureA's existing guidance (never blanking prior guidance).
+            if (scoringGuidance) {
+              const beforeGuidance = mA.scoring_guidance ?? null;
+              const mergedGuidance = mergeStructuredIntoScoringGuidance(beforeGuidance, scoringGuidance);
+              if (mergedGuidance && mergedGuidance !== (beforeGuidance ?? "")) {
+                await db.execute(sql`UPDATE framework_measures SET scoring_guidance = ${mergedGuidance}, updated_at = NOW() WHERE framework_id = ${frameworkId} AND measure_id = ${measureAId}`);
+                await recordMeasureEdit(db, { workspaceId: ctx.workspaceId, frameworkId, listId, measureId: measureAId, field: "scoring_guidance", op: "differentiate", beforeValue: beforeGuidance, afterValue: mergedGuidance, source: `differentiate:against=${measureBId}`, applied: true });
+              }
+            }
           } catch (e: any) {
             const reason = `not applied: differentiate failed: ${e?.message || e}`;
             skipped.push({ action, reason });

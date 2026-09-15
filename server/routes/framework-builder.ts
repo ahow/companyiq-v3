@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import multer from "multer";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import * as storage from "../storage.js";
+import { STRUCTURED_GUIDANCE_FIELDS_SPEC } from "../lib/framework-v2/structured-guidance.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -589,10 +590,7 @@ NOTE ON FRAMEWORK-LEVEL DISCOVERY FIELDS (ALL SEVEN FIELDS ARE MANDATORY FOR A H
 9. "dataPatterns" (array of strings): 5-10 regex fragments that prove the topic's actual DATA is present in a document's text (specific figures, standard names, target phrasings for THIS topic). These distinguish a topic-relevant report with real data from a landing page or generic mention. E.g., for climate: ["scope\\s*[123]", "financed.?emission", "\\bMtCO2", "PCAF"]; for slavery: ["modern.?slavery.?(?:act|statement)", "forced.?labo"]; for tax: ["country.?by.?country", "effective.?tax.?rate"].
 
 NOTE ON SCORING GUIDANCE FIELDS:
-- "qualifyingInstance" (string, MANDATORY): The POSITIVE, per-measure definition of what SPECIFICALLY counts as satisfying THIS measure — a named programme/policy/system, a quantified commitment, or a dated milestone, expressed for this measure's exact requirement. This is the single most important field for precision: the scorer requires a verbatim evidence quote containing an instance of this kind before it may award Yes. Do NOT restate the topic in general terms — describe the concrete SHAPE a qualifying instance takes. Derive it from the measure's own definition; never copy a generic template.
-- "disqualifiers" (array of strings, MANDATORY): Generic, aspirational, or forward-looking mentions — and the topic being named without the specific qualifying instance — that must NOT score Yes on their own. These are the negative mirror of qualifyingInstance. Be specific to this measure.
-- "anchors" (object with "yes" and "no", MANDATORY): EXACTLY ONE canonical worked Yes example and EXACTLY ONE canonical worked No example, each 1-2 short sentences naming why it qualifies / fails. Do NOT author a Partial anchor. These render to the scorer as illustrative-only calibration anchors (never quotable).
-- "yesRequiresQuote" (string, MANDATORY): One sentence stating, for this measure, that a Yes is permissible only when a verbatim quote from the supplied evidence contains the qualifyingInstance. This is a precondition the scorer applies before awarding any Yes.
+${STRUCTURED_GUIDANCE_FIELDS_SPEC}
 - "explicit_exclusions" (array of strings): List specific types of evidence that should NOT be accepted as sufficient. This is the most powerful tool for preventing false positives.
 - "required_evidence_type" (string): Describe the specific FORM the evidence must take. E.g., "Must be a standalone published policy document, not merely a statement within an annual report."
 - "temporal_note" (string): Instructions about time-sensitivity. E.g., "Must reflect current commitments. Evidence from reports older than 2 years should be treated with Low confidence unless confirmed in recent disclosures."

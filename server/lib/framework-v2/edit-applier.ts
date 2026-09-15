@@ -15,6 +15,12 @@
  */
 import { completeWithFallback } from "../ai-providers.js";
 import type { EditProposal } from "./edit-proposer.js";
+import {
+  STRUCTURED_GUIDANCE_REGEN_INSTRUCTION,
+  STRUCTURED_GUIDANCE_SCHEMA_FRAGMENT,
+  normaliseStructuredGuidance,
+  type StructuredGuidance,
+} from "./structured-guidance.js";
 
 export interface FrameworkContext {
   topicTerm: string;
@@ -30,6 +36,10 @@ export interface MeasureBefore {
   fallback_yes_criterion?: string;
   positive_examples?: string[];
   negative_examples?: string[];
+  // The measure's current scoring_guidance (TEXT column) — threaded through so a
+  // regenerator's freshly authored structured fields can be merged onto it
+  // additively rather than blanking prior guidance. Optional/back-compat.
+  scoring_guidance?: string;
 }
 
 export interface MeasureAfter {
@@ -37,6 +47,11 @@ export interface MeasureAfter {
   substantive_definition?: string;
   positive_examples?: string[];
   negative_examples?: string[];
+  // Freshly authored structured scoring_guidance fields (only the fields the LLM
+  // actually returned; a Partial). Undefined when the regenerator does not author
+  // guidance or the LLM omitted it. The caller merges this into the measure's
+  // existing scoring_guidance via mergeStructuredIntoScoringGuidance().
+  scoring_guidance?: Partial<StructuredGuidance>;
 }
 
 export interface RegenerationResult {
@@ -70,10 +85,12 @@ CRITICAL RULES:
 5. Do NOT emit adjacent-topic exclusion clauses here (that is a separate operation).
 6. Output MUST be valid JSON in the exact schema below. No prose outside the JSON.
 
+${STRUCTURED_GUIDANCE_REGEN_INSTRUCTION}
+
 Schema:
 {
   "updates": [
-    { "measureId": "<id>", "substantive_definition": "<revised definition text>" }
+    { "measureId": "<id>", "substantive_definition": "<revised definition text>", ${STRUCTURED_GUIDANCE_SCHEMA_FRAGMENT} }
   ]
 }`;
 
@@ -93,7 +110,7 @@ Schema:
   const updates: MeasureAfter[] = Array.isArray(parsed?.updates)
     ? parsed.updates
         .filter((u: any) => u && typeof u.measureId === "string" && typeof u.substantive_definition === "string")
-        .map((u: any) => ({ measureId: u.measureId, substantive_definition: u.substantive_definition.trim() }))
+        .map((u: any) => ({ measureId: u.measureId, substantive_definition: u.substantive_definition.trim(), scoring_guidance: normaliseStructuredGuidance(u.scoring_guidance) ?? undefined }))
     : [];
   return { updates, raw: text, provider };
 }
@@ -121,7 +138,9 @@ CRITICAL RULES:
 3. Pick ONE adjacent topic per measure, most relevant to that measure's scope.
 4. Do not add other content.
 
-Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<full revised text>" } ] }`;
+${STRUCTURED_GUIDANCE_REGEN_INSTRUCTION}
+
+Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<full revised text>", ${STRUCTURED_GUIDANCE_SCHEMA_FRAGMENT} } ] }`;
 
   const measureList = measures
     .map((m) => `Measure ${m.measureId} (${m.title || "untitled"}):\n  current substantive_definition: ${JSON.stringify(m.substantive_definition)}`)
@@ -137,7 +156,7 @@ Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<full r
   const updates: MeasureAfter[] = Array.isArray(parsed?.updates)
     ? parsed.updates
         .filter((u: any) => u && typeof u.measureId === "string" && typeof u.substantive_definition === "string")
-        .map((u: any) => ({ measureId: u.measureId, substantive_definition: u.substantive_definition.trim() }))
+        .map((u: any) => ({ measureId: u.measureId, substantive_definition: u.substantive_definition.trim(), scoring_guidance: normaliseStructuredGuidance(u.scoring_guidance) ?? undefined }))
     : [];
   return { updates, raw: text, provider };
 }
@@ -218,7 +237,9 @@ CRITICAL RULES:
 3. Keep each definition under 600 characters.
 4. Output MUST be valid JSON in the exact schema below. No prose outside the JSON.
 
-Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<revised definition text>" } ] }`;
+${STRUCTURED_GUIDANCE_REGEN_INSTRUCTION}
+
+Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<revised definition text>", ${STRUCTURED_GUIDANCE_SCHEMA_FRAGMENT} } ] }`;
 
   const measureList = measures
     .map((m) => `Measure ${m.measureId} (${m.title || "untitled"}):\n  current substantive_definition: ${JSON.stringify(m.substantive_definition)}`)
@@ -234,7 +255,7 @@ Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<revise
   const updates: MeasureAfter[] = Array.isArray(parsed?.updates)
     ? parsed.updates
         .filter((u: any) => u && typeof u.measureId === "string" && typeof u.substantive_definition === "string")
-        .map((u: any) => ({ measureId: u.measureId, substantive_definition: u.substantive_definition.trim() }))
+        .map((u: any) => ({ measureId: u.measureId, substantive_definition: u.substantive_definition.trim(), scoring_guidance: normaliseStructuredGuidance(u.scoring_guidance) ?? undefined }))
     : [];
   return { updates, raw: text, provider };
 }
@@ -263,7 +284,9 @@ CRITICAL RULES:
 4. Keep any existing adjacent-topic exclusion clause intact. Keep each definition under 600 characters.
 5. Output MUST be valid JSON in the exact schema below. No prose outside the JSON.
 
-Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<revised definition text>" } ] }`;
+${STRUCTURED_GUIDANCE_REGEN_INSTRUCTION}
+
+Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<revised definition text>", ${STRUCTURED_GUIDANCE_SCHEMA_FRAGMENT} } ] }`;
 
   const measureList = measures
     .map((m) => `Measure ${m.measureId} (${m.title || "untitled"}):\n  current substantive_definition: ${JSON.stringify(m.substantive_definition)}`)
@@ -279,7 +302,7 @@ Schema: { "updates": [ { "measureId": "<id>", "substantive_definition": "<revise
   const updates: MeasureAfter[] = Array.isArray(parsed?.updates)
     ? parsed.updates
         .filter((u: any) => u && typeof u.measureId === "string" && typeof u.substantive_definition === "string")
-        .map((u: any) => ({ measureId: u.measureId, substantive_definition: u.substantive_definition.trim() }))
+        .map((u: any) => ({ measureId: u.measureId, substantive_definition: u.substantive_definition.trim(), scoring_guidance: normaliseStructuredGuidance(u.scoring_guidance) ?? undefined }))
     : [];
   return { updates, raw: text, provider };
 }
@@ -299,7 +322,7 @@ export async function differentiateMeasureDefinition(
   other: MeasureBefore,
   ctx: FrameworkContext,
   providerName?: string,
-): Promise<{ value: string | null; raw: string; provider: string }> {
+): Promise<{ value: string | null; scoringGuidance?: Partial<StructuredGuidance>; raw: string; provider: string }> {
   const system = `You are a framework editor. Two measures in this framework are near-duplicates — they give the same verdict to most companies. REWRITE the substantive_definition of the TARGET measure so it tests a DISTINCT, named, quote-verifiable artefact that the OTHER measure does not, so the two measures stop overlapping.
 
 Framework context:
@@ -309,7 +332,10 @@ CRITICAL RULES:
 1. Keep the TARGET within the framework's topic scope; sharpen it onto an artefact the OTHER measure does not already cover.
 2. Keep criteria countable and decidable from a single verbatim quote (no degree words).
 3. Do not modify the OTHER measure. Keep the definition under 600 characters.
-4. Output MUST be valid JSON: { "substantive_definition": "<revised target definition>" }`;
+
+${STRUCTURED_GUIDANCE_REGEN_INSTRUCTION}
+
+4. Output MUST be valid JSON: { "substantive_definition": "<revised target definition>", ${STRUCTURED_GUIDANCE_SCHEMA_FRAGMENT} }`;
 
   const prompt = `TARGET measure ${target.measureId} (${target.title || "untitled"}):\n  substantive_definition: ${JSON.stringify(target.substantive_definition)}\n\nOTHER measure ${other.measureId} (${other.title || "untitled"}):\n  substantive_definition: ${JSON.stringify(other.substantive_definition)}\n\nReturn JSON only.`;
 
@@ -321,7 +347,8 @@ CRITICAL RULES:
   });
   const parsed = safeParseJSON(text);
   const value = parsed && typeof parsed.substantive_definition === "string" ? parsed.substantive_definition.trim() : null;
-  return { value, raw: text, provider };
+  const scoringGuidance = normaliseStructuredGuidance(parsed?.scoring_guidance) ?? undefined;
+  return { value, scoringGuidance, raw: text, provider };
 }
 
 // ─── Framework-level candidate generation (design-time mining) ─────────────
@@ -461,9 +488,15 @@ export async function regenerateMeasureField(
   instruction: string,
   ctx: FrameworkContext,
   providerName?: string,
-): Promise<{ value: any; raw: string; provider: string }> {
+): Promise<{ value: any; scoringGuidance?: Partial<StructuredGuidance>; raw: string; provider: string }> {
   const isArrayField = field === "positive_examples" || field === "negative_examples";
   const isNumberField = field === "expected_yes_rate" || field === "min_quote_context_chars";
+  // Only when the deciding criteria (substantive_definition) are rewritten do we
+  // also re-author the structured scoring_guidance in the SAME call — no extra
+  // round-trip. Other fields (examples, rates) leave scoring_guidance untouched.
+  const authorGuidance = field === "substantive_definition";
+  const guidanceInstruction = authorGuidance ? `\n\n${STRUCTURED_GUIDANCE_REGEN_INSTRUCTION}` : "";
+  const guidanceSchema = authorGuidance ? `, ${STRUCTURED_GUIDANCE_SCHEMA_FRAGMENT}` : "";
   const valueShape = isArrayField
     ? `an array of 2-4 strings (each 100-500 chars, echoing real disclosure language)`
     : isNumberField
@@ -484,8 +517,8 @@ Framework context: topic = ${ctx.topicTerm}${ctx.adjacentTopics && ctx.adjacentT
 
 RULES:
 1. Honour the user's instruction precisely; keep the measure decidable from a verbatim quote (avoid degree words for deciding criteria).
-2. The value for "${field}" must be ${valueShape}.
-3. Output MUST be valid JSON in exactly this schema, with no prose outside it: { "value": <new value for ${field}> }`;
+2. The value for "${field}" must be ${valueShape}.${guidanceInstruction}
+3. Output MUST be valid JSON in exactly this schema, with no prose outside it: { "value": <new value for ${field}>${guidanceSchema} }`;
 
   const prompt = `Measure ${measure.measureId} (${measure.title || "untitled"}).
 Field to edit: ${field}
@@ -518,7 +551,8 @@ Return JSON only.`;
     value = typeof value === "string" ? value.trim() : (value == null ? null : String(value).trim());
     if (value === "") value = null;
   }
-  return { value, raw: text, provider };
+  const scoringGuidance = authorGuidance ? (normaliseStructuredGuidance(parsed?.scoring_guidance) ?? undefined) : undefined;
+  return { value, scoringGuidance, raw: text, provider };
 }
 
 // Robust JSON parse that strips code fences and trailing junk.

@@ -9,6 +9,8 @@
  *   - stop asking once the user says to proceed with best-guess drafts
  */
 
+import { STRUCTURED_GUIDANCE_AUTHORING_BLOCK } from "./structured-guidance.js";
+
 export const INTAKE_SYSTEM_PROMPT = `You are the intake facilitator for CompanyIQ v3's framework builder. Your job is to converse with the user to gather all information needed to draft a framework that satisfies construction rules C1–C11 (see below). You proceed to drafting only when the intake robustness gate is satisfied OR the user explicitly asks you to proceed with warnings.
 
 # Governing principles
@@ -197,18 +199,7 @@ The following clauses MUST appear in every measure's substantive_definition and 
 
    > "When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context."
 
-3b. RUBRIC-TIGHTENING STRUCTURED GUIDANCE (append to EVERY measure's scoringGuidance). After the prose scoringGuidance above, append a fenced code block containing a JSON object with these four PER-MEASURE fields, derived from THIS measure's own definition (never a generic template):
-
-   \`\`\`json
-   {
-     "qualifyingInstance": "Positive definition of what SPECIFICALLY counts as satisfying THIS measure — a named programme/policy/system, a quantified commitment, or a dated milestone, phrased for this measure's exact requirement.",
-     "disqualifiers": ["Generic or boilerplate mention of the topic with no specific instance", "Aspirational or forward-looking intent without a named, in-place instance", "The topic named in passing without the specific qualifying instance this measure requires"],
-     "anchors": { "yes": "ONE short worked example that clearly SATISFIES this measure (say why).", "no": "ONE short worked example that superficially looks relevant but FAILS (say why)." },
-     "yesRequiresQuote": "A Yes is permissible only when a verbatim quote from the evidence contains the qualifyingInstance above."
-   }
-   \`\`\`
-
-   Rules for this block: "anchors" has EXACTLY ONE "yes" and EXACTLY ONE "no" — NEVER author a Partial anchor. All four fields are mandatory and specific to this measure. The prose scoringGuidance (including the canonical quote-context sentence) still comes first; this fenced JSON block is appended as its final content. The scorer parses this block generically; it is stored inside scoring_guidance.
+3b. ${STRUCTURED_GUIDANCE_AUTHORING_BLOCK}
 
 4. whatDoesNotConstituteEvidence MUST include at least one of these substantive-rejection phrases (choose the one that fits): "aspirational statements without specific programmes"; "generic environmental language without <TOPIC>-specificity"; "third-party or industry initiatives without company action"; "management-level activities only without board or governance sign-off"; "adjacent-topic references without <TOPIC> attribution".
 
@@ -454,18 +445,7 @@ The following clauses MUST appear in every measure. Insert them VERBATIM, append
 
    > "When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context."
 
-3b. RUBRIC-TIGHTENING STRUCTURED GUIDANCE — append to EVERY measure's scoringGuidance, after the prose above, a fenced \`\`\`json block with four PER-MEASURE fields derived from THIS measure's definition (never a generic template):
-
-   \`\`\`json
-   {
-     "qualifyingInstance": "Positive definition of what SPECIFICALLY counts as satisfying THIS measure — a named programme/policy/system, a quantified commitment, or a dated milestone.",
-     "disqualifiers": ["Generic/boilerplate mention with no specific instance", "Aspirational or forward-looking intent without a named, in-place instance", "Topic named in passing without the required qualifying instance"],
-     "anchors": { "yes": "ONE worked example that clearly SATISFIES this measure (say why).", "no": "ONE worked example that superficially looks relevant but FAILS (say why)." },
-     "yesRequiresQuote": "A Yes is permissible only when a verbatim quote from the evidence contains the qualifyingInstance above."
-   }
-   \`\`\`
-
-   "anchors" has EXACTLY ONE "yes" and ONE "no" — NEVER a Partial anchor. All four fields mandatory and measure-specific. The prose scoringGuidance (with the canonical quote-context sentence) comes first; this JSON block is appended last.
+3b. ${STRUCTURED_GUIDANCE_AUTHORING_BLOCK}
 
 4. Every whatDoesNotConstituteEvidence MUST include at least one substantive-rejection phrase (choose one): "aspirational statements without specific programmes", "generic environmental language without topic-specificity", "third-party or industry initiatives without company action", "management-level activities only without board or governance sign-off", or "adjacent-topic references without topic attribution".
 
