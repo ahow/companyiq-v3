@@ -2437,7 +2437,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
           FROM (
             SELECT jsonb_array_elements_text(COALESCE(${target.col}, '[]'::jsonb)) AS term
             UNION
-            SELECT unnest(${values}::text[]) AS term
+            SELECT jsonb_array_elements_text(${JSON.stringify(values)}::jsonb) AS term
           ) sub
         )
         WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
@@ -2748,7 +2748,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
               FROM (
                 SELECT jsonb_array_elements_text(COALESCE(topic_synonyms, '[]'::jsonb)) AS term
                 UNION
-                SELECT unnest(${newTerms}::text[]) AS term
+                SELECT jsonb_array_elements_text(${JSON.stringify(newTerms)}::jsonb) AS term
               ) sub
             )
             WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
