@@ -918,9 +918,11 @@ function isRegulatoryAnnualFilingDoc(url: string | undefined, title: string | un
   // (already recognised by "annual report" / "annual-report") carries the same
   // risk information more comprehensively.
   const looksAnnual =
-    /10-?k|20-?f|40-?f|annual.?report|年度报告|年度報告|年报|年報/.test(s) ||
-    // French URD: "universal-registration-document", "urd-", "documenturd"
-    /universal[-_\s]?registration[-_\s]?document|\burd[-_]\d|documenturd|urd_20\d{2}/.test(s) ||
+    /10-?k|20-?f|40-?f|annual.?report|年度报告|年度報告|年报|年報|informe.?anual|informe.?integrado/.test(s) ||
+    // French/European URD: "universal-registration-document", "urd-", "documenturd", "integrated-report"
+    /universal[-_\s]?registration[-_\s]?document|\burd[-_]\d|documenturd|urd_20\d{2}|integrated[-_\s]?report/.test(s) ||
+    // English variations: "annual-accounts", "annual-report-and-accounts"
+    /annual[-_\s]?account|annual[-_\s]?report[-_\s]?and[-_\s]?account/.test(s) ||
     // ASX / Australian annual filings ("asxpdf/YYYYMMDD/.../<accession>.pdf").
     /announcements\.asx\.com\.au\/asxpdf\//.test(s) ||
     // HK EX filings / HKEX news filings (annual-report-YYYY, ar-YYYY).
