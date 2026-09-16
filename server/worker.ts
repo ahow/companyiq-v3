@@ -38,6 +38,23 @@ const JOB_TIMEOUT = parseInt(process.env.JOB_TIMEOUT_MS || "600000", 10); // 10 
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 30000; // 30 seconds between retries
 
+// ── Stall-recovery tuning (decoupled from JOB_TIMEOUT) ──────────────────────
+// Previously lockDuration == stalledInterval == JOB_TIMEOUT (10 min), so a job
+// orphaned by a dead worker (e.g. an OOM kill) was not reclaimed for up to the
+// full 10-minute window. We instead use a SHORT lock that BullMQ auto-renews
+// every lockDuration/2 while the worker's event loop is alive, plus a short
+// stalled-check interval, so a genuinely dead worker's job is moved back to
+// 'wait' and reprocessed within ~1–2 min. Legitimately long jobs (up to
+// JOB_TIMEOUT) stay alive via lock auto-renewal; the real end-to-end cap is
+// enforced by the in-process Promise.race(JOB_TIMEOUT) watchdog around the
+// pipeline, which is independent of lockDuration. maxStalledCount bounds how
+// many times a repeatedly-stalling job is recovered before BullMQ fails it
+// (the DB-level claimJob attempt counter, capped at MAX_RETRY_ATTEMPTS, remains
+// the authoritative reprocessing limit).
+const WORKER_LOCK_DURATION_MS = parseInt(process.env.WORKER_LOCK_DURATION_MS || "60000", 10); // 60s
+const WORKER_STALLED_INTERVAL_MS = parseInt(process.env.WORKER_STALLED_INTERVAL_MS || "30000", 10); // 30s
+const WORKER_MAX_STALLED_COUNT = parseInt(process.env.WORKER_MAX_STALLED_COUNT || "2", 10);
+
 // Track cancelled batches
 const cancelledBatches = new Set<number>();
 // 42-F: Batch-scoped circuit-breaker state, keyed by batchId.
@@ -1231,8 +1248,14 @@ export function startWorker(workerId?: string): Worker {
     {
       connection: connection as any,
       concurrency: MAX_CONCURRENT,
-      lockDuration: JOB_TIMEOUT, // Must match queue lockDuration (10 min)
-      stalledInterval: JOB_TIMEOUT,
+      // Short lock (auto-renewed by BullMQ while the event loop is alive) + short
+      // stalled-check, so a job orphaned by a dead/OOM-killed worker is reclaimed
+      // within ~1–2 min instead of waiting the full JOB_TIMEOUT window. Long jobs
+      // stay alive via lock renewal; the pipeline's hard cap is the in-process
+      // Promise.race(JOB_TIMEOUT) watchdog, independent of lockDuration.
+      lockDuration: WORKER_LOCK_DURATION_MS,
+      stalledInterval: WORKER_STALLED_INTERVAL_MS,
+      maxStalledCount: WORKER_MAX_STALLED_COUNT,
     }
   );
 
@@ -1323,7 +1346,7 @@ export function startWorker(workerId?: string): Worker {
     return originalClose(...args);
   };
 
-  console.log("[Worker] Started with concurrency=" + MAX_CONCURRENT + ", timeout=" + JOB_TIMEOUT + "ms, maxRetries=" + MAX_RETRY_ATTEMPTS);
+  console.log("[Worker] Started with concurrency=" + MAX_CONCURRENT + ", timeout=" + JOB_TIMEOUT + "ms, maxRetries=" + MAX_RETRY_ATTEMPTS + ", lockDuration=" + WORKER_LOCK_DURATION_MS + "ms, stalledInterval=" + WORKER_STALLED_INTERVAL_MS + "ms, maxStalledCount=" + WORKER_MAX_STALLED_COUNT);
   return worker;
 }
 

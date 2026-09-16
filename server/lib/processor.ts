@@ -9,6 +9,7 @@ import { spawn } from "child_process";
 import { promises as fsp } from "fs";
 import os from "os";
 import path from "path";
+import { capDocumentText } from "./doc-size-guard";
 
 /**
  * Thrown when a document URL fails for a reason that will NOT resolve on retry
@@ -1707,8 +1708,9 @@ export async function processDocument(
     try {
       console.log(`[Processor] Force-headless fetch for pinned/known URL: ${url.slice(0, 80)}`);
       const isPdfUrl = url.toLowerCase().includes(".pdf");
-      const content = isPdfUrl ? await fetchPdfViaBrowser(url) : await fetchWithBrowser(url);
+      let content = isPdfUrl ? await fetchPdfViaBrowser(url) : await fetchWithBrowser(url);
       if (content && content.trim().length > 50) {
+        content = capDocumentText(content, url, "Processor");
         setCachedContent(url, content);
         return content;
       }
@@ -1736,8 +1738,9 @@ export async function processDocument(
         }
         console.log(`[Processor] Direct PDF fetch failed for ${url} (${pdfHttpError.message}) — trying WAF-aware browser-PDF fetch`);
         try {
-          const viaBrowser = await fetchPdfViaBrowser(url);
+          let viaBrowser = await fetchPdfViaBrowser(url);
           if (viaBrowser) {
+            viaBrowser = capDocumentText(viaBrowser, url, "Processor");
             setCachedContent(url, viaBrowser);
             return viaBrowser;
           }
@@ -1860,6 +1863,7 @@ export async function processDocument(
     }
 
     if (content) {
+      content = capDocumentText(content, url, "Processor");
       setCachedContent(url, content);
     }
 
@@ -1897,8 +1901,9 @@ export async function processDocument(
         // ~nothing for a PDF rendered in Chromium's viewer); otherwise scrape HTML.
         const isPdfUrl = url.toLowerCase().includes(".pdf");
         console.log(`[Processor] Final browser fallback for ${url}${isPdfUrl ? ' (browser-PDF)' : ''}`);
-        const browserContent = isPdfUrl ? await fetchPdfViaBrowser(url) : await fetchWithBrowser(url);
+        let browserContent = isPdfUrl ? await fetchPdfViaBrowser(url) : await fetchWithBrowser(url);
         if (browserContent) {
+          browserContent = capDocumentText(browserContent, url, "Processor");
           setCachedContent(url, browserContent);
           return browserContent;
         }

@@ -1024,16 +1024,15 @@ export async function fetchWithGzipFallback(url: string, fetchTimeoutMs = 8000):
 
     if (!resp.ok) return { ok: false, content: null, status: resp.status };
 
-    const buf = Buffer.from(await resp.arrayBuffer());
-    if (buf.length === 0) return { ok: false, content: null, status: resp.status };
-
-    // Detect raw gzip bytes: 1f 8b magic
-    if (buf[0] === 0x1f && buf[1] === 0x8b) {
-      const zlib = await import("node:zlib");
-      const inflated = zlib.gunzipSync(buf);
-      return { ok: true, content: inflated.toString("utf-8"), status: resp.status };
-    }
-    return { ok: true, content: buf.toString("utf-8"), status: resp.status };
+    // Stream the body and apply the MAX_DOC_BYTES cap DURING read/decompression.
+    // readBodyDecompressedCapped auto-detects raw gzip (1f 8b) and gunzips
+    // incrementally, stopping the instant the decompressed output reaches the
+    // cap — so an oversized ESEF filing (the ~104 MB OOM incident) is never
+    // fully materialised. Normal-sized documents are returned unchanged.
+    const { readBodyDecompressedCapped } = await import("./doc-size-guard.js");
+    const { content } = await readBodyDecompressedCapped(resp.body, url, undefined, "R7g");
+    if (!content) return { ok: false, content: null, status: resp.status };
+    return { ok: true, content, status: resp.status };
   } catch {
     clearTimeout(to);
     return { ok: false, content: null, status: 0 };
