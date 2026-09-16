@@ -340,6 +340,64 @@ export async function getFrameworkById(frameworkId: number, workspaceId: number)
     console.warn(`[getFrameworkById] evidenceKeywords back-fill failed for framework ${frameworkId}: ${kwErr?.message ?? kwErr}`);
   }
 
+  // Approach 2 (corpus-recall): normalise retrievalQueryTerms to a clean string[] on
+  // every read so summarizeDocuments can consume it unconditionally. Drizzle already
+  // maps the snake_case `retrieval_query_terms` column to camelCase; this guard only
+  // coerces null / legacy rows to [] and drops non-strings. Fully backward-compatible.
+  try {
+    const rqt = (framework as any).retrievalQueryTerms as unknown;
+    (framework as any).retrievalQueryTerms = Array.isArray(rqt)
+      ? rqt.filter((t): t is string => typeof t === "string" && t.trim().length > 0).map((t) => t.trim())
+      : [];
+  } catch {
+    (framework as any).retrievalQueryTerms = [];
+  }
+
+  // Approach 2 (corpus-recall) — lazy backfill for EXISTING frameworks. New
+  // frameworks get retrievalQueryTerms at creation (/v2/save); frameworks created
+  // before that path existed have an empty column. When the terms are absent AND
+  // the framework carries topic info (topicTerm / topicDescription / topicSynonyms),
+  // generate the curated, DF-validated corpus-SELECTION vocabulary ONCE, persist it
+  // to frameworks.retrieval_query_terms, and use it for the object returned here —
+  // so generation becomes automatic in the dashboard/scoring flow (not CLI-only)
+  // without an LLM call on every read. Mirrors the evidenceKeywords back-fill above.
+  // Non-fatal and backward-compatible: on any failure it degrades to [] (or the
+  // already-normalised value) and proceeds, and it NEVER regenerates once populated.
+  try {
+    const current = (framework as any).retrievalQueryTerms as string[];
+    const hasTopicInfo =
+      (typeof (framework as any).topicTerm === "string" && (framework as any).topicTerm.trim().length > 0) ||
+      (typeof (framework as any).topicDescription === "string" && (framework as any).topicDescription.trim().length > 0) ||
+      (Array.isArray((framework as any).topicSynonyms) && (framework as any).topicSynonyms.length > 0);
+    if ((!current || current.length === 0) && hasTopicInfo) {
+      const { completeWithFallback } = await import("./lib/ai-providers.js");
+      const { generateRetrievalQueryTerms } = await import("./lib/framework-v2/retrieval-query-terms.js");
+      const gen = await generateRetrievalQueryTerms(
+        {
+          topicTerm: (framework as any).topicTerm ?? null,
+          topicSynonyms: Array.isArray((framework as any).topicSynonyms) ? (framework as any).topicSynonyms : [],
+          topicDescription: (framework as any).topicDescription ?? null,
+          frameworkName: (framework as any).name ?? null,
+        },
+        completeWithFallback as any,
+      );
+      if (gen.terms.length > 0) {
+        // Persist once so subsequent reads skip generation.
+        await db
+          .update(schema.frameworks)
+          .set({ retrievalQueryTerms: gen.terms } as any)
+          .where(eq(schema.frameworks.id, frameworkId));
+        (framework as any).retrievalQueryTerms = gen.terms;
+        console.log(
+          `[getFrameworkById] retrievalQueryTerms back-filled for framework ${frameworkId}: ${gen.terms.length} kept, ${gen.validation.dropped.length} dropped (of ${gen.raw.length} candidates)`,
+        );
+      }
+    }
+  } catch (rqtErr: any) {
+    // Non-fatal: leave the already-normalised retrievalQueryTerms as-is.
+    console.warn(`[getFrameworkById] retrievalQueryTerms back-fill failed for framework ${frameworkId}: ${rqtErr?.message ?? rqtErr}`);
+  }
+
   return framework;
 }
 

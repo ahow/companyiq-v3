@@ -897,6 +897,11 @@ export async function initializeDatabase(): Promise<void> {
     // 41-C: Add withdrawal_patterns column
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS withdrawal_patterns JSONB DEFAULT '{"queries": [], "documentRegex": []}'::jsonb`);
 
+    // Approach 2 (corpus-recall): curated DF-validated corpus-selection query vocabulary.
+    // Additive/backward-compatible: default '[]' so existing rows and the analyzer behave
+    // unchanged when no curated terms have been generated yet.
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS retrieval_query_terms JSONB DEFAULT '[]'::jsonb`);
+
     // 41-C: Seed fw3 (climate) withdrawal patterns
     await db.execute(sql`
       UPDATE frameworks SET withdrawal_patterns = '{

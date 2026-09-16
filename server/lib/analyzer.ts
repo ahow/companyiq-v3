@@ -2,8 +2,12 @@ import * as storage from "../storage.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
 import { ProviderScoringError } from "./credit-breaker.js";
 import { classifyProviderError, type ProviderFailureClass } from "./provider-resilience.js";
-import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, applyChunkSanityGate, type EvidencePack, type Chunk, type ChunkSanityResult } from "./passage-retrieval.js";
+import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, applyChunkSanityGate, setShortTokenAllowlist, type EvidencePack, type Chunk, type ChunkSanityResult } from "./passage-retrieval.js";
 import type { IssuerProfile } from "./issuer-profile.js";
+// Approach 3: assembly-time boilerplate removal (generic, deterministic, no budget change).
+import { stripRepeatedStructuralBlocks, computeAssemblyPenaltyFactors, containsQuantifiedFigure } from "./corpus-boilerplate.js";
+// Approach 4: semantic candidate generation (embed + cosine rerank) at corpus assembly.
+import { isSemanticHybridEnabled, isEmbeddingConfigured, embedTextsCached, cosineSim, hybridRankScores } from "./corpus-semantic.js";
 // PR 1 · Change 4: auto re-retrieval on Low-confidence cells (behind autoReretrieval flag).
 import { runTargetedReretrieval, type RetrievalReviewQueue } from "./retrieval-review-queue.js";
 import type { Company, TrustedSource } from "../../shared/schema.js";
@@ -1066,7 +1070,35 @@ export async function summarizeDocuments(opts: {
   // reports prior). Reverted; see Instruction 33 (semantic embedding rerank) for
   // the durable replacement.
 
-  const allQueryTerms = [...new Set([...topicKeywords, ...derivedTerms, ...dataPatternTokens])];
+  // ─── Approach 2b/2c: curated corpus-selection discriminators ────────────────
+  // The framework's own DF-validated retrievalQueryTerms (generated at framework
+  // creation) are the discriminative vocabulary a relevant passage would contain.
+  // Historically they were injected ONLY into the scoring prompt, never into
+  // corpus selection, so the 560k budget was won by generic business/stop words
+  // dense in every filing. We now feed them into allQueryTerms, WEIGHTED above the
+  // free-text tokens: bm25Score() (and the density scan below) sum a term's
+  // contribution once per occurrence in the query array, so repeating each curated
+  // token CURATED_QUERY_TERM_WEIGHT times up-weights the framework's discriminators
+  // without dominating (prevents the iDEA-style regression). Fully generic and
+  // backward-compatible: when retrievalQueryTerms is empty, allQueryTerms is
+  // exactly the previous set.
+  const CURATED_QUERY_TERM_WEIGHT = 3; // framework-independent constant
+  const curatedRaw = ((framework as any).retrievalQueryTerms as string[] | null | undefined) || [];
+  // 2c: seed the short-token allowlist from the curated vocab BEFORE tokenizing so
+  // that short discriminators (e.g. "ai", "ml", "5g") survive tokenize()'s length
+  // filter in BOTH the query and the BM25 index built below.
+  setShortTokenAllowlist(curatedRaw);
+  const freeTextTerms = [...new Set([...topicKeywords, ...derivedTerms, ...dataPatternTokens])];
+  const freeTextSet = new Set(freeTextTerms);
+  // Tokenise the curated terms the same way documents are tokenised (so they match
+  // the BM25 index), dedup within the curated set, then repeat for weighting.
+  const curatedTokens = [...new Set(curatedRaw.flatMap((t) => tokenize(t)))];
+  const weightedCurated = curatedTokens.flatMap((t) =>
+    // A curated token that is ALSO a free-text token gets (WEIGHT - 1) extra copies
+    // (it already appears once via freeTextTerms); a purely-curated token gets WEIGHT.
+    Array(freeTextSet.has(t) ? CURATED_QUERY_TERM_WEIGHT - 1 : CURATED_QUERY_TERM_WEIGHT).fill(t),
+  );
+  const allQueryTerms = [...freeTextTerms, ...weightedCurated];
 
   // v3g-fix: TYPE-AWARE document prioritisation. The previous pure keyword-density
   // ranking let a long, AI-keyword-dense ESG/sustainability PDF (e.g. Apple's
@@ -1266,6 +1298,21 @@ export async function summarizeDocuments(opts: {
   // with BM25 and rebuild a corpus that RE-EMITS the document header (with URL)
   // whenever the source document changes — preserving provenance AND verbatim text.
   // The document-aware chunker carries docUrl/docTitle on every chunk.
+  //
+  // ─── Approach 3c: strip exact repeated structural boilerplate blocks ─────────
+  // Before chunking, drop short header/footer/legend lines that recur identically
+  // across many DISTINCT documents (repeated disclaimers, page furniture, legends).
+  // This reclaims budget deterministically without touching scoring. Fully generic
+  // and SAFE: provenance headers, lines with a quantified figure, longer prose, and
+  // lines containing a curated discriminator are never stripped. Only runs on the
+  // large-corpus path (this branch), where the budget competition actually bites.
+  {
+    const strip = stripRepeatedStructuralBlocks(combined, { protectTerms: curatedTokens });
+    if (strip.strippedLines > 0) {
+      console.log(`[${companyName}] Approach 3c: stripped ${strip.strippedLines} repeated structural line(s) across ${strip.patterns} pattern(s)`);
+      combined = strip.text;
+    }
+  }
   let docChunks = chunkDocuments(combined);
   let chunkSanityDiagnostics: ChunkSanityResult | null = null;
 
@@ -1293,12 +1340,91 @@ export async function summarizeDocuments(opts: {
 
   const bm25Index = buildBM25Index(docChunks.map((c) => c.text));
 
+  // ─── Approach 3a+3b: gentle assembly penalties before budget selection ───────
+  // (3a) down-weight chunks whose k=8 word-shingle fingerprint recurs across many
+  // DISTINCT documents (near-duplicate boilerplate repeated in every filing), and
+  // (3b) demote chunks dominated by terms with very high document-frequency WITHIN
+  // THIS company's own corpus. Both are GENTLE multiplicative factors in (0,1]
+  // applied to the BM25 score BEFORE the 560k selection, so near-unique
+  // discriminative passages win budget they currently lose to boilerplate. SAFE:
+  // a chunk carrying a quantified figure, a curated discriminator, or a framework
+  // dataPattern match is PROTECTED (factor 1) and can never be evicted by this.
+  // Budget, chunk boundaries, and downstream gating are unchanged.
+  const penaltyFactors = computeAssemblyPenaltyFactors(docChunks, {
+    protectTerms: curatedTokens,
+    protectRegexes: dataPatternRegexes,
+  });
+
   const scoredChunks = docChunks.map((chunk, idx) => ({
     idx,
-    score: bm25Score(allQueryTerms, idx, bm25Index),
+    score: bm25Score(allQueryTerms, idx, bm25Index) * (penaltyFactors[idx] ?? 1),
+    rank: 0,
     chunk,
   }));
-  scoredChunks.sort((a, b) => b.score - a.score);
+  // Default rank = BM25 (Approach 2/3) score, so the disabled/degraded path is
+  // byte-for-byte the existing behavior (the sort below is then equivalent to the
+  // prior `b.score - a.score`, with an explicit idx tiebreak that preserves the
+  // original stable ordering).
+  for (const sc of scoredChunks) sc.rank = sc.score;
+
+  // ─── Approach 4: semantic hybrid rerank (OPT-IN, graceful degrade) ─────────
+  // Augments — never replaces — the BM25 (Approach 2/3) ranking above. Behind
+  // RETRIEVAL_HYBRID_SEMANTIC=1 and only when an embeddings key is configured.
+  // Reuses the app's existing OpenAI-compatible provider config. Single embedding
+  // pass; deterministic (on-disk cache keyed by chunk-text hash). If embeddings
+  // are unavailable or error, ranks stay = BM25 so scoring never breaks. Does NOT
+  // change scoredChunks[].score (downstream reserves read .score as a BM25
+  // tiebreak), the budget, chunk boundaries, or any downstream evidence-gating.
+  if (isSemanticHybridEnabled() && isEmbeddingConfigured() && docChunks.length > 0) {
+    try {
+      // Bounded, single-pass candidate set: embed only the top-BM25 chunks (the
+      // ones that can realistically win budget on huge filers); the remainder
+      // keep cosine=null and fall back to their BM25 rank.
+      const MAX_EMBED_CHUNKS = Math.max(1, parseInt(process.env.RETRIEVAL_EMBED_MAX_CHUNKS || "6000", 10));
+      const byBm25 = [...scoredChunks].sort((a, b) => (b.score - a.score) || (a.idx - b.idx));
+      const embedPick = byBm25.slice(0, MAX_EMBED_CHUNKS);
+
+      // Query vector text = topic description + curated discriminators + measure
+      // vocabulary (all framework-independent inputs already computed above).
+      const queryVectorText = [topicDescription, ...curatedRaw, ...dataPatternTokens]
+        .filter(Boolean)
+        .join(" \n ")
+        .slice(0, 8000);
+
+      const chunkTexts = embedPick.map((sc) => sc.chunk.text);
+      const vecs = await embedTextsCached([queryVectorText, ...chunkTexts]);
+      const queryVec = vecs[0];
+
+      if (queryVec) {
+        const cosineByIdx = new Map<number, number | null>();
+        for (let i = 0; i < embedPick.length; i++) {
+          cosineByIdx.set(embedPick[i].idx, cosineSim(queryVec, vecs[i + 1]));
+        }
+
+        // FLOOR (guardrail 4c): any chunk carrying a curated discriminator token
+        // OR a quantified figure is retained regardless of cosine.
+        const curatedFloorRe = curatedTokens.length
+          ? new RegExp("\\b(?:" + curatedTokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\b", "i")
+          : null;
+        const bm25Arr = scoredChunks.map((sc) => sc.score);
+        const cosineArr = scoredChunks.map((sc) => (cosineByIdx.has(sc.idx) ? cosineByIdx.get(sc.idx)! : null));
+        const floorArr = scoredChunks.map((sc) => {
+          const text = sc.chunk.text;
+          return containsQuantifiedFigure(text) || (curatedFloorRe ? curatedFloorRe.test(text) : false);
+        });
+        const hybrid = hybridRankScores({ bm25: bm25Arr, cosine: cosineArr, floor: floorArr });
+        for (let i = 0; i < scoredChunks.length; i++) scoredChunks[i].rank = hybrid[i];
+        const embedded = [...cosineByIdx.values()].filter((v) => v !== null).length;
+        console.log(`[${companyName}] Approach 4: hybrid semantic rerank applied (embedded ${embedded}/${embedPick.length} candidate chunks, floor=${floorArr.filter(Boolean).length}/${scoredChunks.length})`);
+      } else {
+        console.log(`[${companyName}] Approach 4: embeddings unavailable; using BM25 (Approach 2/3) ranking`);
+      }
+    } catch (e) {
+      console.warn(`[${companyName}] Approach 4: hybrid rerank skipped (${(e as Error).message}); using BM25 ranking`);
+    }
+  }
+
+  scoredChunks.sort((a, b) => (b.rank - a.rank) || (a.idx - b.idx));
 
   // v3g-fix: this is the CANDIDATE POOL for the downstream per-measure BM25 packs
   // (buildEvidencePacksForCategory), NOT the text sent to the grader. The grader
@@ -1608,7 +1734,10 @@ export async function summarizeDocuments(opts: {
   }
 
   for (const sc of scoredChunks) {
-    if (sc.score <= 0) continue;
+    // Degraded/disabled path: rank == score, so this is identical to the prior
+    // `sc.score <= 0` gate. Hybrid path: rank is a positive RRF value, so all
+    // chunks are admitted in hybrid order up to the (unchanged) budget.
+    if (sc.rank <= 0) continue;
     if (budget + sc.chunk.text.length > MAX_RETRIEVAL_INPUT) break;
     if (selectedSet.has(sc.idx)) continue;
     selectedSet.add(sc.idx);

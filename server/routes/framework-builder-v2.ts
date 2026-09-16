@@ -1031,6 +1031,33 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       });
     }
 
+    // ─── Approach 2a: generate + DF-validate the corpus-selection query vocab ──
+    // Runs automatically at framework creation (server-side, no CLI). The cleaned
+    // set is persisted to retrievalQueryTerms and later fed (weighted) into
+    // summarizeDocuments' corpus selection. Non-fatal: any failure degrades to []
+    // so creation proceeds exactly as before (backward-compatible).
+    let retrievalQueryTerms: string[] = [];
+    try {
+      const { completeWithFallback } = await import("../lib/ai-providers.js");
+      const { generateRetrievalQueryTerms } = await import("../lib/framework-v2/retrieval-query-terms.js");
+      const gen = await generateRetrievalQueryTerms(
+        {
+          topicTerm: fwDraft.topicTerm,
+          topicSynonyms: fwDraft.topicSynonyms || [],
+          topicDescription: draft.framework.topicDescription || intake.topic || "",
+          frameworkName: fwDraft.name,
+        },
+        completeWithFallback as any,
+      );
+      retrievalQueryTerms = gen.terms;
+      console.log(
+        `[v2/save] retrievalQueryTerms generated: ${gen.terms.length} kept, ${gen.validation.dropped.length} dropped (of ${gen.raw.length} candidates)`,
+      );
+    } catch (e: any) {
+      console.warn(`[v2/save] retrievalQueryTerms generation failed (non-fatal): ${e?.message ?? e}`);
+      retrievalQueryTerms = [];
+    }
+
     // Create framework row
     const created = await storage.createFramework({
       workspaceId: ctx.workspaceId,
@@ -1042,6 +1069,7 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       builderVersion: "v2",
       topicTerm: fwDraft.topicTerm,
       topicSynonyms: fwDraft.topicSynonyms || null,
+      retrievalQueryTerms,
       adjacentTopics: (fwDraft.adjacentTopics as any) || null,
       anchorFrameworks: (fwDraft.anchorFrameworks as any) || null,
       sensitivityPreference: fwDraft.sensitivityPreference || "balanced",

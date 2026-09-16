@@ -145,6 +145,14 @@ export const frameworks = pgTable("frameworks", {
   builderVersion: text("builder_version").notNull().default("v1"),
   topicTerm: text("topic_term"),
   topicSynonyms: jsonb("topic_synonyms").$type<string[]>(),
+  // Approach 2 (corpus-recall): curated, DF-validated corpus-SELECTION query vocabulary.
+  // Distinct from topicSynonyms (which is prompt-only): these 15-30 topic discriminators
+  // (product/technique/artefact terms) are generated at framework creation, validated
+  // against a reference DF gate, and fed — WEIGHTED above free-text tokens — into
+  // summarizeDocuments' allQueryTerms so the corpus is selected by the framework's own
+  // discriminative vocabulary rather than generic business/stop words. Additive/nullable;
+  // defaults to [] so existing frameworks and the analyzer behave unchanged when absent.
+  retrievalQueryTerms: jsonb("retrieval_query_terms").$type<string[]>().default([]),
   adjacentTopics: jsonb("adjacent_topics").$type<Array<{
     name: string;
     example_phrases?: string[];

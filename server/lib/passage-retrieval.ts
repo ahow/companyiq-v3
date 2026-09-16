@@ -34,6 +34,45 @@ const CJK_RUN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud
  * fallback for 1-char runs). Character n-grams are the standard, language-model-free
  * way to make BM25 work on unsegmented CJK text and restore query/document overlap.
  */
+// ─── Approach 2c: short-token allowlist ──────────────────────────────────────
+//
+// tokenize() drops tokens of length <= 2, which silently discards high-signal
+// short discriminators like "ai", "ml", "5g". Rather than lowering the global
+// length filter (which would readmit generic noise across every framework), we
+// keep a framework-scoped allowlist of SHORT tokens the framework itself declared
+// as meaningful (derived from its curated retrievalQueryTerms). Only allowlisted
+// short tokens survive; everything else is filtered exactly as before.
+//
+// The allowlist is a module-level set consulted by tokenize() so that BOTH the
+// BM25 index build (buildBM25Index) and the query tokenization stay consistent
+// within one summarizeDocuments run. It is REPLACED at the start of each run via
+// setShortTokenAllowlist(); it is additive-only (it can only PRESERVE extra short
+// tokens, never drop a token that was previously kept), so it is backward-
+// compatible and safe if a run forgets to set it (defaults to empty).
+let SHORT_TOKEN_ALLOWLIST: Set<string> = new Set();
+
+/** Replace the framework-scoped short-token allowlist consulted by tokenize().
+ * Terms are lowercased/trimmed; only tokens of length 1-2 are retained (longer
+ * tokens already survive tokenize()'s length filter). Pass [] to clear. */
+export function setShortTokenAllowlist(terms: string[] | null | undefined): void {
+  const next = new Set<string>();
+  for (const t of terms || []) {
+    if (typeof t !== "string") continue;
+    // Split each declared term the same way tokenize() would, then keep the
+    // short sub-tokens (length 1-2) — e.g. "Gen AI" contributes "ai".
+    const parts = t.toLowerCase().replace(CJK_RUN, " ").replace(/[^\w\s]/g, " ").split(/\s+/);
+    for (const p of parts) {
+      if (p.length >= 1 && p.length <= 2) next.add(p);
+    }
+  }
+  SHORT_TOKEN_ALLOWLIST = next;
+}
+
+/** Read-only view of the current short-token allowlist (for tests/diagnostics). */
+export function getShortTokenAllowlist(): string[] {
+  return Array.from(SHORT_TOKEN_ALLOWLIST);
+}
+
 export function tokenize(text: string): string[] {
   const lower = text.toLowerCase();
   // ASCII / Latin word tokens: replace CJK with spaces first so they don't glue
@@ -42,7 +81,7 @@ export function tokenize(text: string): string[] {
     .replace(CJK_RUN, " ")
     .replace(/[^\w\s]/g, " ")
     .split(/\s+/)
-    .filter((t) => t.length > 2);
+    .filter((t) => t.length > 2 || SHORT_TOKEN_ALLOWLIST.has(t));
 
   // CJK character-bigram tokens.
   const cjkTokens: string[] = [];
