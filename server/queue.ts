@@ -67,20 +67,32 @@ export async function addBatchJobs(
 }
 
 /**
- * Remove all not-yet-running jobs for a batch (for cancellation).
+ * Remove all jobs for a batch (for cancellation AND for clean re-enqueue).
  *
  * Previously this only removed `waiting` jobs, which let two categories of jobs
  * survive a cancel and keep advancing the "done" counter for minutes:
  *   - `delayed` jobs: retries scheduled with exponential backoff
  *   - `prioritized` jobs: re-enqueued retries added with a priority
- * We now sweep waiting + delayed + prioritized. Active (already-running) jobs
- * can't be force-removed safely, but they observe the Redis cancel flag via the
- * worker's cancelCheck and abort at their next checkpoint.
+ * We now sweep waiting + delayed + prioritized + paused.
+ *
+ * It ALSO sweeps terminal `completed` and `failed` records. addBatchJobs assigns
+ * a DETERMINISTIC jobId (`batch-<batchId>-company-<companyId>`) for idempotency
+ * during a single active enqueue, but the queue retains completed/failed records
+ * (defaultJobOptions removeOnComplete/removeOnFail keep the last N). BullMQ
+ * refuses to add a job whose id already exists in ANY state, so after a batch's
+ * first run those retained terminal records silently deduped/rejected the
+ * re-examine re-add — the app logged "Added N jobs" but the queue stayed empty
+ * and nothing was picked up. Clearing terminal records here lets the subsequent
+ * addBatchJobs re-add with the same deterministic id succeed. Active
+ * (already-running) jobs can't be force-removed safely, but they observe the
+ * Redis cancel flag via the worker's cancelCheck and abort at their next
+ * checkpoint.
  */
 export async function removeBatchJobs(batchId: number): Promise<number> {
   const q = getQueue();
-  // getJobs across all non-active, not-yet-started states.
-  const jobs = await q.getJobs(["waiting", "delayed", "prioritized", "paused"]);
+  // Sweep non-active queued states AND terminal (completed/failed) records so a
+  // re-enqueue with the deterministic jobId is not deduped by a retained record.
+  const jobs = await q.getJobs(["waiting", "delayed", "prioritized", "paused", "completed", "failed"]);
   let removed = 0;
 
   for (const job of jobs) {
@@ -95,7 +107,7 @@ export async function removeBatchJobs(batchId: number): Promise<number> {
     }
   }
 
-  console.log(`[Queue] Removed ${removed} pending/delayed jobs for batch ${batchId}`);
+  console.log(`[Queue] Removed ${removed} pending/delayed/terminal jobs for batch ${batchId}`);
   return removed;
 }
 
