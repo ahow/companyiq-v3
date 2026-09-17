@@ -16,6 +16,7 @@ import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash } from "./processor.js";
 import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
+import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./corpus-hygiene.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
@@ -1800,6 +1801,10 @@ export async function analyzeCompanyMeasures(opts: {
   documentTexts: string[];
   documentUrls: string[];
   documentTitles?: string[];
+  // Opt2 corpus hygiene: optional DB document ids, positionally aligned with
+  // documentTexts/Urls/Titles. Threaded from callers so dropped near-duplicate /
+  // stale documents can be logged by id (falls back to url when absent).
+  documentIds?: number[];
   framework: Framework;
   measures: FrameworkMeasure[];
   temporalContext?: { withdrawals: Array<{ type: string; description: string; affectedTopics: string[]; detectedDate: string | null; confidence: string }>; temporalWarning: string | null };
@@ -1828,12 +1833,51 @@ export async function analyzeCompanyMeasures(opts: {
   // of flags.
   skipFetch?: boolean;
 }): Promise<AnalysisResult> {
-  const { workspaceId, companyName, companyId, documentTexts, documentUrls, documentTitles, framework, measures, temporalContext, freshScoring, issuerProfile, reviewQueue, company, trustedSources, skipFetch } = opts;
+  const { workspaceId, companyName, companyId, documentIds, framework, measures, temporalContext, freshScoring, issuerProfile, reviewQueue, company, trustedSources, skipFetch } = opts;
+  // Opt2 hygiene may reassign these three, so bind them mutably (positionally aligned).
+  let { documentTexts, documentUrls, documentTitles } = opts;
 
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
 
   console.log(`[${companyName}] Starting analysis: ${measures.length} measures, ${documentTexts.length} documents`);
+
+  // ─── Opt2: Corpus hygiene (near-duplicate dedup + recency filter) ───────────
+  // Generic, jurisdiction-agnostic cleanup of the loaded corpus BEFORE chunking,
+  // translation, terminology, summarization and pack assembly consume it. Removes
+  // near-duplicate copies (e.g. the same ESEF/iXBRL year-package under several
+  // URLs) and stale versions of the same versioned report, keeping the newest.
+  // Corpus-input only: does NOT touch scoring, the rubric, provenance filtering
+  // or the DB. Conservative by design (never drops the single most-recent primary
+  // of a type). Default ON; disable with CORPUS_HYGIENE="false".
+  if (isCorpusHygieneEnabled()) {
+    const beforeCount = documentTexts.length;
+    const inputDocs: HygieneDoc[] = documentTexts.map((text, i) => ({
+      id: documentIds?.[i],
+      url: documentUrls[i] || "",
+      title: documentTitles?.[i] || documentUrls[i] || "",
+      text: text || "",
+    }));
+    const { kept, dropped } = applyCorpusHygiene(inputDocs);
+    if (dropped.length > 0) {
+      for (const d of dropped) {
+        console.log(
+          `[${companyName}] corpus-hygiene dropped id=${d.id ?? "n/a"} url=${d.url} reason=${d.reason}`
+        );
+      }
+      documentTexts = kept.map((d) => d.text);
+      documentUrls = kept.map((d) => d.url);
+      documentTitles = kept.map((d) => d.title);
+      const nearDup = dropped.filter((d) => d.reason === "near-duplicate").length;
+      const stale = dropped.filter((d) => d.reason === "stale-version").length;
+      console.log(
+        `[${companyName}] corpus-hygiene: ${beforeCount} -> ${documentTexts.length} documents ` +
+        `(dropped ${dropped.length}: ${nearDup} near-duplicate, ${stale} stale-version)`
+      );
+    } else {
+      console.log(`[${companyName}] corpus-hygiene: no documents dropped (${beforeCount} documents)`);
+    }
+  }
 
   // v3e (Section 3): determine which broad SOURCE TYPES the corpus actually
   // contains (topic-agnostic). Measures that declare requiredSourceTypes none of

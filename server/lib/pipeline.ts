@@ -1953,6 +1953,9 @@ async function runAnalyzePhase(opts: {
   const documentTexts: string[] = [];
   const documentUrls: string[] = [];
   const documentTitles: string[] = [];
+  // Opt2 corpus hygiene: DB document ids kept positionally aligned with the three
+  // arrays above so dropped near-duplicate / stale docs can be logged by id.
+  const documentIds: number[] = [];
   let excludedThirdPartyCount = 0;
   let upgradedToIssuerCount = 0;
   // Fix 1a: set true when the U17 provenance filter excludes every document but
@@ -2015,6 +2018,7 @@ async function runAnalyzePhase(opts: {
     documentTexts.push(doc.content);
     documentUrls.push(doc.url);
     documentTitles.push(doc.title || doc.url);
+    documentIds.push(doc.id);
   }
   if (excludedThirdPartyCount > 0 || upgradedToIssuerCount > 0) {
     console.log(
@@ -2040,6 +2044,7 @@ async function runAnalyzePhase(opts: {
       documentTexts.push(doc.content);
       documentUrls.push(doc.url);
       documentTitles.push(doc.title || doc.url);
+      documentIds.push(doc.id);
     }
     // Raise a domain proposal so an admin can confirm the correct domain.
     try {
@@ -2115,6 +2120,7 @@ async function runAnalyzePhase(opts: {
     documentTexts,
     documentUrls,
     documentTitles,
+    documentIds,
     framework,
     measures,
     temporalContext,

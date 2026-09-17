@@ -2292,6 +2292,8 @@ apiRouter.post("/diagnostic/analyze-subset", async (req: Request, res: Response)
     const documentTexts = filtered.map((d) => d.content as string);
     const documentUrls = filtered.map((d) => d.url as string);
     const documentTitles = filtered.map((d) => d.title as string);
+    // Opt2 corpus hygiene: pass DB ids so dropped near-duplicate / stale docs log by id.
+    const documentIds = filtered.map((d) => d.id as number);
     const totalChars = documentTexts.reduce((s, t) => s + t.length, 0);
 
     const analysis = await analyzeCompanyMeasures({
@@ -2301,6 +2303,7 @@ apiRouter.post("/diagnostic/analyze-subset", async (req: Request, res: Response)
       documentTexts,
       documentUrls,
       documentTitles,
+      documentIds,
       framework: framework as any,
       measures: measures as any,
       freshScoring: true,
