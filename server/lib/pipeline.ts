@@ -2746,8 +2746,13 @@ async function runAnalyzePhase(opts: {
   // the mass-zero as substantive. Framework-agnostic and generic.
   try {
     const MASS_FAILURE_THRESHOLD = parseFloat(process.env.MASS_SCORING_FAILURE_THRESHOLD || "0.5");
-    const failuresInAnswered = allMeasureResults.filter((r: any) => r._scoringFailure && !r.abstained).length;
-    const answeredForRatio = allMeasureResults.filter((r: any) => !r.abstained).length;
+    // Scoring failures are now abstained (excluded from totals) after their bounded
+    // retries, so this detector must count them REGARDLESS of the abstained flag —
+    // otherwise abstaining a crash cell would silently hide it from the mass-failure
+    // safety net. Ratio = failures / (genuinely-answered + failures), i.e. the same
+    // denominator as before crash cells were abstained.
+    const failuresInAnswered = allMeasureResults.filter((r: any) => r._scoringFailure).length;
+    const answeredForRatio = allMeasureResults.filter((r: any) => !r.abstained || r._scoringFailure).length;
     const failureRatio = answeredForRatio > 0 ? failuresInAnswered / answeredForRatio : 0;
     if (failureRatio > MASS_FAILURE_THRESHOLD) {
       console.error(`[${companyName}] MASS SCORING FAILURE: ${failuresInAnswered}/${answeredForRatio} measures failed (ratio ${(failureRatio*100).toFixed(0)}%) — marking analysisStatus=scoring_failure`);

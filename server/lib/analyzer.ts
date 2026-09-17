@@ -86,7 +86,7 @@ export interface MeasureResult {
   confidence: string;
   evidenceSummary: string;
   quotes: Array<{ text: string; source: string; sourceUrl?: string; page?: number }>;
-  verdict: "Yes" | "No" | "Partial" | "Insufficient evidence";
+  verdict: "Yes" | "No" | "Partial" | "Insufficient evidence" | "Scoring error";
   verdictNuance: string | null;
   displayOrder: number;
   // v3e (Section 3): true when the measure was abstained because a required
@@ -2890,15 +2890,26 @@ async function scoreSingleMeasure(opts: {
     if ((r as any)._gradedBy) gradedBy.add((r as any)._gradedBy);
   }
 
+  // Content-crash passes (abstained "Scoring error" from scoreSingleMeasurePass
+  // after its bounded retries) are NOT substantive votes: exclude them from the
+  // majority tally so a transient model/network crash can never tip or override a
+  // genuine verdict. If EVERY pass crashed, propagate the abstained sentinel so
+  // the cell is EXCLUDED from totals (fail-loud), never folded into a fake "No".
+  const substantivePasses = passResults.filter((r) => !(r as any)._scoringFailure);
+  if (substantivePasses.length === 0) {
+    console.error(`[${companyName}] All ${passes} scoring passes crashed for ${measure.measureId} — abstaining (excluded from totals), NOT emitting a substantive zero`);
+    return passResults[0];
+  }
+
   // Majority verdict by score bucket (0 / 0.5 / 1). Ties resolve toward the
   // HIGHER-evidence pass that has quotes, never inflating beyond what a pass found.
   const tally = new Map<number, MeasureResult[]>();
-  for (const r of passResults) {
+  for (const r of substantivePasses) {
     const bucket = r.score;
     if (!tally.has(bucket)) tally.set(bucket, []);
     tally.get(bucket)!.push(r);
   }
-  let winningBucket = passResults[0].score;
+  let winningBucket = substantivePasses[0].score;
   let winningCount = 0;
   for (const [bucket, rs] of tally) {
     if (rs.length > winningCount || (rs.length === winningCount && bucket > winningBucket)) {
@@ -2918,11 +2929,14 @@ async function scoreSingleMeasure(opts: {
     return (a.evidenceSummary || "").localeCompare(b.evidenceSummary || "");
   });
   const chosen = winners[0];
-  const unanimous = winningCount === passes;
+  // Self-consistency is measured over the SUBSTANTIVE passes only (crashed passes
+  // were excluded above), so the confidence denominator reflects real votes.
+  const substantiveCount = substantivePasses.length;
+  const unanimous = winningCount === substantiveCount;
   const gradedByLabel = Array.from(gradedBy).join("+") || "unknown";
-  chosen.confidence = unanimous ? "High" : winningCount >= Math.ceil(passes / 2) ? "Medium" : "Low";
+  chosen.confidence = unanimous ? "High" : winningCount >= Math.ceil(substantiveCount / 2) ? "Medium" : "Low";
   chosen.verdictNuance = (chosen.verdictNuance ? chosen.verdictNuance + " " : "") +
-    `[Self-consistency ${winningCount}/${passes} on ${gradedByLabel}]`;
+    `[Self-consistency ${winningCount}/${substantiveCount} on ${gradedByLabel}]`;
   // Propagate model identity for methodology stamping
   (chosen as any)._gradedBy = gradedByLabel;
 
@@ -2952,6 +2966,9 @@ async function scoreSingleMeasurePass(opts: {
   temporalWarning?: string | null;
   scoringMode?: string;
   framework?: Framework;
+  // Bounded content-crash retry budget, threaded through recursive re-attempts.
+  // Undefined on the first call → seeded from SCORING_CONTENT_RETRIES (default 2).
+  _contentRetriesLeft?: number;
 }): Promise<MeasureResult> {
   const { companyName, companyId, measure, evidenceText, terminology, topicDescription, provider, providerIndex, temporalWarning, scoringMode, framework } = opts;
 
@@ -3188,7 +3205,30 @@ async function scoreSingleMeasurePass(opts: {
     // separate timeout/model-failure zeros from genuine no-evidence zeros.
     const failureClass = classifyProviderError(error);
     const failureType = failureClass === "timeout" ? "timeout" : "scoring_error";
-    console.warn(`[${companyName}] Scoring FAILED [${failureType}/${failureClass}] for ${measure.measureId}: ${error.message}`);
+
+    // Bounded content-crash retry. completeScoring already retries at the
+    // provider/network level, but content crashes (null/empty model content →
+    // JSON-parse failure / null-deref) surface AFTER it returns "successfully",
+    // so they are retried here before we give up. quota_exhausted/authentication
+    // are handled above and never reach this point, so their behaviour is
+    // unchanged. Budget is threaded recursively so each re-attempt is a fresh
+    // completeScoring call (with its own provider rotation).
+    const retriesLeft =
+      opts._contentRetriesLeft ?? parseInt(process.env.SCORING_CONTENT_RETRIES || "2", 10);
+    if ((failureType === "scoring_error" || failureType === "timeout") && retriesLeft > 0) {
+      console.warn(`[${companyName}] Scoring FAILED [${failureType}/${failureClass}] for ${measure.measureId} — retrying (${retriesLeft} attempt(s) left): ${error.message}`);
+      return scoreSingleMeasurePass({ ...opts, _contentRetriesLeft: retriesLeft - 1 });
+    }
+
+    // FAIL LOUD after retries are exhausted. Rather than emit a substantive
+    // score:0 / verdict:"No" (which would be indistinguishable from a genuine
+    // evidence-based "No" in totals and in the CSV), ABSTAIN this single cell:
+    // abstained:true excludes it from totalScore/answeredCount/denominator and
+    // from measuresMet, and the distinct verdict "Scoring error" exports verbatim
+    // (never "No") to the client CSV. Throwing here would abort the WHOLE company
+    // (measures run under Promise.all) — correct for a quota/auth pause, but too
+    // aggressive for a single content crash, so we exclude just this cell.
+    console.error(`[${companyName}] Scoring FAILED [${failureType}/${failureClass}] for ${measure.measureId} after all retries — ABSTAINING (excluded from totals), NOT converting to a substantive zero: ${error.message}`);
     return {
       measureId: measure.measureId,
       title: measure.title,
@@ -3200,8 +3240,9 @@ async function scoreSingleMeasurePass(opts: {
       confidence: "Low",
       evidenceSummary: `Scoring ${failureType}: ${error.message}`,
       quotes: [],
-      verdict: "No",
-      verdictNuance: `[SCORING_FAILURE:${failureType}:${failureClass}] This zero reflects a model/network failure, not a substantive assessment. Retry recommended.`,
+      abstained: true,
+      verdict: "Scoring error",
+      verdictNuance: `[SCORING_FAILURE:${failureType}:${failureClass}] This cell is EXCLUDED (abstained) due to a model/network failure after retries — it is NOT a substantive assessment and must not be read as "No". Retry recommended.`,
       displayOrder: measure.displayOrder,
       _scoringFailure: failureType,
       _failureClass: failureClass,

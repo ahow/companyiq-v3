@@ -288,7 +288,7 @@ export const measureScores = pgTable("measure_scores", {
   confidence: text("confidence").notNull().default("Low"),
   evidenceSummary: text("evidence_summary"),
   quotes: jsonb("quotes").$type<Array<{ text: string; source: string; sourceUrl?: string; page?: number }>>(),
-  verdict: text("verdict").notNull().default("No"), // Yes | No | Partial | Insufficient evidence
+  verdict: text("verdict").notNull().default("No"), // Yes | No | Partial | Insufficient evidence | Scoring error
   verdictNuance: text("verdict_nuance"),
   // v3e (Section 3): true when the measure could not be answered because a
   // REQUIRED source type was absent from the corpus. Abstained measures contribute
