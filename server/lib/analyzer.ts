@@ -167,6 +167,18 @@ export interface AnalysisResult {
     modelResponseValidity: { valid: number; repaired: number; failed: number };
     selfConsistencyPasses: number;
   };
+  // R4 (2026-09): LOUD empty-corpus signal, surfaced as a queryable
+  // end-of-pipeline field. isEmpty=true means EVERY evidence pack across ALL
+  // measures came back as an empty-corpus sentinel (0 usable chunks) — an
+  // OPERATIONAL "insufficient evidence" state, distinct from the substantive
+  // "topic absent in a non-empty corpus" case (which leaves this undefined /
+  // isEmpty=false). This is the auto-rerun trigger consumed by pipeline.ts.
+  // Absent when the LOUD_EMPTY_CORPUS flag is off.
+  emptyCorpus?: {
+    isEmpty: boolean;
+    reason: string;
+    measuresChecked: number;
+  };
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -2086,6 +2098,15 @@ export async function analyzeCompanyMeasures(opts: {
   const allResults: MeasureResult[] = [];
   const scoringProvider = settings.scoringProvider;
 
+  // R4 (2026-09): run-level empty-corpus accounting. Every category's packs
+  // are inspected; the run is flagged emptyCorpus.isEmpty only when EVERY pack
+  // across ALL measures is an empty-corpus sentinel (0 usable chunks). This is
+  // the LOUD signal consumed by the pipeline / auto-rerun.
+  const loudEmptyCorpusEnabled = process.env.LOUD_EMPTY_CORPUS !== "false";
+  let r4TotalPacks = 0;
+  let r4EmptyCorpusPacks = 0;
+  let r4EmptyCorpusReason = "";
+
   for (const [category, categoryMeasures] of categoryMap) {
     console.log(`[${companyName}] Scoring category: ${category} (${categoryMeasures.length} measures)`);
 
@@ -2139,6 +2160,19 @@ export async function analyzeCompanyMeasures(opts: {
         text: fullSlice,
         topicHits: sliceHits,
       }));
+    }
+
+    // R4: tally empty-corpus sentinel packs for this category into the
+    // run-level accumulator (a sentinel pack carries passageDiagnostics.emptyCorpus).
+    if (loudEmptyCorpusEnabled) {
+      for (const ep of evidencePacks) {
+        r4TotalPacks++;
+        const pd: any = (ep as any).passageDiagnostics;
+        if (pd?.emptyCorpus === true) {
+          r4EmptyCorpusPacks++;
+          if (!r4EmptyCorpusReason) r4EmptyCorpusReason = pd.emptyCorpusReason || "empty_corpus";
+        }
+      }
     }
 
     // Shared corpus index for the targeted deep-read second pass (built once per
@@ -2729,6 +2763,26 @@ export async function analyzeCompanyMeasures(opts: {
   console.log(`[${companyName}] Scoring diagnostics: failures=${scoringFailures}, timeouts=${timeoutFailures}, fallback=${fallbackUsed}, defaultScore=${defaultScoreUsed}, emptyEvidence=${scoringDiagnostics.evidencePackCounts.empty}`);
   console.log(`[${companyName}] Analysis complete: ${scorePercentage}% (${totalScore}/${answeredCount} answered; ${abstainedCount} abstained of ${measuresTotal} total)`);
 
+  // R4: derive the run-level empty-corpus signal. isEmpty is true only when the
+  // corpus yielded ZERO usable chunks for EVERY measure (all packs were
+  // empty-corpus sentinels) — an operational "insufficient evidence" state,
+  // distinct from a non-empty corpus in which the topic is genuinely absent.
+  let emptyCorpus: AnalysisResult["emptyCorpus"] | undefined = undefined;
+  if (loudEmptyCorpusEnabled && r4TotalPacks > 0) {
+    const isEmpty = r4EmptyCorpusPacks === r4TotalPacks;
+    emptyCorpus = {
+      isEmpty,
+      reason: isEmpty ? (r4EmptyCorpusReason || "empty_corpus") : "corpus_non_empty",
+      measuresChecked: r4TotalPacks,
+    };
+    if (isEmpty) {
+      console.error(
+        `[${companyName}] R4 EMPTY CORPUS SIGNAL: all ${r4TotalPacks} evidence packs are empty-corpus sentinels ` +
+        `(reason=${emptyCorpus.reason}). Marking run as operationally empty (auto-rerun trigger).`
+      );
+    }
+  }
+
   return {
     totalScore,
     scorePercentage,
@@ -2739,6 +2793,7 @@ export async function analyzeCompanyMeasures(opts: {
     categories: categoryResults.sort((a, b) => a.categoryNumber - b.categoryNumber),
     forceIncludeInvariant,
     scoringDiagnostics,
+    emptyCorpus,
   };
 }
 

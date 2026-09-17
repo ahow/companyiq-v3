@@ -10,3 +10,5 @@ full_verdict_diff.json
 prov_diff*.json
 *.env
 *.env.*
+# ...but the committed template is tracked.
+!.env.example

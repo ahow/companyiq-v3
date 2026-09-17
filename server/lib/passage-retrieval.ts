@@ -801,6 +801,13 @@ export interface EvidencePack {
     }>;
     docBreakdown: Array<{ docUrl: string | null; chunkCount: number }>;
     queryTermCount: number;
+    // R4 (2026-09): LOUD empty-corpus signal. Set true by the empty-corpus
+    // sentinel when the whole category corpus produced zero chunks, so an
+    // operationally-empty pack is machine-distinguishable from a substantive
+    // "topic absent in a non-empty corpus" pack (which has topChunks etc but
+    // no emptyCorpus flag). emptyCorpusReason carries a machine-readable code.
+    emptyCorpus?: boolean;
+    emptyCorpusReason?: string;
   };
   // Task F: per-quote chunk-rank audit for the near-cutoff analysis. Populated by
   // rescorePackWithLLM (LLM rescore path only): an ordered record of ALL rescored
@@ -2149,6 +2156,24 @@ export function buildEvidencePacksForCategory(opts: {
     // v3g (Bug 1): empty corpus -> per-(company,framework,measure) SENTINEL
     // fingerprint, explicitly marked cache-INELIGIBLE so an empty pack can never
     // satisfy a cache hit (and never collide with a real pack).
+    //
+    // R4 (2026-09): make the empty-corpus path LOUD. Previously these sentinel
+    // packs carried NO passageDiagnostics, so a whole company scoring "29 x No /
+    // 0 URLs" from a zero-chunk corpus was indistinguishable downstream from a
+    // company whose topic was genuinely absent in a real corpus. Attach an
+    // explicit machine-readable emptyCorpus diagnostic so the pipeline can treat
+    // "0 usable chunks across ALL measures" as an operational signal (and the
+    // auto-rerun trigger). Gated by LOUD_EMPTY_CORPUS (default-on); when off the
+    // packs are emitted exactly as before (no passageDiagnostics).
+    const loudEmptyCorpus = process.env.LOUD_EMPTY_CORPUS !== "false";
+    const emptyCorpusReason =
+      combinedText.trim().length === 0 ? "no_corpus_text" : "chunker_yielded_zero_chunks";
+    if (loudEmptyCorpus) {
+      console.warn(
+        `[passage-retrieval] R4 EMPTY CORPUS: company=${companyId ?? "?"} framework=${frameworkId ?? "?"} ` +
+        `combinedTextChars=${combinedText.length} reason=${emptyCorpusReason} — emitting ${measures.length} sentinel packs with emptyCorpus:true`
+      );
+    }
     return measures.map((m) => ({
       measureId: m.measureId,
       text: "",
@@ -2161,6 +2186,17 @@ export function buildEvidencePacksForCategory(opts: {
       fingerprintEligible: false,
       forceIncludedCount: 0,
       requiredDocPresent: false,
+      ...(loudEmptyCorpus
+        ? {
+            passageDiagnostics: {
+              topChunks: [],
+              docBreakdown: [],
+              queryTermCount: 0,
+              emptyCorpus: true,
+              emptyCorpusReason,
+            },
+          }
+        : {}),
     }));
   }
 

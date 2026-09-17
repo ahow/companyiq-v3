@@ -38,7 +38,7 @@ import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type Analysi
 import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
-import { classifyProvenance, provenanceToSourceType, type IrTenantBinding } from "./provenance.js";
+import { classifyProvenance, provenanceToSourceType, isProvenanceRobustnessEnabled, type IrTenantBinding } from "./provenance.js";
 import { traceKeep, traceDrop, traceInfo, traceMatches, TRACE_ENABLED } from "./discovery-tracer.js";
 import { deriveAliases } from "./issuer-resolver.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
@@ -65,6 +65,34 @@ const INCOMPANY_FETCH_CONCURRENCY = parseInt(process.env.INCOMPANY_FETCH_CONCURR
 // gate (post-analysis) — keeping a single source of truth and avoiding a TDZ
 // reference from the earlier fetch-coverage block.
 const AUTO_REEXAM_MAX_CHARS = parseInt(process.env.AUTO_REEXAM_MAX_CHARS || "100000", 10);
+
+// ─── R1 / R4 / auto-rerun flags (all generic, default-ON) ───────────────────
+// Each new behaviour is behind its own env flag using the same `!== "false"`
+// default-on idiom as CORPUS_HYGIENE. Setting the flag to "false" restores the
+// pre-change behaviour exactly (clean no-op).
+//
+// R1 — corpus-readiness barrier: before snapshot/scoring, require the PRIMARY
+// tier of gate-accepted docs to be fetched (or bounded-refetched); if still
+// absent, refuse to score the remnant.
+function isCorpusReadinessBarrierEnabled(): boolean {
+  return process.env.CORPUS_READINESS_BARRIER !== "false";
+}
+// Bound on the extra direct re-fetch attempts the barrier makes on dead primaries.
+const CORPUS_READINESS_REFETCH_MAX = parseInt(process.env.CORPUS_READINESS_REFETCH_MAX || "3", 10);
+
+// Auto-rerun — bounded zero-corpus re-run (replaces any static R5 floor).
+function isZeroCorpusRerunEnabled(): boolean {
+  return process.env.ZERO_CORPUS_RERUN !== "false";
+}
+// DEDICATED counter, SEPARATE from the worker's general MAX_RETRY_ATTEMPTS, so a
+// genuinely-empty company can never burn the whole retry budget.
+const MAX_ZERO_CORPUS_RERUNS = parseInt(process.env.MAX_ZERO_CORPUS_RERUNS || "2", 10);
+
+// PRIMARY-tier detection (framework-agnostic): the highest-value disclosure
+// document classes. Used ONLY to decide fetch completeness of gate-accepted
+// docs (R1) — never a score signal. Mirrors the deadTier1 regex already used by
+// the fetch-coverage block so the two stay consistent.
+const PRIMARY_DOC_RE = /10-?k|20-?f|annual.?report|integrated.?report|def.?14a|proxy.?statement/i;
 
 export interface PipelineOptions {
   company: Company;
@@ -132,7 +160,7 @@ async function runFetchPhase(opts: {
   batchId?: number;
   cancelCheck?: () => boolean;
   batchFetchState?: BatchFetchState; // 42-F
-}): Promise<{ fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile }> {
+}): Promise<{ fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } }> {
   const { company, framework, workspaceId, batchId, cancelCheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
@@ -1733,6 +1761,82 @@ async function runFetchPhase(opts: {
     }
   }
 
+  // ─── R1: Corpus-readiness barrier + bounded primary re-fetch ───────────────
+  // Before freezing the snapshot, require the PRIMARY tier of gate-accepted docs
+  // to have actually fetched. The required-doc mechanism upstream only ranks and
+  // labels; nothing blocks scoring when the primaries are absent (3i a1: 18
+  // gate-accepted annual reports dead/inaccessible → scored 29 confident zeros
+  // on the secondary remnant). This barrier detects that state, attempts a small
+  // bounded re-fetch of the dead primaries, and — if they are STILL absent —
+  // records `corpusReadiness.ready=false` so runAnalysisPipeline can refuse to
+  // score the remnant. Generic: primaries are identified structurally
+  // (PRIMARY_DOC_RE over url+title), never by company/framework name; the gate
+  // keys ONLY on fetch completeness of already-gate-accepted docs, never on a
+  // score. Default-ON; CORPUS_READINESS_BARRIER="false" makes this a clean no-op.
+  let corpusReadiness: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } | undefined;
+  if (isCorpusReadinessBarrierEnabled()) {
+    try {
+      const isPrimary = (d: any) => PRIMARY_DOC_RE.test(((d.url || "") + " " + (d.title || "")).toLowerCase());
+      let primaryDocs = finalDocs.filter(isPrimary);
+      let primariesFetched = primaryDocs.filter(d => d.fetchStatus === "ok").length;
+      let refetchAttempts = 0;
+      // Only act when primaries were gate-accepted but NONE fetched. If no
+      // primary was ever discovered, we cannot demand one — the barrier stays
+      // inert (gate on completeness of what was accepted, not on wishful docs).
+      if (primaryDocs.length > 0 && primariesFetched === 0) {
+        console.warn(`[${companyName}] CORPUS-READINESS: ${primaryDocs.length} primary-tier doc(s) gate-accepted but 0 fetched — attempting bounded re-fetch (max ${CORPUS_READINESS_REFETCH_MAX})`);
+        // Bounded, cheap re-fetch of the dead primaries via the fork-free direct
+        // HTTPS retry (same primitive the post-loop PDF recovery uses). Reuses
+        // existing fetch primitives; small configurable bound.
+        try {
+          const { fetchPdfDirectRetry } = await import("./processor.js") as any;
+          const getOrigin = (u: string) => { try { const p = new URL(u); return p.protocol + "//" + p.host; } catch { return ""; } };
+          const deadPrimaries = primaryDocs.filter(d => d.fetchStatus !== "ok");
+          for (const doc of deadPrimaries.slice(0, CORPUS_READINESS_REFETCH_MAX)) {
+            refetchAttempts++;
+            try {
+              let text: string | null = null;
+              if (typeof fetchPdfDirectRetry === "function") {
+                text = await fetchPdfDirectRetry(doc.url, getOrigin(doc.url));
+              }
+              if (text && text.length > 200) {
+                await storage.recordFetchSuccess(companyId, doc.url, text);
+                console.log(`[${companyName}] CORPUS-READINESS: re-fetch recovered ${text.length} chars from ${doc.url.slice(0, 80)}`);
+              }
+            } catch { /* per-URL non-fatal */ }
+          }
+        } catch (refErr: any) {
+          console.warn(`[${companyName}] CORPUS-READINESS: bounded re-fetch primitive unavailable (${refErr?.message || refErr})`);
+        }
+        // Recompute after the bounded re-fetch.
+        const refreshed = await storage.getAcceptedDocuments(companyId);
+        primaryDocs = refreshed.filter(isPrimary);
+        primariesFetched = primaryDocs.filter(d => d.fetchStatus === "ok").length;
+      }
+      const ready = !(primaryDocs.length > 0 && primariesFetched === 0);
+      corpusReadiness = {
+        ready,
+        reason: ready ? undefined : "primaries_missing",
+        primariesDiscovered: primaryDocs.length,
+        primariesFetched,
+        refetchAttempts,
+      };
+      // Persist the recorded reason/state (feeds R4 + auto-rerun + UI/export).
+      try {
+        const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+        priorDiag.corpusReadiness = corpusReadiness;
+        await storage.updateCompany(companyId, workspaceId, { discoveryDiagnostics: priorDiag } as any);
+      } catch (persErr: any) {
+        console.warn(`[${companyName}] CORPUS-READINESS: failed to persist state (non-fatal): ${persErr.message}`);
+      }
+      if (!ready) {
+        console.warn(`[${companyName}] CORPUS-READINESS BARRIER: primaries still missing after ${refetchAttempts} re-fetch attempt(s) (${primariesFetched}/${primaryDocs.length} primary docs fetched) — scoring will be REFUSED (Insufficient corpus, primaries missing)`);
+      }
+    } catch (barErr: any) {
+      console.warn(`[${companyName}] CORPUS-READINESS: barrier check failed (non-fatal, treated as ready): ${barErr.message}`);
+    }
+  }
+
   // ─── Corpus Snapshot: freeze the evidence set for this batch ──────────────
   // This makes re-scoring byte-identical: the analyze phase reads from batch_corpus
   // instead of the live documents table, so corpus composition is frozen at fetch time.
@@ -1771,7 +1875,7 @@ async function runFetchPhase(opts: {
   // PR 1 · Change 1c: return the resolved issuerProfile so runAnalysisPipeline
   // can thread it into the analyze phase for the pre-BM25 sanity gate. Optional
   // — discoveryResult.issuerProfile is itself optional and may be undefined.
-  return { fetchedCount: totalFetched, totalAccepted: totalFetched, issuerProfile: discoveryResult.issuerProfile };
+  return { fetchedCount: totalFetched, totalAccepted: totalFetched, issuerProfile: discoveryResult.issuerProfile, corpusReadiness };
 }
 
 // ─── Phase 2: Analyze Documents (Framework-Specific) ────────────────────────
@@ -1950,6 +2054,28 @@ async function runAnalyzePhase(opts: {
     isin: (company as any)?.isin || null,
   });
 
+  // R3 (2026-09): provenance-robustness master flag (default-on).
+  const provenanceRobustnessEnabled = isProvenanceRobustnessEnabled();
+  // R3.1: when the company has no confirmed domain at scoring time, the U17
+  // classifier cannot tell issuer-hosted docs from third_party ones by
+  // hostname, so unmatched issuer-site docs default to third_party and get
+  // over-excluded (JPX: 46 jpx.co.jp docs dropped, only a SEC filing kept).
+  // Fail OPEN for that company's third_party exclusion — keep the docs and
+  // log loudly that provenance ran without a confirmed domain. Exclusion
+  // stays active whenever a domain IS confirmed.
+  const domainConfirmedForCorpus = companyDomainForCorpus.length > 0;
+  const failOpenProvenance = provenanceRobustnessEnabled && provenanceFilterEnabled && !domainConfirmedForCorpus;
+  if (failOpenProvenance) {
+    console.warn(
+      `[${companyName}] R3.1: provenance running WITHOUT a confirmed company domain — ` +
+      `failing OPEN (U17 third_party exclusion skipped for this company to avoid over-excluding issuer-site docs).`
+    );
+  }
+  let failOpenKeptCount = 0;
+  // R3.3: chars excluded by the U17 third_party filter, tracked so the
+  // empty-pack refill can also fire on a HIGH EXCLUSION RATIO (below).
+  let excludedThirdPartyChars = 0;
+
   const documentTexts: string[] = [];
   const documentUrls: string[] = [];
   const documentTitles: string[] = [];
@@ -1999,20 +2125,31 @@ async function runAnalyzePhase(opts: {
       }
     }
     if (prov.provenance === "third_party" && provenanceFilterEnabled) {
-      excludedThirdPartyCount++;
-      // Persist the classification too, so a subsequent re-classification
-      // has consistent state. Silent no-op if column update fails.
-      if (priorSourceType !== "third_party") {
-        try {
-          await storage.updateDocumentSourceType(doc.id, "third_party");
-        } catch (e: any) {
-          console.warn(`[${companyName}] Failed to persist source_type downgrade for doc ${doc.id}: ${e.message}`);
+      // R3.1: fail OPEN when no confirmed domain — keep the doc instead of
+      // excluding it (the classifier can't be trusted to separate issuer from
+      // third_party without a domain anchor). Fall through to the push below.
+      if (failOpenProvenance) {
+        failOpenKeptCount++;
+        if (TRACE_ENABLED && traceMatches(doc.url)) traceKeep(companyName, "S14.u17ProvenanceFilter", doc.url, `R3.1 fail-open (no confirmed domain): kept despite third_party classification (${prov.reason})`);
+      } else {
+        excludedThirdPartyCount++;
+        // R3.3: accumulate excluded content chars for the high-exclusion-ratio
+        // refill trigger below.
+        excludedThirdPartyChars += doc.content.length;
+        // Persist the classification too, so a subsequent re-classification
+        // has consistent state. Silent no-op if column update fails.
+        if (priorSourceType !== "third_party") {
+          try {
+            await storage.updateDocumentSourceType(doc.id, "third_party");
+          } catch (e: any) {
+            console.warn(`[${companyName}] Failed to persist source_type downgrade for doc ${doc.id}: ${e.message}`);
+          }
         }
+        // Excluded from the analyzer pack. Log at info level so it's traceable.
+        console.log(`[${companyName}] U17 excluded third-party doc ${doc.id}: ${doc.url} (${prov.reason})`);
+        if (TRACE_ENABLED && traceMatches(doc.url)) traceDrop(companyName, "S14.u17ProvenanceFilter", doc.url, `content-time classifier flagged third_party: ${prov.reason}`);
+        continue;
       }
-      // Excluded from the analyzer pack. Log at info level so it's traceable.
-      console.log(`[${companyName}] U17 excluded third-party doc ${doc.id}: ${doc.url} (${prov.reason})`);
-      if (TRACE_ENABLED && traceMatches(doc.url)) traceDrop(companyName, "S14.u17ProvenanceFilter", doc.url, `content-time classifier flagged third_party: ${prov.reason}`);
-      continue;
     }
     if (TRACE_ENABLED && traceMatches(doc.url)) traceKeep(companyName, "S14.u17ProvenanceFilter", doc.url, `provenance=${prov.provenance}, kept for evidence pack`);
     documentTexts.push(doc.content);
@@ -2020,25 +2157,60 @@ async function runAnalyzePhase(opts: {
     documentTitles.push(doc.title || doc.url);
     documentIds.push(doc.id);
   }
-  if (excludedThirdPartyCount > 0 || upgradedToIssuerCount > 0) {
+  if (excludedThirdPartyCount > 0 || upgradedToIssuerCount > 0 || failOpenKeptCount > 0) {
     console.log(
       `[${companyName}] U17 provenance filter: excluded=${excludedThirdPartyCount}, ` +
-      `upgraded-to-issuer=${upgradedToIssuerCount}, kept=${documentTexts.length}`
+      `upgraded-to-issuer=${upgradedToIssuerCount}, fail-open-kept=${failOpenKeptCount}, kept=${documentTexts.length}`
     );
   }
+  // R3.1: when we failed open (no confirmed domain) and that actually kept
+  // docs that would otherwise have been excluded, mark provenance as skipped
+  // so the fallback is auditable in each measure's verdictNuance.
+  if (failOpenKeptCount > 0) {
+    provenanceVerificationSkipped = true;
+  }
 
-  // Fix 1a: Empty-pack guard.
-  // If the U17 provenance filter excluded every document but fetchedDocs contains
-  // content-bearing accepted docs, fall back to including them all. This prevents
-  // a provenance mis-classification (e.g. company.domain missing or an acronym
-  // domain not matched) from silently producing a zero-evidence scoring run.
+  // R3.3: refill trigger ratio. The pre-R3 Fix-1a guard only fired when the
+  // U17 filter dropped EVERY document (documentTexts.length===0). JPX-class
+  // failures excluded 46 issuer docs but kept 1 SEC filing, so the corpus was
+  // 99%+ gutted yet the guard never fired. Broaden the refill to also trigger
+  // when provenance exclusion drops more than a configurable fraction of the
+  // corpus's content chars. Env-tunable via PROVENANCE_EXCLUSION_REFILL_RATIO
+  // (default 0.8); only active under the provenance-robustness flag.
+  const HIGH_EXCLUSION_RATIO = (() => {
+    const raw = parseFloat(process.env.PROVENANCE_EXCLUSION_REFILL_RATIO || "");
+    return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.8;
+  })();
+  const totalContentChars = fetchedDocs.reduce(
+    (s, d) => s + (d.content && d.content.length > 50 ? d.content.length : 0),
+    0,
+  );
+  const exclusionRatio = totalContentChars > 0 ? excludedThirdPartyChars / totalContentChars : 0;
+  const highExclusionRefill =
+    provenanceRobustnessEnabled &&
+    documentTexts.length > 0 &&
+    exclusionRatio >= HIGH_EXCLUSION_RATIO;
+
+  // Fix 1a / R3.3: Empty-pack (or high-exclusion) guard.
+  // If the U17 provenance filter excluded every document — OR dropped a high
+  // fraction of corpus content chars — but fetchedDocs contains content-bearing
+  // accepted docs, fall back to including them all. This prevents a provenance
+  // mis-classification (e.g. company.domain missing or an acronym domain not
+  // matched) from silently producing a (near-)zero-evidence scoring run.
   // The flag is threaded into verdictNuance so the output is auditable.
-  if (documentTexts.length === 0 && fetchedDocs.some(d => d.content && d.content.length > 50)) {
+  const emptyPackRefill = documentTexts.length === 0 && fetchedDocs.some(d => d.content && d.content.length > 50);
+  if (emptyPackRefill || highExclusionRefill) {
     console.warn(
-      `[${companyName}] Fix 1a: U17 filter excluded ALL documents but ${fetchedDocs.length} have content. ` +
+      `[${companyName}] Fix 1a/R3.3: U17 filter ${emptyPackRefill ? "excluded ALL documents" : `dropped ${(exclusionRatio * 100).toFixed(0)}% of corpus content chars (>= ${(HIGH_EXCLUSION_RATIO * 100).toFixed(0)}% threshold)`} but ${fetchedDocs.length} docs have content. ` +
       `Falling back to unfiltered corpus. Raise domain proposal for review.`
     );
     provenanceVerificationSkipped = true;
+    // Reset the aligned arrays before refilling so the high-exclusion path
+    // (documentTexts already partially populated) does not create duplicates.
+    documentTexts.length = 0;
+    documentUrls.length = 0;
+    documentTitles.length = 0;
+    documentIds.length = 0;
     for (const doc of fetchedDocs) {
       if (!doc.content || doc.content.length <= 50) continue;
       documentTexts.push(doc.content);
@@ -2703,6 +2875,149 @@ async function maybeAutoReexamine(opts: {
   }
 }
 
+/**
+ * Auto-rerun — bounded zero-corpus re-run (REPLACES any static char/doc floor).
+ *
+ * Fires ONLY on the R4 signal (`analysis.emptyCorpus.isEmpty` — 0 usable chunks
+ * across ALL measures on a NON-empty fetched corpus, i.e. a degenerate/empty
+ * evidence pack, not a genuine no-disclosure zero). When it fires, the outcome
+ * must change from a silent success-with-29-No into an operational failure that
+ * is either re-run once more (fresh discovery+fetch — a fresh chance for a
+ * transient content-linkage race) or, once the dedicated budget is spent,
+ * recorded as "Insufficient corpus" rather than emitting zeros.
+ *
+ * The rerun counter is DEDICATED (discoveryDiagnostics.zeroCorpusRerun.count,
+ * capped at MAX_ZERO_CORPUS_RERUNS) and SEPARATE from the worker's general
+ * MAX_RETRY_ATTEMPTS so a genuinely-empty company can't burn the whole budget.
+ *
+ * CRITICAL GATING — must NOT loop on known-deterministic classes where a re-run
+ * cannot change state:
+ *   (a) unresolved/absent company domain — a rerun can't resolve provenance;
+ *       quarantine immediately.
+ *   (b) anti-bot-stub-dominated corpus (dominated by sub-STUB_MAX_CHARS stub
+ *       docs, Santos class) WHEN the residential proxy is NOT enabled — the
+ *       stubs will re-fetch identically; quarantine. When the proxy IS enabled
+ *       (EVOMI_PROXY_USER/PASS set) the stubs are no longer deterministic, so
+ *       the corpus BECOMES eligible for rerun.
+ *
+ * Returns the decision so the caller can shape the PipelineResult:
+ *   outcome="rerun"      → a fresh re-examination batch was enqueued (supersede)
+ *   outcome="capped"     → dedicated budget spent → mark Insufficient corpus
+ *   outcome="quarantine" → deterministic class → mark Insufficient corpus
+ *   outcome="disabled"|"not_empty" → no-op, let the normal result stand
+ */
+const ZERO_CORPUS_STUB_MAX_CHARS = parseInt(process.env.ZERO_CORPUS_STUB_MAX_CHARS || "500", 10);
+async function maybeZeroCorpusRerun(opts: {
+  company: Company;
+  framework: Framework;
+  workspaceId: number;
+  analysis: AnalysisResult;
+}): Promise<{ outcome: "rerun" | "capped" | "quarantine" | "disabled" | "not_empty"; reason?: string }> {
+  const { company, framework, workspaceId, analysis } = opts;
+  const companyId = company.id;
+  const companyName = company.name;
+  if (!isZeroCorpusRerunEnabled()) return { outcome: "disabled" };
+  // Fire strictly on the R4 mechanical-emptiness signal, never on a score value.
+  if (!analysis?.emptyCorpus?.isEmpty) return { outcome: "not_empty" };
+  try {
+    const fresh = await storage.getCompanyById(companyId, workspaceId);
+    const diag = (fresh?.discoveryDiagnostics as any) || {};
+    const rerun = diag.zeroCorpusRerun || { count: 0 };
+
+    // GATING (a): unresolved/absent domain → deterministic, quarantine (a rerun
+    // cannot fix provenance). The worker already treats no-domain as
+    // non-retriable; we keep that and refuse to loop here too.
+    const domain = ((fresh?.domain as string) || "").trim();
+    const persistQuarantine = async (reason: string) => {
+      try {
+        await storage.updateCompany(companyId, workspaceId, {
+          analysisStatus: "completed",
+          totalScore: 0,
+          summary: `Insufficient corpus — zero usable content across all measures (quarantined: ${reason}; a re-run cannot change this outcome).`,
+          discoveryDiagnostics: {
+            ...diag,
+            zeroCorpusRerun: { ...rerun, quarantined: true, quarantineReason: reason, lastCheckedAt: new Date().toISOString() },
+          } as any,
+        } as any);
+      } catch (e: any) {
+        console.warn(`[${companyName}] Zero-corpus quarantine persist failed (non-fatal): ${e.message}`);
+      }
+    };
+
+    if (!domain) {
+      console.warn(`[${companyName}] ZERO-CORPUS RERUN QUARANTINED: no confirmed company domain — deterministic, not re-running`);
+      await persistQuarantine("unresolved_domain");
+      return { outcome: "quarantine", reason: "unresolved_domain" };
+    }
+
+    // GATING (b): anti-bot-stub dominance. Determine whether the fetched corpus
+    // is dominated by sub-threshold stub documents (Santos class). Proxy-aware:
+    // stubs are deterministic ONLY when the residential proxy is absent.
+    const proxyEnabled = !!(process.env.EVOMI_PROXY_USER && process.env.EVOMI_PROXY_PASS);
+    let stubDominated = false;
+    try {
+      const fetched = await storage.getAllFetchedDocumentsForCompany(companyId);
+      if (fetched.length > 0) {
+        const stubCount = fetched.filter(d => ((d.content || "").length) < ZERO_CORPUS_STUB_MAX_CHARS).length;
+        stubDominated = stubCount / fetched.length >= 0.8;
+      }
+    } catch (e: any) {
+      console.warn(`[${companyName}] Zero-corpus stub-dominance check failed (non-fatal): ${e.message}`);
+    }
+    if (stubDominated && !proxyEnabled) {
+      console.warn(`[${companyName}] ZERO-CORPUS RERUN QUARANTINED: anti-bot-stub-dominated corpus and residential proxy NOT enabled — deterministic, not re-running (set EVOMI_PROXY_USER/PASS to make this eligible)`);
+      await persistQuarantine("anti_bot_stub_no_proxy");
+      return { outcome: "quarantine", reason: "anti_bot_stub_no_proxy" };
+    }
+
+    // BUDGET: dedicated, separate from the worker's general retry budget.
+    if ((rerun.count || 0) >= MAX_ZERO_CORPUS_RERUNS) {
+      console.warn(`[${companyName}] ZERO-CORPUS RERUN budget exhausted (${rerun.count}/${MAX_ZERO_CORPUS_RERUNS}) — marking Insufficient corpus (not scored)`);
+      try {
+        await storage.updateCompany(companyId, workspaceId, {
+          analysisStatus: "completed",
+          totalScore: 0,
+          summary: `Insufficient corpus — zero usable content across all measures after ${rerun.count} bounded re-run(s).`,
+          discoveryDiagnostics: {
+            ...diag,
+            zeroCorpusRerun: { ...rerun, capped: true, lastCheckedAt: new Date().toISOString() },
+          } as any,
+        } as any);
+      } catch (e: any) {
+        console.warn(`[${companyName}] Zero-corpus cap persist failed (non-fatal): ${e.message}`);
+      }
+      return { outcome: "capped" };
+    }
+
+    // ELIGIBLE: increment the dedicated counter and enqueue a fresh re-run
+    // (full re-discovery + re-fetch — fresh chance for the transient race).
+    const nextCount = (rerun.count || 0) + 1;
+    await storage.updateCompany(companyId, workspaceId, {
+      discoveryDiagnostics: {
+        ...diag,
+        zeroCorpusRerun: {
+          count: nextCount,
+          lastTriggeredAt: new Date().toISOString(),
+          reason: `zero usable corpus (R4 emptyCorpus: ${analysis.emptyCorpus?.reason || "unknown"})`,
+          proxyEnabled,
+          stubDominated,
+        },
+      } as any,
+    } as any);
+    const enq = await storage.enqueueReexamination({ companyId, companyName, frameworkId: framework.id, workspaceId });
+    if (enq) {
+      console.warn(`[${companyName}] ZERO-CORPUS RERUN TRIGGERED (${nextCount}/${MAX_ZERO_CORPUS_RERUNS}): R4 emptyCorpus reason=${analysis.emptyCorpus?.reason} proxyEnabled=${proxyEnabled} stubDominated=${stubDominated} -> re-enqueued as batch ${enq.batchId}, job ${enq.jobId}`);
+      return { outcome: "rerun" };
+    }
+    // Enqueue failed → fall back to marking Insufficient corpus so we still don't
+    // record a silent success-with-zeros.
+    return { outcome: "capped" };
+  } catch (err: any) {
+    console.warn(`[${companyName}] Zero-corpus rerun check failed (non-fatal): ${err.message}`);
+    return { outcome: "not_empty" };
+  }
+}
+
 // ─── Combined Pipeline (both phases in sequence) ────────────────────────────
 
 export async function runAnalysisPipeline(opts: PipelineOptions): Promise<PipelineResult> {
@@ -2737,7 +3052,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // Phase 1: Fetch (unless skipping to reuse cached docs)
       // PR 1 · Change 1c: type widened to carry the optional issuerProfile returned
       // by runFetchPhase; used to thread the profile into the analyze phase.
-      let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile } = { fetchedCount: 0, totalAccepted: 0 };
+      let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } } = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
         fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck, batchFetchState: opts.batchFetchState });
         
@@ -2775,6 +3090,33 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
             failureType: "no_documents" as const,
           };
         }
+
+        // R1 — Corpus-readiness barrier: if the PRIMARY tier was gate-accepted
+        // but could not be fetched (even after the bounded re-fetch inside
+        // runFetchPhase), REFUSE to score the secondary remnant rather than
+        // emitting confident zeros (3i a1). Gate keys ONLY on fetch completeness
+        // of gate-accepted docs, never a score. The recorded reason lives in
+        // discoveryDiagnostics.corpusReadiness (persisted in runFetchPhase). The
+        // refusal is a non-retriable "Insufficient corpus" outcome (worker keeps
+        // it from looping) — a bounded re-fetch already ran; scoring the remnant
+        // would only reproduce the confident-zero failure.
+        if (isCorpusReadinessBarrierEnabled() && fetchResult.corpusReadiness && fetchResult.corpusReadiness.ready === false) {
+          const cr = fetchResult.corpusReadiness;
+          console.error(`[${companyName}] SCORING REFUSED — Insufficient corpus (primaries missing): ${cr.primariesFetched}/${cr.primariesDiscovered} primary-tier docs fetched after ${cr.refetchAttempts} bounded re-fetch attempt(s)`);
+          await storage.updateCompany(companyId, workspaceId, {
+            analysisStatus: "completed",
+            totalScore: 0,
+            summary: `Insufficient corpus (primaries missing): ${cr.primariesDiscovered} primary disclosure document(s) were gate-accepted but could not be fetched; measure scoring was refused rather than scoring an incomplete corpus.`,
+          });
+          return {
+            success: false,
+            error: "Insufficient corpus (primaries missing)",
+            documentsProcessed: fetchResult.fetchedCount,
+            documentsFresh: fetchResult.totalAccepted,
+            documentsCached: 0,
+            failureType: "scoring_error" as const,
+          };
+        }
       } else {
         console.log(`[${companyName}] Skipping fetch phase (reusing cached documents)`);
         // Ensure status reflects we're past fetching
@@ -2810,6 +3152,42 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
 
       const elapsed = Math.round((Date.now() - pipelineStart) / 1000);
       console.log(`[${companyName}] Pipeline completed in ${elapsed}s`);
+
+      // Auto-rerun — bounded zero-corpus re-run (R4-signal-driven). This runs
+      // BEFORE the generic auto-reexam because it is the more specific signal:
+      // "0 usable chunks across ALL measures" (a degenerate/empty pack) is an
+      // operational failure, not a legitimate zero. Replaces any static char/doc
+      // floor. When the corpus is mechanically empty we NEVER return the silent
+      // success-with-29-No result — either a fresh bounded re-run supersedes it,
+      // or (budget spent / deterministic class) it becomes an "Insufficient
+      // corpus" operational failure. No-op when disabled or corpus non-empty.
+      if (analysis.emptyCorpus?.isEmpty && isZeroCorpusRerunEnabled()) {
+        const zc = await maybeZeroCorpusRerun({ company, framework, workspaceId, analysis });
+        if (zc.outcome === "rerun") {
+          // Superseded by a fresh re-examination batch; return success so the
+          // worker does not ALSO fire its generic retry on the same corpus.
+          return {
+            success: true,
+            documentsProcessed: fetchResult.fetchedCount,
+            documentsFresh: fetchResult.totalAccepted,
+            documentsCached: skipFetch ? fetchResult.fetchedCount : 0,
+          };
+        }
+        if (zc.outcome === "capped" || zc.outcome === "quarantine") {
+          // Operational failure (NOT a silent success). Marked "Insufficient
+          // corpus" inside the helper; surface a non-retriable failure so the
+          // worker records it as a final failure rather than looping.
+          return {
+            success: false,
+            analysis,
+            error: `Insufficient corpus — zero usable content across all measures (${zc.outcome}${zc.reason ? ": " + zc.reason : ""})`,
+            documentsProcessed: fetchResult.fetchedCount,
+            documentsFresh: fetchResult.totalAccepted,
+            documentsCached: skipFetch ? fetchResult.fetchedCount : 0,
+            failureType: "scoring_error" as const,
+          };
+        }
+      }
 
       // Auto-reexamination gate on the NORMAL completion path: a company can
       // finish with >0 fetched docs yet a 0% score because the few docs that

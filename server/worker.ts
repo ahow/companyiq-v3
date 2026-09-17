@@ -168,6 +168,14 @@ function isRetriableError(error: string): boolean {
     // no domain). Retrying just hangs again for another full timeout window, so
     // treat it as a final failure to free the slot and let the batch close.
     "Job watchdog timeout",
+    // R1 / auto-rerun: the pipeline itself owns the bounded re-run decision for
+    // an incomplete/empty corpus. When it returns an "Insufficient corpus"
+    // failure it has ALREADY decided not to (or exhausted its dedicated
+    // MAX_ZERO_CORPUS_RERUNS budget / quarantined a deterministic class), so the
+    // worker's generic MAX_RETRY_ATTEMPTS loop must NOT re-run it on top — that
+    // would reuse the same corpus and burn the general budget. Eligible re-runs
+    // are enqueued by the pipeline as their own re-examination batch.
+    "Insufficient corpus",
   ];
   return !nonRetriable.some(msg => error.includes(msg));
 }

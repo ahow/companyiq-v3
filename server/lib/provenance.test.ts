@@ -623,3 +623,66 @@ test("R5c: tenant cache with wrong tenant ID does not match", () => {
   assert.equal(r.provenance, "third_party");
   assert.equal(r.identitySignal, "none");
 });
+
+// ---------------------------------------------------------------------------
+// R3.2 (2026-09): broadened multi-token brand-token rescue (Rule 1b).
+// Behind PROVENANCE_ROBUSTNESS (default on). For 3+ distinctive-token issuer
+// names whose issuer site was missing from related_domains, accept the host
+// when either two distinct brand tokens match host segments, OR a single long
+// (>= 8 char) distinctive token matches. Keyed to verifiable name-token
+// overlap in host segments — never a score signal, no hard-coded names.
+// Uses a synthetic 3-distinctive-token name to stay company-agnostic.
+// ---------------------------------------------------------------------------
+
+const MULTI_TOKEN = {
+  companyName: "Aurora Cascade Dynamics",
+  companyDomain: "", // unconfirmed/absent — Rule 1 cannot fire
+  relatedDomains: [] as string[],
+  companyTicker: "ACD",
+  companyAliases: ["aurora cascade dynamics"],
+};
+
+test("R3.2 fires on two brand-token host-segment matches (multi-token name)", () => {
+  const r = classifyProvenance({
+    url: "https://auroracascade.com/sustainability/report.pdf",
+    title: "Sustainability report",
+    ...MULTI_TOKEN,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /R3/);
+});
+
+test("R3.2 fires on a single long (>=8 char) brand-token host-segment match", () => {
+  const r = classifyProvenance({
+    url: "https://reports.dynamics.io/esg/report.pdf",
+    title: "ESG report",
+    ...MULTI_TOKEN,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /R3/);
+});
+
+test("R3.2 does NOT over-fire on a single short brand-token match", () => {
+  const r = classifyProvenance({
+    url: "https://aurora-news.com/article/aurora-cascade-dynamics-loses-suit",
+    title: "News article",
+    ...MULTI_TOKEN,
+  });
+  assert.equal(r.provenance, "third_party");
+});
+
+test("R3.2 is a clean no-op when PROVENANCE_ROBUSTNESS=false", () => {
+  const prev = process.env.PROVENANCE_ROBUSTNESS;
+  process.env.PROVENANCE_ROBUSTNESS = "false";
+  try {
+    const r = classifyProvenance({
+      url: "https://auroracascade.com/sustainability/report.pdf",
+      title: "Sustainability report",
+      ...MULTI_TOKEN,
+    });
+    assert.equal(r.provenance, "third_party");
+  } finally {
+    if (prev === undefined) delete process.env.PROVENANCE_ROBUSTNESS;
+    else process.env.PROVENANCE_ROBUSTNESS = prev;
+  }
+});

@@ -515,11 +515,13 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
   if (host) {
     const nameTokens = distinctiveNameTokens(input.companyName);
     const brandCandidates = nameTokens.filter(t => t.length >= 5);
+    const registrable = host.replace(/^www\./i, "");
+    const segments = registrable.split(/[.\-_]/);
+    const tokenMatchesSegment = (token: string) =>
+      segments.some(seg => seg === token || seg.startsWith(token) || seg.endsWith(token));
     if (brandCandidates.length >= 1 && nameTokens.length <= 2) {
-      const registrable = host.replace(/^www\./i, "");
-      const segments = registrable.split(/[.\-_]/);
       for (const token of brandCandidates) {
-        if (segments.some(seg => seg === token || seg.startsWith(token) || seg.endsWith(token))) {
+        if (tokenMatchesSegment(token)) {
           return {
             provenance: "issuer",
             reason: `brand-token "${token}" in hostname segment (subsidiary/regional site)`,
@@ -528,6 +530,27 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
             identitySignal: "url-path",
           };
         }
+      }
+    } else if (isProvenanceRobustnessEnabled() && nameTokens.length >= 3 && brandCandidates.length >= 1) {
+      // R3.2 (2026-09): the pre-R3 brand rescue above only fired for issuer
+      // names with <= 2 distinctive tokens, so multi-token names (e.g.
+      // "Japan Exchange Group") whose issuer site was missing from
+      // related_domains fell through to third_party. Broaden generically,
+      // keyed to VERIFIABLE identity (distinctive name-token overlap in the
+      // host segments — never a score signal), while guarding against
+      // over-firing on generic compound names by requiring either:
+      //   - two or more distinct brand tokens matching host segments, OR
+      //   - a single long (>= 8 char) distinctive token matching.
+      const matched = brandCandidates.filter(tokenMatchesSegment);
+      const longMatch = matched.find(t => t.length >= 8);
+      if (matched.length >= 2 || longMatch) {
+        return {
+          provenance: "issuer",
+          reason: `brand-token overlap (${matched.slice(0, 2).join(",")}) in hostname segment (multi-token issuer name, R3)`,
+          regulatorHost: null,
+          irPlatformHost: null,
+          identitySignal: "url-path",
+        };
       }
     }
   }
@@ -759,4 +782,14 @@ function companyMatchesBinding(input: ProvenanceInput, bound: IrTenantBinding): 
 // two-way class into the DB `source_type` column.
 export function provenanceToSourceType(p: ProvenanceClass): "first_party" | "third_party" {
   return p === "issuer" ? "first_party" : "third_party";
+}
+
+// R3 (2026-09): master flag for the provenance-robustness behaviours —
+//   (1) fail-open on unconfirmed company domain (pipeline.ts U17 gate),
+//   (2) broadened multi-token brand-token rescue (Rule 1b above),
+//   (3) high-exclusion-ratio empty-pack refill trigger (pipeline.ts).
+// Default-ON; set PROVENANCE_ROBUSTNESS="false" to restore pre-R3 behaviour
+// exactly. Mirrors the `!== "false"` default-on idiom used elsewhere.
+export function isProvenanceRobustnessEnabled(): boolean {
+  return process.env.PROVENANCE_ROBUSTNESS !== "false";
 }
