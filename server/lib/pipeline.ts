@@ -43,6 +43,49 @@ import { traceKeep, traceDrop, traceInfo, traceMatches, TRACE_ENABLED } from "./
 import { deriveAliases } from "./issuer-resolver.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
+/**
+ * FIX 2 — build the issuerProfileSummary sidecar. Pure/deterministic and
+ * exported so it can be unit-tested in isolation.
+ *
+ * When `fromDiagnostics` is true (ISSUER_SUMMARY_FROM_DIAGNOSTICS on) and a
+ * retrievalDiagnostics.issuerProfile object is present, verifiedDomainCount and
+ * resolutionPath are read from the ProfileDiagnostics object (the CORRECT,
+ * already-computed values). Otherwise it reproduces the prior read off the raw
+ * IssuerProfile object exactly — which is buggy (domainCandidates never carry
+ * status "verified"; IssuerProfile has no resolutionPath), so callers should
+ * keep the flag on. Telemetry-only; never affects scoring.
+ */
+export function buildIssuerProfileSummary(
+  profile: any,
+  retrievalDiagnostics: any,
+  fromDiagnostics: boolean,
+): { legalName: any; figiName: any; aliasCount: number; verifiedDomainCount: number; resolutionPath: string[] } {
+  const p: any = profile || {};
+  const rdProfile: any = fromDiagnostics ? retrievalDiagnostics?.issuerProfile : null;
+  if (rdProfile) {
+    return {
+      legalName: rdProfile.legalName ?? p.legalName,
+      figiName: rdProfile.figiName ?? (p.figiName || null),
+      aliasCount: typeof rdProfile.aliasCount === "number" ? rdProfile.aliasCount : (p.aliases || []).length,
+      verifiedDomainCount: typeof rdProfile.verifiedDomainCount === "number" ? rdProfile.verifiedDomainCount : 0,
+      resolutionPath: Array.isArray(rdProfile.resolutionPath) ? rdProfile.resolutionPath.slice(-6) : [],
+    };
+  }
+  return {
+    legalName: p.legalName,
+    figiName: p.figiName || null,
+    aliasCount: (p.aliases || []).length,
+    verifiedDomainCount: (p.domainCandidates || []).filter((d: any) => d.status === "verified").length,
+    resolutionPath: (p.resolutionPath || []).slice(-6),
+  };
+}
+
+/** FIX 2 — flag helper: ISSUER_SUMMARY_FROM_DIAGNOSTICS (default-on). */
+export function isIssuerSummaryFromDiagnosticsEnabled(): boolean {
+  const v = (process.env.ISSUER_SUMMARY_FROM_DIAGNOSTICS || "").toLowerCase();
+  return v !== "0" && v !== "false";
+}
+
 // ─── Timeout Constants ──────────────────────────────────────────────────────
 // NOTE: these must all stay below the BullMQ queue/worker lockDuration (10 min)
 // so a single long-running company never exceeds its lock. Large annual-report
@@ -628,13 +671,23 @@ async function runFetchPhase(opts: {
     if ((discoveryResult as any).issuerProfile) {
       // Only summary fields — do not persist the full profile (large).
       const p: any = (discoveryResult as any).issuerProfile;
-      merged.issuerProfileSummary = {
-        legalName: p.legalName,
-        figiName: p.figiName || null,
-        aliasCount: (p.aliases || []).length,
-        verifiedDomainCount: (p.domainCandidates || []).filter((d: any) => d.status === "verified").length,
-        resolutionPath: (p.resolutionPath || []).slice(-6),
-      };
+      // FIX 2 — ISSUER_SUMMARY_FROM_DIAGNOSTICS (default-on, telemetry-only).
+      // The previous code built this summary from the IssuerProfile object,
+      // which has neither a `status:"verified"` domain state (the type only
+      // has "accepted"/"rejected", so the filter ALWAYS returned 0) nor a
+      // `resolutionPath` field (it lives on ProfileDiagnostics, so it was
+      // ALWAYS []). The correct, already-computed values are on the
+      // ProfileDiagnostics object, which was persisted verbatim onto
+      // merged.retrievalDiagnostics.issuerProfile a few lines above. Read
+      // from there so the sidecar summary matches retrievalDiagnostics.
+      // Falls back to the old (buggy) read when the diagnostics object is
+      // absent or the flag is off, so behaviour is otherwise unchanged.
+      // ZERO scoring impact — telemetry only.
+      merged.issuerProfileSummary = buildIssuerProfileSummary(
+        p,
+        merged?.retrievalDiagnostics,
+        isIssuerSummaryFromDiagnosticsEnabled(),
+      );
     }
     await storage.updateCompany(companyId, workspaceId, {
       discoveryDiagnostics: merged,
@@ -2249,6 +2302,41 @@ async function runAnalyzePhase(opts: {
       }
     } catch (propErr: any) {
       console.warn(`[${companyName}] Fix 1a: failed to raise domain proposal: ${propErr.message}`);
+    }
+
+    // FIX 3 — PROVENANCE_REFILL_TELEMETRY (default-on, telemetry-only).
+    // The U17 over-prune safety net (R3.3 high-exclusion + empty-pack refill)
+    // already self-corrects the corpus, but until now the ONLY evidence it
+    // fired was a transient console.warn, a verdictNuance on measures, and a
+    // company_domain_proposal row — none of it persisted to the discovery
+    // sidecar, so gate-time diagnosis of an over-prune had no structured data.
+    // Persist a minimal, structured record of the refill event into
+    // discoveryDiagnostics (read-merge-write so it survives re-fetches). NO
+    // behavioural or scoring change — the corpus refill above is unchanged.
+    const refillTelemetryEnabled =
+      (process.env.PROVENANCE_REFILL_TELEMETRY || "").toLowerCase() !== "0" &&
+      (process.env.PROVENANCE_REFILL_TELEMETRY || "").toLowerCase() !== "false";
+    if (provenanceRobustnessEnabled && refillTelemetryEnabled) {
+      try {
+        const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+        priorDiag.provenanceRefill = {
+          fired: true,
+          trigger: emptyPackRefill ? "empty_pack" : "high_exclusion",
+          emptyPackRefill,
+          highExclusionRefill,
+          exclusionRatio: Number(exclusionRatio.toFixed(4)),
+          exclusionRatioThreshold: HIGH_EXCLUSION_RATIO,
+          excludedThirdPartyCount,
+          excludedThirdPartyChars,
+          totalContentChars,
+          failOpenKeptCount,
+          docsRefilled: documentTexts.length,
+          at: new Date().toISOString(),
+        };
+        await storage.updateCompany(companyId, workspaceId, { discoveryDiagnostics: priorDiag } as any);
+      } catch (telErr: any) {
+        console.warn(`[${companyName}] FIX3/PROVENANCE_REFILL_TELEMETRY: failed to persist refill telemetry (non-fatal): ${telErr?.message}`);
+      }
     }
   }
 

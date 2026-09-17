@@ -55,6 +55,22 @@ function isEntityScoreRecalEnabled(): boolean {
 }
 
 /**
+ * FIX 1 — DOMAIN_CORROBORATION_PERSIST (default-on).
+ * When on, an INDEPENDENT FMP-corroborated domain (derived by the caller from
+ * the durable companies.fmp_website ISIN→website field, deny-list guarded) is
+ * seeded into verifiedDomains here, alongside the CHANGE 1 seeds. This restores
+ * verifiedDomainCount for issuers whose companies.domain enters the run NULL
+ * (wiped by a prior run's I53/I54 discriminative-check failure) but whose FMP
+ * website independently corroborates the correct domain. Generic: reads only
+ * what the caller passes for ANY issuer, never a hardcoded value. When off,
+ * corroborated domains are ignored and seeding behaves exactly as before.
+ */
+function isDomainCorroborationPersistEnabled(): boolean {
+  const v = (process.env.DOMAIN_CORROBORATION_PERSIST || "").toLowerCase();
+  return v !== "0" && v !== "false";
+}
+
+/**
  * CHANGE 4 — env-overridable floor a verifiable-identifier match must clear.
  * Defaults to the chunk-gate hard-reject floor (20) so an identified doc is
  * never hard-rejected as "wrong entity". Overridable because the number is a
@@ -484,6 +500,13 @@ export async function resolveIssuerProfile(opts: {
   country: string | null;
   /** Optional explicit related-domain list (CHANGE 1 seeding); falls back to companyRow. */
   relatedDomains?: string[] | null;
+  /**
+   * FIX 1 — independently corroborated domain(s) (e.g. from FMP's durable
+   * ISIN→website field). Seeded into verifiedDomains when
+   * DOMAIN_CORROBORATION_PERSIST is on, so issuers whose companies.domain
+   * entered the run NULL still get a verified domain this run.
+   */
+  corroboratedDomains?: string[] | null;
   /** Full company row for cached FIGI fields */
   companyRow?: any;
 }): Promise<{ profile: IssuerProfile; diagnostics: ProfileDiagnostics }> {
@@ -555,28 +578,44 @@ export async function resolveIssuerProfile(opts: {
   // company. Normalized + de-duped consistently with scoreEntityMatch's
   // comparison. Default-on; ISSUER_SEED_VERIFIED_DOMAIN=0 restores prior
   // behaviour exactly.
-  if (isIssuerSeedVerifiedDomainEnabled()) {
+  const seedVerifiedEnabled = isIssuerSeedVerifiedDomainEnabled();
+  const corroboratePersistEnabled = isDomainCorroborationPersistEnabled();
+  if (seedVerifiedEnabled || corroboratePersistEnabled) {
     const seedCandidates: string[] = [];
-    if (opts.domain) seedCandidates.push(opts.domain);
-    const rowRelated =
-      (opts.relatedDomains as string[] | null | undefined) ||
-      (opts.companyRow?.relatedDomains as string[] | null | undefined) ||
-      (opts.companyRow?.related_domains as string[] | null | undefined) ||
-      [];
-    if (Array.isArray(rowRelated)) {
-      for (const rd of rowRelated) if (rd) seedCandidates.push(rd);
+    if (seedVerifiedEnabled) {
+      if (opts.domain) seedCandidates.push(opts.domain);
+      const rowRelated =
+        (opts.relatedDomains as string[] | null | undefined) ||
+        (opts.companyRow?.relatedDomains as string[] | null | undefined) ||
+        (opts.companyRow?.related_domains as string[] | null | undefined) ||
+        [];
+      if (Array.isArray(rowRelated)) {
+        for (const rd of rowRelated) if (rd) seedCandidates.push(rd);
+      }
     }
+    // FIX 1: independently-corroborated domains (deny-list guarded upstream).
+    const corroborated =
+      corroboratePersistEnabled && Array.isArray(opts.corroboratedDomains)
+        ? opts.corroboratedDomains.filter((d): d is string => !!d)
+        : [];
+    for (const cd of corroborated) seedCandidates.push(cd);
+    const corroboratedNorm = new Set(corroborated.map((c) => normalizeVerifiedDomain(c)));
     const already = new Set(verifiedDomains.map((d) => normalizeVerifiedDomain(d)));
     let seededCount = 0;
+    let corroboratedSeeded = 0;
     for (const cand of seedCandidates) {
       const norm = normalizeVerifiedDomain(cand);
       if (!norm || already.has(norm)) continue;
       verifiedDomains.push(norm);
       already.add(norm);
       seededCount++;
+      if (corroboratedNorm.has(norm)) corroboratedSeeded++;
     }
     if (seededCount > 0) {
       resolutionPath.push(`domain-seeded(${seededCount})`);
+    }
+    if (corroboratedSeeded > 0) {
+      resolutionPath.push(`domain-corroborated(${corroboratedSeeded})`);
     }
   }
 

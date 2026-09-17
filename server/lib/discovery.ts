@@ -52,6 +52,58 @@ const MAX_DOCS_RETURNED = 90;
 const PRE_GATE_CAP = 180;
 const SEARCH_TIMEOUT = 15000;
 
+// ─── FIX 1: FMP domain corroboration (DOMAIN_CORROBORATION_PERSIST) ──────────
+// Closed deny-list of shared/aggregator/exchange/registry hosts that must NEVER
+// be treated as an issuer's own corporate domain. Hoisted to module scope so
+// both the FMP resolution ladder and the corroboration helper share ONE list.
+const FMP_NEVER_ISSUER_DOMAINS = new Set([
+  "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
+  "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
+  "google.com", "amazon.com", "reddit.com", "medium.com",
+  "nasdaq.com", "marketwatch.com", "finance.yahoo.com", "yahoo.com",
+  "moomoo.com", "seekingalpha.com", "stockanalysis.com", "tipranks.com",
+  "ssga.com", "ishares.com", "blackrock.com", "vanguard.com",
+  "morningstar.com", "fool.com", "investing.com", "stocktwits.com",
+  "finbox.com", "simplywall.st", "gurufocus.com", "zacks.com",
+  "canada.ca", "gov.uk", "gov.au", "europa.eu",
+]);
+
+/**
+ * FIX 1 — DOMAIN_CORROBORATION_PERSIST (default-on).
+ * When on, the durable FMP authoritative ISIN→website field (companies.fmp_website)
+ * is used as an INDEPENDENT corroboration source for the issuer's own domain.
+ * This makes domain resolution robust for issuers whose legal name lacks a
+ * distinctive token (e.g. "3I GROUP PLC" ↔ 3i.com), which otherwise fail the
+ * I53/I54 discriminative-token check every run and get their companies.domain
+ * NULL-wiped — starving the next run's seeding and emptying the retrieval pool.
+ * Generic: reads whatever FMP holds for ANY issuer, deny-list guarded, never a
+ * hardcoded per-company value. When off (=0/false), behaviour is exactly as
+ * before: no corroboration seeding, no clear-suppression, cache-hit FMP path
+ * keeps requiring the strict discriminative gate.
+ */
+function isDomainCorroborationPersistEnabled(): boolean {
+  const v = (process.env.DOMAIN_CORROBORATION_PERSIST || "").toLowerCase();
+  return v !== "0" && v !== "false";
+}
+
+/**
+ * FIX 1 helper — derive an independent corroborated domain from the durable
+ * FMP website field on the company row. Returns the normalised registrable
+ * domain when present and NOT on the never-issuer deny-list, else null.
+ * Deny-list only (no discriminative-token gate) because FMP's ISIN→website is
+ * authoritative-per-issuer and corporates routinely brand under a short name
+ * not derivable from the legal name. Framework-agnostic and topic-agnostic.
+ */
+function computeFmpCorroboratedDomain(companyRow: any): string | null {
+  const fmpWebsite = (companyRow?.fmpWebsite ?? companyRow?.fmp_website) as string | null | undefined;
+  if (!fmpWebsite) return null;
+  const cand = fmpWebsiteToDomain(fmpWebsite);
+  if (!cand) return null;
+  const norm = normaliseToRegistrableDomain(cand);
+  if (!norm || FMP_NEVER_ISSUER_DOMAINS.has(norm)) return null;
+  return norm;
+}
+
 // ─── Document Tier Classification ──────────────────────────────────────────
 // Tier 1 (mandatory): 10-K, 20-F, annual report, proxy/DEF 14A, AGM circular
 // Tier 2 (priority): Investor presentations, governance pages, AI/responsible-AI policy, press releases
@@ -3248,6 +3300,17 @@ async function searchCompanyDocumentsInner(opts: {
   let issuerProfile: IssuerProfile | undefined;
   let queryExpansionResult: QueryExpansionResult | undefined;
   let registrySummary: RegistrySearchSummary = emptyRegistrySummary();
+  // FIX 1: derive an independent FMP-corroborated domain from the durable
+  // companies.fmp_website field (deny-list guarded). resolveIssuerProfile runs
+  // BEFORE the domain ladder, and companies.domain may enter this run as NULL
+  // (wiped by a prior run's I53/I54 discriminative-check failure), so seeding
+  // Change 1 from this corroboration is what restores verifiedDomainCount:1 in
+  // the SAME run for issuers with non-distinctive legal names. Default-on;
+  // null when the flag is off so seeding behaviour is unchanged.
+  const corroborationEnabled = isDomainCorroborationPersistEnabled();
+  const corroboratedDomain = corroborationEnabled
+    ? computeFmpCorroboratedDomain(opts.companyRow || {})
+    : null;
   try {
     const profileResult = await resolveIssuerProfile({
       companyId,
@@ -3258,6 +3321,7 @@ async function searchCompanyDocumentsInner(opts: {
       sector: opts.sector || null,
       country: opts.country || null,
       companyRow: opts.companyRow,
+      corroboratedDomains: corroboratedDomain ? [corroboratedDomain] : null,
     });
     issuerProfile = profileResult.profile;
     diagBuilder.setIssuerProfile(issuerProfile, profileResult.diagnostics);
@@ -3507,15 +3571,35 @@ async function searchCompanyDocumentsInner(opts: {
     const nameTokens = nameForVerify.toLowerCase().split(/[\s&,.']+/).filter((w) => w.length >= 3);
     const check = domainMatchesIssuerDistinctively(cachedDomain, aliasesForVerify, nameTokens);
     if (!check.ok) {
-      console.warn(`[${companyName}] I53/I54: cached domain '${cachedDomain}' fails discriminative check (aliases=[${aliasesForVerify.join(",")}], name='${nameForVerify}') — clearing`);
-      if (companyRow.id) {
-        try {
-          await db.execute(sql`UPDATE companies SET domain = NULL, related_domains = NULL, related_domains_pipeline_version = NULL WHERE id = ${companyRow.id}`);
-        } catch (clrErr: any) {
-          console.warn(`[${companyName}] I53: failed to clear stale domain cache: ${clrErr?.message}`);
+      // FIX 1: the discriminative-token check fails for issuers whose legal
+      // name lacks a distinctive token (e.g. "3I GROUP PLC" ↔ 3i.com). Before
+      // destroying the cached family, consult the INDEPENDENT FMP corroboration
+      // source. When FMP's durable ISIN→website field corroborates the SAME
+      // cached domain, the value is trustworthy despite the token mismatch, so
+      // we keep it (non-destructive) instead of NULL-wiping — which is the root
+      // cause of the domain=NULL regression that empties the retrieval pool.
+      // The RBC/canada.ca-style protection is preserved: a domain that FMP does
+      // NOT corroborate (or that is on the deny-list) is still cleared exactly
+      // as before.
+      const cachedNorm = normaliseToRegistrableDomain(cachedDomain);
+      const clearSuppressed =
+        corroborationEnabled &&
+        !!corroboratedDomain &&
+        cachedNorm === corroboratedDomain;
+      if (clearSuppressed) {
+        // Fail-loud: record that FMP corroboration overrode the destructive clear.
+        console.warn(`[${companyName}] FIX1/DOMAIN_CORROBORATION_PERSIST: cached domain '${cachedDomain}' fails I53/I54 discriminative check BUT is corroborated by FMP (fmpCorroborated=true, corroboratedDomain='${corroboratedDomain}', clearSuppressed=true) — keeping cached domain, NOT clearing`);
+      } else {
+        console.warn(`[${companyName}] I53/I54: cached domain '${cachedDomain}' fails discriminative check (aliases=[${aliasesForVerify.join(",")}], name='${nameForVerify}'; fmpCorroborated=${corroborationEnabled && !!corroboratedDomain}, corroboratedDomain='${corroboratedDomain ?? ""}', clearSuppressed=false) — clearing`);
+        if (companyRow.id) {
+          try {
+            await db.execute(sql`UPDATE companies SET domain = NULL, related_domains = NULL, related_domains_pipeline_version = NULL WHERE id = ${companyRow.id}`);
+          } catch (clrErr: any) {
+            console.warn(`[${companyName}] I53: failed to clear stale domain cache: ${clrErr?.message}`);
+          }
         }
+        cachedDomain = null;
       }
-      cachedDomain = null;
     }
   }
 
@@ -3603,17 +3687,7 @@ async function searchCompanyDocumentsInner(opts: {
           // corporate websites often use a brand name (commbank, scotiabank,
           // mufg) that is not derivable from the legal name, so requiring
           // token equality is too strict for FMP data.
-          const FMP_NEVER_ISSUER_DOMAINS = new Set([
-            "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com",
-            "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
-            "google.com", "amazon.com", "reddit.com", "medium.com",
-            "nasdaq.com", "marketwatch.com", "finance.yahoo.com", "yahoo.com",
-            "moomoo.com", "seekingalpha.com", "stockanalysis.com", "tipranks.com",
-            "ssga.com", "ishares.com", "blackrock.com", "vanguard.com",
-            "morningstar.com", "fool.com", "investing.com", "stocktwits.com",
-            "finbox.com", "simplywall.st", "gurufocus.com", "zacks.com",
-            "canada.ca", "gov.uk", "gov.au", "europa.eu",
-          ]);
+          // FIX 1: deny-list hoisted to module scope (FMP_NEVER_ISSUER_DOMAINS).
           const denied = normalisedFmpDomain && FMP_NEVER_ISSUER_DOMAINS.has(normalisedFmpDomain);
           if (normalisedFmpDomain && !denied) {
             fmpResolvedDomain = normalisedFmpDomain;
@@ -3661,6 +3735,20 @@ async function searchCompanyDocumentsInner(opts: {
         if (gate.ok) {
           fmpResolvedDomain = normalisedFmpDomain;
           console.log(`[${companyName}] 40-Z (cache-hit): reusing FMP domain ${normalisedFmpDomain}`);
+        } else if (
+          corroborationEnabled &&
+          !!corroboratedDomain &&
+          normalisedFmpDomain === corroboratedDomain &&
+          !FMP_NEVER_ISSUER_DOMAINS.has(normalisedFmpDomain)
+        ) {
+          // FIX 1: the strict discriminative-token gate fails for issuers whose
+          // legal name lacks a distinctive token (e.g. "3I GROUP PLC" ↔ 3i.com).
+          // FMP's ISIN→website is authoritative-per-issuer, so when the cached
+          // FMP domain is corroborated (deny-list guarded) we accept it here as
+          // the resolved domain — restoring a non-null companies.domain this run
+          // instead of falling through to an empty resolution and re-NULL.
+          fmpResolvedDomain = normalisedFmpDomain;
+          console.warn(`[${companyName}] FIX1/DOMAIN_CORROBORATION_PERSIST: 40-Z (cache-hit) FMP domain '${normalisedFmpDomain}' fails discriminative gate BUT is corroborated (fmpCorroborated=true, corroboratedDomain='${corroboratedDomain}') — accepting as resolved domain`);
         }
       }
     }
