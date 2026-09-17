@@ -134,12 +134,40 @@ section("Soft flag: 2023 doc (age 3, currentYear 2026) → kept, vintage-warning
 section("Multiple chunks from same doc → one rejection entry with correct chunkCount");
 {
   // Same URL, five chunks, all deep-vintage: single rejected entry with chunkCount=5.
-  const chunks: Chunk[] = [];
-  for (let i = 0; i < 5; i++) chunks.push(mkChunk(`c${i}`, "https://example.com/old-2018.pdf", "Old 2018 Report", 0, i));
-  const r = applyChunkSanityGate(chunks, { currentYear: CY });
-  ok(r.rejected.length === 1, `group-collapse: one rejected entry for 5 chunks (got ${r.rejected.length})`);
-  ok(r.rejected[0].chunkCount === 5, `group-collapse: chunkCount aggregates to 5 (got ${r.rejected[0]?.chunkCount})`);
-  ok(r.keep.length === 0, `group-collapse: keep=0 (got ${r.keep.length})`);
+  // With CHUNK_GATE_FAIL_OPEN default-on, an all-rejected pool would be rescued by
+  // the fail-open safety net; this assertion targets the *gate decision* itself, so
+  // it disables the fail-open flag to observe the prior collapse-to-empty behaviour.
+  const prev = process.env.CHUNK_GATE_FAIL_OPEN;
+  process.env.CHUNK_GATE_FAIL_OPEN = "false";
+  try {
+    const chunks: Chunk[] = [];
+    for (let i = 0; i < 5; i++) chunks.push(mkChunk(`c${i}`, "https://example.com/old-2018.pdf", "Old 2018 Report", 0, i));
+    const r = applyChunkSanityGate(chunks, { currentYear: CY });
+    ok(r.rejected.length === 1, `group-collapse: one rejected entry for 5 chunks (got ${r.rejected.length})`);
+    ok(r.rejected[0].chunkCount === 5, `group-collapse: chunkCount aggregates to 5 (got ${r.rejected[0]?.chunkCount})`);
+    ok(r.keep.length === 0, `group-collapse: keep=0 with fail-open disabled (got ${r.keep.length})`);
+  } finally {
+    if (prev === undefined) delete process.env.CHUNK_GATE_FAIL_OPEN;
+    else process.env.CHUNK_GATE_FAIL_OPEN = prev;
+  }
+}
+
+section("CHUNK_GATE_FAIL_OPEN default-on: all-rejected pool is rescued (keep>0)");
+{
+  // Same input as above, but with the fail-open flag at its default (on): rather
+  // than collapsing to an empty pool, the gate keeps the least-bad chunk(s) and
+  // emits a loud [CHUNK_GATE_FAIL_OPEN] warning. This proves the new safety net.
+  const prev = process.env.CHUNK_GATE_FAIL_OPEN;
+  delete process.env.CHUNK_GATE_FAIL_OPEN;
+  try {
+    const chunks: Chunk[] = [];
+    for (let i = 0; i < 5; i++) chunks.push(mkChunk(`c${i}`, "https://example.com/old-2018.pdf", "Old 2018 Report", 0, i));
+    const r = applyChunkSanityGate(chunks, { currentYear: CY });
+    ok(r.keep.length > 0, `fail-open: least-bad chunks rescued rather than empty pool (got keep=${r.keep.length})`);
+  } finally {
+    if (prev === undefined) delete process.env.CHUNK_GATE_FAIL_OPEN;
+    else process.env.CHUNK_GATE_FAIL_OPEN = prev;
+  }
 }
 
 section("preserveIfOnlySource: true accepted but no-op (identical to default)");

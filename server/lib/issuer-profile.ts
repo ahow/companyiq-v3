@@ -18,6 +18,69 @@ import { PIPELINE_VERSION } from "./pipeline-version.js";
 // Note: db/sql imports removed — profile resolution is pure computation.
 // Persistence is handled by the caller (pipeline.ts / discovery.ts).
 
+// ─── Env flags (default-ON; "0"/"false" restores exact prior behaviour) ──────
+
+/**
+ * CHANGE 1 — ISSUER_SEED_VERIFIED_DOMAIN (default-on).
+ * When on, resolveIssuerProfile seeds `verifiedDomains` from the company
+ * record's KNOWN `domain` (+ `related_domains`) even when the heuristic
+ * `verifyDomainCandidate` step did not "accept" the domain. Root-cause fix for
+ * issuers whose legal name lacks distinctive tokens (e.g. "3i Group plc"):
+ * `verifyDomainCandidate` cannot corroborate 3i.com from the name so it stays
+ * unverified → scoreEntityMatch never awards the +40 domain signal → every
+ * first-party doc scores below the chunk-gate floor. The company `domain`
+ * column is itself a verifiable identifier that operators/registry resolution
+ * populated; trusting it here is generic (uses whatever the row holds for ANY
+ * company, never a hardcoded value). When off, verifiedDomains is populated
+ * exactly as before.
+ */
+function isIssuerSeedVerifiedDomainEnabled(): boolean {
+  const v = (process.env.ISSUER_SEED_VERIFIED_DOMAIN || "").toLowerCase();
+  return v !== "0" && v !== "false";
+}
+
+/**
+ * CHANGE 4 — ENTITY_SCORE_RECAL (default-on).
+ * When on, scoreEntityMatch guarantees that a doc which matches at least one
+ * STRONG VERIFIABLE IDENTIFIER (verified-domain, ISIN, or FIGI-name) clears the
+ * chunk-gate floor, so issuers with non-distinctive legal names are not
+ * systematically under-scored despite carrying correct identifiers. Tied
+ * strictly to an actual identifier MATCH (never a name/ticker/isin literal and
+ * never a rationale/quality signal), so genuinely-unrelated docs are unaffected.
+ * When off, scoreEntityMatch behaves exactly as before.
+ */
+function isEntityScoreRecalEnabled(): boolean {
+  const v = (process.env.ENTITY_SCORE_RECAL || "").toLowerCase();
+  return v !== "0" && v !== "false";
+}
+
+/**
+ * CHANGE 4 — env-overridable floor a verifiable-identifier match must clear.
+ * Defaults to the chunk-gate hard-reject floor (20) so an identified doc is
+ * never hard-rejected as "wrong entity". Overridable because the number is a
+ * cross-module contract (passage-retrieval's gate uses <20); kept here as the
+ * single tunable rather than a scattered magic number.
+ */
+function verifiableIdentifierFloor(): number {
+  const raw = parseInt(process.env.ENTITY_SCORE_IDENTIFIER_FLOOR || "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 20;
+}
+
+/**
+ * Normalize a domain for verifiedDomains: strip scheme, leading www., any
+ * path/query, and lowercase. Matches how scoreEntityMatch compares domains
+ * (substring on the lowercased URL) and how pipeline.ts normalizes domains
+ * elsewhere (`.replace(/^www\./,"").toLowerCase()`).
+ */
+export function normalizeVerifiedDomain(raw: string | null | undefined): string {
+  if (!raw) return "";
+  let d = raw.trim().toLowerCase();
+  d = d.replace(/^[a-z][a-z0-9+.-]*:\/\//, ""); // strip scheme
+  d = d.replace(/^www\./, "");                  // strip leading www.
+  d = d.split(/[/?#]/)[0];                       // drop path/query/fragment
+  return d.trim();
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface IssuerAlias {
@@ -419,6 +482,8 @@ export async function resolveIssuerProfile(opts: {
   domain: string | null;
   sector: string | null;
   country: string | null;
+  /** Optional explicit related-domain list (CHANGE 1 seeding); falls back to companyRow. */
+  relatedDomains?: string[] | null;
   /** Full company row for cached FIGI fields */
   companyRow?: any;
 }): Promise<{ profile: IssuerProfile; diagnostics: ProfileDiagnostics }> {
@@ -478,6 +543,41 @@ export async function resolveIssuerProfile(opts: {
       verifiedDomains.push(opts.domain);
     }
     resolutionPath.push(`domain-verified(${verification.status})`);
+  }
+
+  // CHANGE 1 — Seed verifiedDomains from the known company domain + related
+  // domains (gate fix, root cause). The `companies.domain`/`related_domains`
+  // columns are themselves verifiable identifiers on the record; when the
+  // heuristic verifyDomainCandidate step above did NOT accept them (common for
+  // issuers whose legal name lacks distinctive tokens, e.g. "3i Group plc"),
+  // seed them here so scoreEntityMatch can still award the domain signal to
+  // genuine first-party docs. Generic: reads whatever the row holds for ANY
+  // company. Normalized + de-duped consistently with scoreEntityMatch's
+  // comparison. Default-on; ISSUER_SEED_VERIFIED_DOMAIN=0 restores prior
+  // behaviour exactly.
+  if (isIssuerSeedVerifiedDomainEnabled()) {
+    const seedCandidates: string[] = [];
+    if (opts.domain) seedCandidates.push(opts.domain);
+    const rowRelated =
+      (opts.relatedDomains as string[] | null | undefined) ||
+      (opts.companyRow?.relatedDomains as string[] | null | undefined) ||
+      (opts.companyRow?.related_domains as string[] | null | undefined) ||
+      [];
+    if (Array.isArray(rowRelated)) {
+      for (const rd of rowRelated) if (rd) seedCandidates.push(rd);
+    }
+    const already = new Set(verifiedDomains.map((d) => normalizeVerifiedDomain(d)));
+    let seededCount = 0;
+    for (const cand of seedCandidates) {
+      const norm = normalizeVerifiedDomain(cand);
+      if (!norm || already.has(norm)) continue;
+      verifiedDomains.push(norm);
+      already.add(norm);
+      seededCount++;
+    }
+    if (seededCount > 0) {
+      resolutionPath.push(`domain-seeded(${seededCount})`);
+    }
   }
 
   // Step 4: Corroborate acronyms with domain evidence
@@ -666,6 +766,34 @@ export function scoreEntityMatch(
     isAmbiguous = true;
     score = Math.min(score, 25); // Cap at weak match
     signals.push("acronym-only-match(ambiguous)");
+  }
+
+  // CHANGE 4 — Verifiable-identifier floor recalibration. Issuers whose legal
+  // name lacks distinctive tokens (e.g. "3i Group plc", generic Japanese
+  // holding names) can score below the chunk-gate floor even on genuine
+  // first-party documents, because the legal-name signal contributes little.
+  // When a STRONG verifiable identifier actually MATCHED this document — a
+  // verified/seeded domain in the URL, the ISIN string in the content, or the
+  // FIGI canonical name in the content — lift the score to at least the floor
+  // so those docs survive the gate. This keys strictly off ACTUAL identifier
+  // matches recorded as signals above (never off the name, ticker, rationale
+  // or quality), so a document with NO identifier match is never boosted.
+  // Default-on; ENTITY_SCORE_RECAL=0 restores prior behaviour exactly.
+  // ENTITY_SCORE_IDENTIFIER_FLOOR overrides the floor (default 20).
+  if (isEntityScoreRecalEnabled()) {
+    const hasStrongIdentifierMatch = signals.some(
+      (s) =>
+        s.startsWith("domain-match:") ||
+        s === "isin-in-content" ||
+        s.startsWith("figi-name-match("),
+    );
+    if (hasStrongIdentifierMatch) {
+      const floor = verifiableIdentifierFloor();
+      if (score < floor) {
+        score = floor;
+        signals.push(`identifier-floor-applied(${floor})`);
+      }
+    }
   }
 
   // Cap score at 100

@@ -13,7 +13,7 @@ import { runTargetedReretrieval, type RetrievalReviewQueue } from "./retrieval-r
 import type { Company, TrustedSource } from "../../shared/schema.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
-import { generateDocumentHash } from "./processor.js";
+import { generateDocumentHash, generateContentStableHash } from "./processor.js";
 import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
 import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./corpus-hygiene.js";
@@ -1049,8 +1049,20 @@ export async function summarizeDocuments(opts: {
   // invalidates the summary cache without a manual salt rotation. This closes
   // the class of bugs where a code change to the summarizer ships to prod but
   // scored batches silently use stale cached summaries.
+  // CHANGE 3 — content-stable summary cache key. Default-on: hash the document
+  // TEXT (whitespace/order-normalized, no volatile URL/timestamp fields) so the
+  // same corpus content reuses its summary regardless of URL or fetch order, and
+  // silently-changed content invalidates the entry. CONTENT_STABLE_HASH=0 (or
+  // =false) restores the prior URL-set hashing exactly. The `:corpus-${VERSION}`
+  // salt is preserved in both modes so a code change still invalidates the cache.
+  const contentStableHashEnabled =
+    (process.env.CONTENT_STABLE_HASH || "").toLowerCase() !== "0" &&
+    (process.env.CONTENT_STABLE_HASH || "").toLowerCase() !== "false";
+  const hashBasis = contentStableHashEnabled
+    ? generateContentStableHash(documentTexts)
+    : generateDocumentHash(documentUrls);
   const docHash = createHash("sha256")
-    .update(generateDocumentHash(documentUrls) + `:corpus-${PIPELINE_VERSION}`)
+    .update(hashBasis + `:corpus-${PIPELINE_VERSION}`)
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
@@ -1338,7 +1350,10 @@ export async function summarizeDocuments(opts: {
     const gate = applyChunkSanityGate(docChunks, {
       issuerProfile,
       currentYear: new Date().getUTCFullYear(),
-      preserveIfOnlySource: false,
+      // CHANGE 2: preserve the only available source rather than letting the
+      // gate hand retrieval an empty corpus. Effective only when
+      // CHUNK_GATE_FAIL_OPEN is on (default); a no-op when the flag is off.
+      preserveIfOnlySource: true,
     });
     if (gate.rejected.length > 0) {
       const totalRejected = gate.rejected.reduce((a, r) => a + r.chunkCount, 0);

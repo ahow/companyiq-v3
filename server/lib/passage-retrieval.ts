@@ -5,6 +5,18 @@ import { flattenTerms } from "./terminology-discovery.js";
 import type { IssuerProfile } from "./issuer-profile.js";
 import { scoreEntityMatch } from "./issuer-profile.js";
 
+/**
+ * CHANGE 2 flag — chunk-gate fail-open safety net + preserveIfOnlySource.
+ * Default-on. Set CHUNK_GATE_FAIL_OPEN=0 (or =false) to restore the prior
+ * behaviour exactly (the gate may empty the pool; preserveIfOnlySource is a
+ * no-op). Keyed to a verifiable structural condition (all input chunks
+ * rejected / a source fully removed), never to score or name.
+ */
+function isChunkGateFailOpenEnabled(): boolean {
+  const v = (process.env.CHUNK_GATE_FAIL_OPEN || "").toLowerCase();
+  return v !== "0" && v !== "false";
+}
+
 // ─── BM25 Implementation ─────────────────────────────────────────────────────
 
 export interface BM25Index {
@@ -179,8 +191,12 @@ export function applyChunkSanityGate(
 ): ChunkSanityResult {
   const currentYear = opts.currentYear ?? new Date().getUTCFullYear();
   const issuerProfile = opts.issuerProfile;
-  // TODO: implement in change 4 — currently accepted but not yet used.
-  void opts.preserveIfOnlySource;
+  const failOpenEnabled = isChunkGateFailOpenEnabled();
+  if (!failOpenEnabled) {
+    // Flag off: exact prior behaviour — preserveIfOnlySource remains a no-op
+    // and the gate may empty the pool.
+    void opts.preserveIfOnlySource;
+  }
 
   if (chunks.length === 0) {
     return { keep: [], rejected: [], softFlagged: [] };
@@ -208,6 +224,11 @@ export function applyChunkSanityGate(
   const keep: Chunk[] = [];
   const rejected: ChunkSanityResult["rejected"] = [];
   const softFlagged: ChunkSanityResult["softFlagged"] = [];
+  // CHANGE 2 — record every rejected group with its scores so the fail-open
+  // safety net can pick the LEAST-BAD chunk(s) deterministically (highest
+  // entity score, then most-recent year) if the gate would otherwise empty
+  // the pool. Independent of the flag; only consumed when the flag is on.
+  const rejectedGroups: Array<{ group: Group; entityScore: number | null; year: number | null }> = [];
 
   for (const g of groups.values()) {
     const entityScore: number | null = issuerProfile
@@ -225,6 +246,7 @@ export function applyChunkSanityGate(
         detail: `entity match score: ${entityScore} (<20)`,
         chunkCount: g.chunks.length,
       });
+      rejectedGroups.push({ group: g, entityScore, year });
       continue;
     }
     if (age !== null && age >= 5) {
@@ -235,6 +257,7 @@ export function applyChunkSanityGate(
         detail: `document year: ${year}, age ${age} years`,
         chunkCount: g.chunks.length,
       });
+      rejectedGroups.push({ group: g, entityScore, year });
       continue;
     }
     if (entityScore !== null && entityScore < 40) {
@@ -256,6 +279,60 @@ export function applyChunkSanityGate(
     }
     // Keep the chunks (soft flag or clean).
     for (const c of g.chunks) keep.push(c);
+  }
+
+  // CHANGE 2 — Fail-open safety net + preserveIfOnlySource. Only active when
+  // CHUNK_GATE_FAIL_OPEN is on. Both paths key strictly off the STRUCTURAL
+  // fact that the gate removed everything (or removed the only source), never
+  // off a document's score or name, and both emit a LOUD, greppable warning so
+  // the situation is never silent.
+  if (failOpenEnabled && rejectedGroups.length > 0) {
+    // Deterministic least-bad ordering: highest entity score first, then most
+    // recent year, then stable group key. Nulls sort last.
+    const leastBadFirst = [...rejectedGroups].sort((a, b) => {
+      const as = a.entityScore ?? -1;
+      const bs = b.entityScore ?? -1;
+      if (as !== bs) return bs - as;
+      const ay = a.year ?? -1;
+      const by = b.year ?? -1;
+      if (ay !== by) return by - ay;
+      return a.group.key.localeCompare(b.group.key);
+    });
+
+    const issuerLabel = issuerProfile?.legalName ?? "(no issuer profile)";
+    const reasonSummary = rejected
+      .map((r) => `${r.reason}[${r.detail}]`)
+      .slice(0, 5)
+      .join("; ");
+
+    // (a) preserveIfOnlySource: a single source that was fully removed. Preserve
+    //     its least-bad chunk(s) rather than losing the only source available.
+    if (opts.preserveIfOnlySource && keep.length === 0 && groups.size === 1) {
+      const only = leastBadFirst[0];
+      console.warn(
+        `[CHUNK_GATE_FAIL_OPEN] preserveIfOnlySource: issuer="${issuerLabel}" ` +
+          `only source fully rejected (inputChunks=${chunks.length}, groups=1); ` +
+          `preserving least-bad source docUrl="${only.group.docUrl ?? ""}" ` +
+          `docTitle="${only.group.docTitle ?? ""}" entityScore=${only.entityScore ?? "n/a"} ` +
+          `year=${only.year ?? "n/a"}; reasons: ${reasonSummary}`,
+      );
+      for (const c of only.group.chunks) keep.push(c);
+    }
+
+    // (b) General fail-open: the gate emptied the pool even though there WERE
+    //     input chunks. Keep the single least-bad source's chunks so retrieval
+    //     is never handed an empty corpus by the gate.
+    if (keep.length === 0 && chunks.length > 0) {
+      const best = leastBadFirst[0];
+      console.warn(
+        `[CHUNK_GATE_FAIL_OPEN] fail-open: issuer="${issuerLabel}" ` +
+          `ALL ${chunks.length} input chunks across ${groups.size} source(s) were rejected by the ` +
+          `sanity gate; keeping least-bad source docUrl="${best.group.docUrl ?? ""}" ` +
+          `docTitle="${best.group.docTitle ?? ""}" entityScore=${best.entityScore ?? "n/a"} ` +
+          `year=${best.year ?? "n/a"}; reasons: ${reasonSummary}`,
+      );
+      for (const c of best.group.chunks) keep.push(c);
+    }
   }
 
   return { keep, rejected, softFlagged };

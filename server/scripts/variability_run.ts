@@ -64,6 +64,22 @@ if (!companyId || !runIndex) {
   process.exit(1);
 }
 
+// CHANGE 5 — N-repeats variability mode. Runs the SAME (company, framework)
+// through N repeated scoring passes IN THIS PROCESS and reports per-measure
+// score variability (distribution, mean, stdev, min/max, and info↔no-info flip
+// rate). Set via env VARIABILITY_REPEATS or the optional 5th CLI arg. Default 1,
+// which reproduces the original single-pass behaviour byte-for-byte (the main
+// OUT file and its records are computed from pass 0 exactly as before). When N>1
+// an additional *_variability.json summary is written alongside OUT; production
+// scoring behaviour is unchanged (this is a diagnostics-only script).
+// NOTE: the deterministic per-provider seed is intentionally identical across
+// passes, so this measures the residual provider-side run-to-run variance that
+// remains even when everything the harness controls is held constant.
+const VARIABILITY_REPEATS = Math.max(
+  1,
+  parseInt(process.env.VARIABILITY_REPEATS || process.argv[5] || "1", 10) || 1,
+);
+
 // ---- static inputs (frozen) ----
 const framework = JSON.parse(readFileSync(`${HOME}/var_framework.json`, "utf8"));
 let measures = JSON.parse(readFileSync(process.env.MEASURES_FILE || `${HOME}/var_measures.json`, "utf8"));
@@ -127,6 +143,76 @@ function deterministicSeed(measureId: string, cid: number, providerIndex: number
 // main() — see the dynamic import block below — so the harness uses the IDENTICAL
 // parse+repair+raw-on-failure-logging logic as production.
 function verdictLabel(s: number): string { return s === 1 ? "Yes" : s === 0.5 ? "Partial" : "No"; }
+
+// CHANGE 5 — per-measure variability summary across N repeated scoring passes.
+// Reports the score distribution, mean, population standard deviation, min/max,
+// modal verdict + its share, and the info↔no-info flip rate. "Info" is defined
+// as a decided cascade verdict of Yes or Partial (score > 0), "no-info" as No
+// (score 0); passes that errored (null score) are excluded from numeric stats
+// but counted separately. The flip rate is the fraction of adjacent pass pairs
+// whose info/no-info classification differs — a direct measure of how often a
+// re-run would flip the answer between "found evidence" and "found none".
+function summariseMeasureVariability(
+  measureId: string,
+  title: string,
+  category: string,
+  passScores: Array<number | null>,
+  passVerdicts: string[],
+  passStages: string[],
+) {
+  const n = passScores.length;
+  const numeric = passScores.filter((s): s is number => s != null);
+  const errored = n - numeric.length;
+  const mean = numeric.length ? numeric.reduce((a, b) => a + b, 0) / numeric.length : null;
+  const stdev =
+    numeric.length > 0 && mean != null
+      ? Math.sqrt(numeric.reduce((a, b) => a + (b - mean) ** 2, 0) / numeric.length)
+      : null;
+  const min = numeric.length ? Math.min(...numeric) : null;
+  const max = numeric.length ? Math.max(...numeric) : null;
+
+  // Score distribution (as string keys so 0/0.5/1 and "error" coexist).
+  const scoreDist: Record<string, number> = {};
+  for (const s of passScores) {
+    const k = s == null ? "error" : String(s);
+    scoreDist[k] = (scoreDist[k] || 0) + 1;
+  }
+
+  // Verdict distribution + modal verdict / share.
+  const verdictDist: Record<string, number> = {};
+  for (const v of passVerdicts) verdictDist[v] = (verdictDist[v] || 0) + 1;
+  let modalVerdict: string | null = null;
+  let modalCount = 0;
+  for (const [v, c] of Object.entries(verdictDist)) {
+    if (c > modalCount) { modalCount = c; modalVerdict = v; }
+  }
+  const modalShare = n ? modalCount / n : null;
+
+  // info↔no-info flip rate over adjacent passes (only where both are numeric).
+  const info = (s: number | null): boolean | null => (s == null ? null : s > 0);
+  let adjacentPairs = 0;
+  let flips = 0;
+  for (let i = 1; i < passScores.length; i++) {
+    const a = info(passScores[i - 1]);
+    const b = info(passScores[i]);
+    if (a == null || b == null) continue;
+    adjacentPairs++;
+    if (a !== b) flips++;
+  }
+  const infoFlipRate = adjacentPairs > 0 ? flips / adjacentPairs : null;
+  const infoPasses = numeric.filter((s) => s > 0).length;
+  const noInfoPasses = numeric.filter((s) => s === 0).length;
+  const unanimous = numeric.length > 0 && min === max && errored === 0;
+
+  return {
+    measureId, title, category,
+    repeats: n, errored,
+    mean, stdev, min, max, unanimous,
+    scoreDist, verdictDist, modalVerdict, modalShare,
+    infoPasses, noInfoPasses, infoFlipRate,
+    passScores, passVerdicts, passStages,
+  };
+}
 
 // Streaming fallback for corpora too large to read as a single JS string.
 // V8's max string length is ~536M chars; the frozen corpus for a document-heavy
@@ -238,6 +324,8 @@ async function main() {
   const RESCORE_BUDGET_CHUNKS = parseInt(process.env.RETRIEVAL_EVIDENCE_TOP_K || "20", 10);
 
   const records: any[] = [];
+  // CHANGE 5 — per-measure variability summaries (only populated when N>1).
+  const variabilityRecords: any[] = [];
 
   for (const [category, catMeasures] of catMap) {
     // BM25 pack (pre-rescore, deterministic)
@@ -334,65 +422,95 @@ async function main() {
       };
 
       // ---- score the deciding primaries + extra votes (arbiter deferred in v2) ----
-      const llmResults: any[] = [];
-      // v2: score only the primaries + extra (glm) up front; the GPT-5 arbiter is
-      //     fired conditionally below (ONLY on primary disagreement).
-      // legacy: score all four as before so the 3-vote reconstruction has s3.
-      const preArbiter = NEW_CASCADE
-        ? [CASCADE.primary, CASCADE.secondary, ...EXTRA_LLMS]
-        : ALL_LLMS;
-      for (const provider of preArbiter) llmResults.push(await scoreOne(provider));
+      // CHANGE 5 — one full cascade scoring pass, factored into a closure so the
+      // N-repeats variability mode can invoke it repeatedly. For VARIABILITY_REPEATS=1
+      // this runs exactly once and the recorded output is byte-identical to before.
+      const runOneScoringPass = async (): Promise<{ llmResults: any[]; byLlm: Record<string, any>; cascade: any }> => {
+        const llmResults: any[] = [];
+        // v2: score only the primaries + extra (glm) up front; the GPT-5 arbiter is
+        //     fired conditionally below (ONLY on primary disagreement).
+        // legacy: score all four as before so the 3-vote reconstruction has s3.
+        const preArbiter = NEW_CASCADE
+          ? [CASCADE.primary, CASCADE.secondary, ...EXTRA_LLMS]
+          : ALL_LLMS;
+        for (const provider of preArbiter) llmResults.push(await scoreOne(provider));
 
-      const byLlm: Record<string, any> = {};
-      for (const r of llmResults) byLlm[r.llm] = r;
-      const s1 = byLlm[CASCADE.primary]?.score;   // GATED
-      const s2 = byLlm[CASCADE.secondary]?.score; // GATED
-      let cascade: any;
+        const byLlm: Record<string, any> = {};
+        for (const r of llmResults) byLlm[r.llm] = r;
+        const s1 = byLlm[CASCADE.primary]?.score;   // GATED
+        const s2 = byLlm[CASCADE.secondary]?.score; // GATED
+        let cascade: any;
 
-      if (NEW_CASCADE) {
-        // ---- v2: primaries decide; GPT-5 arbiter fires ONLY on disagreement ----
-        if (s1 == null || s2 == null) {
-          cascade = { stage: "error", note: "primary/secondary missing", arbiterFired: false };
-        } else if (s1 === s2) {
-          cascade = { stage: "agreed", score: s1, verdict: verdictLabel(s1),
-            confidence: "High", arbiterFired: false };
-        } else {
-          const arbRec = await scoreOne(CASCADE.arbiter); // gated inside scoreOne
-          llmResults.push(arbRec);
-          byLlm[arbRec.llm] = arbRec;
-          const s3 = arbRec.score;
-          if (s3 == null) {
-            cascade = { stage: "error", note: "arbiter missing on disagreement", arbiterFired: true };
+        if (NEW_CASCADE) {
+          // ---- v2: primaries decide; GPT-5 arbiter fires ONLY on disagreement ----
+          if (s1 == null || s2 == null) {
+            cascade = { stage: "error", note: "primary/secondary missing", arbiterFired: false };
+          } else if (s1 === s2) {
+            cascade = { stage: "agreed", score: s1, verdict: verdictLabel(s1),
+              confidence: "High", arbiterFired: false };
           } else {
-            const arbiterSidedWith = s3 === s1 ? CASCADE.primary
-              : (s3 === s2 ? CASCADE.secondary : "neither");
-            cascade = { stage: "arbiter", score: s3, verdict: verdictLabel(s3),
-              confidence: "Medium", arbiterFired: true, arbiterSidedWith };
+            const arbRec = await scoreOne(CASCADE.arbiter); // gated inside scoreOne
+            llmResults.push(arbRec);
+            byLlm[arbRec.llm] = arbRec;
+            const s3 = arbRec.score;
+            if (s3 == null) {
+              cascade = { stage: "error", note: "arbiter missing on disagreement", arbiterFired: true };
+            } else {
+              const arbiterSidedWith = s3 === s1 ? CASCADE.primary
+                : (s3 === s2 ? CASCADE.secondary : "neither");
+              cascade = { stage: "arbiter", score: s3, verdict: verdictLabel(s3),
+                confidence: "Medium", arbiterFired: true, arbiterSidedWith };
+            }
+          }
+        } else {
+          // ---- legacy (unchanged): deepseek+glm decide, claude tiebreaks on disagree ----
+          const s3 = byLlm[CASCADE.arbiter]?.score;
+          if (s1 == null || s2 == null) {
+            cascade = { stage: "error", note: "primary/secondary missing" };
+          } else if (s1 === s2) {
+            cascade = { stage: "agreed", score: s1, verdict: verdictLabel(s1),
+              confidence: "High", arbiterFired: false };
+          } else if (s3 == null) {
+            cascade = { stage: "error", note: "arbiter missing on disagreement" };
+          } else {
+            const votes = [s1, s2, s3];
+            const uniq = Array.from(new Set(votes));
+            if (uniq.length === 3) {
+              cascade = { stage: "3-way", score: s3, verdict: verdictLabel(s3),
+                confidence: "Review-required", arbiterFired: true };
+            } else {
+              const majorityScore = votes.find((v) => votes.filter((x) => x === v).length >= 2)!;
+              const arbiterSidedWith = s3 === s1 ? CASCADE.primary : (s3 === s2 ? CASCADE.secondary : "neither");
+              cascade = { stage: "arbiter", score: majorityScore, verdict: verdictLabel(majorityScore),
+                confidence: "Medium", arbiterFired: true, arbiterSidedWith };
+            }
           }
         }
-      } else {
-        // ---- legacy (unchanged): deepseek+glm decide, claude tiebreaks on disagree ----
-        const s3 = byLlm[CASCADE.arbiter]?.score;
-        if (s1 == null || s2 == null) {
-          cascade = { stage: "error", note: "primary/secondary missing" };
-        } else if (s1 === s2) {
-          cascade = { stage: "agreed", score: s1, verdict: verdictLabel(s1),
-            confidence: "High", arbiterFired: false };
-        } else if (s3 == null) {
-          cascade = { stage: "error", note: "arbiter missing on disagreement" };
-        } else {
-          const votes = [s1, s2, s3];
-          const uniq = Array.from(new Set(votes));
-          if (uniq.length === 3) {
-            cascade = { stage: "3-way", score: s3, verdict: verdictLabel(s3),
-              confidence: "Review-required", arbiterFired: true };
-          } else {
-            const majorityScore = votes.find((v) => votes.filter((x) => x === v).length >= 2)!;
-            const arbiterSidedWith = s3 === s1 ? CASCADE.primary : (s3 === s2 ? CASCADE.secondary : "neither");
-            cascade = { stage: "arbiter", score: majorityScore, verdict: verdictLabel(majorityScore),
-              confidence: "Medium", arbiterFired: true, arbiterSidedWith };
-          }
-        }
+        return { llmResults, byLlm, cascade };
+      };
+
+      // Pass 0 drives the existing (unchanged) per-measure record + console line.
+      const pass0 = await runOneScoringPass();
+      const llmResults = pass0.llmResults;
+      const byLlm = pass0.byLlm;
+      const cascade = pass0.cascade;
+
+      // CHANGE 5 — additional repeat passes (only when VARIABILITY_REPEATS > 1).
+      // Collect the cascade score/verdict/stage of every pass (pass 0 included)
+      // so per-measure variability can be summarised after the category loop.
+      const passScores: Array<number | null> = [cascade.score ?? null];
+      const passVerdicts: string[] = [cascade.verdict ?? "-"];
+      const passStages: string[] = [cascade.stage ?? "-"];
+      for (let rp = 1; rp < VARIABILITY_REPEATS; rp++) {
+        const p = await runOneScoringPass();
+        passScores.push(p.cascade.score ?? null);
+        passVerdicts.push(p.cascade.verdict ?? "-");
+        passStages.push(p.cascade.stage ?? "-");
+      }
+      if (VARIABILITY_REPEATS > 1) {
+        variabilityRecords.push(
+          summariseMeasureVariability(measure.measureId, measure.title, category, passScores, passVerdicts, passStages),
+        );
       }
 
       // ---- Task F: per-quote chunk-rank resolution (near-cutoff analysis) ----
@@ -450,9 +568,9 @@ async function main() {
       };
       const packMark = records[records.length - 1].chunks.packChangedByRescore ? "  [pack↻]" : "";
       if (NEW_CASCADE) {
-        console.error(`  ${measure.measureId.padEnd(26)} ds=${gv(CASCADE.primary)} mistral=${gv(CASCADE.secondary)} gpt5=${gv(CASCADE.arbiter)} glm=${gv("glm-4.6-zai")} => ${cascade.verdict}/${cascade.stage}${cascade.arbiterFired ? " [arb]" : ""}${packMark}`);
+        console.error(`  ${(measure.measureId || "???").padEnd(26)} ds=${gv(CASCADE.primary)} mistral=${gv(CASCADE.secondary)} gpt5=${gv(CASCADE.arbiter)} glm=${gv("glm-4.6-zai")} => ${cascade.verdict}/${cascade.stage}${cascade.arbiterFired ? " [arb]" : ""}${packMark}`);
       } else {
-        console.error(`  ${measure.measureId.padEnd(26)} ds=${gv(CASCADE.primary)} glm=${gv(CASCADE.secondary)} claude=${gv(CASCADE.arbiter)} mistral=${gv("mistral-or")} => ${cascade.verdict}/${cascade.stage}${packMark}`);
+        console.error(`  ${(measure.measureId || "???").padEnd(26)} ds=${gv(CASCADE.primary)} glm=${gv(CASCADE.secondary)} claude=${gv(CASCADE.arbiter)} mistral=${gv("mistral-or")} => ${cascade.verdict}/${cascade.stage}${packMark}`);
       }
     }
   }
@@ -467,6 +585,7 @@ async function main() {
       cascadeMode: CASCADE_MODE, evidenceGate: true,
       scoringMaxTokens: SCORING_MAX_TOKENS,
       scoringMode: "binary", passes: 1,
+      variabilityRepeats: VARIABILITY_REPEATS,
       rescoreOn: isRescoreEnabled(), retrievalV2: true,
       deepReadInHarness: false, issuerProfileSupplied: false,
       elapsedSec: null as any, ts: new Date().toISOString(),
@@ -476,5 +595,50 @@ async function main() {
   out.meta.elapsedSec = Math.round((Date.now() - t0) / 1000);
   writeFileSync(OUT, JSON.stringify(out, null, 2));
   console.error(`\nSAVED ${OUT}  (${records.length} measures, ${out.meta.elapsedSec}s, combinedHash=${combinedHash})`);
+
+  // CHANGE 5 — write the per-measure variability summary when N>1. The main OUT
+  // above is unchanged (pass 0); this is an additional diagnostics file.
+  if (VARIABILITY_REPEATS > 1) {
+    const VAR_OUT = `${OUTDIR}/${companyId}_run${runIndex}${NEW_CASCADE ? "_v2" : ""}${measureLimit ? `_lim${measureLimit}` : ""}_variability.json`;
+    // Corpus-level roll-up across measures.
+    const measuresWithVariance = variabilityRecords.filter((r) => !r.unanimous).length;
+    const flipRates = variabilityRecords
+      .map((r) => r.infoFlipRate)
+      .filter((x): x is number => x != null);
+    const stdevs = variabilityRecords
+      .map((r) => r.stdev)
+      .filter((x): x is number => x != null);
+    const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    const varOut = {
+      meta: {
+        companyId, companyName, runIndex, framework: framework.name, frameworkId: framework.id,
+        measureCount: variabilityRecords.length, repeats: VARIABILITY_REPEATS,
+        cascade: CASCADE, cascadeMode: CASCADE_MODE,
+        combinedTextHash: combinedHash,
+        measuresWithVariance,
+        measuresFullyStable: variabilityRecords.length - measuresWithVariance,
+        meanInfoFlipRate: avg(flipRates),
+        meanScoreStdev: avg(stdevs),
+        maxInfoFlipRate: flipRates.length ? Math.max(...flipRates) : null,
+        ts: new Date().toISOString(),
+      },
+      measures: variabilityRecords,
+    };
+    writeFileSync(VAR_OUT, JSON.stringify(varOut, null, 2));
+    console.error(
+      `\nVARIABILITY (N=${VARIABILITY_REPEATS}) SAVED ${VAR_OUT}\n` +
+        `  measures=${variabilityRecords.length} withVariance=${measuresWithVariance} ` +
+        `meanFlipRate=${varOut.meta.meanInfoFlipRate?.toFixed(3) ?? "n/a"} ` +
+        `meanStdev=${varOut.meta.meanScoreStdev?.toFixed(3) ?? "n/a"}`,
+    );
+    for (const r of variabilityRecords) {
+      console.error(
+        `  ${(r.measureId || "???").padEnd(26)} dist=${JSON.stringify(r.scoreDist)} ` +
+          `modal=${r.modalVerdict}(${((r.modalShare ?? 0) * 100).toFixed(0)}%) ` +
+          `stdev=${r.stdev?.toFixed(3) ?? "n/a"} flip=${r.infoFlipRate?.toFixed(3) ?? "n/a"}` +
+          `${r.unanimous ? " [stable]" : ""}`,
+      );
+    }
+  }
 }
 main().catch((e) => { console.error("FATAL", e); process.exit(1); });

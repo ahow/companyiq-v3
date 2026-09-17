@@ -1933,3 +1933,29 @@ export function generateDocumentHash(urls: string[]): string {
   const sorted = [...urls].sort();
   return crypto.createHash("sha256").update(sorted.join("|||")).digest("hex").slice(0, 16);
 }
+
+// ─── CHANGE 3 — Content-stable document hash ─────────────────────────────────
+//
+// The URL-set hash above keys the summary cache on WHICH documents were fetched.
+// That is not content-stable: the same corpus text reachable at a different or
+// tracking-decorated URL, or in a different fetch order, produces a different
+// key and misses the cache, while a URL that silently serves changed content
+// keeps hitting a stale entry. This hash is derived purely from the document
+// TEXT, so identical content always produces the same key regardless of URL,
+// ordering, or whitespace differences:
+//   - each document's text is whitespace-normalized (all runs of whitespace,
+//     including newlines/tabs, collapsed to a single space; trimmed) so
+//     cosmetic reflowing does not change the hash;
+//   - empty documents are dropped so they cannot perturb the digest;
+//   - the per-document digests are SORTED before joining, so fetch/order
+//     differences are irrelevant (order-insensitive, like the URL-set hash);
+//   - no volatile fields (timestamps, tracking params, URLs) enter the digest.
+// Deterministic and dependency-free. Callers keep their own version salt.
+export function generateContentStableHash(texts: string[]): string {
+  const perDoc = (texts || [])
+    .map((t) => (t || "").replace(/\s+/g, " ").trim())
+    .filter((t) => t.length > 0)
+    .map((t) => crypto.createHash("sha256").update(t).digest("hex"));
+  perDoc.sort();
+  return crypto.createHash("sha256").update(perDoc.join("|||")).digest("hex").slice(0, 16);
+}
