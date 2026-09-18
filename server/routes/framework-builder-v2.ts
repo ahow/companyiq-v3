@@ -253,7 +253,7 @@ function parseDraftJson(response: string): { ok: true; draft: any } | { ok: fals
 
 // ─── Chunked drafting: skeleton + per-category batches in parallel ───────
 
-async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string, resolvedTarget?: number): Promise<{ draft: any; truncationRecovered: boolean } | { error: string; raw?: string }> {
+async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string, resolvedTarget?: number): Promise<{ draft: any; truncationRecovered: boolean; provider?: string } | { error: string; raw?: string }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
 
   // Wire the RESOLVED (normalised integer) target into the intake copy the
@@ -299,29 +299,65 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
       otherCategories: skeleton.categories.filter((_: any, i: number) => i !== idx).map((c: any) => ({ name: c.name, purpose: c.purpose })),
     };
     const categoryPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nSkeleton reference (JSON):\n${JSON.stringify(skeletonRef, null, 2)}\n\nDraft the full measures for the ${batchOutlines.length} outline(s) listed under the category "${cat.name}" only. Return the JSON object described in the system prompt.`;
-    const catResp = await completeWithFallback(providerName || "claude", {
-      system: CHUNKED_MEASURES_SYSTEM_PROMPT,
-      prompt: categoryPrompt,
-      maxTokens: 24000,
-      temperature: 0.2,
-      json: true,
-    });
-    const catParsed = parseDraftJson(catResp.text);
-    if (!catParsed.ok) {
-      console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" batch failed: ${catParsed.error}`);
-      // FIX 3: retain a truncated sample of the unparseable payload so the
-      // all-failed path can persist WHY parsing failed (e.g. escaped fallback JSON).
-      return {
-        measures: [],
-        failed: true,
-        error: catParsed.error,
-        rawSample: typeof catResp.text === "string" ? catResp.text.slice(0, 500) : undefined,
-        provider: catResp.provider,
-      };
+    // FIX D: count-based fail-loud + bounded retry. A batch is asked to produce
+    // batchOutlines.length measures. A response that parses but returns FEWER
+    // measures than requested is a masked mid-stream truncation (the salvage /
+    // jsonrepair net "succeeds" on a cut payload, yielding e.g. 1 of 8 measures)
+    // — historically accepted silently. We now retry the SAME batch up to 3
+    // attempts total, keep the best (most-measures, successfully-parsed) attempt,
+    // and accept as soon as an attempt is complete. If every attempt is short or
+    // unparseable, we return the batch as FAILED (with the best partial measures)
+    // so the shortfall flows into failedCategories / the dashboard Retry path
+    // instead of quietly under-producing the framework.
+    const EXPAND_MAX_ATTEMPTS = 3;
+    let best: { measures: any[]; parsed: boolean; truncationRecovered: boolean } = {
+      measures: [],
+      parsed: false,
+      truncationRecovered: false,
+    };
+    let lastText = "";
+    let lastProvider: string | undefined;
+    let lastParseError: string | undefined;
+    for (let attempt = 1; attempt <= EXPAND_MAX_ATTEMPTS; attempt++) {
+      const catResp = await completeWithFallback(providerName || "claude", {
+        system: CHUNKED_MEASURES_SYSTEM_PROMPT,
+        prompt: categoryPrompt,
+        maxTokens: 24000,
+        temperature: 0.2,
+        json: true,
+      });
+      lastText = typeof catResp.text === "string" ? catResp.text : "";
+      lastProvider = catResp.provider;
+      const catParsed = parseDraftJson(catResp.text);
+      if (!catParsed.ok) {
+        lastParseError = catParsed.error;
+        console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" batch attempt ${attempt}/${EXPAND_MAX_ATTEMPTS} failed to parse: ${catParsed.error}`);
+        continue; // retry
+      }
+      const measures = Array.isArray(catParsed.draft?.measures) ? catParsed.draft.measures : [];
+      const truncationRecovered = Boolean((catParsed.draft as any)?.__truncationRecovered);
+      if (measures.length > best.measures.length) {
+        best = { measures, parsed: true, truncationRecovered };
+      }
+      if (measures.length >= batchOutlines.length) {
+        // Complete generation — accept immediately (preserves the original
+        // success return shape: measures + truncationRecovered, no `failed`).
+        return { measures, truncationRecovered, provider: catResp.provider };
+      }
+      console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" batch attempt ${attempt}/${EXPAND_MAX_ATTEMPTS} under-produced: got ${measures.length} of ${batchOutlines.length} measures; retrying.`);
     }
+    // Every attempt was short or unparseable — fail LOUD, keeping best partial.
+    const error = best.parsed
+      ? `Under-produced batch: got ${best.measures.length} of ${batchOutlines.length} measures after ${EXPAND_MAX_ATTEMPTS} attempts (likely mid-stream truncation)`
+      : (lastParseError || `Batch failed to parse after ${EXPAND_MAX_ATTEMPTS} attempts`);
+    console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" batch FAILED: ${error}`);
     return {
-      measures: Array.isArray(catParsed.draft?.measures) ? catParsed.draft.measures : [],
-      truncationRecovered: Boolean((catParsed.draft as any)?.__truncationRecovered),
+      measures: best.measures,
+      failed: true,
+      error,
+      rawSample: lastText ? lastText.slice(0, 500) : undefined,
+      provider: lastProvider,
+      truncationRecovered: best.truncationRecovered,
     };
   };
 
@@ -346,7 +382,8 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
       const firstFailed = batchResults.find((r) => r.failed) ?? batchResults[0];
       return { categoryName: cat.name, measures: [], failed: true, error: firstFailed?.error, rawSample: firstFailed?.rawSample, provider: firstFailed?.provider };
     }
-    return { categoryName: cat.name, measures, truncationRecovered: anyTrunc };
+    const catProvider = batchResults.find((r) => r.provider)?.provider;
+    return { categoryName: cat.name, measures, truncationRecovered: anyTrunc, provider: catProvider };
   });
 
   const categoryResults = await Promise.all(perCategoryPromises);
@@ -395,10 +432,14 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
   const totalMeasures = assembled.categories.reduce((s: number, c: any) => s + (c.measures?.length || 0), 0);
   console.log(`[framework-builder v2] Chunked drafting complete: ${assembled.categories.length} categories, ${totalMeasures} measures, ${failedCategories.length} failed categories.`);
 
-  return { draft: assembled, truncationRecovered: anyTruncationRecovered };
+  // FIX F: report the ACTUAL provider that produced the draft (prefer a category
+  // provider, else the skeleton's) so the job runner can persist provider_name
+  // on success too — previously only recorded for failed batches.
+  const draftProvider = categoryResults.find((r: any) => r.provider)?.provider || skeletonResp.provider;
+  return { draft: assembled, truncationRecovered: anyTruncationRecovered, provider: draftProvider };
 }
 
-async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; truncationRecovered?: boolean } | { error: string; raw?: string }> {
+async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; truncationRecovered?: boolean; provider?: string } | { error: string; raw?: string }> {
   // Route to chunked drafting for fresh attempts unless the target is KNOWN to
   // be small. Repair passes always use single-shot with the prior draft as
   // context. Crucially, an UNKNOWN target (undefined — e.g. the intake LLM wrote
@@ -413,7 +454,7 @@ async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, pr
   return callSingleShotDraftingLLM(intake, providerName, priorAttempt);
 }
 
-async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any } | { error: string; raw?: string }> {
+async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; provider?: string } | { error: string; raw?: string }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
 
   let userPrompt: string;
@@ -431,7 +472,7 @@ async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: 
     userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C11 exactly. ${countClause} Every measure must comply with C1–C11 — in particular: every measure's substantive_definition MUST include an explicit adjacent-topic exclusion clause naming at least one adjacent topic from the intake list; every measure's fallback_yes_criterion MUST have at least 3 numbered conditions each referencing the topic term or a synonym; every measure MUST have whatConstitutesEvidence AND whatDoesNotConstituteEvidence AND positive_examples (>=2) AND negative_examples (>=2).`;
   }
 
-  const { text: response } = await completeWithFallback(providerName || "claude", {
+  const { text: response, provider: singleShotProvider } = await completeWithFallback(providerName || "claude", {
     system: DRAFTING_SYSTEM_PROMPT_HEAD,
     prompt: userPrompt,
     maxTokens: 24000,
@@ -463,7 +504,7 @@ async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: 
       return { error: msg, raw: response };
     }
   }
-  return { draft };
+  return { draft, provider: singleShotProvider };
 }
 
 // Attempt to salvage a partial framework from a truncated JSON string.
@@ -709,11 +750,13 @@ async function repairMeasuresTargeted(
   return patched;
 }
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport } | { error: string; raw?: string }> {
+async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; provider?: string; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport } | { error: string; raw?: string }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
   if ("error" in first) return first;
   let draft = first.draft;
+  // FIX F: actual provider that produced this draft, for persistence on success.
+  const draftProvider = (first as any).provider as string | undefined;
 
   const validate = (d: any) => {
     const fwDraft = buildFrameworkDraft(d, intake);
@@ -777,6 +820,7 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     measureCount: measures.length,
     failedCategories,
     failedCategoryNames,
+    provider: draftProvider,
     // STATIC design diagnostic over the just-drafted measures (LLM-free). The
     // builder surfaces these as REVIEW items so design defects are tackled
     // BEFORE the draft is proposed as ready. Advisory only — never auto-applied.
@@ -952,9 +996,12 @@ router.post("/v2/draft/start", requireWorkspace, async (req: Request, res: Respo
           `);
           return;
         }
+        // FIX F: persist the ACTUAL provider that produced the draft (not just the
+        // requested one recorded at INSERT) so a succeeded-but-under-produced job
+        // still has provider_name for diagnostics.
         await db.execute(sql`
           UPDATE framework_v2_jobs
-          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, updated_at = NOW()
+          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, provider_name = COALESCE(${(result as any).provider || null}, provider_name), updated_at = NOW()
           WHERE id = ${jobId}
         `);
       } catch (err: any) {

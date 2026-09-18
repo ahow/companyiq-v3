@@ -471,4 +471,4 @@ Same C1–C11 rules as the single-shot drafter. In particular:
 - Only draft measures for the category named in the user prompt. Ignore other categories.
 - Preserve measureId values from the skeleton exactly.
 - Do NOT include prose commentary outside the JSON.
-- Keep the response under 8000 tokens (this is a per-category batch; other categories are handled in parallel).`;
+- Draft EVERY measure listed in the current category's measureOutlines completely and in full — do not omit, abbreviate, or summarise any measure. Output only the JSON object; do not add commentary.`;

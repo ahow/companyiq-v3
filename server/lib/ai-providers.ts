@@ -139,7 +139,11 @@ class ClaudeProvider implements AIProvider {
     let lastError: any;
     const attempts = Math.max(1, this.apiKeys.length);
     for (let i = 0; i < attempts; i++) {
-      const client = new Anthropic({ apiKey: this.getNextKey() });
+      // FIX B: generous transport timeout + SDK-level retries. Large drafting
+      // calls legitimately take 165–270s; the SDK default timeout can drop a
+      // slow/throttled connection mid-stream, so we allow 600s and let the SDK
+      // retry dropped/throttled requests at the transport layer before we fail.
+      const client = new Anthropic({ apiKey: this.getNextKey(), timeout: 600000, maxRetries: 3 });
       try {
         // claude-sonnet-4-5 supports up to 64K output tokens.
         // Cap at 32K so we don't blow through the credit budget on runaway prompts,
@@ -174,6 +178,15 @@ class ClaudeProvider implements AIProvider {
           // truncated JSON downstream to an opaque "Unterminated string" parse error.
           if (response.stop_reason === "max_tokens") {
             throw new Error(`claude output truncated: hit max_tokens cap (${effectiveMaxTokens})`);
+          }
+          // FIX A: stream-completeness guard. A cleanly finished stream stops
+          // with one of end_turn / stop_sequence / tool_use. Any other value
+          // (including null/undefined) means the stream was cut mid-generation,
+          // so the text is truncated — throw so completeWithFallback retries or
+          // falls back rather than returning partial JSON downstream.
+          const CLEAN_STOP_REASONS = ["end_turn", "stop_sequence", "tool_use"];
+          if (!response.stop_reason || !CLEAN_STOP_REASONS.includes(response.stop_reason)) {
+            throw new Error(`Claude streaming response ended abnormally (stop_reason=${response.stop_reason}) — likely a truncated/cut stream`);
           }
           const block = response.content[0];
           if (block && block.type === "text") return block.text;
