@@ -32,6 +32,7 @@ import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { jsonrepair } from "jsonrepair";
 
 const router = Router();
 
@@ -230,6 +231,18 @@ function parseDraftJson(response: string): { ok: true; draft: any } | { ok: fals
       (salvaged as any).__truncationRecovered = true;
       return { ok: true, draft: salvaged };
     }
+    // LAST-RESORT safety net: structurally repair malformed JSON via jsonrepair.
+    // Only reached after standard JSON.parse, escaped-JSON recovery, and truncation
+    // salvage have all failed. Fail-LOUD: a successful repair is logged as a WARNING
+    // so it is visible in Railway logs — the raw LLM output was malformed/truncated
+    // and the recovered measures may be incomplete.
+    try {
+      const repaired = JSON.parse(jsonrepair(candidate));
+      if (repaired && typeof repaired === "object") {
+        console.warn("[framework-builder v2] WARNING: recovered draft JSON via jsonrepair — the raw LLM output was malformed/truncated; this category's measures may be incomplete. Investigate provider truncation.");
+        return { ok: true, draft: repaired };
+      }
+    } catch { /* jsonrepair could not recover — fall through to the failure path */ }
     const looksTruncated = response.trim().length > 20000 && !response.trim().endsWith("}") && !response.trim().endsWith("```");
     const err = looksTruncated
       ? `The framework was too large for the model's output limit and got cut off (${response.length} chars generated). Try a smaller target measure count.`
@@ -278,7 +291,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     cat: any,
     idx: number,
     batchOutlines: any[],
-  ): Promise<{ measures: any[]; failed?: boolean; error?: string; rawSample?: string; truncationRecovered?: boolean }> => {
+  ): Promise<{ measures: any[]; failed?: boolean; error?: string; rawSample?: string; provider?: string; truncationRecovered?: boolean }> => {
     // Slim skeleton reference so the LLM has enough context but not too much.
     const skeletonRef = {
       framework: skeleton.framework,
@@ -303,6 +316,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
         failed: true,
         error: catParsed.error,
         rawSample: typeof catResp.text === "string" ? catResp.text.slice(0, 500) : undefined,
+        provider: catResp.provider,
       };
     }
     return {
@@ -330,7 +344,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     const anyTrunc = batchResults.some((r) => r.truncationRecovered);
     if (allFailed) {
       const firstFailed = batchResults.find((r) => r.failed) ?? batchResults[0];
-      return { categoryName: cat.name, measures: [], failed: true, error: firstFailed?.error, rawSample: firstFailed?.rawSample };
+      return { categoryName: cat.name, measures: [], failed: true, error: firstFailed?.error, rawSample: firstFailed?.rawSample, provider: firstFailed?.provider };
     }
     return { categoryName: cat.name, measures, truncationRecovered: anyTrunc };
   });
@@ -345,6 +359,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     // that the dashboard renders, so a failure is actionable at a glance.
     const details = failedCategories.map((r: any) => ({
       category: r.categoryName,
+      provider: r.provider,
       error: r.error,
       payloadSample: r.rawSample,
     }));

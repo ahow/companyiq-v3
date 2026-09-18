@@ -168,6 +168,13 @@ class ClaudeProvider implements AIProvider {
           const stream = client.messages.stream(params);
           const response = await stream.finalMessage();
           try { opts.onUsage?.(response.usage); } catch { /* usage sink must never break scoring */ }
+          // FAIL-LOUD: if the model stopped because it hit the output cap the text
+          // is truncated (typically mid-string). Throw instead of returning it so
+          // completeWithFallback moves to the next provider rather than passing
+          // truncated JSON downstream to an opaque "Unterminated string" parse error.
+          if (response.stop_reason === "max_tokens") {
+            throw new Error(`claude output truncated: hit max_tokens cap (${effectiveMaxTokens})`);
+          }
           const block = response.content[0];
           if (block && block.type === "text") return block.text;
           throw new Error("Unexpected response type from Claude");
@@ -175,6 +182,10 @@ class ClaudeProvider implements AIProvider {
 
         const response = await client.messages.create(params);
         try { opts.onUsage?.(response.usage); } catch { /* usage sink must never break scoring */ }
+        // FAIL-LOUD: see streaming branch above — never return cap-truncated text.
+        if (response.stop_reason === "max_tokens") {
+          throw new Error(`claude output truncated: hit max_tokens cap (${effectiveMaxTokens})`);
+        }
         const block = response.content[0];
         if (block.type === "text") return block.text;
         throw new Error("Unexpected response type from Claude");
@@ -312,7 +323,14 @@ class OpenAICompatibleProvider implements AIProvider {
           }
         );
         try { opts.onUsage?.(response.data?.usage); } catch { /* usage sink must never break scoring */ }
-        return response.data.choices[0].message.content;
+        // FAIL-LOUD: finish_reason=length means the model hit the token cap and the
+        // content is truncated. Throw instead of returning it so completeWithFallback
+        // moves on rather than passing truncated JSON downstream.
+        const choice = response.data.choices?.[0];
+        if (choice?.finish_reason === "length") {
+          throw new Error(`${this.name} output truncated: finish_reason=length`);
+        }
+        return choice.message.content;
       } catch (error: any) {
         lastError = error;
         const status = error.response?.status;
@@ -378,7 +396,14 @@ class GeminiProvider implements AIProvider {
     );
 
     try { opts.onUsage?.(response.data?.usageMetadata); } catch { /* usage sink must never break scoring */ }
-    return response.data.candidates[0].content.parts[0].text;
+    // FAIL-LOUD: finishReason=MAX_TOKENS means the model hit the output cap and the
+    // text is truncated. Throw instead of returning it so completeWithFallback moves
+    // on rather than passing truncated JSON downstream.
+    const cand = response.data.candidates?.[0];
+    if (cand?.finishReason === "MAX_TOKENS") {
+      throw new Error("gemini output truncated: finishReason=MAX_TOKENS");
+    }
+    return cand.content.parts[0].text;
   }
 }
 
