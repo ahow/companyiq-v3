@@ -141,19 +141,39 @@ class ClaudeProvider implements AIProvider {
     for (let i = 0; i < attempts; i++) {
       const client = new Anthropic({ apiKey: this.getNextKey() });
       try {
-        const response = await client.messages.create({
+        // claude-sonnet-4-5 supports up to 64K output tokens.
+        // Cap at 32K so we don't blow through the credit budget on runaway prompts,
+        // but allow the framework drafter to request the whole 16K+ envelope it needs.
+        const effectiveMaxTokens = Math.min(opts.maxTokens ?? 4096, 32000);
+        const params = {
           model: this.model,
-          // claude-sonnet-4-5 supports up to 64K output tokens.
-          // Cap at 32K so we don't blow through the credit budget on runaway prompts,
-          // but allow the framework drafter to request the whole 16K+ envelope it needs.
-          max_tokens: Math.min(opts.maxTokens ?? 4096, 32000),
+          max_tokens: effectiveMaxTokens,
           temperature: opts.temperature ?? 0,
           // NOTE: claude-sonnet-4-5 and newer models reject requests that
           // include BOTH temperature and top_p. We rely on temperature for
           // determinism and omit top_p (default is 1 anyway).
           system: opts.system,
-          messages: [{ role: "user", content: opts.prompt }],
-        });
+          messages: [{ role: "user" as const, content: opts.prompt }],
+        };
+
+        // The Anthropic SDK enforces a client-side guard that THROWS
+        // "Streaming is required for operations that may take longer than 10
+        // minutes" for non-streaming requests whenever max_tokens exceeds
+        // ~21,333 ((3600*max_tokens)/128000 > 600). Large framework-drafting
+        // calls request up to 24-32K tokens, so we MUST stream those. Small
+        // calls keep the existing non-streaming path to minimise change/risk.
+        // Both branches return the same contract: the response's text, and a
+        // single onUsage(usage) callback with the provider usage object.
+        if (effectiveMaxTokens > 20000) {
+          const stream = client.messages.stream(params);
+          const response = await stream.finalMessage();
+          try { opts.onUsage?.(response.usage); } catch { /* usage sink must never break scoring */ }
+          const block = response.content[0];
+          if (block && block.type === "text") return block.text;
+          throw new Error("Unexpected response type from Claude");
+        }
+
+        const response = await client.messages.create(params);
         try { opts.onUsage?.(response.usage); } catch { /* usage sink must never break scoring */ }
         const block = response.content[0];
         if (block.type === "text") return block.text;

@@ -182,12 +182,49 @@ const C11_REPAIR_CLAUSE =
 
 // Robust JSON extractor + parser used across all drafting phases. Handles
 // fenced ```json blocks, bare JSON, and truncation-recovery.
+// Recovers a JSON OBJECT from a candidate string, tolerating fallback providers
+// (e.g. openrouter/DeepSeek) that return DOUBLE-ESCAPED / stringified JSON —
+// text literally starting with backslash-n / backslash-quote, or a JSON string
+// literal that wraps the real object. Returns the parsed object, or null if none
+// of the strategies yield an object.
+function tryParseDraftObject(candidate: string): any | null {
+  // Strategy 1: direct parse. If it yields a string (the payload was a JSON
+  // string literal), parse that string once more to reach the object.
+  try {
+    const v = JSON.parse(candidate);
+    if (v && typeof v === "object") return v;
+    if (typeof v === "string") {
+      try {
+        const v2 = JSON.parse(v);
+        if (v2 && typeof v2 === "object") return v2;
+      } catch { /* fall through */ }
+    }
+  } catch { /* fall through */ }
+  // Strategy 2: the candidate is escaped one level (literal \n, \" etc.) but was
+  // NOT wrapped in quotes. Wrap it in quotes and parse to unescape one level,
+  // then parse the unescaped string into the object.
+  try {
+    const unescaped = JSON.parse('"' + candidate.trim() + '"');
+    if (typeof unescaped === "string") {
+      const v = JSON.parse(unescaped);
+      if (v && typeof v === "object") return v;
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
 function parseDraftJson(response: string): { ok: true; draft: any } | { ok: false; error: string; recovered?: boolean; raw?: string } {
   const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\{[\s\S]*\}/);
   const candidate = jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : response;
   try {
     return { ok: true, draft: JSON.parse(candidate) };
   } catch (e: any) {
+    // Defense-in-depth: recover double-escaped / stringified JSON returned by
+    // fallback providers before treating this as an unrecoverable parse failure.
+    const recoveredObj = tryParseDraftObject(candidate);
+    if (recoveredObj) {
+      return { ok: true, draft: recoveredObj };
+    }
     const salvaged = trySalvageTruncatedFramework(candidate);
     if (salvaged) {
       (salvaged as any).__truncationRecovered = true;
@@ -241,7 +278,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     cat: any,
     idx: number,
     batchOutlines: any[],
-  ): Promise<{ measures: any[]; failed?: boolean; error?: string; truncationRecovered?: boolean }> => {
+  ): Promise<{ measures: any[]; failed?: boolean; error?: string; rawSample?: string; truncationRecovered?: boolean }> => {
     // Slim skeleton reference so the LLM has enough context but not too much.
     const skeletonRef = {
       framework: skeleton.framework,
@@ -259,7 +296,14 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     const catParsed = parseDraftJson(catResp.text);
     if (!catParsed.ok) {
       console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" batch failed: ${catParsed.error}`);
-      return { measures: [], failed: true, error: catParsed.error };
+      // FIX 3: retain a truncated sample of the unparseable payload so the
+      // all-failed path can persist WHY parsing failed (e.g. escaped fallback JSON).
+      return {
+        measures: [],
+        failed: true,
+        error: catParsed.error,
+        rawSample: typeof catResp.text === "string" ? catResp.text.slice(0, 500) : undefined,
+      };
     }
     return {
       measures: Array.isArray(catParsed.draft?.measures) ? catParsed.draft.measures : [],
@@ -285,7 +329,8 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     const allFailed = batchResults.length > 0 && batchResults.every((r) => r.failed);
     const anyTrunc = batchResults.some((r) => r.truncationRecovered);
     if (allFailed) {
-      return { categoryName: cat.name, measures: [], failed: true, error: batchResults[0]?.error };
+      const firstFailed = batchResults.find((r) => r.failed) ?? batchResults[0];
+      return { categoryName: cat.name, measures: [], failed: true, error: firstFailed?.error, rawSample: firstFailed?.rawSample };
     }
     return { categoryName: cat.name, measures, truncationRecovered: anyTrunc };
   });
@@ -294,7 +339,20 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
   const anyTruncationRecovered = categoryResults.some((r: any) => r.truncationRecovered);
   const failedCategories = categoryResults.filter((r: any) => r.failed);
   if (failedCategories.length === categoryResults.length) {
-    return { error: `All ${failedCategories.length} category-drafting sub-calls failed.`, raw: undefined };
+    // FIX 3: Surface the underlying per-category causes instead of a bare summary.
+    // `raw` is persisted into error_stack (via result.raw) for full diagnostics,
+    // and the first concrete cause is folded into the human-readable error_message
+    // that the dashboard renders, so a failure is actionable at a glance.
+    const details = failedCategories.map((r: any) => ({
+      category: r.categoryName,
+      error: r.error,
+      payloadSample: r.rawSample,
+    }));
+    const firstCause = failedCategories.find((r: any) => r.error)?.error;
+    const summary = firstCause
+      ? `All ${failedCategories.length} category-drafting sub-calls failed. Last underlying error: ${String(firstCause).slice(0, 300)}`
+      : `All ${failedCategories.length} category-drafting sub-calls failed.`;
+    return { error: summary, raw: JSON.stringify(details, null, 2) };
   }
 
   // Assemble the final framework in the shape the existing validator expects.
