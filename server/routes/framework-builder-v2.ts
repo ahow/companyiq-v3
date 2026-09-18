@@ -64,10 +64,14 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
       ? `\n\nCurrent robustness gate state: ${currentGate.passedItems}/${currentGate.totalItems} items resolved.\n${currentGate.summaryForUser}`
       : "";
 
+    // The final intake turn emits the full intake artefact JSON + prose + gate_state block, which
+    // exceeds 4000 tokens for frameworks seeded from an existing one; truncation at 4000 triggers a
+    // slow fail-loud fallback cascade that blows the client's timeout (proven from Railway logs 2026-09-18).
+    // Kept below 20000 so this stays on the non-streaming Claude path.
     const { text: response } = await completeWithFallback(providerName || "claude", {
       system: INTAKE_SYSTEM_PROMPT + gateContext,
       prompt: history,
-      maxTokens: 4000,
+      maxTokens: 12000,
       temperature: 0.2,
     });
 

@@ -113,7 +113,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
 
   // Wrap the chat request in a manual fetch with an AbortController so we can
   // give a friendly timeout error, and let the user retry the same turn.
-  async function callChatEndpoint(nextMessages: Message[], timeoutMs = 180_000) {
+  async function callChatEndpoint(nextMessages: Message[], timeoutMs = 300_000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
