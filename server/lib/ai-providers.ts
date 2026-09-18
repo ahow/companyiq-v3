@@ -92,6 +92,12 @@ export interface AIProvider {
     maxTokens?: number;
     json?: boolean;
     temperature?: number;
+    // When true, a truncation (hit token cap / abnormal stop) does NOT throw —
+    // the provider returns whatever partial text it produced. Use ONLY for
+    // conversational/prose calls (intake chat, improvement chat) where a partial
+    // reply is acceptable. Leave falsy for structured-JSON calls (drafting/scoring)
+    // which must stay fail-loud so truncated JSON never flows downstream.
+    allowTruncated?: boolean;
     // Optional usage sink: called synchronously with the raw provider usage
     // object on a successful response (before returning), so callers can log
     // token/cost usage without changing the string return contract. Tolerant —
@@ -132,6 +138,7 @@ class ClaudeProvider implements AIProvider {
     maxTokens?: number;
     json?: boolean;
     temperature?: number;
+    allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
   }): Promise<string> {
     if (this.apiKeys.length === 0) throw new Error("Claude not configured");
@@ -176,7 +183,13 @@ class ClaudeProvider implements AIProvider {
           // is truncated (typically mid-string). Throw instead of returning it so
           // completeWithFallback moves to the next provider rather than passing
           // truncated JSON downstream to an opaque "Unterminated string" parse error.
+          const streamBlock = response.content[0];
+          const streamText = streamBlock && streamBlock.type === "text" ? streamBlock.text : "";
           if (response.stop_reason === "max_tokens") {
+            // GRACEFUL DEGRADATION: conversational callers pass allowTruncated so a
+            // capped reply returns its partial text instead of cascading through
+            // every fallback provider (each also capped/slow) until the client aborts.
+            if (opts.allowTruncated && streamText) return streamText;
             throw new Error(`claude output truncated: hit max_tokens cap (${effectiveMaxTokens})`);
           }
           // FIX A: stream-completeness guard. A cleanly finished stream stops
@@ -186,20 +199,22 @@ class ClaudeProvider implements AIProvider {
           // falls back rather than returning partial JSON downstream.
           const CLEAN_STOP_REASONS = ["end_turn", "stop_sequence", "tool_use"];
           if (!response.stop_reason || !CLEAN_STOP_REASONS.includes(response.stop_reason)) {
+            if (opts.allowTruncated && streamText) return streamText;
             throw new Error(`Claude streaming response ended abnormally (stop_reason=${response.stop_reason}) — likely a truncated/cut stream`);
           }
-          const block = response.content[0];
-          if (block && block.type === "text") return block.text;
+          if (streamBlock && streamBlock.type === "text") return streamBlock.text;
           throw new Error("Unexpected response type from Claude");
         }
 
         const response = await client.messages.create(params);
         try { opts.onUsage?.(response.usage); } catch { /* usage sink must never break scoring */ }
         // FAIL-LOUD: see streaming branch above — never return cap-truncated text.
+        const block = response.content[0];
         if (response.stop_reason === "max_tokens") {
+          const partial = block && block.type === "text" ? block.text : "";
+          if (opts.allowTruncated && partial) return partial;
           throw new Error(`claude output truncated: hit max_tokens cap (${effectiveMaxTokens})`);
         }
-        const block = response.content[0];
         if (block.type === "text") return block.text;
         throw new Error("Unexpected response type from Claude");
       } catch (error: any) {
@@ -290,6 +305,7 @@ class OpenAICompatibleProvider implements AIProvider {
     json?: boolean;
     temperature?: number;
     seed?: number;
+    allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
   }): Promise<string> {
     const body: any = {
@@ -341,6 +357,8 @@ class OpenAICompatibleProvider implements AIProvider {
         // moves on rather than passing truncated JSON downstream.
         const choice = response.data.choices?.[0];
         if (choice?.finish_reason === "length") {
+          // GRACEFUL DEGRADATION: conversational callers accept the partial content.
+          if (opts.allowTruncated && choice?.message?.content) return choice.message.content;
           throw new Error(`${this.name} output truncated: finish_reason=length`);
         }
         return choice.message.content;
@@ -383,6 +401,7 @@ class GeminiProvider implements AIProvider {
     maxTokens?: number;
     json?: boolean;
     temperature?: number;
+    allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
   }): Promise<string> {
     if (!this.apiKey) throw new Error("Gemini not configured");
@@ -414,6 +433,9 @@ class GeminiProvider implements AIProvider {
     // on rather than passing truncated JSON downstream.
     const cand = response.data.candidates?.[0];
     if (cand?.finishReason === "MAX_TOKENS") {
+      // GRACEFUL DEGRADATION: conversational callers accept the partial text.
+      const partial = cand?.content?.parts?.[0]?.text;
+      if (opts.allowTruncated && partial) return partial;
       throw new Error("gemini output truncated: finishReason=MAX_TOKENS");
     }
     return cand.content.parts[0].text;
@@ -815,7 +837,7 @@ export function getIndependentTieBreakerProvider(primaryName: string): AIProvide
 
 export async function completeWithFallback(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string; allowTruncated?: boolean }
 ): Promise<{ text: string; provider: string }> {
   // Gate every LLM call (primary + fallbacks) through the global semaphore so
   // total in-flight requests never exceed LLM_MAX_CONCURRENCY for this process.
@@ -972,7 +994,7 @@ export async function completeScoring(
 
 async function completeWithFallbackInner(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string; allowTruncated?: boolean }
 ): Promise<{ text: string; provider: string }> {
   const errors: string[] = [];
   const primary = getProvider(providerName);

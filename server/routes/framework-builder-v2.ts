@@ -64,15 +64,17 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
       ? `\n\nCurrent robustness gate state: ${currentGate.passedItems}/${currentGate.totalItems} items resolved.\n${currentGate.summaryForUser}`
       : "";
 
-    // The final intake turn emits the full intake artefact JSON + prose + gate_state block, which
-    // exceeds 4000 tokens for frameworks seeded from an existing one; truncation at 4000 triggers a
-    // slow fail-loud fallback cascade that blows the client's timeout (proven from Railway logs 2026-09-18).
-    // Kept below 20000 so this stays on the non-streaming Claude path.
+    // Route onto Claude's streaming path (>20000 => streaming) which handles large
+    // conversational outputs; the final intake turn for a seeded framework can be
+    // large. allowTruncated makes truncation on this CONVERSATIONAL path degrade
+    // gracefully (return partial text) instead of throwing and cascading through
+    // every fallback provider until the client aborts. Drafting/scoring stay fail-loud.
     const { text: response } = await completeWithFallback(providerName || "claude", {
       system: INTAKE_SYSTEM_PROMPT + gateContext,
       prompt: history,
-      maxTokens: 12000,
+      maxTokens: 32000,
       temperature: 0.2,
+      allowTruncated: true,
     });
 
     // Try to extract a full intake JSON block if the assistant emitted one this turn
@@ -2429,6 +2431,9 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       prompt: history + "\n\nAssistant:",
       maxTokens: 4000,
       temperature: 0.2,
+      // Conversational path: on the rare turn that hits the cap, return the partial
+      // reply instead of throwing and cascading through fallbacks until the client aborts.
+      allowTruncated: true,
     });
     const { displayText, actions } = extractActionsFromReply(reply);
     return res.json({ reply: displayText, actions, proposalCount: editsBundle.proposals.length });
