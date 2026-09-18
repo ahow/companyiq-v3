@@ -15,12 +15,15 @@ if (!process.env.DATABASE_URL) {
 // comfortably under ~90. e.g. 8 replicas * 10 = 80. Each replica only runs
 // WORKER_CONCURRENCY jobs at a time, so 10 connections/replica is ample.
 const PG_POOL_MAX = parseInt(process.env.PG_POOL_MAX || "20", 10);
+// Defaults to 10000ms; can be raised per-environment via PG_CONNECTION_TIMEOUT_MS
+// so callers queue through transient pool-acquisition spikes instead of failing fast.
+const PG_CONNECTION_TIMEOUT_MS = parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "10000", 10);
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: PG_POOL_MAX,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: PG_CONNECTION_TIMEOUT_MS,
 });
 
 export const db = drizzle(pool, { schema });
