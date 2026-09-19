@@ -49,13 +49,24 @@ export interface FrameworkDraft {
   }>;
   anchorFrameworks?: Array<{ name: string; source?: string }>;
   sensitivityPreference?: "precision" | "recall" | "balanced";
+  // Retrieval guard artefacts (populated at intake). Optional so the type stays
+  // backward-compatible; the set-level empty-guard check emits an `info` flag
+  // (never error/warning) when they are absent/empty at validation time.
+  negativeKeywords?: string[];
+  antiInferenceRules?: string[];
   measures: MeasureDraft[];
 }
 
 export interface Violation {
   measureId?: string;
   rule: string;
-  severity: "error" | "warning";
+  // "info" is a NON-repair-triggering severity for advisory, set-level
+  // diagnostics (overlap, numbering, empty guards). It is deliberately EXCLUDED
+  // from the repair trigger (framework-builder-v2.ts ~L1048, which checks only
+  // `severity === "error"`) and from the repairMeasuresTargeted grouping
+  // (~L866, which skips anything that is not error/warning) so new checks can
+  // never grow the repair payload. See the 316678be repair-loop telemetry.
+  severity: "error" | "warning" | "info";
   message: string;
   suggestion?: string;
 }
@@ -884,6 +895,152 @@ export function validateC11(fw: FrameworkDraft): ValidationResult {
   return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };
 }
 
+// ─── Set-level diagnostics (definition-of-good dimensions 2, 3, 4) ──────────
+//
+// These check the SET as a whole, not each measure. They implement the
+// DETERMINISTIC half of the reviewer's dimensions 2 (non-overlap), 3
+// (numbering continuity) and 4 (empty retrieval guards) — see
+// definition-of-good.ts.
+//
+// CRITICAL: every violation emitted here is `severity: "info"`. `info` is
+// advisory only — its resolution is a human/skeleton decision, not a mechanical
+// rewrite — so it must NOT feed the repair loop. It is excluded, by
+// construction, from the repair trigger (framework-builder-v2.ts checks only
+// `severity === "error"`) and from the repairMeasuresTargeted grouping (which
+// skips anything not error/warning). This is the whole point of the 316678be
+// redesign: new checks reduce or bypass repair, they never add to it. Do NOT
+// change these to error/warning.
+
+// Named standards that, when they are the sole shared deciding evidence of two
+// measures, indicate effective double-counting (both fire on the same
+// disclosure sentence). Detected in addition to the framework's own
+// anchorFrameworks names.
+const NAMED_STANDARD_PATTERNS: RegExp[] = [
+  /\bISO\/IEC\s?\d{3,}(?:[:\-]\d{2,4})?\b/gi,
+  /\bISO\s?\d{3,}(?:[:\-]\d{2,4})?\b/gi,
+  /\b(?:TCFD|TNFD|ISSB|GRI|SASB|SBTi|SBTN|CDP|GBF|IPBES|NIST(?:\s+AI\s+RMF)?|SOC\s?2|GDPR|CSRD|SFDR)\b/gi,
+];
+
+function extractNamedStandards(text: string, anchorNames: string[]): Set<string> {
+  const found = new Set<string>();
+  if (!text) return found;
+  for (const re of NAMED_STANDARD_PATTERNS) {
+    const matches = text.match(re);
+    if (matches) for (const m of matches) found.add(m.replace(/\s+/g, " ").trim().toUpperCase());
+  }
+  const lc = text.toLowerCase();
+  for (const name of anchorNames) {
+    const n = name.trim();
+    if (n.length >= 3 && lc.includes(n.toLowerCase())) found.add(n.toUpperCase());
+  }
+  return found;
+}
+
+function normaliseQuote(s: string): string {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Deterministic, ADVISORY set-level diagnostics. Emits ONLY `severity: "info"`.
+ *   - Overlap: measure pairs whose deciding evidence shares a named standard or
+ *     a verbatim anchor quote (positive example) → effective double-counting.
+ *   - Numbering continuity: non-contiguous within-category measure numbering.
+ *   - Empty retrieval guards: negativeKeywords / antiInferenceRules absent or
+ *     empty (primarily fixed at generation; flagged here only if still empty).
+ */
+export function validateSetLevel(fw: FrameworkDraft): ValidationResult {
+  const violations: Violation[] = [];
+  const measures = Array.isArray(fw.measures) ? fw.measures : [];
+  const anchorNames = (fw.anchorFrameworks || []).map((a) => a?.name || "").filter(Boolean);
+
+  // ── Dimension 2: overlap / effective double-counting ──
+  // Build a per-measure signature: named standards in its deciding text, plus
+  // normalised positive-example anchor quotes.
+  const sigs = measures.map((m) => {
+    const decidingText = [
+      toText(m.substantive_definition),
+      toText(m.whatConstitutesEvidence),
+      toText(m.fallback_yes_criterion),
+      toText(m.scoringGuidance),
+    ].join("\n");
+    return {
+      measureId: m.measureId,
+      standards: extractNamedStandards(decidingText, anchorNames),
+      quotes: new Set((m.positive_examples || []).map(normaliseQuote).filter((q) => q.length >= 20)),
+    };
+  });
+  const MAX_OVERLAP_FLAGS = 25; // bound the advisory output
+  outer:
+  for (let i = 0; i < sigs.length; i++) {
+    for (let j = i + 1; j < sigs.length; j++) {
+      const a = sigs[i];
+      const b = sigs[j];
+      const sharedStandards = [...a.standards].filter((s) => b.standards.has(s));
+      const sharedQuotes = [...a.quotes].filter((q) => b.quotes.has(q));
+      if (sharedStandards.length === 0 && sharedQuotes.length === 0) continue;
+      const parts: string[] = [];
+      if (sharedStandards.length > 0) parts.push(`named standard(s) [${sharedStandards.join(", ")}]`);
+      if (sharedQuotes.length > 0) parts.push(`a shared anchor quote`);
+      violations.push({
+        measureId: a.measureId,
+        rule: "overlap",
+        severity: "info",
+        message: `Possible overlap: ${a.measureId} and ${b.measureId} both rely on ${parts.join(" and ")} as deciding evidence, so they may qualify on the same disclosure sentence (effective double-counting).`,
+        suggestion: `Give each measure distinct qualifying evidence, or explicitly accept the correlation and note it in pillar-score interpretation. Advisory only — this does not block drafting.`,
+      });
+      if (violations.length >= MAX_OVERLAP_FLAGS) break outer;
+    }
+  }
+
+  // ── Dimension 3: within-category numbering continuity ──
+  const byCategory = new Map<string, number[]>();
+  for (const m of measures) {
+    const match = /^(\d+)\.(\d+)/.exec(String(m.measureId || ""));
+    if (!match) continue;
+    const cat = match[1];
+    const num = Number(match[2]);
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat)!.push(num);
+  }
+  for (const [cat, nums] of byCategory) {
+    const uniq = [...new Set(nums)].sort((x, y) => x - y);
+    if (uniq.length < 2) continue;
+    const missing: number[] = [];
+    for (let n = uniq[0]; n <= uniq[uniq.length - 1]; n++) {
+      if (!uniq.includes(n)) missing.push(n);
+    }
+    if (missing.length > 0) {
+      violations.push({
+        rule: "numbering",
+        severity: "info",
+        message: `Category ${cat} has non-contiguous measure numbering: missing ${missing.map((n) => `${cat}.${n}`).join(", ")} (present: ${uniq.map((n) => `${cat}.${n}`).join(", ")}). This can indicate a measure unintentionally dropped during the build.`,
+        suggestion: `Confirm the gap is intentional, or renumber so the category's measures are contiguous. Advisory only — this does not block drafting.`,
+      });
+    }
+  }
+
+  // ── Dimension 4: empty retrieval guards ──
+  if (!(fw.negativeKeywords && fw.negativeKeywords.length > 0)) {
+    violations.push({
+      rule: "empty-guards",
+      severity: "info",
+      message: `negativeKeywords is empty. Negative keywords reduce false-positive retrieval; populating them matters more when adjacency risk is high.`,
+      suggestion: `Populate negativeKeywords at intake (the intake schema now generates them). Advisory only — this does not block drafting.`,
+    });
+  }
+  if (!(fw.antiInferenceRules && fw.antiInferenceRules.length > 0)) {
+    violations.push({
+      rule: "empty-guards",
+      severity: "info",
+      message: `antiInferenceRules is empty. Anti-inference rules keep scoring disclosure-grounded (no inference from absence); populating them matters more when adjacency risk is high.`,
+      suggestion: `Populate antiInferenceRules at intake (the intake schema now generates them). Advisory only — this does not block drafting.`,
+    });
+  }
+
+  // `passed` reflects error-severity only; info never fails validation.
+  return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };
+}
+
 // ─── Combined validator ───────────────────────────────────────────────────
 
 export function validateAll(fw: FrameworkDraft): ValidationResult {
@@ -900,6 +1057,9 @@ export function validateAll(fw: FrameworkDraft): ValidationResult {
     ["C9", validateC9],
     ["C10", validateC10],
     ["C11", validateC11],
+    // Set-level advisory diagnostics — emits ONLY `severity: "info"`, which is
+    // excluded from the repair trigger and grouping (see validateSetLevel).
+    ["set-level", validateSetLevel],
   ] as const) {
     const r = fn(fw);
     all.push(...r.violations);
@@ -954,7 +1114,7 @@ export function summariseViolations(violations: Violation[]): string {
 export interface StructuredIssue {
   id: string;
   ruleCode: string;              // "C1".."C11", "evidence-keyword-distinctiveness", "internal"
-  severity: "error" | "warning";
+  severity: "error" | "warning" | "info";
   measureId: string;             // "framework-level" when the violation is not measure-scoped
   field: string;                 // best-effort source field the issue concerns
   issue: string;                 // (a) what is wrong
@@ -1048,6 +1208,28 @@ const RULE_ISSUE_META: Record<
     reason: "The validator could not complete, so robustness cannot be confirmed.",
     implication: "The framework may carry undetected design issues that flip verdicts run-to-run.",
   },
+  // Set-level advisory diagnostics (info-severity; never block, never repair).
+  overlap: {
+    field: "substantive_definition / positive_examples / anchorFrameworks",
+    reason:
+      "Two measures rely on the same named standard or the same anchor quote as their deciding evidence, so both can fire on the same disclosure sentence (effective double-counting).",
+    implication:
+      "Boilerplate-rich reporters inflate relative to substantive-but-differently-worded ones; pillar scores over-weight the shared sentence. Advisory — resolution is a design choice.",
+  },
+  numbering: {
+    field: "measureId",
+    reason:
+      "Within-category measure numbering is non-contiguous, which can indicate a measure was unintentionally dropped during the build.",
+    implication:
+      "A silently missing measure leaves a coverage gap. Advisory — confirm the gap is intentional or renumber.",
+  },
+  "empty-guards": {
+    field: "negativeKeywords / antiInferenceRules",
+    reason:
+      "Empty negative-keywords / anti-inference rules leave retrieval unguarded against adjacent-topic false positives; this matters more when adjacency risk is high.",
+    implication:
+      "Adjacent-topic passages are retrieved and scored, inflating and destabilising the Yes rate. Advisory — populate at intake.",
+  },
 };
 
 const GENERIC_ISSUE_META = {
@@ -1094,12 +1276,13 @@ export function toStructuredIssues(violations: Violation[]): StructuredIssue[] {
  */
 export function renderStructuredIssues(issues: StructuredIssue[]): string {
   if (issues.length === 0) return "No outstanding design issues — all C1–C11 rules pass.";
-  const order = { error: 0, warning: 1 } as const;
+  const order = { error: 0, warning: 1, info: 2 } as const;
   const sorted = [...issues].sort((a, b) => order[a.severity] - order[b.severity]);
   const errors = issues.filter((i) => i.severity === "error").length;
-  const warnings = issues.length - errors;
+  const warnings = issues.filter((i) => i.severity === "warning").length;
+  const infos = issues.filter((i) => i.severity === "info").length;
   const lines: string[] = [
-    `${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"} must be reviewed before drafting/saving.`,
+    `${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"}${infos > 0 ? `, ${infos} info` : ""} must be reviewed before drafting/saving.`,
     "",
   ];
   for (const i of sorted) {

@@ -12,6 +12,7 @@ import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evide
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
 import { resolveTargetCount } from "../lib/framework-v2/target-count.js";
+import { sanitizeSearchTemplates } from "../lib/framework-v2/query-template-hygiene.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
@@ -200,6 +201,8 @@ function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft
     adjacentTopics: normalisedAdjacent,
     anchorFrameworks: (Array.isArray(draft.framework?.anchorFrameworks) ? draft.framework.anchorFrameworks : null) || intake.anchorFrameworks,
     sensitivityPreference: draft.framework?.sensitivityPreference || intake.sensitivityPreference,
+    negativeKeywords: (Array.isArray(draft.framework?.negativeKeywords) ? draft.framework.negativeKeywords : null) || intake.negativeKeywords,
+    antiInferenceRules: (Array.isArray(draft.framework?.antiInferenceRules) ? draft.framework.antiInferenceRules : null) || intake.antiInferenceRules,
     measures,
   };
 }
@@ -603,7 +606,16 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
         measures: catResult.measures || [],
       };
     }),
-    searchTemplates: skeleton.searchTemplates || [],
+    searchTemplates: (() => {
+      // Deterministic query-template hygiene (definition-of-good dim 4):
+      // parameterise stale hardcoded years and drop junk-verb-only templates
+      // before assembly. Auto-fix only — logged, never a violation, so the
+      // repair loop is not touched.
+      const h = sanitizeSearchTemplates(skeleton.searchTemplates || []);
+      if (h.dropped.length > 0) console.log(`[framework-builder v2] query-template hygiene dropped ${h.dropped.length} junk template(s): ${h.dropped.slice(0, 10).join(" | ")}`);
+      if (h.rewritten.length > 0) console.log(`[framework-builder v2] query-template hygiene parameterised ${h.rewritten.length} stale-year template(s): ${h.rewritten.slice(0, 10).join(" | ")}`);
+      return h.cleaned;
+    })(),
     evidenceKeywords: skeleton.evidenceKeywords || [],
   };
   if (anyTruncationRecovered) assembled.__truncationRecovered = true;
@@ -855,15 +867,18 @@ async function repairMeasuresTargeted(
     providerRequested: providerName || "claude",
     parseOk: false,
     measuresReplaced: 0,
+    batchCount: 0,
+    batches: [] as any[],
     outcome: "unknown",
   };
 
-  // Group error+warning violations by measureId. Violations without a measureId
-  // (framework-level) can't be targeted per-measure, so they're skipped here —
-  // they surface to the review pane as before.
+  // FIX (b): Group ERROR violations by measureId only. Warnings/info must NOT
+  // drag a measure into a repair pass — only hard errors are addressable here.
+  // Violations without a measureId (framework-level) can't be targeted
+  // per-measure, so they're skipped — they surface to the review pane as before.
   const byMeasure = new Map<string, any[]>();
   for (const v of violations) {
-    if (v.severity !== "error" && v.severity !== "warning") continue;
+    if (v.severity !== "error") continue;
     const id = v.measureId;
     if (!id) continue;
     if (!byMeasure.has(id)) byMeasure.set(id, []);
@@ -885,72 +900,118 @@ async function repairMeasuresTargeted(
   }
   if (targetMeasures.length === 0) { telem.outcome = "no-target-measures"; return { patched: null, telem }; }
 
-  const violationBlock = Array.from(byMeasure.entries())
-    .map(([id, vs]) => {
-      const lines = vs
-        .map((v: any) => `  - [${v.rule}][${v.severity}] ${v.message}${v.suggestion ? ` — SUGGESTION: ${v.suggestion}` : ""}`)
-        .join("\n");
-      return `${id}:\n${lines}`;
-    })
-    .join("\n\n");
-
-  const userPrompt =
-    `Intake artefact (JSON, for context — topic term, synonyms, adjacent topics):\n${JSON.stringify(intake, null, 2)}\n\n` +
-    `The following measures FAILED validation. Each is given in full, followed by the exact violations to fix:\n\n` +
-    `Measures to repair (JSON array):\n${JSON.stringify(targetMeasures, null, 2)}\n\n` +
-    `Violations, grouped by measureId:\n${violationBlock}\n\n` +
-    `${C11_REPAIR_CLAUSE}\n\n` +
-    `Rewrite ONLY the fields that trigger these violations; leave every other field of each measure unchanged. ` +
-    `Do NOT invent new measures and do NOT drop any. Preserve every measureId EXACTLY. ` +
-    `Return a JSON object of the form {"measures": [ ...corrected measure objects... ]} containing ONLY the ` +
-    `measures listed above (one corrected object per measureId), and nothing else.`;
-
-  telem.promptChars = userPrompt.length;
-
-  let resp: { text: string; provider?: string };
-  const llmStart = Date.now();
-  try {
-    resp = await completeWithFallback(providerName || "claude", {
-      system: DRAFTING_SYSTEM_PROMPT_HEAD,
-      prompt: userPrompt,
-      maxTokens: 16000,
-      temperature: 0.2,
-      json: true,
-    });
-  } catch (e: any) {
-    telem.llmElapsedMs = Date.now() - llmStart;
-    telem.outcome = "llm-failed";
-    console.warn(`[framework-builder v2] Targeted repair LLM call failed: ${e?.message || e}`);
-    return { patched: null, telem };
+  // FIX (c): Split the offending measures into batches of
+  // CHUNK_MEASURES_PER_CALL and repair them IN PARALLEL. A single giant call
+  // carrying every offending measure can exceed Claude's non-streaming output
+  // window and fall through to the slow OpenAI fallback — see telemetry job
+  // 316678be, where one 340k-char repair call dominated a 30-min build.
+  // Batching keeps each payload small; Promise.all issues the batch calls
+  // concurrently. Cross-call concurrency is already bounded globally by the
+  // single semaphore inside completeWithFallback, so no extra semaphore is
+  // needed here (this mirrors expandBatch).
+  const batches: any[][] = [];
+  for (let i = 0; i < targetMeasures.length; i += CHUNK_MEASURES_PER_CALL) {
+    batches.push(targetMeasures.slice(i, i + CHUNK_MEASURES_PER_CALL));
   }
-  telem.llmElapsedMs = Date.now() - llmStart;
-  // Actual provider that produced the response, when completeWithFallback
-  // exposes it (falls back to the requested provider otherwise).
-  if ((resp as any).provider) telem.provider = (resp as any).provider;
+  telem.batchCount = batches.length;
 
-  const parsed = parseDraftJson(resp.text);
-  if (!parsed.ok) {
-    telem.outcome = "parse-failed";
-    console.warn(`[framework-builder v2] Targeted repair failed to parse: ${(parsed as { error: string }).error}`);
-    return { patched: null, telem };
+  const repairBatch = async (batchMeasures: any[], batchIndex: number) => {
+    const rec: any = {
+      batchIndex,
+      measuresRequested: batchMeasures.length,
+      promptChars: 0,
+      provider: providerName || "claude",
+      parseOk: false,
+      measuresReturned: 0,
+      llmElapsedMs: null as number | null,
+      outcome: "unknown",
+    };
+    const violationBlock = batchMeasures
+      .map((m: any) => {
+        const vs = byMeasure.get(m.measureId) || [];
+        const lines = vs
+          .map((v: any) => `  - [${v.rule}][${v.severity}] ${v.message}${v.suggestion ? ` — SUGGESTION: ${v.suggestion}` : ""}`)
+          .join("\n");
+        return `${m.measureId}:\n${lines}`;
+      })
+      .join("\n\n");
+
+    const userPrompt =
+      `Intake artefact (JSON, for context — topic term, synonyms, adjacent topics):\n${JSON.stringify(intake, null, 2)}\n\n` +
+      `The following measures FAILED validation. Each is given in full, followed by the exact violations to fix:\n\n` +
+      `Measures to repair (JSON array):\n${JSON.stringify(batchMeasures, null, 2)}\n\n` +
+      `Violations, grouped by measureId:\n${violationBlock}\n\n` +
+      `${C11_REPAIR_CLAUSE}\n\n` +
+      `Rewrite ONLY the fields that trigger these violations; leave every other field of each measure unchanged. ` +
+      `Do NOT invent new measures and do NOT drop any. Preserve every measureId EXACTLY. ` +
+      `Return a JSON object of the form {"measures": [ ...corrected measure objects... ]} containing ONLY the ` +
+      `measures listed above (one corrected object per measureId), and nothing else.`;
+    rec.promptChars = userPrompt.length;
+
+    let resp: { text: string; provider?: string };
+    const llmStart = Date.now();
+    try {
+      resp = await completeWithFallback(providerName || "claude", {
+        system: DRAFTING_SYSTEM_PROMPT_HEAD,
+        prompt: userPrompt,
+        maxTokens: 16000,
+        temperature: 0.2,
+        json: true,
+      });
+    } catch (e: any) {
+      rec.llmElapsedMs = Date.now() - llmStart;
+      rec.outcome = "llm-failed";
+      console.warn(`[framework-builder v2] Targeted repair batch ${batchIndex} LLM call failed: ${e?.message || e}`);
+      return { corrected: [] as any[], rec };
+    }
+    rec.llmElapsedMs = Date.now() - llmStart;
+    // Actual provider that produced this batch's response, when
+    // completeWithFallback exposes it (else the requested provider).
+    if ((resp as any).provider) rec.provider = (resp as any).provider;
+
+    const parsed = parseDraftJson(resp.text);
+    if (!parsed.ok) {
+      rec.outcome = "parse-failed";
+      console.warn(`[framework-builder v2] Targeted repair batch ${batchIndex} failed to parse: ${(parsed as { error: string }).error}`);
+      return { corrected: [] as any[], rec };
+    }
+    rec.parseOk = true;
+    const correctedBatch = Array.isArray(parsed.draft?.measures)
+      ? parsed.draft.measures
+      : Array.isArray(parsed.draft)
+        ? parsed.draft
+        : [];
+    rec.measuresReturned = correctedBatch.length;
+    rec.outcome = correctedBatch.length > 0 ? "parsed" : "no-measures-returned";
+    return { corrected: correctedBatch as any[], rec };
+  };
+
+  // Issue all batch repairs concurrently; the global LLM semaphore inside
+  // completeWithFallback bounds real parallelism. llmElapsedMs is the wall-clock
+  // of the whole parallel phase (per-batch timings live in telem.batches).
+  const batchStart = Date.now();
+  const results = await Promise.all(batches.map((b, i) => repairBatch(b, i)));
+  telem.llmElapsedMs = Date.now() - batchStart;
+  telem.batches = results.map((r) => r.rec);
+  telem.promptChars = results.reduce((s, r) => s + (r.rec.promptChars || 0), 0);
+  telem.parseOk = results.some((r) => r.rec.parseOk);
+  const providersUsed = Array.from(new Set(results.map((r) => r.rec.provider).filter(Boolean)));
+  if (providersUsed.length > 0) telem.provider = providersUsed.join(",");
+
+  // Merge corrected measures from every batch, keyed by measureId.
+  const correctedById = new Map<string, any>();
+  for (const r of results) {
+    for (const m of r.corrected) {
+      if (m && typeof m.measureId === "string") correctedById.set(m.measureId, m);
+    }
   }
-  telem.parseOk = true;
-  const corrected = Array.isArray(parsed.draft?.measures)
-    ? parsed.draft.measures
-    : Array.isArray(parsed.draft)
-      ? parsed.draft
-      : null;
-  if (!corrected || corrected.length === 0) {
+  if (correctedById.size === 0) {
     telem.outcome = "no-measures-returned";
-    console.warn(`[framework-builder v2] Targeted repair returned no measures.`);
+    console.warn(`[framework-builder v2] Targeted repair returned no measures across ${batches.length} batch(es).`);
     return { patched: null, telem };
   }
 
   // Splice corrected measures back into the full draft by measureId, in place.
-  const correctedById = new Map<string, any>();
-  for (const m of corrected) {
-    if (m && typeof m.measureId === "string") correctedById.set(m.measureId, m);
-  }
   let replaced = 0;
   const patched = {
     ...draft,
@@ -1035,14 +1096,26 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
   // the LLM call took, the payload size, the provider that answered, the parse
   // outcome, how many measures were replaced, and the validation error/warning
   // counts after each pass — so an over-long draft can be attributed to the
-  // repair LLM calls rather than guessed at. Instrumentation ONLY: the loop
-  // condition, MAX_REPAIRS, provider selection, and break semantics below are
-  // byte-for-byte identical to before — every telemetry write is additive.
+  // repair LLM calls rather than guessed at.
+  //
+  // FIX (a) KEEP-BEST / NON-REGRESSION GUARD: after each pass we RE-VALIDATE the
+  // patched draft and compare its error count to the count that went INTO the
+  // pass. A pass is only ACCEPTED if it STRICTLY reduces errors; otherwise the
+  // patched draft is DISCARDED, the pre-pass draft is kept, and the loop stops.
+  // The phase returns the fewest-error draft observed across the initial draft
+  // and all accepted passes. This prevents the destructive-pass pathology (see
+  // telemetry job 316678be, 14→100 errors) where a repair pass made the draft
+  // strictly worse and that worse draft was carried forward. MAX_REPAIRS (2) and
+  // the repair trigger condition are unchanged.
   const repairPhaseStart = Date.now();
   const repairPasses: any[] = [];
   const initialCounts = countSeverity(validation);
   let repairAttempts = 0;
   const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_MAX_REPAIRS || 2);
+  // Best (fewest-error) draft observed so far, seeded with the initial draft.
+  let bestDraft = draft;
+  let bestValidation = validation;
+  let bestErrorCount = initialCounts.errorCount;
   while (
     repairAttempts < MAX_REPAIRS &&
     validation.violations.some((v: any) => v.severity === "error")
@@ -1050,6 +1123,7 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     repairAttempts++;
     const passStart = Date.now();
     const violationsInCounts = countSeverity(validation);
+    const errorsIn = violationsInCounts.errorCount;
     const { patched, telem } = await repairMeasuresTargeted(intake, draft, validation.violations, providerName);
     if (!patched) {
       // Nothing addressable, or the repair failed to parse — keep prior draft, stop.
@@ -1058,46 +1132,78 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
           pass: repairAttempts,
           targetedMeasureCount: telem?.targetedMeasureCount ?? null,
           violationsInCount: telem?.violationsInCount ?? violationsInCounts.violationCount,
-          errorsIn: violationsInCounts.errorCount,
+          batchCount: telem?.batchCount ?? null,
+          batches: telem?.batches ?? null,
+          errorsIn,
           warningsIn: violationsInCounts.warningCount,
+          errorCountBefore: errorsIn,
           promptChars: telem?.promptChars ?? null,
           llmElapsedMs: telem?.llmElapsedMs ?? null,
           provider: telem?.provider ?? (providerName || "claude"),
           parseOk: telem?.parseOk ?? false,
           measuresReplaced: telem?.measuresReplaced ?? 0,
           elapsedMs: Date.now() - passStart,
-          errorCountAfter: violationsInCounts.errorCount,
+          errorCountAfter: errorsIn,
           warningCountAfter: violationsInCounts.warningCount,
+          accepted: false,
           outcome: telem?.outcome ?? "no-usable-draft",
         });
       } catch { /* telemetry must never break the draft */ }
       console.warn(`[framework-builder v2] Repair attempt ${repairAttempts} produced no usable draft; keeping prior draft.`);
       break;
     }
-    draft = patched;
+    // FIX (a): validate the patched draft WITHOUT committing to it yet, so a
+    // regressive pass can be discarded.
     const postValidateStart = Date.now();
-    validation = validate(draft);
-    const afterCounts = countSeverity(validation);
+    const patchedValidation = validate(patched);
+    const postValidateMs = Date.now() - postValidateStart;
+    const afterCounts = countSeverity(patchedValidation);
+    // Accept only if this pass STRICTLY reduced the error count.
+    const accepted = afterCounts.errorCount < errorsIn;
     try {
       repairPasses.push({
         pass: repairAttempts,
         targetedMeasureCount: telem?.targetedMeasureCount ?? null,
         violationsInCount: telem?.violationsInCount ?? violationsInCounts.violationCount,
-        errorsIn: violationsInCounts.errorCount,
+        batchCount: telem?.batchCount ?? null,
+        batches: telem?.batches ?? null,
+        errorsIn,
         warningsIn: violationsInCounts.warningCount,
+        errorCountBefore: errorsIn,
         promptChars: telem?.promptChars ?? null,
         llmElapsedMs: telem?.llmElapsedMs ?? null,
         provider: telem?.provider ?? (providerName || "claude"),
         parseOk: telem?.parseOk ?? false,
         measuresReplaced: telem?.measuresReplaced ?? 0,
-        postValidateMs: Date.now() - postValidateStart,
+        postValidateMs,
         elapsedMs: Date.now() - passStart,
         errorCountAfter: afterCounts.errorCount,
         warningCountAfter: afterCounts.warningCount,
-        outcome: telem?.outcome ?? "repaired",
+        accepted,
+        outcome: accepted ? (telem?.outcome ?? "repaired") : "discarded-regression",
       });
     } catch { /* telemetry must never break the draft */ }
+    if (!accepted) {
+      // FIX (a): pass did not strictly reduce errors — DISCARD the patched
+      // draft, keep the pre-pass draft (already the best-so-far), and stop.
+      console.warn(
+        `[framework-builder v2] Repair attempt ${repairAttempts} did not reduce errors ` +
+        `(${errorsIn} → ${afterCounts.errorCount}); discarding patched draft and stopping.`,
+      );
+      break;
+    }
+    // Accepted: commit the patched draft and update best-so-far.
+    draft = patched;
+    validation = patchedValidation;
+    if (afterCounts.errorCount < bestErrorCount) {
+      bestDraft = draft;
+      bestValidation = validation;
+      bestErrorCount = afterCounts.errorCount;
+    }
   }
+  // FIX (a): return the fewest-error draft observed (keep-best).
+  draft = bestDraft;
+  validation = bestValidation;
   const repairPhaseMs = Date.now() - repairPhaseStart;
 
   // [fb2-telemetry] Attach the repair + validation phase section onto the
@@ -1114,6 +1220,8 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
           warningCount: initialCounts.warningCount,
           violationCount: initialCounts.violationCount,
         },
+        // FIX (a): fewest-error count of the draft actually returned (keep-best).
+        finalErrorCount: bestErrorCount,
         passes: repairPasses,
       };
       draftTelemetry.validationPhase = {

@@ -468,6 +468,46 @@ export interface TerminologyGapResult {
 }
 
 /**
+ * Stopword set used to detect synonym-list pollution (function-word n-gram
+ * artefacts). Module-scoped so the pollution predicate can be reused and unit-
+ * tested independently of the corpus-mining path.
+ */
+export const SYNONYM_STOPWORDS = new Set([
+  "the", "and", "for", "with", "that", "this", "from", "are", "has", "have",
+  "been", "not", "its", "our", "their", "we", "to", "of", "in", "on", "at",
+  "by", "as", "an", "a", "or", "be", "is", "was", "will", "it", "which",
+]);
+
+/**
+ * Deterministic synonym-pollution predicate over pre-tokenised words. A phrase
+ * is polluted (must be rejected from the synonym list) if it is empty, its
+ * leading OR trailing token is a stopword, or it contains no topic-relevant
+ * (non-stopword) token. e.g. "the board", "operations and", "and other" → true;
+ * "algorithmic accountability" → false. No LLM, no violation emitted.
+ */
+export function isPollutedSynonymTokens(
+  tokens: string[],
+  stopwords: Set<string> = SYNONYM_STOPWORDS,
+): boolean {
+  if (!tokens || tokens.length === 0) return true;
+  if (stopwords.has(tokens[0])) return true;
+  if (stopwords.has(tokens[tokens.length - 1])) return true;
+  if (tokens.every((w) => stopwords.has(w))) return true;
+  return false;
+}
+
+/** Convenience wrapper: tokenise a phrase string, then apply the predicate. */
+export function isPollutedSynonymPhrase(
+  phrase: string,
+  stopwords: Set<string> = SYNONYM_STOPWORDS,
+): boolean {
+  return isPollutedSynonymTokens(
+    String(phrase || "").toLowerCase().split(/\s+/).filter(Boolean),
+    stopwords,
+  );
+}
+
+/**
  * Mine the test-drive corpus for terms that companies actually use for the topic
  * but that are NOT already in topicSynonyms. Returns candidate additions ranked
  * by frequency across companies.
@@ -493,11 +533,7 @@ export function detectTerminologyGaps(
   //  3. Are NOT already in knownTermsLc
   //  4. Pass a basic relevance heuristic (≥3 chars, not pure stopwords)
 
-  const STOPWORDS = new Set([
-    "the", "and", "for", "with", "that", "this", "from", "are", "has", "have",
-    "been", "not", "its", "our", "their", "we", "to", "of", "in", "on", "at",
-    "by", "as", "an", "a", "or", "be", "is", "was", "will", "it", "which",
-  ]);
+  const STOPWORDS = SYNONYM_STOPWORDS;
 
   // ── Hard resource bounds ────────────────────────────────────────────────
   // This function previously had no caps and mined every phrase around every
@@ -514,6 +550,16 @@ export function detectTerminologyGaps(
   // Extract candidate phrases: for each company corpus, find windows around known terms
   const termCounts = new Map<string, Set<string>>(); // term → set of company names
   let capped = false; // stop growing the map once the phrase ceiling is hit
+
+  // ── Synonym-pollution auto-fix (definition-of-good dimension 4) ──
+  // Reject n-gram artefacts whose LEADING or TRAILING token is a stopword
+  // (e.g. "the board", "operations and", "and other", "our global") or that
+  // contain no topic-relevant (non-stopword) token. These function-word phrases
+  // cause severe false-positive retrieval. This is a DETERMINISTIC filter, not a
+  // violation: polluted candidates are dropped here and logged, so they never
+  // reach the synonym list, validation, or the repair loop.
+  const removedPollutedPhrases = new Set<string>();
+  const isPolluted = (tokens: string[]): boolean => isPollutedSynonymTokens(tokens, STOPWORDS);
 
   outer:
   for (const [companyName, rawText] of corpusTexts) {
@@ -536,12 +582,17 @@ export function detectTerminologyGaps(
         const words = window.split(/\s+/).filter((w) => /^[a-z][a-z-]{2,}/.test(w));
         for (let wi = 0; wi < words.length - 1; wi++) {
           for (let len = 2; len <= 3 && wi + len <= words.length; len++) {
-            const phrase = words.slice(wi, wi + len).join(" ");
+            const phraseTokens = words.slice(wi, wi + len);
+            const phrase = phraseTokens.join(" ");
             if (phrase === knownTerm) continue;
             if (knownTermsLc.has(phrase)) continue;
-            // Skip phrases that are mostly stopwords
-            const contentWords = words.slice(wi, wi + len).filter((w) => !STOPWORDS.has(w));
-            if (contentWords.length === 0) continue;
+            // Reject function-word / n-gram pollution: leading or trailing
+            // stopword, or no topic-relevant token at all. Logged, not a
+            // violation — dropped here so it never reaches the synonym list.
+            if (isPolluted(phraseTokens)) {
+              if (removedPollutedPhrases.size < 200) removedPollutedPhrases.add(phrase);
+              continue;
+            }
             if (phrase.length < 4 || phrase.length > 60) continue;
             let bucket = termCounts.get(phrase);
             if (!bucket) {
@@ -558,6 +609,13 @@ export function detectTerminologyGaps(
       }
       if (capped && termCounts.size >= MAX_DISTINCT_PHRASES) break outer;
     }
+  }
+
+  if (removedPollutedPhrases.size > 0) {
+    const sample = Array.from(removedPollutedPhrases).slice(0, 20);
+    console.log(
+      `[test-drive] synonym-pollution filter dropped ${removedPollutedPhrases.size} function-word candidate phrase(s) (leading/trailing stopword or no topic-relevant token). Sample: ${sample.join(", ")}`,
+    );
   }
 
   // Filter: must appear in ≥2 companies, rank by company coverage

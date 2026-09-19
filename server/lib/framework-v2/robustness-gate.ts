@@ -26,6 +26,11 @@ export interface IntakeArtefact {
     cooccurrence_possible?: boolean;
   }>;
   anchorFrameworks?: Array<{ name: string; source?: string }>;
+  // Retrieval guard artefacts (populated at intake). Optional for backward
+  // compatibility; when empty at validation the set-level check emits an `info`
+  // flag only (never error/warning).
+  negativeKeywords?: string[];
+  antiInferenceRules?: string[];
   entityType?: string;
   sectorScope?: string;
   universe?: string;
