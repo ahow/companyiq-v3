@@ -620,6 +620,24 @@ async function maybeHandleBatchCompletion(
   try {
     const listId = batchRow.list_id ? Number(batchRow.list_id) : undefined;
 
+    // Reliability/recovery batches (system-generated diagnostic runs) must never
+    // enter the user-facing interactive review queue. They have their own
+    // acceptance/rejection lifecycle keyed off `reliability_run_id`, and their
+    // jobs are allowed to fail transiently by design. Routing them into
+    // `pending_review` + a `batch_review` alert would surface a system batch as
+    // the "latest reviewable batch", blocking /api/analyze and dead-ending the
+    // Resolve flow. Mark the batch terminal and let the reliability lifecycle
+    // handle the outcome; do NOT raise a batch_review alert.
+    if (batchRow.reliability_run_id) {
+      console.log(
+        "[Worker] Batch " + batchId + " is a reliability/recovery run (reliability_run_id=" +
+        batchRow.reliability_run_id + ") with " + failed +
+        " failure(s) — handled via reliability lifecycle, not surfaced to the interactive review queue",
+      );
+      await storage.completeBatchRun(batchId);
+      return;
+    }
+
     if (failed > 0) {
       // ── Option (a): pause for review, do NOT save ──
       console.log(

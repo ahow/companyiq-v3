@@ -1183,7 +1183,16 @@ apiRouter.post("/batch/review/finalize", async (req: Request, res: Response) => 
   try {
     const { workspaceId } = getSessionContext(req);
     const batch = await storage.getLatestReviewableBatch(workspaceId);
-    if (!batch) return res.status(404).json({ error: "No batch awaiting review." });
+    if (!batch) {
+      // Nothing user-facing to review. This can happen when the only "reviewable"
+      // batch was a system reliability/recovery run (now excluded), or the alert
+      // is stale. Clear any lingering batch_review alert so the UI doesn't
+      // dead-end on a Resolve action, and return success rather than a bare 404.
+      try {
+        await storage.clearSystemAlert("batch_review");
+      } catch { /* non-fatal */ }
+      return res.json({ success: true, finalised: false, nothingToReview: true });
+    }
 
     await finalizeBatchAndSave(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
     res.json({ success: true, finalised: true, batchId: batch.id });

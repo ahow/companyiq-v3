@@ -1395,7 +1395,14 @@ export async function getLatestReviewableBatch(workspaceId: number) {
   const [batch] = await db
     .select()
     .from(schema.batchRuns)
-    .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "pending_review")))
+    .where(and(
+      eq(schema.batchRuns.workspaceId, workspaceId),
+      eq(schema.batchRuns.status, "pending_review"),
+      // Defensive: reliability/recovery batches must never be surfaced as a
+      // reviewable batch even if one somehow reached pending_review — they have
+      // their own lifecycle and would otherwise block the interactive flow.
+      isNull(schema.batchRuns.reliabilityRunId),
+    ))
     .orderBy(desc(schema.batchRuns.startedAt))
     .limit(1);
   return batch || null;
