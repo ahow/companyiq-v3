@@ -23,6 +23,7 @@ import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } fro
 import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import { groupProposalsByPatch, BATCH_REGENERATORS, differentiateMeasureDefinition, regenerateMeasureField, CUSTOM_EDIT_FIELDS, type CustomEditField, type CustomEditMeasure, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import { mergeStructuredIntoScoringGuidance } from "../lib/framework-v2/structured-guidance.js";
+import { mergeCorrectedMeasure } from "../lib/framework-v2/merge-corrected-measure.js";
 import { runTruthCheck, type TruthCheckResult } from "../lib/framework-v2/truth-check.js";
 import { recordMeasureEdit } from "../lib/framework-v2/measure-audit.js";
 import { resolveProposalByIdentity } from "../lib/framework-v2/proposal-identity.js";
@@ -1018,7 +1019,13 @@ async function repairMeasuresTargeted(
   }
 
   // Splice corrected measures back into the full draft by measureId, in place.
+  // FIX: PRUNE-MERGE the model's (often partial) correction onto the ORIGINAL
+  // measure via mergeCorrectedMeasure — a correction can only add/improve fields,
+  // never delete one the model omitted or blanked. This stops complete measures
+  // being turned into stubs. See mergeCorrectedMeasure for the root cause.
   let replaced = 0;
+  let fieldsPreservedByMerge = 0;
+  let regressionsPrevented = 0;
   const patched = {
     ...draft,
     categories: cats.map((c: any) => ({
@@ -1026,14 +1033,21 @@ async function repairMeasuresTargeted(
       measures: (Array.isArray(c?.measures) ? c.measures : []).map((m: any) => {
         if (m && correctedById.has(m.measureId)) {
           replaced++;
-          // Force the measureId to survive even if the model altered it.
-          return { ...correctedById.get(m.measureId), measureId: m.measureId };
+          const { merged, fieldsPreserved, regressionPrevented } = mergeCorrectedMeasure(
+            m,
+            correctedById.get(m.measureId),
+          );
+          fieldsPreservedByMerge += fieldsPreserved;
+          if (regressionPrevented) regressionsPrevented++;
+          return merged;
         }
         return m;
       }),
     })),
   };
   telem.measuresReplaced = replaced;
+  telem.fieldsPreservedByMerge = fieldsPreservedByMerge;
+  telem.regressionsPrevented = regressionsPrevented;
   if (replaced === 0) {
     telem.outcome = "no-matches";
     console.warn(`[framework-builder v2] Targeted repair produced no measureId matches; keeping prior draft.`);
