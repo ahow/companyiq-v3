@@ -214,37 +214,61 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
 
   // Wrap the chat request in a manual fetch with an AbortController so we can
   // give a friendly timeout error, and let the user retry the same turn.
+  //
+  // The chat turn is IDEMPOTENT server-side (it takes the full messages[] + the
+  // current intake and has no side effects — no job is created here), so a
+  // dropped socket can be retried safely. Mobile browsers routinely drop a
+  // long-idle fetch socket while the server buffers a large LLM response, which
+  // surfaced as "Network error before response" at the intake-emission turn. We
+  // now auto-retry that transient "failed to fetch" case a couple of times with
+  // a short backoff before giving up and surfacing the manual-retry message.
   async function callChatEndpoint(nextMessages: Message[], timeoutMs = 300_000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch("/api/framework-builder/v2/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        signal: controller.signal,
-        body: JSON.stringify({ messages: nextMessages, intake }),
-      });
-      clearTimeout(timer);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(body.error || `HTTP ${res.status}`);
+    const MAX_SOCKET_RETRIES = 2;
+    let lastSocketErr: any = null;
+    for (let attempt = 0; attempt <= MAX_SOCKET_RETRIES; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch("/api/framework-builder/v2/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          signal: controller.signal,
+          body: JSON.stringify({ messages: nextMessages, intake }),
+        });
+        clearTimeout(timer);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ error: res.statusText }));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        return res.json();
+      } catch (err: any) {
+        clearTimeout(timer);
+        if (err?.name === "AbortError") {
+          // Deterministic timeout — retrying regenerates the same slow response,
+          // so surface immediately.
+          throw new Error(
+            "Request timed out after " + Math.round(timeoutMs / 1000) + "s. The model provider is slow right now; please retry.",
+          );
+        }
+        const isSocketDrop =
+          typeof err?.message === "string" && err.message.toLowerCase().includes("failed to fetch");
+        if (isSocketDrop && attempt < MAX_SOCKET_RETRIES) {
+          // Transient socket drop — wait briefly and retry the same idempotent turn.
+          lastSocketErr = err;
+          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+          continue;
+        }
+        if (isSocketDrop) {
+          throw new Error(
+            "Network error before response. Your connection may have dropped or the request was interrupted. Please retry \u2014 your conversation history is preserved.",
+          );
+        }
+        throw err;
       }
-      return res.json();
-    } catch (err: any) {
-      clearTimeout(timer);
-      if (err?.name === "AbortError") {
-        throw new Error(
-          "Request timed out after " + Math.round(timeoutMs / 1000) + "s. The model provider is slow right now; please retry.",
-        );
-      }
-      if (typeof err?.message === "string" && err.message.toLowerCase().includes("failed to fetch")) {
-        throw new Error(
-          "Network error before response. Your connection may have dropped or the request was interrupted. Please retry \u2014 your conversation history is preserved.",
-        );
-      }
-      throw err;
     }
+    // Unreachable in practice; satisfies the type checker.
+    throw lastSocketErr ?? new Error("Network error before response.");
   }
 
   async function sendMessage(text: string, isRetry = false) {
