@@ -309,6 +309,9 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
   const [draftJobId, setDraftJobId] = useState<string | null>(null);
   const [draftJobStartTime, setDraftJobStartTime] = useState<number | null>(null);
   const [repairAttempts, setRepairAttempts] = useState<number>(0);
+  // ISSUE 2: honest, human-readable outcome of a user-initiated "Re-draft with
+  // corrections" run (how many warnings were resolved vs remain, and why).
+  const [refineMessage, setRefineMessage] = useState<string | null>(null);
   const [truncationRecovered, setTruncationRecovered] = useState<boolean>(false);
   // Honest shortfall reporting: the resolved target the drafter aimed for and
   // how many category batches (if any) failed to complete.
@@ -335,6 +338,17 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     } catch { return 1; }
   });
   const [scoringProgress, setScoringProgress] = useState<string | null>(null);
+  // ISSUE 3: when /api/analyze is rejected (HTTP 409) because a previous batch is
+  // awaiting review, surface an actionable inline resolver instead of a dead-end
+  // error. We stash the framework/list so the retry can re-run analyze verbatim
+  // once the old batch is finalised. `alreadyRunning` is a wait-only state (no button).
+  const [testDrivePendingReview, setTestDrivePendingReview] = useState<
+    { batchId: number; failed: number; completed: number; total: number; frameworkId: number; listId: number; listName: string } | null
+  >(null);
+  const [testDriveAlreadyRunning, setTestDriveAlreadyRunning] = useState<
+    { batchId: number; completed: number; total: number } | null
+  >(null);
+  const [resolvingBatch, setResolvingBatch] = useState(false);
 
   // Persist test-drive identifiers across refreshes so users can return to the
   // improvement panel without losing state. Cleared by the "Build another" button.
@@ -547,6 +561,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     setLoading(true);
     setStage("drafting");
     setRepairAttempts(0);
+    setRefineMessage(null);
     setTruncationRecovered(false);
     try {
       // Start a refine job and poll to completion (same pattern as draftFramework).
@@ -576,6 +591,8 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
           setValidation(status.result.validation);
           setDesignDiagnostic(status.result.designDiagnostic || null);
           if (typeof status.result.repairAttempts === "number") setRepairAttempts(status.result.repairAttempts);
+          // ISSUE 2: surface the honest server-computed outcome of the refine run.
+          if (typeof status.result.refineMessage === "string") setRefineMessage(status.result.refineMessage);
           setStage("review");
           setDraftJobId(null);
           break;
@@ -648,9 +665,63 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     }
   }
 
+  // ISSUE 3: kick off /api/analyze and advance the UI. Extracted so it can be
+  // retried verbatim after a previous pending-review batch is resolved. On a 409
+  // conflict it records the actionable state (pending-review → resolver button;
+  // already-running → wait message) rather than throwing a generic error.
+  // Returns true on success, false if a 409 conflict was surfaced.
+  async function startTestDriveAnalyze(fwId: number, listId: number, listName: string): Promise<boolean> {
+    try {
+      // Analyze is async and single-active-batch; runs 2..N are driven by the
+      // results panel via /v2/rescore once each prior batch completes.
+      await api.request("/analyze", {
+        method: "POST",
+        body: JSON.stringify({ frameworkId: fwId, listId }),
+      });
+      // Advance UI to the saved stage; user can go watch progress on Results.
+      setTestDrivePendingReview(null);
+      setTestDriveAlreadyRunning(null);
+      setTestDriveListId(listId);
+      setTestDriveListName(listName);
+      setStage("saved");
+      return true;
+    } catch (err: any) {
+      const body = err?.body || {};
+      if (err?.status === 409 && body.pendingReview) {
+        // A previous batch in this workspace is awaiting review and blocks a new
+        // analysis. Offer to finalise it (safely saves completed results) and retry.
+        setTestDriveAlreadyRunning(null);
+        setTestDrivePendingReview({
+          batchId: Number(body.batchId),
+          failed: Number(body.failed) || 0,
+          completed: Number(body.completed) || 0,
+          total: Number(body.total) || 0,
+          frameworkId: fwId,
+          listId,
+          listName,
+        });
+        return false;
+      }
+      if (err?.status === 409 && body.alreadyRunning) {
+        // Another analysis is actively running — no safe resolve action; the user
+        // must wait for it to finish, then retry.
+        setTestDrivePendingReview(null);
+        setTestDriveAlreadyRunning({
+          batchId: Number(body.batchId),
+          completed: Number(body.completed) || 0,
+          total: Number(body.total) || 0,
+        });
+        return false;
+      }
+      throw err;
+    }
+  }
+
   async function runTestDriveScoring() {
     if (!draft || !intake || !testDriveCompanies || testDriveCompanies.length === 0) return;
     setError(null);
+    setTestDrivePendingReview(null);
+    setTestDriveAlreadyRunning(null);
     setLoading(true);
     try {
       // 1. Save framework as draft first so we have a frameworkId.
@@ -682,23 +753,34 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
       try { localStorage.setItem("fw-builder-v2-scoringRuns", String(scoringRuns)); } catch { /* ignore */ }
       setScoringProgress(scoringRuns > 1 ? `Multi-run scoring: iteration 1 of ${scoringRuns} starting…` : null);
       // 3. Kick off /api/analyze against the new list + framework (batch 1 of N).
-      //    Analyze is async and single-active-batch; runs 2..N are driven by the
-      //    results panel via /v2/rescore once each prior batch completes.
-      await api.request("/analyze", {
-        method: "POST",
-        body: JSON.stringify({
-          frameworkId: fwId,
-          listId: run.listId,
-        }),
-      });
-      // 4. Advance UI to the saved stage; user can go watch progress on Results.
-      setTestDriveListId(run.listId);
-      setTestDriveListName(run.listName);
-      setStage("saved");
+      await startTestDriveAnalyze(fwId, run.listId, run.listName);
     } catch (err: any) {
       setError(err?.message || String(err));
     } finally {
       setLoading(false);
+    }
+  }
+
+  // ISSUE 3: finalise the previous pending-review batch (safely saves its completed
+  // results and clears the review alert), then retry the blocked analyze verbatim.
+  async function resolvePreviousBatchAndContinue() {
+    const pending = testDrivePendingReview;
+    if (!pending) return;
+    setError(null);
+    setResolvingBatch(true);
+    try {
+      await api.request("/batch/review/finalize", { method: "POST" });
+      setTestDrivePendingReview(null);
+      setLoading(true);
+      try {
+        await startTestDriveAnalyze(pending.frameworkId, pending.listId, pending.listName);
+      } finally {
+        setLoading(false);
+      }
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    } finally {
+      setResolvingBatch(false);
     }
   }
 
@@ -944,6 +1026,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                 errorCount={errorCount}
                 warningCount={warningCount}
                 repairAttempts={repairAttempts}
+                refineMessage={refineMessage}
                 truncationRecovered={truncationRecovered}
                 targetMeasureCount={targetMeasureCount}
                 failedCategories={failedCategories}
@@ -977,6 +1060,49 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                 onRunTestDrive={runTestDriveScoring}
                 loading={loading}
               />
+              {/* ISSUE 3: a previous batch is awaiting review and is blocking analyze.
+                  Offer an in-place resolver that finalises it then retries. */}
+              {testDrivePendingReview && (
+                <div className="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-800 rounded-lg text-sm text-amber-900 dark:text-amber-100">
+                  <div className="font-semibold mb-1">A previous batch is awaiting review</div>
+                  <p className="mb-3">
+                    Analysis batch #{testDrivePendingReview.batchId} finished but was never reviewed
+                    ({testDrivePendingReview.completed} of {testDrivePendingReview.total} companies completed
+                    {testDrivePendingReview.failed > 0 ? `, ${testDrivePendingReview.failed} failed` : ""}).
+                    Only one active analysis is allowed per workspace, so it must be resolved before this
+                    test-drive can start. Resolving it saves the completed results to the Results page and
+                    clears the review — then this test-drive starts automatically.
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={resolvePreviousBatchAndContinue}
+                      disabled={resolvingBatch || loading}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {resolvingBatch ? "Resolving…" : "Resolve previous batch & continue"}
+                    </button>
+                    <button
+                      onClick={() => setTestDrivePendingReview(null)}
+                      disabled={resolvingBatch}
+                      className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg disabled:opacity-50"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+              {/* ISSUE 3: another analysis is actively running — wait, no resolve action. */}
+              {testDriveAlreadyRunning && (
+                <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-300 dark:border-blue-800 rounded-lg text-sm text-blue-900 dark:text-blue-100">
+                  <div className="font-semibold mb-1">An analysis is already running</div>
+                  <p>
+                    Batch #{testDriveAlreadyRunning.batchId} is currently in progress
+                    ({testDriveAlreadyRunning.completed} of {testDriveAlreadyRunning.total} companies done).
+                    Only one analysis can run at a time in this workspace — wait for it to finish, then
+                    click <strong>Save framework and run test-drive</strong> again.
+                  </p>
+                </div>
+              )}
               {saveGate && (
                 <SaveGatePanel
                   gate={saveGate}
@@ -1069,6 +1195,33 @@ function MessageBubble({
 }) {
   const isUser = role === "user";
   const { prose, options } = isUser ? { prose: content, options: [] } : parseOptions(content);
+  // ISSUE 1 — Accept-default UX. On any assistant turn that presents options,
+  // show a single PROMINENT primary "Accept the proposal" action first, and keep
+  // the remaining chips as secondary buttons beneath it. If the LLM's first chip
+  // is already an acceptance-style label, promote THAT chip (so its exact text is
+  // sent) rather than adding a duplicate; otherwise synthesize a primary button
+  // that sends a canonical acceptance message through the same path. The user can
+  // always type a normal message instead.
+  const isAcceptLabel = (label: string): boolean => {
+    const l = label.trim().toLowerCase();
+    return (
+      l.startsWith("accept") ||
+      l.startsWith("yes, proceed") ||
+      l.startsWith("yes proceed") ||
+      l === "proceed" ||
+      l === "yes" ||
+      l.startsWith("proceed with") ||
+      l.startsWith("looks good")
+    );
+  };
+  const firstIsAccept = options.length > 0 && isAcceptLabel(options[0]);
+  // Primary button label + the message it sends. When the first chip is an accept
+  // chip, reuse its verbatim label/message; otherwise synthesize a generic one.
+  const primaryLabel = firstIsAccept ? options[0] : "Accept the proposal";
+  const primaryMessage = firstIsAccept ? options[0] : "Accept the proposal as stated.";
+  // Secondary chips: every option except the promoted accept chip (if any).
+  const secondaryOptions = firstIsAccept ? options.slice(1) : options;
+  const hasOptions = showOptions && options.length > 0 && !!onSelectOption;
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
@@ -1079,17 +1232,28 @@ function MessageBubble({
         }`}
       >
         {prose}
-        {showOptions && options.length > 0 && onSelectOption && (
-          <div className="mt-3 flex flex-wrap gap-2 not-prose">
-            {options.map((opt, i) => (
-              <button
-                key={i}
-                onClick={() => onSelectOption(opt)}
-                className="px-3 py-1.5 bg-white dark:bg-gray-800 border border-purple-300 dark:border-purple-700 text-purple-800 dark:text-purple-200 rounded-full text-sm hover:bg-purple-50 dark:hover:bg-purple-900/30 transition"
-              >
-                {opt}
-              </button>
-            ))}
+        {hasOptions && (
+          <div className="mt-3 not-prose">
+            {/* Primary: accept the proposal exactly as the assistant stated it. */}
+            <button
+              onClick={() => onSelectOption!(primaryMessage)}
+              className="w-full sm:w-auto px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg text-sm transition shadow-sm"
+            >
+              ✓ {primaryLabel}
+            </button>
+            {secondaryOptions.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {secondaryOptions.map((opt, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onSelectOption!(opt)}
+                    className="px-3 py-1 bg-white dark:bg-gray-800 border border-purple-300 dark:border-purple-700 text-purple-800 dark:text-purple-200 rounded-full text-xs hover:bg-purple-50 dark:hover:bg-purple-900/30 transition"
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1259,6 +1423,7 @@ function DraftReview({
   errorCount,
   warningCount,
   repairAttempts,
+  refineMessage,
   truncationRecovered,
   targetMeasureCount,
   failedCategories,
@@ -1276,6 +1441,7 @@ function DraftReview({
   loading: boolean;
   measureCount: number;
   repairAttempts?: number;
+  refineMessage?: string | null;
   truncationRecovered?: boolean;
   targetMeasureCount?: number | null;
   failedCategories?: number;
@@ -1452,6 +1618,16 @@ function DraftReview({
           <strong className="mx-1">Re-draft with corrections</strong> (re-runs the LLM with the exact
           violation list), or use
           <strong className="mx-1">Save as draft</strong> to park this framework and edit measures manually later.
+          {refineMessage && (
+            <div className="mt-2 pt-2 border-t border-yellow-300 dark:border-yellow-800">
+              <strong>Last re-draft:</strong> {refineMessage}
+            </div>
+          )}
+        </div>
+      )}
+      {refineMessage && errorCount === 0 && warningCount === 0 && (
+        <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-300 dark:border-green-800 rounded text-sm text-green-800 dark:text-green-200">
+          <strong>Last re-draft:</strong> {refineMessage}
         </div>
       )}
       <div className="mt-6 flex gap-2 flex-wrap justify-end">

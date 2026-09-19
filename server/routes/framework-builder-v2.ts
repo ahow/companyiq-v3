@@ -850,6 +850,11 @@ async function repairMeasuresTargeted(
   draft: any,
   violations: any[],
   providerName?: string,
+  // ISSUE 2: which violation severities this pass should target per-measure.
+  // Defaults to errors-only so the auto-repair path (executeDraft) is unchanged.
+  // The user-initiated refine passes ["error","warning"] to genuinely address
+  // per-measure warnings on explicit request.
+  targetSeverities: Array<"error" | "warning"> = ["error"],
 ): Promise<{ patched: any | null; telem: any }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
 
@@ -872,13 +877,14 @@ async function repairMeasuresTargeted(
     outcome: "unknown",
   };
 
-  // FIX (b): Group ERROR violations by measureId only. Warnings/info must NOT
-  // drag a measure into a repair pass — only hard errors are addressable here.
-  // Violations without a measureId (framework-level) can't be targeted
-  // per-measure, so they're skipped — they surface to the review pane as before.
+  // FIX (b) / ISSUE 2: Group violations by measureId, keeping only the severities
+  // this pass targets (errors-only by default; refine adds warnings). Info-level
+  // advisories are never targeted. Violations without a measureId (framework/
+  // set-level) can't be targeted per-measure, so they're skipped — they surface
+  // to the review pane as before.
   const byMeasure = new Map<string, any[]>();
   for (const v of violations) {
-    if (v.severity !== "error") continue;
+    if (!targetSeverities.includes(v.severity)) continue;
     const id = v.measureId;
     if (!id) continue;
     if (!byMeasure.has(id)) byMeasure.set(id, []);
@@ -1338,6 +1344,12 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
           catch (e: any) { return { passed: false, violations: [{ rule: "internal", severity: "error", message: e?.message }] }; }
         };
         let currentValidation: any = revalidate(currentFwDraft);
+        // ISSUE 2: snapshot the pre-refine warning/error counts so we can report,
+        // honestly, how many warnings this user-initiated refine actually resolved.
+        const countWarn = (val: any) => (val.violations || []).filter((v: any) => v.severity === "warning").length;
+        const countErr = (val: any) => (val.violations || []).filter((v: any) => v.severity === "error").length;
+        const initialWarningCount = countWarn(currentValidation);
+        const initialErrorCount = countErr(currentValidation);
         const hasActionable = (val: any) =>
           (val.violations || []).some((v: any) => v.severity === "error" || v.severity === "warning");
         if (!hasActionable(currentValidation)) {
@@ -1353,7 +1365,17 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
         let repairAttempts = 0;
         while (repairAttempts < MAX_REPAIRS && hasActionable(currentValidation)) {
           repairAttempts++;
-          const { patched } = await repairMeasuresTargeted(intake, currentDraft, currentValidation.violations, providerName);
+          // ISSUE 2: user-initiated refine targets BOTH errors AND warnings that
+          // carry a measureId (per-measure repairable). This is the explicit
+          // "address the warnings" request — distinct from the errors-only
+          // auto-repair during initial drafting.
+          const { patched } = await repairMeasuresTargeted(
+            intake,
+            currentDraft,
+            currentValidation.violations,
+            providerName,
+            ["error", "warning"],
+          );
           if (!patched) {
             console.warn(`[framework-builder v2 /draft/refine] repair attempt ${repairAttempts} produced no usable draft; keeping prior draft.`);
             break;
@@ -1373,11 +1395,65 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
           return;
         }
 
+        // ISSUE 2: build an HONEST outcome distinguishing warnings we resolved from
+        // those that remain, and WHY the remainder could not be auto-fixed. Set-level
+        // advisories (no measureId) cannot be patched per-measure by repairMeasuresTargeted,
+        // so they will persist across passes; per-measure warnings that survive MAX_REPAIRS
+        // are genuinely unresolved-after-passes. This drives an accurate client message
+        // instead of implying "re-draft ran but nothing changed".
+        const finalViolations: any[] = currentValidation.violations || [];
+        const finalWarnings = finalViolations.filter((v: any) => v.severity === "warning");
+        const finalErrorCount = countErr(currentValidation);
+        const setLevelWarnings = finalWarnings.filter((v: any) => !v.measureId);
+        const perMeasureRemaining = finalWarnings.filter((v: any) => !!v.measureId);
+        const warningsResolved = Math.max(0, initialWarningCount - finalWarnings.length);
+        const setLevelRuleNames = [...new Set(setLevelWarnings.map((v: any) => v.rule).filter(Boolean))];
+        const errorsResolved = Math.max(0, initialErrorCount - finalErrorCount);
+        const refineOutcome = {
+          initialWarningCount,
+          initialErrorCount,
+          warningsResolved,
+          errorsResolved,
+          warningsRemaining: finalWarnings.length,
+          errorsRemaining: finalErrorCount,
+          setLevelWarningCount: setLevelWarnings.length,
+          setLevelRuleNames,
+          perMeasureRemainingCount: perMeasureRemaining.length,
+          repairAttempts,
+          maxRepairs: MAX_REPAIRS,
+        };
+        // Human-readable honest summary (client also renders a structured version).
+        let refineMessage: string;
+        if (finalWarnings.length === 0 && finalErrorCount === 0) {
+          refineMessage = `Re-draft resolved all ${initialWarningCount} warning${initialWarningCount === 1 ? "" : "s"}${initialErrorCount ? ` and ${initialErrorCount} error${initialErrorCount === 1 ? "" : "s"}` : ""}. The draft is now clean.`;
+        } else {
+          const parts: string[] = [];
+          parts.push(
+            `Re-draft addressed ${warningsResolved} of ${initialWarningCount} warning${initialWarningCount === 1 ? "" : "s"}. ${finalWarnings.length} remain`,
+          );
+          const reasons: string[] = [];
+          if (setLevelWarnings.length > 0) {
+            reasons.push(
+              `${setLevelWarnings.length} set-level advisor${setLevelWarnings.length === 1 ? "y" : "ies"} (${setLevelRuleNames.join(", ")}) that cannot be auto-fixed per-measure`,
+            );
+          }
+          if (perMeasureRemaining.length > 0) {
+            reasons.push(
+              `${perMeasureRemaining.length} still unresolved after ${repairAttempts} repair pass${repairAttempts === 1 ? "" : "es"} (max ${MAX_REPAIRS})`,
+            );
+          }
+          if (reasons.length) parts.push(`: ${reasons.join("; ")}`);
+          parts.push(". These are advisory — you can save as a draft and edit manually, or re-draft again.");
+          refineMessage = parts.join("");
+        }
+
         const result = {
           draft: currentDraft,
           measures: currentFwDraft.measures,
           validation: currentValidation,
           summary: summariseViolations(currentValidation.violations),
+          refineOutcome,
+          refineMessage,
           repairAttempts,
           designDiagnostic: buildDraftDesignDiagnostic(currentDraft, intake),
         };
