@@ -838,8 +838,25 @@ async function repairMeasuresTargeted(
   draft: any,
   violations: any[],
   providerName?: string,
-): Promise<any | null> {
+): Promise<{ patched: any | null; telem: any }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
+
+  // [fb2-telemetry] Per-pass diagnostic record. Instrumentation ONLY — it never
+  // changes the repair control flow, thresholds, or what is returned to the
+  // caller (the patched draft, or null). The caller reads `.patched` for the
+  // exact same `if (!patched)` semantics as before and stashes `.telem` on the
+  // telemetry sidecar so it lands in framework_v2_jobs.telemetry.
+  const telem: any = {
+    targetedMeasureCount: 0,
+    violationsInCount: 0,
+    promptChars: 0,
+    llmElapsedMs: null as number | null,
+    provider: providerName || "claude",
+    providerRequested: providerName || "claude",
+    parseOk: false,
+    measuresReplaced: 0,
+    outcome: "unknown",
+  };
 
   // Group error+warning violations by measureId. Violations without a measureId
   // (framework-level) can't be targeted per-measure, so they're skipped here —
@@ -852,7 +869,9 @@ async function repairMeasuresTargeted(
     if (!byMeasure.has(id)) byMeasure.set(id, []);
     byMeasure.get(id)!.push(v);
   }
-  if (byMeasure.size === 0) return null;
+  telem.targetedMeasureCount = byMeasure.size;
+  telem.violationsInCount = Array.from(byMeasure.values()).reduce((s, vs) => s + vs.length, 0);
+  if (byMeasure.size === 0) { telem.outcome = "nothing-addressable"; return { patched: null, telem }; }
 
   // Locate each offending measure in the draft by measureId, so we send only
   // those measures (not the whole framework) to the LLM.
@@ -864,7 +883,7 @@ async function repairMeasuresTargeted(
       if (m && byMeasure.has(m.measureId)) targetMeasures.push(m);
     }
   }
-  if (targetMeasures.length === 0) return null;
+  if (targetMeasures.length === 0) { telem.outcome = "no-target-measures"; return { patched: null, telem }; }
 
   const violationBlock = Array.from(byMeasure.entries())
     .map(([id, vs]) => {
@@ -886,7 +905,10 @@ async function repairMeasuresTargeted(
     `Return a JSON object of the form {"measures": [ ...corrected measure objects... ]} containing ONLY the ` +
     `measures listed above (one corrected object per measureId), and nothing else.`;
 
-  let resp: { text: string };
+  telem.promptChars = userPrompt.length;
+
+  let resp: { text: string; provider?: string };
+  const llmStart = Date.now();
   try {
     resp = await completeWithFallback(providerName || "claude", {
       system: DRAFTING_SYSTEM_PROMPT_HEAD,
@@ -896,23 +918,32 @@ async function repairMeasuresTargeted(
       json: true,
     });
   } catch (e: any) {
+    telem.llmElapsedMs = Date.now() - llmStart;
+    telem.outcome = "llm-failed";
     console.warn(`[framework-builder v2] Targeted repair LLM call failed: ${e?.message || e}`);
-    return null;
+    return { patched: null, telem };
   }
+  telem.llmElapsedMs = Date.now() - llmStart;
+  // Actual provider that produced the response, when completeWithFallback
+  // exposes it (falls back to the requested provider otherwise).
+  if ((resp as any).provider) telem.provider = (resp as any).provider;
 
   const parsed = parseDraftJson(resp.text);
   if (!parsed.ok) {
+    telem.outcome = "parse-failed";
     console.warn(`[framework-builder v2] Targeted repair failed to parse: ${(parsed as { error: string }).error}`);
-    return null;
+    return { patched: null, telem };
   }
+  telem.parseOk = true;
   const corrected = Array.isArray(parsed.draft?.measures)
     ? parsed.draft.measures
     : Array.isArray(parsed.draft)
       ? parsed.draft
       : null;
   if (!corrected || corrected.length === 0) {
+    telem.outcome = "no-measures-returned";
     console.warn(`[framework-builder v2] Targeted repair returned no measures.`);
-    return null;
+    return { patched: null, telem };
   }
 
   // Splice corrected measures back into the full draft by measureId, in place.
@@ -935,12 +966,15 @@ async function repairMeasuresTargeted(
       }),
     })),
   };
+  telem.measuresReplaced = replaced;
   if (replaced === 0) {
+    telem.outcome = "no-matches";
     console.warn(`[framework-builder v2] Targeted repair produced no measureId matches; keeping prior draft.`);
-    return null;
+    return { patched: null, telem };
   }
+  telem.outcome = "repaired";
   console.log(`[framework-builder v2] Targeted repair replaced ${replaced} measure(s).`);
-  return patched;
+  return { patched, telem };
 }
 
 async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; provider?: string; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
@@ -969,7 +1003,22 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     }
   };
 
+  // [fb2-telemetry] Count error/warning/total violations off a validation
+  // result. Pure read — never throws, never touches control flow.
+  const countSeverity = (val: any) => {
+    const vs = Array.isArray(val?.violations) ? val.violations : [];
+    return {
+      errorCount: vs.filter((v: any) => v.severity === "error").length,
+      warningCount: vs.filter((v: any) => v.severity === "warning").length,
+      violationCount: vs.length,
+    };
+  };
+
+  // Initial (pre-repair) validation, timed so the sidecar can prove the
+  // synchronous validator is not the ~35-min sink.
+  const initialValidateStart = Date.now();
   let validation: any = validate(draft);
+  const initialValidateMs = Date.now() - initialValidateStart;
 
   // Up to MAX_REPAIRS targeted repair passes for hard errors. Warnings don't
   // trigger a repair.
@@ -981,6 +1030,17 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
   // the user's review pane as an unrepaired dead end. repairMeasuresTargeted
   // sends only the offending measures, so the payload stays small and safe for
   // chunked drafts too.
+  //
+  // [fb2-telemetry] The repairPhase sidecar records, per executed pass, how long
+  // the LLM call took, the payload size, the provider that answered, the parse
+  // outcome, how many measures were replaced, and the validation error/warning
+  // counts after each pass — so an over-long draft can be attributed to the
+  // repair LLM calls rather than guessed at. Instrumentation ONLY: the loop
+  // condition, MAX_REPAIRS, provider selection, and break semantics below are
+  // byte-for-byte identical to before — every telemetry write is additive.
+  const repairPhaseStart = Date.now();
+  const repairPasses: any[] = [];
+  const initialCounts = countSeverity(validation);
   let repairAttempts = 0;
   const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_MAX_REPAIRS || 2);
   while (
@@ -988,21 +1048,104 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     validation.violations.some((v: any) => v.severity === "error")
   ) {
     repairAttempts++;
-    const patched = await repairMeasuresTargeted(intake, draft, validation.violations, providerName);
+    const passStart = Date.now();
+    const violationsInCounts = countSeverity(validation);
+    const { patched, telem } = await repairMeasuresTargeted(intake, draft, validation.violations, providerName);
     if (!patched) {
       // Nothing addressable, or the repair failed to parse — keep prior draft, stop.
+      try {
+        repairPasses.push({
+          pass: repairAttempts,
+          targetedMeasureCount: telem?.targetedMeasureCount ?? null,
+          violationsInCount: telem?.violationsInCount ?? violationsInCounts.violationCount,
+          errorsIn: violationsInCounts.errorCount,
+          warningsIn: violationsInCounts.warningCount,
+          promptChars: telem?.promptChars ?? null,
+          llmElapsedMs: telem?.llmElapsedMs ?? null,
+          provider: telem?.provider ?? (providerName || "claude"),
+          parseOk: telem?.parseOk ?? false,
+          measuresReplaced: telem?.measuresReplaced ?? 0,
+          elapsedMs: Date.now() - passStart,
+          errorCountAfter: violationsInCounts.errorCount,
+          warningCountAfter: violationsInCounts.warningCount,
+          outcome: telem?.outcome ?? "no-usable-draft",
+        });
+      } catch { /* telemetry must never break the draft */ }
       console.warn(`[framework-builder v2] Repair attempt ${repairAttempts} produced no usable draft; keeping prior draft.`);
       break;
     }
     draft = patched;
+    const postValidateStart = Date.now();
     validation = validate(draft);
+    const afterCounts = countSeverity(validation);
+    try {
+      repairPasses.push({
+        pass: repairAttempts,
+        targetedMeasureCount: telem?.targetedMeasureCount ?? null,
+        violationsInCount: telem?.violationsInCount ?? violationsInCounts.violationCount,
+        errorsIn: violationsInCounts.errorCount,
+        warningsIn: violationsInCounts.warningCount,
+        promptChars: telem?.promptChars ?? null,
+        llmElapsedMs: telem?.llmElapsedMs ?? null,
+        provider: telem?.provider ?? (providerName || "claude"),
+        parseOk: telem?.parseOk ?? false,
+        measuresReplaced: telem?.measuresReplaced ?? 0,
+        postValidateMs: Date.now() - postValidateStart,
+        elapsedMs: Date.now() - passStart,
+        errorCountAfter: afterCounts.errorCount,
+        warningCountAfter: afterCounts.warningCount,
+        outcome: telem?.outcome ?? "repaired",
+      });
+    } catch { /* telemetry must never break the draft */ }
   }
+  const repairPhaseMs = Date.now() - repairPhaseStart;
+
+  // [fb2-telemetry] Attach the repair + validation phase section onto the
+  // existing drafting telemetry sidecar so it is persisted to the
+  // framework_v2_jobs.telemetry JSONB column alongside skeleton/expansion data.
+  try {
+    if (draftTelemetry && typeof draftTelemetry === "object") {
+      draftTelemetry.repairPhase = {
+        wallClockMs: repairPhaseMs,
+        maxRepairs: MAX_REPAIRS,
+        repairAttempts,
+        initialValidation: {
+          errorCount: initialCounts.errorCount,
+          warningCount: initialCounts.warningCount,
+          violationCount: initialCounts.violationCount,
+        },
+        passes: repairPasses,
+      };
+      draftTelemetry.validationPhase = {
+        initialValidateMs,
+      };
+      console.log(
+        `[fb2-telemetry] repairPhase wallClockMs=${repairPhaseMs} attempts=${repairAttempts}/${MAX_REPAIRS} ` +
+        `initialErrors=${initialCounts.errorCount} initialWarnings=${initialCounts.warningCount} ` +
+        `finalErrors=${countSeverity(validation).errorCount} passes=${repairPasses.length} ` +
+        `initialValidateMs=${initialValidateMs}`,
+      );
+    }
+  } catch { /* telemetry must never break the draft */ }
 
   const measures = flattenMeasures(draft);
   const truncationRecovered = Boolean((draft as any).__truncationRecovered);
   const failedCategories = Number((draft as any).__failedCategories || 0);
   const failedCategoryNames = ((draft as any).__failedCategoryNames as string[] | undefined) || undefined;
   const issuePayload = buildIssuePayload(validation);
+  // [fb2-telemetry] Time the (synchronous) design-diagnostic build so the sidecar
+  // can prove it is not the phase consuming the wall clock. Behaviour unchanged:
+  // the same report is passed to the return object below.
+  const designDiagStart = Date.now();
+  const designDiagnosticReport = buildDraftDesignDiagnostic(draft, intake);
+  try {
+    if (draftTelemetry && typeof draftTelemetry === "object") {
+      draftTelemetry.validationPhase = {
+        ...(draftTelemetry.validationPhase || {}),
+        designDiagnosticMs: Date.now() - designDiagStart,
+      };
+    }
+  } catch { /* telemetry must never break the draft */ }
   return {
     draft,
     measures,
@@ -1020,7 +1163,7 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     // STATIC design diagnostic over the just-drafted measures (LLM-free). The
     // builder surfaces these as REVIEW items so design defects are tackled
     // BEFORE the draft is proposed as ready. Advisory only — never auto-applied.
-    designDiagnostic: buildDraftDesignDiagnostic(draft, intake),
+    designDiagnostic: designDiagnosticReport,
     telemetry: draftTelemetry,
     ...issuePayload,
   };
@@ -1102,7 +1245,7 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
         let repairAttempts = 0;
         while (repairAttempts < MAX_REPAIRS && hasActionable(currentValidation)) {
           repairAttempts++;
-          const patched = await repairMeasuresTargeted(intake, currentDraft, currentValidation.violations, providerName);
+          const { patched } = await repairMeasuresTargeted(intake, currentDraft, currentValidation.violations, providerName);
           if (!patched) {
             console.warn(`[framework-builder v2 /draft/refine] repair attempt ${repairAttempts} produced no usable draft; keeping prior draft.`);
             break;
