@@ -41,6 +41,30 @@ const router = Router();
 // conversation history so far; the server returns the next assistant message
 // plus the current robustness-gate state.
 
+// ─── POST /v2/extract-pdf — extract text from an attached PDF ──────────────
+// The FB v2 chat box lets the user attach reference files. Text-like files
+// (csv/txt/md/json) are read client-side; PDFs are sent here as base64 and
+// parsed server-side with pdf-parse (already a dependency), returning plain
+// text the client folds into its chat message. Extraction only — no LLM call.
+router.post("/v2/extract-pdf", async (req: Request, res: Response) => {
+  try {
+    const { base64, filename } = req.body as { base64?: string; filename?: string };
+    if (!base64 || typeof base64 !== "string") {
+      return res.status(400).json({ error: "base64 PDF content required" });
+    }
+    const buffer = Buffer.from(base64, "base64");
+    // pdf-parse ships no type declarations (same as processor.ts / framework-builder.ts v1)
+    // @ts-ignore
+    const { default: pdfParse } = await import("pdf-parse");
+    const data = await pdfParse(buffer);
+    const text = (data?.text || "").trim();
+    return res.json({ text, pages: data?.numpages ?? null, filename: filename || null });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /extract-pdf] error:", err);
+    return res.status(500).json({ error: `Could not extract PDF text: ${err?.message || String(err)}` });
+  }
+});
+
 router.post("/v2/chat", async (req: Request, res: Response) => {
   try {
     const { messages, intake, providerName } = req.body as {
@@ -69,13 +93,32 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
     // large. allowTruncated makes truncation on this CONVERSATIONAL path degrade
     // gracefully (return partial text) instead of throwing and cascading through
     // every fallback provider until the client aborts. Drafting/scoring stay fail-loud.
-    const { text: response } = await completeWithFallback(providerName || "claude", {
+    const intakeCallStart = Date.now();
+    const intakeResp = await completeWithFallback(providerName || "claude", {
       system: INTAKE_SYSTEM_PROMPT + gateContext,
       prompt: history,
       maxTokens: 32000,
       temperature: 0.2,
       allowTruncated: true,
     });
+    const { text: response } = intakeResp;
+    // [fb2-telemetry] Lightweight intake-path record. Log-only (not persisted):
+    // this is the CONVERSATIONAL path where a truncation degrades gracefully, so
+    // one compact line per turn is enough to spot provider/token/latency issues
+    // without changing any behaviour.
+    try {
+      const m = (intakeResp as any).meta ?? null;
+      console.log("[fb2-telemetry] intake", JSON.stringify({
+        provider: (intakeResp as any).provider ?? null,
+        elapsedMs: Date.now() - intakeCallStart,
+        inputTokens: m?.inputTokens ?? null,
+        outputTokens: m?.outputTokens ?? null,
+        finishReason: m?.finishReason ?? null,
+        truncated: m ? Boolean(m.truncated) : null,
+        semaphoreWaitMs: m?.semaphoreWaitMs ?? null,
+        messages: Array.isArray(messages) ? messages.length : null,
+      }));
+    } catch { /* telemetry must never break intake */ }
 
     // Try to extract a full intake JSON block if the assistant emitted one this turn
     const jsonMatch = response.match(/```json\s*([\s\S]*?)```/);
@@ -259,8 +302,47 @@ function parseDraftJson(response: string): { ok: true; draft: any } | { ok: fals
 
 // ─── Chunked drafting: skeleton + per-category batches in parallel ───────
 
-async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string, resolvedTarget?: number): Promise<{ draft: any; truncationRecovered: boolean; provider?: string } | { error: string; raw?: string }> {
+// [fb2-telemetry] Build the compact run summary from the per-category results.
+// Pure reduction over data already collected — no control-flow impact. Kept
+// defensive (never throws) because it runs inside a tRec() swallow-wrapper.
+function buildTelemetrySummary(categoryResults: any[], outcome: string): any {
+  const cats = Array.isArray(categoryResults) ? categoryResults : [];
+  const failedCategoryNames = cats.filter((r: any) => r?.failed).map((r: any) => r?.categoryName);
+  const skippedCategoryNames = cats.filter((r: any) => r?.skipped).map((r: any) => r?.categoryName);
+  const emptyCategoryNames = cats
+    .filter((r: any) => !r?.failed && !r?.skipped && (!Array.isArray(r?.measures) || r.measures.length === 0))
+    .map((r: any) => r?.categoryName);
+  const totalMeasures = cats.reduce((s: number, r: any) => s + (Array.isArray(r?.measures) ? r.measures.length : 0), 0);
+  return {
+    outcome,
+    totalCategories: cats.length,
+    totalMeasures,
+    failedCategoryCount: failedCategoryNames.length,
+    skippedCategoryCount: skippedCategoryNames.length,
+    emptyCategoryCount: emptyCategoryNames.length,
+    failedCategoryNames,
+    skippedCategoryNames,
+    emptyCategoryNames,
+  };
+}
+
+async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string, resolvedTarget?: number): Promise<{ draft: any; truncationRecovered: boolean; provider?: string; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
+
+  // [fb2-telemetry] Diagnostic-first sidecar accumulator. Instrumentation ONLY:
+  // it records what each LLM call did; it never changes control flow, retry
+  // counts, thresholds, parallelism, or the failed/skipped decision logic. Every
+  // write is wrapped so a telemetry error is swallowed and never breaks the draft.
+  const runStart = Date.now();
+  const telemetry: any = {
+    version: 1,
+    startedAt: new Date(runStart).toISOString(),
+    resolvedTarget: resolvedTarget ?? null,
+    skeleton: null as any,
+    categories: [] as any[],
+    summary: null as any,
+  };
+  const tRec = (fn: () => void) => { try { fn(); } catch { /* telemetry must never break the draft */ } };
 
   // Wire the RESOLVED (normalised integer) target into the intake copy the
   // skeleton sees, so the skeleton distributes the right number of measures
@@ -272,6 +354,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
 
   // Phase 1: skeleton (framework metadata + category outlines).
   const skeletonPrompt = `Intake artefact (JSON):\n${JSON.stringify(skeletonIntake, null, 2)}\n\nProduce the framework skeleton now.`;
+  const skeletonStart = Date.now();
   const skeletonResp = await completeWithFallback(providerName || "claude", {
     system: CHUNKED_SKELETON_SYSTEM_PROMPT,
     prompt: skeletonPrompt,
@@ -279,14 +362,54 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     temperature: 0.2,
     json: true,
   });
+  const skeletonElapsedMs = Date.now() - skeletonStart;
   const skeletonParsed = parseDraftJson(skeletonResp.text);
   if (!skeletonParsed.ok) {
-    return { error: `Skeleton phase failed: ${skeletonParsed.error}`, raw: skeletonParsed.raw };
+    tRec(() => {
+      telemetry.skeleton = {
+        provider: (skeletonResp as any).provider ?? null,
+        elapsedMs: skeletonElapsedMs,
+        meta: (skeletonResp as any).meta ?? null,
+        parsed: false,
+        parseError: skeletonParsed.error,
+        categoriesProduced: 0,
+      };
+      telemetry.summary = { failedPhase: "skeleton", elapsedMs: Date.now() - runStart };
+    });
+    return { error: `Skeleton phase failed: ${skeletonParsed.error}`, raw: skeletonParsed.raw, telemetry };
   }
   const skeleton = skeletonParsed.draft;
   if (!Array.isArray(skeleton?.categories) || skeleton.categories.length === 0) {
-    return { error: `Skeleton phase produced no categories.`, raw: skeletonResp.text };
+    tRec(() => {
+      telemetry.skeleton = {
+        provider: (skeletonResp as any).provider ?? null,
+        elapsedMs: skeletonElapsedMs,
+        meta: (skeletonResp as any).meta ?? null,
+        parsed: true,
+        categoriesProduced: 0,
+      };
+      telemetry.summary = { failedPhase: "skeleton-empty", elapsedMs: Date.now() - runStart };
+    });
+    return { error: `Skeleton phase produced no categories.`, raw: skeletonResp.text, telemetry };
   }
+  tRec(() => {
+    const sMeta = (skeletonResp as any).meta ?? null;
+    telemetry.skeleton = {
+      provider: (skeletonResp as any).provider ?? null,
+      elapsedMs: skeletonElapsedMs,
+      meta: sMeta,
+      parsed: true,
+      truncated: sMeta ? Boolean(sMeta.truncated) : null,
+      categoriesProduced: skeleton.categories.length,
+      // Per-category outline distribution: distinguishes "skeleton under-
+      // distributed outlines" (0 outlines here) from "expansion failed" (outlines
+      // present but measures came back empty).
+      outlineDistribution: skeleton.categories.map((c: any) => ({
+        name: c?.name ?? null,
+        outlineCount: Array.isArray(c?.measureOutlines) ? c.measureOutlines.length : 0,
+      })),
+    };
+  });
 
   // Phase 2: for each category, expand outlines into full measures. Run in
   // parallel. A category with many measures is split into sub-batches of
@@ -296,8 +419,11 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
   const expandBatch = async (
     cat: any,
     idx: number,
+    batchIndex: number,
     batchOutlines: any[],
-  ): Promise<{ measures: any[]; failed?: boolean; error?: string; rawSample?: string; provider?: string; truncationRecovered?: boolean }> => {
+  ): Promise<{ measures: any[]; failed?: boolean; error?: string; rawSample?: string; provider?: string; truncationRecovered?: boolean; attempts?: any[] }> => {
+    // [fb2-telemetry] per-attempt records for this batch. Recording only.
+    const attempts: any[] = [];
     // Slim skeleton reference so the LLM has enough context but not too much.
     const skeletonRef = {
       framework: skeleton.framework,
@@ -325,6 +451,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     let lastProvider: string | undefined;
     let lastParseError: string | undefined;
     for (let attempt = 1; attempt <= EXPAND_MAX_ATTEMPTS; attempt++) {
+      const attemptStart = Date.now();
       const catResp = await completeWithFallback(providerName || "claude", {
         system: CHUNKED_MEASURES_SYSTEM_PROMPT,
         prompt: categoryPrompt,
@@ -332,23 +459,46 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
         temperature: 0.2,
         json: true,
       });
+      const attemptElapsedMs = Date.now() - attemptStart;
       lastText = typeof catResp.text === "string" ? catResp.text : "";
       lastProvider = catResp.provider;
       const catParsed = parseDraftJson(catResp.text);
       if (!catParsed.ok) {
         lastParseError = catParsed.error;
+        tRec(() => {
+          const m = (catResp as any).meta ?? null;
+          attempts.push({
+            attempt, batchIndex, provider: catResp.provider ?? null, elapsedMs: attemptElapsedMs,
+            measuresRequested: batchOutlines.length, measuresReturned: 0,
+            parsed: false, parseError: catParsed.error,
+            inputTokens: m?.inputTokens ?? null, outputTokens: m?.outputTokens ?? null,
+            finishReason: m?.finishReason ?? null, truncated: m ? Boolean(m.truncated) : null,
+            semaphoreWaitMs: m?.semaphoreWaitMs ?? null,
+          });
+        });
         console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" batch attempt ${attempt}/${EXPAND_MAX_ATTEMPTS} failed to parse: ${catParsed.error}`);
         continue; // retry
       }
       const measures = Array.isArray(catParsed.draft?.measures) ? catParsed.draft.measures : [];
       const truncationRecovered = Boolean((catParsed.draft as any)?.__truncationRecovered);
+      tRec(() => {
+        const m = (catResp as any).meta ?? null;
+        attempts.push({
+          attempt, batchIndex, provider: catResp.provider ?? null, elapsedMs: attemptElapsedMs,
+          measuresRequested: batchOutlines.length, measuresReturned: measures.length,
+          parsed: true, truncationRecovered,
+          inputTokens: m?.inputTokens ?? null, outputTokens: m?.outputTokens ?? null,
+          finishReason: m?.finishReason ?? null, truncated: m ? Boolean(m.truncated) : null,
+          semaphoreWaitMs: m?.semaphoreWaitMs ?? null,
+        });
+      });
       if (measures.length > best.measures.length) {
         best = { measures, parsed: true, truncationRecovered };
       }
       if (measures.length >= batchOutlines.length) {
         // Complete generation — accept immediately (preserves the original
         // success return shape: measures + truncationRecovered, no `failed`).
-        return { measures, truncationRecovered, provider: catResp.provider };
+        return { measures, truncationRecovered, provider: catResp.provider, attempts };
       }
       console.warn(`[framework-builder v2] Chunked-drafting category "${cat.name}" batch attempt ${attempt}/${EXPAND_MAX_ATTEMPTS} under-produced: got ${measures.length} of ${batchOutlines.length} measures; retrying.`);
     }
@@ -364,19 +514,32 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
       rawSample: lastText ? lastText.slice(0, 500) : undefined,
       provider: lastProvider,
       truncationRecovered: best.truncationRecovered,
+      attempts,
     };
   };
 
   const perCategoryPromises = skeleton.categories.map(async (cat: any, idx: number) => {
     const outlines = Array.isArray(cat.measureOutlines) ? cat.measureOutlines : [];
-    if (outlines.length === 0) return { categoryName: cat.name, measures: [], skipped: true };
+    if (outlines.length === 0) {
+      // Skeleton produced this category but gave it NO outlines to expand — the
+      // measures will be empty through no fault of expansion. Recording this
+      // separately (skipped vs failed) is what tells the "skeleton under-
+      // distributed" story apart from the "expansion failed" story.
+      tRec(() => {
+        telemetry.categories.push({
+          categoryName: cat.name, outlineCount: 0, batchCount: 0,
+          measuresReturned: 0, skipped: true, failed: false, attempts: [],
+        });
+      });
+      return { categoryName: cat.name, measures: [], skipped: true };
+    }
 
     // Split into batches of CHUNK_MEASURES_PER_CALL; expand batches in parallel.
     const batches: any[][] = [];
     for (let i = 0; i < outlines.length; i += CHUNK_MEASURES_PER_CALL) {
       batches.push(outlines.slice(i, i + CHUNK_MEASURES_PER_CALL));
     }
-    const batchResults = await Promise.all(batches.map((b) => expandBatch(cat, idx, b)));
+    const batchResults = await Promise.all(batches.map((b, bi) => expandBatch(cat, idx, bi, b)));
 
     // Concatenate measures in outline order; a whole category counts as failed
     // only if EVERY one of its batches failed (partial success still returns
@@ -384,6 +547,18 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     const measures = batchResults.flatMap((r) => r.measures);
     const allFailed = batchResults.length > 0 && batchResults.every((r) => r.failed);
     const anyTrunc = batchResults.some((r) => r.truncationRecovered);
+    tRec(() => {
+      telemetry.categories.push({
+        categoryName: cat.name,
+        outlineCount: outlines.length,
+        batchCount: batches.length,
+        measuresReturned: measures.length,
+        skipped: false,
+        failed: allFailed,
+        failedBatchCount: batchResults.filter((r) => r.failed).length,
+        attempts: batchResults.flatMap((r) => r.attempts ?? []),
+      });
+    });
     if (allFailed) {
       const firstFailed = batchResults.find((r) => r.failed) ?? batchResults[0];
       return { categoryName: cat.name, measures: [], failed: true, error: firstFailed?.error, rawSample: firstFailed?.rawSample, provider: firstFailed?.provider };
@@ -410,7 +585,11 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
     const summary = firstCause
       ? `All ${failedCategories.length} category-drafting sub-calls failed. Last underlying error: ${String(firstCause).slice(0, 300)}`
       : `All ${failedCategories.length} category-drafting sub-calls failed.`;
-    return { error: summary, raw: JSON.stringify(details, null, 2) };
+    tRec(() => {
+      telemetry.summary = buildTelemetrySummary(categoryResults, "all-categories-failed");
+      console.log("[fb2-telemetry]", JSON.stringify(telemetry.summary));
+    });
+    return { error: summary, raw: JSON.stringify(details, null, 2), telemetry };
   }
 
   // Assemble the final framework in the shape the existing validator expects.
@@ -442,10 +621,18 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
   // provider, else the skeleton's) so the job runner can persist provider_name
   // on success too — previously only recorded for failed batches.
   const draftProvider = categoryResults.find((r: any) => r.provider)?.provider || skeletonResp.provider;
-  return { draft: assembled, truncationRecovered: anyTruncationRecovered, provider: draftProvider };
+  tRec(() => {
+    telemetry.summary = {
+      ...buildTelemetrySummary(categoryResults, failedCategories.length > 0 ? "partial-success" : "success"),
+      wallClockMs: Date.now() - runStart,
+      resolvedTarget: resolvedTarget ?? null,
+    };
+    console.log("[fb2-telemetry]", JSON.stringify(telemetry.summary));
+  });
+  return { draft: assembled, truncationRecovered: anyTruncationRecovered, provider: draftProvider, telemetry };
 }
 
-async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; truncationRecovered?: boolean; provider?: string } | { error: string; raw?: string }> {
+async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; truncationRecovered?: boolean; provider?: string; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
   // Route to chunked drafting for fresh attempts unless the target is KNOWN to
   // be small. Repair passes always use single-shot with the prior draft as
   // context. Crucially, an UNKNOWN target (undefined — e.g. the intake LLM wrote
@@ -756,13 +943,16 @@ async function repairMeasuresTargeted(
   return patched;
 }
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; provider?: string; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport } | { error: string; raw?: string }> {
+async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; provider?: string; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
   if ("error" in first) return first;
   let draft = first.draft;
   // FIX F: actual provider that produced this draft, for persistence on success.
   const draftProvider = (first as any).provider as string | undefined;
+  // [fb2-telemetry] Sidecar from the drafting call, propagated verbatim to the
+  // job runner so it can be persisted to the framework_v2_jobs.telemetry column.
+  const draftTelemetry = (first as any).telemetry;
 
   const validate = (d: any) => {
     const fwDraft = buildFrameworkDraft(d, intake);
@@ -831,6 +1021,7 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     // builder surfaces these as REVIEW items so design defects are tackled
     // BEFORE the draft is proposed as ready. Advisory only — never auto-applied.
     designDiagnostic: buildDraftDesignDiagnostic(draft, intake),
+    telemetry: draftTelemetry,
     ...issuePayload,
   };
 }
@@ -994,10 +1185,14 @@ router.post("/v2/draft/start", requireWorkspace, async (req: Request, res: Respo
     (async () => {
       try {
         const result = await executeDraft(intake, providerName);
+        // [fb2-telemetry] Persist the diagnostic sidecar to the dedicated JSONB
+        // column on BOTH outcomes so a failed/under-produced run survives beyond
+        // Railway's short log-retention window and is queryable after the fact.
+        const telemetryJson = (result as any).telemetry ? JSON.stringify((result as any).telemetry) : null;
         if ("error" in result) {
           await db.execute(sql`
             UPDATE framework_v2_jobs
-            SET status = 'failed', error_message = ${result.error}, error_stack = ${result.raw || null}, updated_at = NOW()
+            SET status = 'failed', error_message = ${result.error}, error_stack = ${result.raw || null}, telemetry = ${telemetryJson}::jsonb, updated_at = NOW()
             WHERE id = ${jobId}
           `);
           return;
@@ -1007,7 +1202,7 @@ router.post("/v2/draft/start", requireWorkspace, async (req: Request, res: Respo
         // still has provider_name for diagnostics.
         await db.execute(sql`
           UPDATE framework_v2_jobs
-          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, provider_name = COALESCE(${(result as any).provider || null}, provider_name), updated_at = NOW()
+          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, provider_name = COALESCE(${(result as any).provider || null}, provider_name), telemetry = ${telemetryJson}::jsonb, updated_at = NOW()
           WHERE id = ${jobId}
         `);
       } catch (err: any) {

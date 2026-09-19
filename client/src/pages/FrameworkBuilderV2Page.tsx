@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Sparkles, Loader2, CheckCircle2, XCircle, AlertTriangle, Save, Play, RotateCcw, ClipboardList } from "lucide-react";
+import { Send, Sparkles, Loader2, CheckCircle2, XCircle, AlertTriangle, Save, Play, RotateCcw, ClipboardList, Paperclip, X, FileText } from "lucide-react";
 import { api } from "../lib/api";
 
 type Stage = "intake" | "drafting" | "review" | "test-drive" | "saved";
@@ -106,6 +106,107 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
   const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ── Chat file attachments ────────────────────────────────────────────────
+  // The user can attach reference files (CSV/TXT/MD/JSON read client-side; PDF
+  // extracted server-side via /v2/extract-pdf). On send, the extracted text is
+  // folded into the outgoing message under labelled delimiters, capped so a
+  // huge file can't blow the intake token budget. Attachments clear after send.
+  interface ChatAttachment { name: string; text: string; chars: number; truncated: boolean }
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const ATTACH_PER_FILE_CAP = 100_000; // chars per file folded into the message
+
+  const readFileAsBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || "");
+        const comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = () => reject(reader.error || new Error("file read failed"));
+      reader.readAsDataURL(file);
+    });
+
+  async function handleFilesSelected(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    setAttachError(null);
+    setAttaching(true);
+    try {
+      const next: ChatAttachment[] = [];
+      for (const file of Array.from(fileList)) {
+        const lower = file.name.toLowerCase();
+        const isPdf = lower.endsWith(".pdf") || file.type === "application/pdf";
+        const isTextLike = /\.(csv|txt|md|markdown|json|tsv|log)$/.test(lower)
+          || file.type.startsWith("text/")
+          || file.type === "application/json";
+        let raw = "";
+        if (isPdf) {
+          const base64 = await readFileAsBase64(file);
+          const res = await fetch("/api/framework-builder/v2/extract-pdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ base64, filename: file.name }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({ error: res.statusText }));
+            throw new Error(`${file.name}: ${body.error || `HTTP ${res.status}`}`);
+          }
+          const body = await res.json();
+          raw = String(body.text || "");
+        } else if (isTextLike) {
+          raw = await file.text();
+        } else {
+          throw new Error(`${file.name}: unsupported type. Attach CSV, TXT, MD, JSON, or PDF.`);
+        }
+        const truncated = raw.length > ATTACH_PER_FILE_CAP;
+        next.push({
+          name: file.name,
+          text: truncated ? raw.slice(0, ATTACH_PER_FILE_CAP) : raw,
+          chars: raw.length,
+          truncated,
+        });
+      }
+      setAttachments((prev) => [...prev, ...next]);
+    } catch (err: any) {
+      setAttachError(err?.message || String(err));
+    } finally {
+      setAttaching(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  function removeAttachment(idx: number) {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  // Fold attachments into the outgoing message text under labelled delimiters.
+  function foldAttachments(text: string): string {
+    if (attachments.length === 0) return text;
+    const blocks = attachments.map((a) => {
+      const note = a.truncated
+        ? ` (truncated to ${ATTACH_PER_FILE_CAP.toLocaleString()} of ${a.chars.toLocaleString()} chars)`
+        : "";
+      return `--- Attached file: ${a.name}${note} ---\n${a.text}`;
+    });
+    return `${text}\n\n${blocks.join("\n\n")}`.trim();
+  }
+
+  // Send handler for the intake box: folds attachments in, sends, then clears
+  // them. Option-select and retry call sendMessage directly (no attachments).
+  function handleUserSend() {
+    if (loading || attaching) return;
+    const typed = input.trim();
+    if (!typed && attachments.length === 0) return;
+    const outgoing = foldAttachments(typed || "Please review the attached file(s).");
+    setAttachments([]);
+    setAttachError(null);
+    void sendMessage(outgoing);
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -719,7 +820,54 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
               </div>
               {stage === "intake" && (
                 <div className="p-4 border-t dark:border-gray-700">
+                  {attachments.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {attachments.map((att, i) => (
+                        <div
+                          key={i}
+                          className="flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 border dark:border-gray-600 rounded text-xs"
+                        >
+                          <FileText className="w-3 h-3 text-purple-600" />
+                          <span className="max-w-[160px] truncate" title={att.name}>
+                            {att.name}
+                          </span>
+                          <span className="text-gray-400">
+                            ({Math.round(att.chars / 1000)}k)
+                          </span>
+                          <button
+                            onClick={() => removeAttachment(i)}
+                            className="ml-1 text-gray-400 hover:text-red-500"
+                            title="Remove attachment"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {attachError && (
+                    <div className="mb-2 text-xs text-red-500">{attachError}</div>
+                  )}
                   <div className="flex gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept=".csv,.txt,.md,.json,.pdf,text/plain,text/csv,text/markdown,application/json,application/pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleFilesSelected(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={loading || attaching}
+                      className="px-3 py-2 border rounded-lg dark:border-gray-600 self-end flex items-center gap-1 disabled:opacity-50"
+                      title="Attach files (CSV, TXT, MD, JSON, PDF)"
+                    >
+                      <Paperclip className="w-4 h-4" />
+                    </button>
                     <textarea
                       ref={textareaRef}
                       value={input}
@@ -727,7 +875,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
-                          sendMessage(input);
+                          handleUserSend();
                         }
                       }}
                       placeholder="Type your answer, or start with the topic and initial-input template contents…"
@@ -736,8 +884,8 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                       disabled={loading}
                     />
                     <button
-                      onClick={() => sendMessage(input)}
-                      disabled={loading || !input.trim()}
+                      onClick={() => handleUserSend()}
+                      disabled={loading || attaching || (!input.trim() && attachments.length === 0)}
                       className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-lg self-end flex items-center gap-1"
                     >
                       <Send className="w-4 h-4" /> Send

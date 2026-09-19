@@ -103,6 +103,10 @@ export interface AIProvider {
     // token/cost usage without changing the string return contract. Tolerant —
     // providers that don't expose usage simply never call it.
     onUsage?: (rawUsage: any) => void;
+    // Optional completion-meta sink for [fb2-telemetry]: called once on a
+    // successful return with the provider's finishReason/stop_reason and whether
+    // the text was truncated. Purely additive — never affects the return contract.
+    onMeta?: (m: { finishReason?: string | null; truncated?: boolean }) => void;
   }): Promise<string>;
 }
 
@@ -140,6 +144,7 @@ class ClaudeProvider implements AIProvider {
     temperature?: number;
     allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
+    onMeta?: (m: { finishReason?: string | null; truncated?: boolean }) => void;
   }): Promise<string> {
     if (this.apiKeys.length === 0) throw new Error("Claude not configured");
     // Try each available key once; rotate on rate-limit (429) or auth (401) errors
@@ -189,7 +194,10 @@ class ClaudeProvider implements AIProvider {
             // GRACEFUL DEGRADATION: conversational callers pass allowTruncated so a
             // capped reply returns its partial text instead of cascading through
             // every fallback provider (each also capped/slow) until the client aborts.
-            if (opts.allowTruncated && streamText) return streamText;
+            if (opts.allowTruncated && streamText) {
+              try { opts.onMeta?.({ finishReason: response.stop_reason, truncated: true }); } catch { /* telemetry must never break */ }
+              return streamText;
+            }
             throw new Error(`claude output truncated: hit max_tokens cap (${effectiveMaxTokens})`);
           }
           // FIX A: stream-completeness guard. A cleanly finished stream stops
@@ -199,10 +207,16 @@ class ClaudeProvider implements AIProvider {
           // falls back rather than returning partial JSON downstream.
           const CLEAN_STOP_REASONS = ["end_turn", "stop_sequence", "tool_use"];
           if (!response.stop_reason || !CLEAN_STOP_REASONS.includes(response.stop_reason)) {
-            if (opts.allowTruncated && streamText) return streamText;
+            if (opts.allowTruncated && streamText) {
+              try { opts.onMeta?.({ finishReason: response.stop_reason ?? null, truncated: true }); } catch { /* telemetry must never break */ }
+              return streamText;
+            }
             throw new Error(`Claude streaming response ended abnormally (stop_reason=${response.stop_reason}) — likely a truncated/cut stream`);
           }
-          if (streamBlock && streamBlock.type === "text") return streamBlock.text;
+          if (streamBlock && streamBlock.type === "text") {
+            try { opts.onMeta?.({ finishReason: response.stop_reason, truncated: false }); } catch { /* telemetry must never break */ }
+            return streamBlock.text;
+          }
           throw new Error("Unexpected response type from Claude");
         }
 
@@ -212,10 +226,16 @@ class ClaudeProvider implements AIProvider {
         const block = response.content[0];
         if (response.stop_reason === "max_tokens") {
           const partial = block && block.type === "text" ? block.text : "";
-          if (opts.allowTruncated && partial) return partial;
+          if (opts.allowTruncated && partial) {
+            try { opts.onMeta?.({ finishReason: response.stop_reason, truncated: true }); } catch { /* telemetry must never break */ }
+            return partial;
+          }
           throw new Error(`claude output truncated: hit max_tokens cap (${effectiveMaxTokens})`);
         }
-        if (block.type === "text") return block.text;
+        if (block.type === "text") {
+          try { opts.onMeta?.({ finishReason: response.stop_reason ?? null, truncated: false }); } catch { /* telemetry must never break */ }
+          return block.text;
+        }
         throw new Error("Unexpected response type from Claude");
       } catch (error: any) {
         lastError = error;
@@ -307,6 +327,7 @@ class OpenAICompatibleProvider implements AIProvider {
     seed?: number;
     allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
+    onMeta?: (m: { finishReason?: string | null; truncated?: boolean }) => void;
   }): Promise<string> {
     const body: any = {
       model: this.model,
@@ -358,9 +379,13 @@ class OpenAICompatibleProvider implements AIProvider {
         const choice = response.data.choices?.[0];
         if (choice?.finish_reason === "length") {
           // GRACEFUL DEGRADATION: conversational callers accept the partial content.
-          if (opts.allowTruncated && choice?.message?.content) return choice.message.content;
+          if (opts.allowTruncated && choice?.message?.content) {
+            try { opts.onMeta?.({ finishReason: choice.finish_reason, truncated: true }); } catch { /* telemetry must never break */ }
+            return choice.message.content;
+          }
           throw new Error(`${this.name} output truncated: finish_reason=length`);
         }
+        try { opts.onMeta?.({ finishReason: choice?.finish_reason ?? null, truncated: false }); } catch { /* telemetry must never break */ }
         return choice.message.content;
       } catch (error: any) {
         lastError = error;
@@ -403,6 +428,7 @@ class GeminiProvider implements AIProvider {
     temperature?: number;
     allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
+    onMeta?: (m: { finishReason?: string | null; truncated?: boolean }) => void;
   }): Promise<string> {
     if (!this.apiKey) throw new Error("Gemini not configured");
 
@@ -435,9 +461,13 @@ class GeminiProvider implements AIProvider {
     if (cand?.finishReason === "MAX_TOKENS") {
       // GRACEFUL DEGRADATION: conversational callers accept the partial text.
       const partial = cand?.content?.parts?.[0]?.text;
-      if (opts.allowTruncated && partial) return partial;
+      if (opts.allowTruncated && partial) {
+        try { opts.onMeta?.({ finishReason: cand.finishReason, truncated: true }); } catch { /* telemetry must never break */ }
+        return partial;
+      }
       throw new Error("gemini output truncated: finishReason=MAX_TOKENS");
     }
+    try { opts.onMeta?.({ finishReason: cand?.finishReason ?? null, truncated: false }); } catch { /* telemetry must never break */ }
     return cand.content.parts[0].text;
   }
 }
@@ -835,15 +865,50 @@ export function getIndependentTieBreakerProvider(primaryName: string): AIProvide
   return candidates[0];
 }
 
+// [fb2-telemetry] Non-breaking meta surfaced alongside the text/provider result.
+// Existing callers destructure { text, provider } and are unaffected; the drafting
+// telemetry sidecar reads `meta` when present. Every field is optional/defensive.
+export interface CompletionMeta {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  finishReason: string | null;
+  truncated: boolean;
+  semaphoreWaitMs: number;
+}
+
+// Defensively normalise token counts from any provider's raw usage shape.
+// Anthropic: {input_tokens, output_tokens}; OpenAI-style: {prompt_tokens,
+// completion_tokens}; Gemini: {promptTokenCount, candidatesTokenCount}. Never throws.
+function normaliseUsageTokens(raw: any): { inputTokens: number | null; outputTokens: number | null } {
+  try {
+    if (!raw || typeof raw !== "object") return { inputTokens: null, outputTokens: null };
+    const inputTokens =
+      raw.input_tokens ?? raw.prompt_tokens ?? raw.promptTokenCount ?? null;
+    const outputTokens =
+      raw.output_tokens ?? raw.completion_tokens ?? raw.candidatesTokenCount ?? null;
+    return {
+      inputTokens: typeof inputTokens === "number" ? inputTokens : null,
+      outputTokens: typeof outputTokens === "number" ? outputTokens : null,
+    };
+  } catch {
+    return { inputTokens: null, outputTokens: null };
+  }
+}
+
 export async function completeWithFallback(
   providerName: string,
   opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string; allowTruncated?: boolean }
-): Promise<{ text: string; provider: string }> {
+): Promise<{ text: string; provider: string; meta?: CompletionMeta }> {
   // Gate every LLM call (primary + fallbacks) through the global semaphore so
   // total in-flight requests never exceed LLM_MAX_CONCURRENCY for this process.
+  // [fb2-telemetry] time spent waiting for a concurrency slot (queueing pressure).
+  const semStart = Date.now();
   await acquireLlmSlot();
+  const semaphoreWaitMs = Date.now() - semStart;
   try {
-    return await completeWithFallbackInner(providerName, opts);
+    const result = await completeWithFallbackInner(providerName, opts);
+    if (result.meta) result.meta.semaphoreWaitMs = semaphoreWaitMs;
+    return result;
   } finally {
     releaseLlmSlot();
   }
@@ -995,15 +1060,27 @@ export async function completeScoring(
 async function completeWithFallbackInner(
   providerName: string,
   opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string; allowTruncated?: boolean }
-): Promise<{ text: string; provider: string }> {
+): Promise<{ text: string; provider: string; meta?: CompletionMeta }> {
   const errors: string[] = [];
   const primary = getProvider(providerName);
   if (primary?.isAvailable()) {
     try {
+      // [fb2-telemetry] capture usage + finishReason/truncation without changing
+      // the return contract. All defensive: any missing value becomes null/false.
       let capturedUsage: any = null;
-      const text = await primary.complete({ ...opts, onUsage: (u) => { capturedUsage = u; } });
+      let capturedMeta: { finishReason?: string | null; truncated?: boolean } = {};
+      const text = await primary.complete({
+        ...opts,
+        onUsage: (u) => { capturedUsage = u; },
+        onMeta: (m) => { capturedMeta = m; },
+      });
       recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType: opts.callType });
-      return { text, provider: primary.name };
+      const toks = normaliseUsageTokens(capturedUsage);
+      return {
+        text,
+        provider: primary.name,
+        meta: { ...toks, finishReason: capturedMeta.finishReason ?? null, truncated: Boolean(capturedMeta.truncated), semaphoreWaitMs: 0 },
+      };
     } catch (error: any) {
       const msg = `${primary.name}: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
       errors.push(msg);
@@ -1017,9 +1094,19 @@ async function completeWithFallbackInner(
   for (const fallback of fallbacks) {
     try {
       let capturedUsage: any = null;
-      const text = await fallback.complete({ ...opts, onUsage: (u) => { capturedUsage = u; } });
+      let capturedMeta: { finishReason?: string | null; truncated?: boolean } = {};
+      const text = await fallback.complete({
+        ...opts,
+        onUsage: (u) => { capturedUsage = u; },
+        onMeta: (m) => { capturedMeta = m; },
+      });
       recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType: opts.callType });
-      return { text, provider: fallback.name };
+      const toks = normaliseUsageTokens(capturedUsage);
+      return {
+        text,
+        provider: fallback.name,
+        meta: { ...toks, finishReason: capturedMeta.finishReason ?? null, truncated: Boolean(capturedMeta.truncated), semaphoreWaitMs: 0 },
+      };
     } catch (error: any) {
       const msg = `${fallback.name}: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
       errors.push(msg);

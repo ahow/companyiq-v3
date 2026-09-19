@@ -206,6 +206,13 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS framework_v2_jobs_workspace_idx ON framework_v2_jobs(workspace_id, created_at DESC)`);
+    // [fb2-telemetry] Diagnostic-first sidecar. A per-run JSON blob capturing the
+    // skeleton phase, every per-category/per-batch/per-attempt LLM call (provider,
+    // in/out tokens, finishReason, truncation, measures requested vs returned,
+    // elapsed ms, semaphore-wait ms, error) and a run summary — persisted here so
+    // it survives Railway's short log-retention window and can be queried after a
+    // live draft to root-cause category under-production. Purely additive.
+    await db.execute(sql`ALTER TABLE framework_v2_jobs ADD COLUMN IF NOT EXISTS telemetry JSONB`);
 
     // ─── Company Lists ──────────────────────────────────────────────────────
     await db.execute(sql`
