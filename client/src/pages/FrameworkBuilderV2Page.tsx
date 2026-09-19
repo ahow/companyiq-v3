@@ -1445,7 +1445,10 @@ function DraftReview({
           {typeof repairAttempts === "number" && repairAttempts > 0
             ? `remain after ${repairAttempts} auto-repair pass${repairAttempts === 1 ? "" : "es"}.`
             : "are present in the initial draft (auto-repair did not run or could not address them)."}
-          {" "}To proceed to test-drive or save as production-ready, resolve them by clicking
+          {errorCount > 0
+            ? " Errors must be resolved before you can test-drive or save as production-ready."
+            : " Warnings are advisory — you can proceed to test-drive or save as production-ready with them present."}
+          {" "}To reduce them, click
           <strong className="mx-1">Re-draft with corrections</strong> (re-runs the LLM with the exact
           violation list), or use
           <strong className="mx-1">Save as draft</strong> to park this framework and edit measures manually later.
@@ -1480,11 +1483,13 @@ function DraftReview({
         )}
         <button
           onClick={onSelectTestDrive}
-          disabled={loading || errorCount > 0 || warningCount > 0}
+          disabled={loading || errorCount > 0}
           className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
           title={
-            errorCount > 0 || warningCount > 0
-              ? "Resolve all errors and warnings before test-driving."
+            errorCount > 0
+              ? "Resolve all errors before test-driving. Warnings are advisory and do not block."
+              : warningCount > 0
+              ? "Warnings are advisory — you can proceed to test-drive. Re-draft with corrections if you want to reduce them first."
               : ""
           }
         >
@@ -1492,11 +1497,13 @@ function DraftReview({
         </button>
         <button
           onClick={() => onSave(true)}
-          disabled={loading || errorCount > 0 || warningCount > 0}
+          disabled={loading || errorCount > 0}
           className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
           title={
-            errorCount > 0 || warningCount > 0
-              ? "Resolve all errors and warnings before saving as production-ready."
+            errorCount > 0
+              ? "Resolve all errors before saving as production-ready. Warnings are advisory and do not block."
+              : warningCount > 0
+              ? "Warnings are advisory — you can save as production-ready. Any remaining acceptance items are confirmed on the next step."
               : ""
           }
         >
