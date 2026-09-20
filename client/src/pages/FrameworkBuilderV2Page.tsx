@@ -2332,6 +2332,13 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   const [applyingIterate, setApplyingIterate] = useState(false);
   const [applyIterateResult, setApplyIterateResult] = useState<string | null>(null);
   const [applyIterateError, setApplyIterateError] = useState<string | null>(null);
+  // Recovering state for the case where the apply request's connection is cut by
+  // the ~300s edge timeout (large edit sets run several minutes). The server
+  // keeps working and auto-triggers the re-score, so instead of a hard error we
+  // enter a non-alarming "recovering" state and poll for the new iteration.
+  const [applyRecovering, setApplyRecovering] = useState<string | null>(null);
+  const [applyRecoverPolling, setApplyRecoverPolling] = useState(false);
+  const recoverTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Recent edit-audit rows for this framework/list (observability). Refreshed
   // after every apply so silently-skipped accepts become visible.
   const [measureEdits, setMeasureEdits] = useState<MeasureEditRow[]>([]);
@@ -2350,11 +2357,49 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
     } catch { /* non-fatal — audit is observability-only */ }
   };
 
+  // Poll /v2/test-drive/results after a cut apply connection until a fresh
+  // running batch appears (iteration started) or ~15 min elapses. Reuses the
+  // existing results endpoint rather than inventing a parallel poller.
+  const startApplyRecoveryPolling = (prevBatchId?: number) => {
+    if (recoverTimerRef.current) clearInterval(recoverTimerRef.current);
+    setApplyRecoverPolling(true);
+    const deadline = Date.now() + 15 * 60 * 1000;
+    const stop = () => {
+      if (recoverTimerRef.current) { clearInterval(recoverTimerRef.current); recoverTimerRef.current = null; }
+      setApplyRecoverPolling(false);
+    };
+    recoverTimerRef.current = setInterval(async () => {
+      try {
+        const r = await api.request(`/framework-builder/v2/test-drive/results?frameworkId=${frameworkId}&listId=${listId}`);
+        const b: any = r?.batch;
+        const started = b && (
+          b.status === "running" || b.status === "pending" ||
+          (prevBatchId != null && b.id != null && Number(b.id) > Number(prevBatchId))
+        );
+        if (started) {
+          setBatch(b);
+          setApplyRecovering(null);
+          setApplyIterateResult("Recovered — a fresh iteration is running. Watch the counter above.");
+          void fetchIterations();
+          void fetchMeasureEdits();
+          stop();
+          return;
+        }
+      } catch { /* keep polling through transient errors */ }
+      if (Date.now() > deadline) {
+        stop();
+        setApplyRecovering("The apply connection dropped and no new iteration was detected within 15 minutes. Your edits may already be applied — click \"Re-score now\" to start the iteration.");
+      }
+    }, 15_000);
+  };
+
   const applyAcceptedAndIterate = async () => {
     if (applyingIterate || acceptedCount === 0) return;
     setApplyingIterate(true);
     setApplyIterateResult(null);
     setApplyIterateError(null);
+    setApplyRecovering(null);
+    const prevBatchId = (batch as any)?.id as number | undefined;
     try {
       // Build one apply_edit action per accepted proposal. Send the stable
       // identity tuple (measure + flagRule + patch op/path) so the server can
@@ -2382,14 +2427,35 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
         body: JSON.stringify({ frameworkId, listId, actions }),
       });
       const summary = summariseApplyResult(applyResp);
-      setApplyIterateResult(`${summary} Now starting a fresh test-drive…`);
       // Refresh the edit-audit so any silently-skipped accepts are visible.
       void fetchMeasureEdits();
-      // Kick off a re-score against the updated framework
-      await triggerRescore();
-      setApplyIterateResult(`${summary} Started a fresh iteration — watch the counter above.`);
+      // The server now auto-triggers the re-score at the tail of apply. Do NOT
+      // fire a second /v2/rescore here — that would create a duplicate batch and
+      // trip the single-active-batch 409. Reflect the server's outcome instead.
+      if (applyResp?.rescoreTriggered) {
+        // Set the local batch to running and let the existing results poller pick
+        // it up (same effect triggerRescore had on success).
+        setBatch({ status: "running", completedJobs: 0, totalJobs: applyResp.rescoreTotalJobs || 10, failedJobs: 0 });
+        void fetchIterations();
+        setApplyIterateResult(`${summary} Started a fresh iteration — watch the counter above.`);
+      } else if (applyResp?.rescoreSkippedReason === "no edits applied") {
+        setApplyIterateResult(`${summary} No edits were applied, so no re-score was started.`);
+      } else {
+        // Apply succeeded but the re-score did not start (a batch already running/
+        // pending review, or a trigger error). Not a dead-end: surface a
+        // recoverable message plus the manual "Re-score now" button.
+        const why = applyResp?.rescoreError || applyResp?.rescoreSkippedReason || "the re-score did not start";
+        setApplyIterateResult(summary);
+        setApplyRecovering(`Edits applied, but the re-score did not start (${why}). Click "Re-score now" to start the iteration.`);
+      }
     } catch (e: any) {
-      setApplyIterateError(e?.message || String(e));
+      // The apply request itself may have exceeded the ~300s edge timeout and had
+      // its connection cut. The server is very likely still applying and will
+      // auto-trigger the re-score when done — so do NOT show a dead-end red error.
+      // Enter a recovering state and poll for the newly-created running batch.
+      setApplyRecovering("The apply is taking a while and the connection dropped — the server is still working; watching for the new iteration…");
+      startApplyRecoveryPolling(prevBatchId);
+      void fetchMeasureEdits();
     } finally {
       setApplyingIterate(false);
     }
@@ -2480,6 +2546,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
     return () => {
       cancelled = true;
       if (intervalId) clearInterval(intervalId);
+      if (recoverTimerRef.current) { clearInterval(recoverTimerRef.current); recoverTimerRef.current = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameworkId, listId]);
@@ -3097,6 +3164,24 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
           </div>
           {applyIterateResult && <div className="text-xs text-green-700 dark:text-green-400">{applyIterateResult}</div>}
           {applyIterateError && <div className="text-xs text-red-600">{applyIterateError}</div>}
+          {applyRecovering && (
+            <div className="text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2 flex-wrap">
+              {applyRecoverPolling && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{applyRecovering}</span>
+              <button
+                onClick={() => {
+                  if (recoverTimerRef.current) { clearInterval(recoverTimerRef.current); recoverTimerRef.current = null; }
+                  setApplyRecoverPolling(false);
+                  setApplyRecovering(null);
+                  void triggerRescore();
+                }}
+                disabled={rescoring}
+                className={`px-2 py-0.5 rounded font-medium ${rescoring ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-700"}`}
+              >
+                {rescoring ? "Starting…" : "Re-score now"}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

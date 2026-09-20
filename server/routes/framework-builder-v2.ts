@@ -3637,7 +3637,64 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     // Run batched LLM regeneration for any deferred proposals.
     await runBatchedRegenerations(deferredForLLM, applied, skipped);
 
-    return res.json({ applied, skipped, appliedCount: applied.length, skippedCount: skipped.length });
+    // ── Auto-trigger the re-score server-side ──────────────────────────────
+    // A large apply can run several minutes; Railway's edge proxy cuts any HTTP
+    // connection at ~300s, so the browser frequently never receives this
+    // response and therefore never fires the follow-up /v2/rescore. To make the
+    // iteration reliable we trigger the re-score here, in-process, exactly the
+    // way POST /v2/rescore does — independent of the browser surviving the
+    // request. The client MUST NOT fire a second rescore (that would trip the
+    // single-active-batch 409 / create a duplicate batch).
+    let rescoreTriggered = false;
+    let newBatchId: number | undefined;
+    let rescoreTotalJobs: number | undefined;
+    let rescoreSkippedReason: string | undefined;
+    let rescoreError: string | undefined;
+    if (applied.length > 0) {
+      try {
+        // Idempotent snapshot of the batch about to be replaced in measure_scores.
+        await snapshotIteration(frameworkId, listId, ctx.workspaceId);
+        const cookieHeader = req.headers.cookie || "";
+        const port = process.env.PORT || "3000";
+        const analyzeResp = await fetch(`http://127.0.0.1:${port}/api/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", cookie: cookieHeader },
+          body: JSON.stringify({ frameworkId, listId }),
+        });
+        const analyzeJson: any = await analyzeResp.json().catch(() => ({}));
+        if (analyzeResp.ok) {
+          rescoreTriggered = true;
+          newBatchId = analyzeJson?.batchId;
+          rescoreTotalJobs = analyzeJson?.totalJobs;
+        } else if (analyzeResp.status === 409) {
+          // A batch is already running / pending review — non-fatal. The apply
+          // itself fully succeeded; just report that a rescore wasn't started.
+          rescoreSkippedReason =
+            analyzeJson?.error || (analyzeJson?.pendingReview ? "pendingReview" : "alreadyRunning");
+        } else {
+          rescoreError = analyzeJson?.error || `analyze route returned ${analyzeResp.status}`;
+        }
+      } catch (e: any) {
+        // A rescore-trigger failure must never turn a fully-successful apply into
+        // a 500. Report it and let the client recover / offer a manual re-score.
+        rescoreError = e?.message || "rescore trigger failed";
+        console.error("[framework-builder v2 /improvement/apply] rescore trigger failed:", e);
+      }
+    } else {
+      rescoreSkippedReason = "no edits applied";
+    }
+
+    return res.json({
+      applied,
+      skipped,
+      appliedCount: applied.length,
+      skippedCount: skipped.length,
+      rescoreTriggered,
+      newBatchId,
+      rescoreTotalJobs,
+      rescoreSkippedReason,
+      rescoreError,
+    });
   } catch (err: any) {
     console.error("[framework-builder v2 /improvement/apply] error:", err);
     return res.status(500).json({ error: err?.message || "internal error" });
