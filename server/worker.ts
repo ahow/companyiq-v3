@@ -377,8 +377,10 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       clearInterval(heartbeatTimer);
     }
 
+    let jobCompletionTransitioned = false;
     if (result.success) {
-      await storage.completeJob(jobId);
+      const _jt = await storage.completeJob(jobId);
+      jobCompletionTransitioned = _jt.transitioned;
       console.log("[Worker] Job " + jobId + " completed successfully (attempt " + currentAttempt + ")");
 
       // Fix B: Update priorBestScore if this run's total exceeds the stored value.
@@ -492,8 +494,21 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
 
     // Check if batch is complete
     if (result.success) {
-      const batchRow = await storage.incrementBatchCompleted(batchId) as any;
-      await maybeHandleBatchCompletion(batchRow, batchId, frameworkId, workspaceId);
+      if (jobCompletionTransitioned) {
+        // Genuine first-time completion for this job — count it once.
+        const batchRow = await storage.incrementBatchCompleted(batchId) as any;
+        await maybeHandleBatchCompletion(batchRow, batchId, frameworkId, workspaceId);
+      } else {
+        // Duplicate success execution of an already-completed job (BullMQ at-least-once
+        // redelivery, worker lock-expiry/redeploy mid-job, reconciler resurrection of a
+        // slow-but-alive job). Do NOT double-count completed_jobs. Still re-check batch
+        // completion from the authoritative row in case this observer is the one that
+        // sees terminal state.
+        const { db } = await import("./db.js");
+        const { sql } = await import("drizzle-orm");
+        const batchResult = await db.execute(sql`SELECT * FROM batch_runs WHERE id = ${batchId}`);
+        await maybeHandleBatchCompletion(batchResult.rows[0] as any, batchId, frameworkId, workspaceId);
+      }
     } else if (result.error !== "Cancelled") {
       // For failed jobs (final failure only), check if batch is now complete
       if (currentAttempt >= MAX_RETRY_ATTEMPTS || !isRetriableError(result.error || "")) {

@@ -1763,11 +1763,18 @@ export async function claimJob(jobId: number) {
   return row || null;
 }
 
-export async function completeJob(jobId: number) {
+export async function completeJob(jobId: number): Promise<{ transitioned: boolean; batchId: number | null }> {
   const now = new Date();
-  const result = await db.execute(sql`UPDATE analysis_jobs SET status = 'completed', completed_at = ${now}, last_progress_at = ${now} WHERE id = ${jobId} RETURNING batch_id`);
-  const batchId = (result.rows[0] as any)?.batch_id;
-  if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail: { jobId, status: "completed" } });
+  // Atomic terminal transition: the `AND status <> 'completed'` guard means a duplicate
+  // success execution of an already-completed job (BullMQ at-least-once redelivery, worker
+  // lock-expiry/redeploy mid-job, reconciler resurrection) matches 0 rows -> transitioned=false,
+  // so the caller can skip the completed_jobs increment and avoid a double-count.
+  const result = await db.execute(sql`UPDATE analysis_jobs SET status = 'completed', completed_at = ${now}, last_progress_at = ${now} WHERE id = ${jobId} AND status <> 'completed' RETURNING batch_id`);
+  const row = result.rows[0] as any;
+  const batchId = row?.batch_id != null ? Number(row.batch_id) : null;
+  const transitioned = !!row;
+  if (batchId != null) await touchBatchHeartbeat(batchId, { lastProgressAt: now, detail: { jobId, status: "completed" } });
+  return { transitioned, batchId };
 }
 
 export async function failJob(jobId: number, error: string) {
