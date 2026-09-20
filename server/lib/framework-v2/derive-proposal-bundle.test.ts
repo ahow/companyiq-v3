@@ -121,3 +121,70 @@ test("deriveProposalBundle edit-proposal prefix of allProposals is byte-stable f
     assert.equal(bundle.allProposals[i], bundle.edits.proposals[i]);
   }
 });
+
+/**
+ * Resolved-proposal suppression: once an edit has been APPLIED
+ * (measure_edits.applied=true) or explicitly DISMISSED (skip_reason='dismissed')
+ * the proposal must stop re-deriving, so the "Apply N edits" count can reach
+ * zero. Uses a QUERY-AWARE mock (routes by SQL text) so the extra measure_edits
+ * SELECT does not depend on call ordering.
+ */
+function queryAwareDb(editRows: any[]): DbLike {
+  return {
+    async execute(query: any) {
+      const chunks = (query && query.queryChunks) || [];
+      const text = chunks
+        .map((c: any) => (c && c.value ? (Array.isArray(c.value) ? c.value.join("") : String(c.value)) : ""))
+        .join("");
+      if (text.includes("measure_edits")) return { rows: editRows };
+      if (text.includes("measure_scores")) return { rows: scoreRows };
+      if (text.includes("framework_measures")) return { rows: measureRows };
+      if (text.includes("framework_v2_iterations")) return { rows: iterationRows };
+      return { rows: [] };
+    },
+  };
+}
+
+const hasTarget = (bundle: any, path?: string, op?: string) =>
+  bundle.edits.proposals.some((p: any) => p.measureId === "m1" && p.patch?.path === path && p.patch?.op === op);
+
+test("deriveProposalBundle suppresses a proposal once its edit is applied or dismissed", async () => {
+  // Baseline: no recorded edits → the m1 residual-instability proposal is present.
+  const base = await deriveProposalBundle(queryAwareDb([]), 999, 888, 777);
+  const target = base.edits.proposals.find((p) => p.flagRule === "residual-instability" && p.measureId === "m1");
+  assert.ok(target, "precondition: residual-instability proposal present without suppression");
+  const path = target!.patch?.path;
+  const op = target!.patch?.op;
+
+  // APPLIED edit (field = patch.path, op = patch.op) suppresses the proposal.
+  const afterApplied = await deriveProposalBundle(
+    queryAwareDb([{ measure_id: "m1", field: path, op, applied: true, skip_reason: null }]),
+    999, 888, 777,
+  );
+  assert.ok(!hasTarget(afterApplied, path, op), "an APPLIED edit suppresses its proposal from edits.proposals");
+  assert.ok(
+    !afterApplied.allProposals.some((p) => p.measureId === "m1" && p.patch?.path === path && p.patch?.op === op),
+    "suppression also removes it from allProposals (the apply-path resolution list)",
+  );
+
+  // DISMISSED edit (applied=false, skip_reason='dismissed') suppresses it too.
+  const afterDismissed = await deriveProposalBundle(
+    queryAwareDb([{ measure_id: "m1", field: path, op, applied: false, skip_reason: "dismissed" }]),
+    999, 888, 777,
+  );
+  assert.ok(!hasTarget(afterDismissed, path, op), "a DISMISSED edit suppresses its proposal");
+
+  // A pending row (applied=false, no dismiss) must NOT suppress.
+  const afterPending = await deriveProposalBundle(
+    queryAwareDb([{ measure_id: "m1", field: path, op, applied: false, skip_reason: null }]),
+    999, 888, 777,
+  );
+  assert.ok(hasTarget(afterPending, path, op), "a non-applied, non-dismissed edit row does NOT suppress the proposal");
+
+  // Postgres text-boolean 't' is treated as applied → suppresses.
+  const afterTextBool = await deriveProposalBundle(
+    queryAwareDb([{ measure_id: "m1", field: path, op, applied: "t", skip_reason: null }]),
+    999, 888, 777,
+  );
+  assert.ok(!hasTarget(afterTextBool, path, op), "applied='t' (pg text boolean) suppresses the proposal");
+});

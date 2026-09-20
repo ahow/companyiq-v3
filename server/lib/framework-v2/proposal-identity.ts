@@ -46,6 +46,74 @@ interface IdentifiableProposal {
  *       on measureId + flagRule only: exactly one → matched, zero → absent,
  *       more than one → ambiguous.
  */
+// ─── Shared resolved-proposal identity key ─────────────────────────────────
+//
+// deriveProposalBundle must suppress any proposal whose edit has already been
+// APPLIED (measure_edits.applied=true) or explicitly DISMISSED
+// (measure_edits.skip_reason='dismissed'). Both the SUPPRESS path (keying a
+// freshly derived proposal) and the RECORD path (keying a persisted
+// measure_edits row) MUST compute the identical key, or resolved proposals
+// leak back into the results view. This ONE routine is that shared key so the
+// two paths can never drift.
+//
+// The key is (measureId, field, op): the same tuple the apply loop audits with
+// (recordMeasureEdit writes field = patch.path, op = patch.op for a proposal),
+// which is exactly what a proposal exposes via patch.path / patch.op. flagRule
+// is deliberately NOT part of the key — the audit row has no dedicated flagRule
+// column, and once a measure's field has been changed by one flag's proposal,
+// a second proposal targeting the same field+op is the same resolved edit.
+// GENERIC: no framework / company / topic / id is referenced.
+
+function normKeyPart(v: unknown): string {
+  return v === undefined || v === null ? "" : String(v).trim();
+}
+
+/** Build the shared identity key from its raw (measureId, field, op) parts. */
+export function proposalIdentityKeyParts(parts: {
+  measureId?: unknown;
+  field?: unknown;
+  op?: unknown;
+}): string {
+  return [normKeyPart(parts.measureId), normKeyPart(parts.field), normKeyPart(parts.op)].join("::");
+}
+
+/** Shape we need from a derived proposal to compute its resolved-identity key. */
+interface KeyableProposal {
+  measureId: string;
+  fieldPath?: string;
+  patch?: { op?: string; path?: string } | null;
+}
+
+/**
+ * Key a freshly DERIVED proposal. field is taken from patch.path (falling back
+ * to fieldPath — they are equal for every builder) so it lines up with the
+ * measure_edits.field the apply loop records.
+ */
+export function proposalKeyFromProposal(p: KeyableProposal): string {
+  return proposalIdentityKeyParts({
+    measureId: p.measureId,
+    field: p.patch?.path ?? p.fieldPath,
+    op: p.patch?.op,
+  });
+}
+
+/** Shape we need from a persisted measure_edits row (snake_case from SQL). */
+interface KeyableEditRow {
+  measure_id?: string;
+  measureId?: string;
+  field?: string;
+  op?: string | null;
+}
+
+/** Key a persisted measure_edits row with the SAME routine as the proposal. */
+export function proposalKeyFromEditRow(row: KeyableEditRow): string {
+  return proposalIdentityKeyParts({
+    measureId: row.measure_id ?? row.measureId,
+    field: row.field,
+    op: row.op,
+  });
+}
+
 export function resolveProposalByIdentity<P extends IdentifiableProposal>(
   bundleProposals: P[],
   attrs: ProposalIdentityAttrs | undefined,

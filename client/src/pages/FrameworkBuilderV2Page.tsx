@@ -2267,6 +2267,11 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<Record<string, "accept" | "reject">>({});
+  // Proposals the user has explicitly DISMISSED this session. Hidden locally
+  // straight away; the server also records the dismissal so deriveProposalBundle
+  // stops re-surfacing them on the next results load (survives reload).
+  const [dismissedKeys, setDismissedKeys] = useState<Record<string, true>>({});
+  const [dismissingKey, setDismissingKey] = useState<string | null>(null);
   const [expandedMeasure, setExpandedMeasure] = useState<string | null>(null);
   const [drillRows, setDrillRows] = useState<Record<string, MeasureDrillRow[]>>({});
   const [drillLoading, setDrillLoading] = useState<string | null>(null);
@@ -2409,7 +2414,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       const actions: Array<{ type: string; attrs: Record<string, string> }> = [];
       (edits?.proposals || []).forEach((p, idx) => {
         const key = `${p.measureId}::${p.flagRule}`;
-        if (decisions[key] === "accept") {
+        if (decisions[key] === "accept" && !dismissedKeys[key]) {
           actions.push({
             type: "apply_edit",
             attrs: {
@@ -2524,6 +2529,64 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
 
   const acceptedCount = Object.values(decisions).filter((d) => d === "accept").length;
   const rejectedCount = Object.values(decisions).filter((d) => d === "reject").length;
+
+  // Persist accept/reject/near-dup/dismiss selections per framework+list so the
+  // user's review decisions survive a page reload. hydratedRef gates the save
+  // effect so the initial empty state never clobbers previously-saved choices.
+  const decisionsStorageKey = `fbv2:decisions:${frameworkId}:${listId}`;
+  const decisionsHydratedRef = useRef(false);
+  useEffect(() => {
+    decisionsHydratedRef.current = false;
+    try {
+      const raw = localStorage.getItem(decisionsStorageKey);
+      const saved = raw ? JSON.parse(raw) : {};
+      setDecisions(saved && typeof saved.decisions === "object" && saved.decisions ? saved.decisions : {});
+      setNearDupDecisions(saved && typeof saved.nearDupDecisions === "object" && saved.nearDupDecisions ? saved.nearDupDecisions : {});
+      setDismissedKeys(saved && typeof saved.dismissedKeys === "object" && saved.dismissedKeys ? saved.dismissedKeys : {});
+    } catch { /* non-fatal; start with empty selections */ }
+    decisionsHydratedRef.current = true;
+  }, [decisionsStorageKey]);
+  useEffect(() => {
+    if (!decisionsHydratedRef.current) return;
+    try {
+      localStorage.setItem(decisionsStorageKey, JSON.stringify({ decisions, nearDupDecisions, dismissedKeys }));
+    } catch { /* non-fatal */ }
+  }, [decisionsStorageKey, decisions, nearDupDecisions, dismissedKeys]);
+
+  // Explicitly dismiss a proposal: POST a `dismiss` action (same identity shape
+  // the apply POST sends, so the server can resolve it), then hide it locally
+  // and clear any accept/reject decision so it stops counting toward the apply
+  // batch. Pure suppression — the server does not mutate the measure or rescore.
+  const dismissProposal = async (p: EditProposal) => {
+    const key = `${p.measureId}::${p.flagRule}`;
+    if (dismissingKey) return;
+    setDismissingKey(key);
+    try {
+      await api.request("/framework-builder/v2/improvement/apply", {
+        method: "POST",
+        body: JSON.stringify({
+          frameworkId,
+          listId,
+          actions: [{
+            type: "dismiss",
+            attrs: {
+              measure: p.measureId,
+              flagRule: p.flagRule,
+              op: p.patch?.op ?? "",
+              path: p.patch?.path ?? "",
+            },
+          }],
+        }),
+      });
+      setDismissedKeys((prev) => ({ ...prev, [key]: true }));
+      setDecisions((prev) => { const c = { ...prev }; delete c[key]; return c; });
+      void fetchMeasureEdits();
+    } catch (e: any) {
+      setError(`Failed to dismiss proposal: ${e?.message || e}`);
+    } finally {
+      setDismissingKey(null);
+    }
+  };
 
   useEffect(() => {
     // Poll every 30 seconds while scoring is in progress; poll once at mount.
@@ -2876,7 +2939,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
             <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
               Proposed measure edits
               <span className="ml-2 text-xs font-normal text-gray-500">
-                {edits.proposals.length} proposal{edits.proposals.length === 1 ? "" : "s"} — {acceptedCount} accepted, {rejectedCount} rejected
+                {(() => { const visible = edits.proposals.filter((p) => !dismissedKeys[`${p.measureId}::${p.flagRule}`]).length; return `${visible} proposal${visible === 1 ? "" : "s"}`; })()} — {acceptedCount} accepted, {rejectedCount} rejected
               </span>
             </div>
             <div className="flex gap-1 text-xs text-gray-500">
@@ -2888,7 +2951,9 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
           <div className="space-y-2">
             {edits.proposals.map((p, i) => {
               const key = `${p.measureId}::${p.flagRule}`;
+              if (dismissedKeys[key]) return null;
               const dec = decisions[key];
+              const isDismissing = dismissingKey === key;
               const isExpanded = expandedMeasure === p.measureId;
               return (
                 <div
@@ -2928,6 +2993,14 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
                         className={`px-2 py-1 rounded text-xs font-medium ${dec === "reject" ? "bg-gray-600 text-white" : "bg-white dark:bg-gray-700 border border-gray-300 text-gray-700 dark:text-gray-400 hover:bg-gray-50"}`}
                       >
                         {dec === "reject" ? "✗ Rejected" : "Reject"}
+                      </button>
+                      <button
+                        onClick={() => dismissProposal(p)}
+                        disabled={isDismissing}
+                        title="Permanently dismiss this proposal so it stops re-appearing after future re-scores"
+                        className={`px-2 py-1 rounded text-xs font-medium flex items-center justify-center gap-1 bg-white dark:bg-gray-700 border border-gray-300 text-gray-500 dark:text-gray-400 hover:bg-red-50 hover:text-red-600 hover:border-red-300 disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                        {isDismissing ? <Loader2 className="w-3 h-3 animate-spin" /> : "Dismiss"}
                       </button>
                     </div>
                   </div>

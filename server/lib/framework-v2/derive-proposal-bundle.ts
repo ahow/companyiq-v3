@@ -37,9 +37,14 @@ import {
   proposeAnchorFrameworks,
   proposeExpectedYesRateRecalibration,
   proposeNonDiscriminatingRetire,
+  FRAMEWORK_SENTINEL,
   type EditProposal,
   type EditProposalBundle,
 } from "./edit-proposer.js";
+import {
+  proposalKeyFromProposal,
+  proposalKeyFromEditRow,
+} from "./proposal-identity.js";
 import { mineFrameworkCandidates } from "./framework-candidates.js";
 import {
   computeQualityMetrics,
@@ -427,6 +432,59 @@ export async function deriveProposalBundle(
     }
   } catch (e: any) {
     console.warn("[deriveProposalBundle] calibration/annotation proposals failed (non-fatal):", e?.message);
+  }
+
+  // Suppress proposals whose edit has already been RESOLVED — either APPLIED
+  // (measure_edits.applied=true) or explicitly DISMISSED
+  // (measure_edits.skip_reason='dismissed'). Without this, an applied/dismissed
+  // proposal re-derives on every results load and re-inflates the "Apply N
+  // edits → iterate" count, so the user can never drive the review list to
+  // zero. The resolved-identity key is computed by the shared routine in
+  // proposal-identity.ts on BOTH sides (persisted row and derived proposal) so
+  // the two can never drift. Framework-level proposals (measureId ===
+  // FRAMEWORK_SENTINEL) are EXEMPT: they aggregate many values into one
+  // proposal and self-suppress per-value via filterUnregistered above, so a
+  // whole-proposal suppression after a single value was added would wrongly
+  // hide the still-unregistered remainder. Non-fatal: on any read error we
+  // simply skip suppression (fail-open — worst case a resolved proposal shows).
+  try {
+    const editsRes = await db.execute(sql`
+      SELECT measure_id, field, op, applied, skip_reason
+      FROM measure_edits
+      WHERE workspace_id = ${workspaceId}
+        AND framework_id = ${frameworkId}
+        AND list_id = ${listId}
+    `);
+    const editRows = ((editsRes as any).rows || []) as Array<any>;
+    const resolvedKeys = new Set<string>();
+    for (const row of editRows) {
+      const applied =
+        row.applied === true || row.applied === "t" || row.applied === "true" || row.applied === 1;
+      const dismissed = String(row.skip_reason || "") === "dismissed";
+      if (applied || dismissed) {
+        resolvedKeys.add(proposalKeyFromEditRow(row));
+      }
+    }
+    if (resolvedKeys.size > 0) {
+      const keep = (p: EditProposal): boolean =>
+        p.measureId === FRAMEWORK_SENTINEL || !resolvedKeys.has(proposalKeyFromProposal(p));
+
+      if (edits && Array.isArray(edits.proposals)) {
+        const kept = edits.proposals.filter(keep);
+        if (kept.length !== edits.proposals.length) {
+          edits.proposals = kept;
+          edits.totalWithProposals = kept.length;
+          const causeBreakdown: Record<string, number> = {};
+          for (const p of kept) {
+            causeBreakdown[p.cause] = (causeBreakdown[p.cause] || 0) + 1;
+          }
+          edits.causeBreakdown = causeBreakdown as any;
+        }
+      }
+      nearDuplicateEdits = nearDuplicateEdits.filter(keep);
+    }
+  } catch (e: any) {
+    console.warn("[deriveProposalBundle] resolved-proposal suppression failed (non-fatal):", e?.message);
   }
 
   // The COMPLETE proposal set the apply path resolves against. Edit proposals

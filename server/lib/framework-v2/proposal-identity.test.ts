@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveProposalByIdentity } from "./proposal-identity.js";
+import {
+  resolveProposalByIdentity,
+  proposalKeyFromProposal,
+  proposalKeyFromEditRow,
+  proposalIdentityKeyParts,
+} from "./proposal-identity.js";
 
 // Minimal proposal shape for identity resolution.
 function p(measureId: string, flagRule: string, op: string, path: string) {
@@ -112,4 +117,70 @@ test("op/path sent but no measure+rule+op/path proposal exists → absent (never
     proposal: "P1",
   });
   assert.equal(r.status, "absent");
+});
+
+// ─── Shared resolved-proposal identity key (suppression invariant) ──────────
+//
+// deriveProposalBundle suppresses a proposal iff a persisted measure_edits row
+// (applied OR dismissed) keys to the SAME string. These tests pin the ONE
+// invariant that keeps that correct: a derived proposal and the audit row the
+// apply/dismiss loop writes for it MUST produce an identical key.
+
+test("proposal key and its persisted edit-row key are identical", () => {
+  // Apply/dismiss records field = patch.path, op = patch.op (see the apply loop).
+  const prop = p("m-alpha", "too-narrow", "replace", "/fallback_yes_criterion");
+  const row = { measure_id: "m-alpha", field: "/fallback_yes_criterion", op: "replace" };
+  assert.equal(proposalKeyFromProposal(prop), proposalKeyFromEditRow(row));
+});
+
+test("key ignores flagRule: a second flag targeting the same field+op is the same resolved edit", () => {
+  const a = p("m-alpha", "too-narrow", "replace", "/fallback_yes_criterion");
+  const b = p("m-alpha", "off-expected-narrow", "replace", "/fallback_yes_criterion");
+  assert.equal(proposalKeyFromProposal(a), proposalKeyFromProposal(b));
+});
+
+test("key distinguishes different measure / field / op", () => {
+  const base = p("m-alpha", "too-narrow", "replace", "/fallback_yes_criterion");
+  const diffMeasure = p("m-beta", "too-narrow", "replace", "/fallback_yes_criterion");
+  const diffField = p("m-alpha", "too-narrow", "replace", "/positive_examples");
+  const diffOp = p("m-alpha", "too-narrow", "append", "/fallback_yes_criterion");
+  const k = proposalKeyFromProposal(base);
+  assert.notEqual(k, proposalKeyFromProposal(diffMeasure));
+  assert.notEqual(k, proposalKeyFromProposal(diffField));
+  assert.notEqual(k, proposalKeyFromProposal(diffOp));
+});
+
+test("proposal key falls back to fieldPath when patch.path is absent", () => {
+  const prop = { measureId: "m-alpha", fieldPath: "/substantive_definition", patch: { op: "tighten_definition" } };
+  const row = { measure_id: "m-alpha", field: "/substantive_definition", op: "tighten_definition" };
+  assert.equal(proposalKeyFromProposal(prop), proposalKeyFromEditRow(row));
+});
+
+test("near-duplicate proposal keys match a dismiss audit row", () => {
+  // Near-dup: measureId = measureIdA, patch.op merge_or_differentiate, path substantive_definition.
+  const prop = { measureId: "m-alpha", flagRule: "near-duplication", patch: { op: "merge_or_differentiate", path: "substantive_definition" } };
+  const dismissRow = { measure_id: "m-alpha", field: "substantive_definition", op: "merge_or_differentiate" };
+  assert.equal(proposalKeyFromProposal(prop), proposalKeyFromEditRow(dismissRow));
+});
+
+test("edit-row key accepts both snake_case and camelCase measure id", () => {
+  assert.equal(
+    proposalKeyFromEditRow({ measure_id: "m-alpha", field: "f", op: "replace" }),
+    proposalKeyFromEditRow({ measureId: "m-alpha", field: "f", op: "replace" }),
+  );
+});
+
+test("key parts are trimmed and null/undefined-safe", () => {
+  // Trimming: padded parts key identically to their trimmed form.
+  assert.equal(
+    proposalIdentityKeyParts({ measureId: " m-alpha ", field: " f ", op: " replace " }),
+    proposalIdentityKeyParts({ measureId: "m-alpha", field: "f", op: "replace" }),
+  );
+  // Three empty parts joined by "::" → two separators → "::::".
+  assert.equal(proposalIdentityKeyParts({}), "::::");
+  // null/undefined normalise to empty parts (no throw).
+  assert.equal(
+    proposalIdentityKeyParts({ measureId: null, field: undefined, op: "replace" }),
+    "::::replace",
+  );
 });

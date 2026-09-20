@@ -3394,6 +3394,7 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     // Walk actions and apply.
     const applied: any[] = [];
     const skipped: any[] = [];
+    const dismissed: any[] = [];
     const deferredForLLM: any[] = [];
     for (const action of actions) {
       if (action.type === "apply_edit") {
@@ -3444,6 +3445,36 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         } else {
           deferredForLLM.push(prop);
         }
+      } else if (action.type === "dismiss") {
+        // Explicitly DISMISS a proposal without changing the measure. This is a
+        // pure audit/suppression write: it records a measure_edits row with
+        // applied=false and skip_reason='dismissed' so deriveProposalBundle's
+        // resolved-proposal suppression stops re-surfacing this proposal on
+        // subsequent results loads. It must NOT mutate any measure and must NOT
+        // push to `applied` (which would wrongly trigger the auto-rescore tail).
+        // We resolve by identity so the persisted (measureId, field, op) key
+        // matches proposalKeyFromProposal for the SAME proposal; if the proposal
+        // is no longer present we still record from the client-supplied attrs so
+        // the dismissal sticks.
+        const match = resolveProposalByIdentity(allProposals, action.attrs);
+        const prop: any = match.status === "matched" ? match.proposal : null;
+        const measureId = String(prop?.measureId ?? action.attrs.measure ?? "(unknown)");
+        const field = String(prop?.patch?.path ?? prop?.fieldPath ?? action.attrs.path ?? "(proposal)");
+        const op = String(prop?.patch?.op ?? action.attrs.op ?? "dismiss");
+        const flagRule = prop?.flagRule ?? action.attrs.flagRule;
+        const auditSource = flagRule ? `proposal:${flagRule}` : "user_dismiss";
+        await recordMeasureEdit(db, {
+          workspaceId: ctx.workspaceId,
+          frameworkId,
+          listId,
+          measureId,
+          field,
+          op,
+          source: auditSource,
+          applied: false,
+          skipReason: "dismissed",
+        });
+        dismissed.push({ measureId, field, op, flagRule });
       } else if (action.type === "ignore_measure") {
         // No-op on framework; record for audit only.
         applied.push({ measureId: action.attrs.measure, action: "ignore", reason: action.attrs.reason });
@@ -3687,8 +3718,10 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     return res.json({
       applied,
       skipped,
+      dismissed,
       appliedCount: applied.length,
       skippedCount: skipped.length,
+      dismissedCount: dismissed.length,
       rescoreTriggered,
       newBatchId,
       rescoreTotalJobs,
