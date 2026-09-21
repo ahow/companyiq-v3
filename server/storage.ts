@@ -2434,6 +2434,13 @@ export async function removeListMember(listId: number, companyId: number, worksp
 }
 
 export async function deleteList(listId: number, workspaceId: number) {
+  // Detach — do NOT delete — the analysis run rows that reference this list via a
+  // NULLABLE FK, so the DELETE on company_lists no longer trips
+  // batch_runs_list_id_fkey / reliability_runs_list_id_fkey while the run
+  // HISTORY is preserved. company_list_members has a NOT NULL list_id, so those
+  // rows are still removed outright.
+  await db.execute(sql`UPDATE batch_runs SET list_id = NULL WHERE list_id = ${listId}`);
+  await db.execute(sql`UPDATE reliability_runs SET list_id = NULL WHERE list_id = ${listId}`);
   await db.execute(sql`DELETE FROM company_list_members WHERE list_id = ${listId}`);
   await db.execute(sql`DELETE FROM company_lists WHERE id = ${listId} AND workspace_id = ${workspaceId}`);
 }
