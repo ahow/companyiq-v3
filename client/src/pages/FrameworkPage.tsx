@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState, useRef, useEffect } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User, Settings, Globe, Search, Ban, Link2, Sparkles, Download } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Star, MessageSquare, Send, X, Bot, User, Settings, Globe, Search, Ban, Link2, Sparkles, Download, Upload } from "lucide-react";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -31,6 +31,9 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
   const [newName, setNewName] = useState("");
   const [showAIEditor, setShowAIEditor] = useState(false);
   const [exportingFull, setExportingFull] = useState(false);
+  const [exportingJson, setExportingJson] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [showDiscoverySettings, setShowDiscoverySettings] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -172,6 +175,71 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
       alert(`Export failed: ${err.message}`);
     } finally {
       setExportingFull(false);
+    }
+  };
+
+  // Export the framework as a deterministic machine-readable JSON file. This is
+  // the round-trip counterpart to Import Framework — no LLM, exact reproduction.
+  const handleExportJson = async () => {
+    if (!activeFrameworkId) return;
+    setExportingJson(true);
+    try {
+      const resp = await fetch(`/api/framework-builder/v2/${activeFrameworkId}/export-json`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `framework-${activeFrameworkId}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(`JSON export failed: ${err.message}`);
+    } finally {
+      setExportingJson(false);
+    }
+  };
+
+  // Open the hidden file picker for importing a framework JSON export.
+  const handleImportClick = () => {
+    importInputRef.current?.click();
+  };
+
+  // Read the selected JSON file and POST it to the deterministic import endpoint.
+  // On success, refetch the frameworks list and select the newly created one.
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset the input so selecting the same file again re-triggers onChange.
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      let parsed: any;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error("Selected file is not valid JSON.");
+      }
+      const result = await api.request("/framework-builder/v2/import", {
+        method: "POST",
+        body: JSON.stringify(parsed),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["frameworks"] });
+      if (result?.frameworkId) {
+        setSelectedFrameworkId(result.frameworkId);
+      }
+      alert(
+        `Imported "${result?.name ?? "framework"}" with ${result?.measureCount ?? 0} measure(s).`,
+      );
+    } catch (err: any) {
+      alert(`Import failed: ${err.message}`);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -489,6 +557,29 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
               >
                 <Download className="w-4 h-4" /> {exportingFull ? "Exporting..." : "Export Full"}
               </button>
+              <button
+                onClick={handleExportJson}
+                disabled={exportingJson}
+                className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg text-sm hover:bg-teal-700 transition-colors disabled:opacity-50"
+                title="Export as machine-readable JSON — re-import with Import Framework to recreate this framework exactly (no AI)"
+              >
+                <Download className="w-4 h-4" /> {exportingJson ? "Exporting..." : "Export (JSON)"}
+              </button>
+              <button
+                onClick={handleImportClick}
+                disabled={importing}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                title="Import a framework from a JSON export — recreates it exactly as a new framework (no AI)"
+              >
+                <Upload className="w-4 h-4" /> {importing ? "Importing..." : "Import Framework"}
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={handleImportFile}
+                className="hidden"
+              />
               <button
                 onClick={openAIEditor}
                 className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 transition-colors"

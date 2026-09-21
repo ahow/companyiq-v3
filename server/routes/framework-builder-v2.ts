@@ -15,6 +15,7 @@ import { resolveTargetCount } from "../lib/framework-v2/target-count.js";
 import { sanitizeSearchTemplates } from "../lib/framework-v2/query-template-hygiene.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
+import { buildFrameworkExport, buildFrameworkInserts, isFrameworkExportPayload } from "../lib/framework-v2/import-framework.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
 import { proposeEditsForFlags, proposeMergeForNearDuplicate, FRAMEWORK_LEVEL_OPS, DIRECT_MEASURE_OPS, FRAMEWORK_SENTINEL } from "../lib/framework-v2/edit-proposer.js";
@@ -3808,6 +3809,82 @@ router.get("/v2/:frameworkId/export-full", requireWorkspace, async (req: Request
     res.setHeader("Content-Type", "text/markdown; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${slug}-full-export.md"`);
     return res.send(markdown);
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── GET /v2/:frameworkId/export-json — deterministic machine-readable export ─
+// Canonical JSON round-trip counterpart to export-full. The payload has a stable
+// shape ({ companyiqFrameworkExport, framework, measures }) that POST /v2/import
+// recreates EXACTLY, with no LLM in the loop.
+
+router.get("/v2/:frameworkId/export-json", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const frameworkId = parseInt(String(req.params.frameworkId), 10);
+    if (!Number.isFinite(frameworkId) || frameworkId <= 0) {
+      return res.status(400).json({ error: "valid frameworkId required" });
+    }
+
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+
+    const fw = await storage.getFrameworkById(frameworkId, ctx.workspaceId);
+    if (!fw) {
+      return res.status(404).json({ error: "framework not found" });
+    }
+    const measures = await storage.getFrameworkMeasures(frameworkId);
+
+    const payload = buildFrameworkExport(fw as any, (measures as any[]) || []);
+
+    const slug = String((fw as any).name || `framework-${frameworkId}`)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || `framework-${frameworkId}`;
+
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${slug}-framework.json"`);
+    return res.send(JSON.stringify(payload, null, 2));
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── POST /v2/import — deterministic framework import (NO LLM) ────────────────
+// Accepts the export-json payload (or a raw { framework, measures } object) and
+// creates a NEW framework in the current workspace, copying every measure
+// field-for-field. This bypasses all builder validation/robustness/overlap gates
+// on purpose: it is a faithful copy, so duplicate-numbering or overlap warnings
+// must never block it. Makes ZERO LLM calls.
+
+router.post("/v2/import", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
+
+    const body = req.body;
+    if (!isFrameworkExportPayload(body)) {
+      return res.status(400).json({
+        error:
+          "Not a recognizable CompanyIQ framework export. Expected a JSON object with a `framework` object and a `measures` array.",
+      });
+    }
+
+    const existing = await storage.getFrameworks(ctx.workspaceId);
+    const existingNames = (existing as any[] | undefined)?.map((f) => f?.name) ?? [];
+
+    const { framework, measures } = buildFrameworkInserts(body, ctx.workspaceId, existingNames);
+
+    const created = await storage.createFramework(framework as any);
+
+    let measureCount = 0;
+    for (const measure of measures) {
+      await storage.createFrameworkMeasure({ ...measure, frameworkId: created.id } as any);
+      measureCount++;
+    }
+
+    return res.json({ frameworkId: created.id, name: created.name, measureCount });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || "internal error" });
   }
