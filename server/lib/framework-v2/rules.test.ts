@@ -24,6 +24,7 @@ import {
   validateC9,
   validateC10,
   validateC11,
+  validateC12,
   findDegreeWords,
   DEGREE_WORDS,
   toStructuredIssues,
@@ -427,6 +428,92 @@ test("C11 passes on a fully countable per-condition criterion with no degree wor
   const r = validateC11(fw);
   assert.equal(r.passed, true, `expected pass, got: ${JSON.stringify(r.violations)}`);
   assert.equal(r.violations.filter((v) => v.rule === "C11").length, 0);
+});
+
+// ─── C12 — conjunctive-bundle advisory (info, never blocking) ─────────────
+
+// (a) An M-of-N / OR-list soft gate produces exactly ONE C12 advisory at
+// severity "info", and it NEVER makes the framework fail (passed stays true).
+test("C12 emits an info advisory on an M-of-N soft gate and never blocks", () => {
+  const fw = goodFramework({
+    measures: [
+      goodMeasure({
+        measureId: "1.2-mofn",
+        fallback_yes_criterion:
+          "Yes if at least 2 of the following conditions appear in a verbatim quote:\n(1) a named enterprise risk register listing a nature or biodiversity risk,\n(2) a named board or management committee with nature and biodiversity risk in its mandate,\n(3) a quantified or dated nature/biodiversity risk metric.",
+      }),
+    ],
+  });
+  const r = validateC12(fw);
+  const c12 = r.violations.filter((v) => v.rule === "C12");
+  assert.equal(c12.length, 1, `expected exactly one C12 advisory, got: ${JSON.stringify(r.violations)}`);
+  assert.equal(c12[0].severity, "info");
+  assert.ok(c12[0].suggestion && /ALL of the following/i.test(c12[0].suggestion), "C12 suggestion should propose a conjunctive ALL-of bundle");
+  // validateC12 itself never fails ...
+  assert.equal(r.passed, true);
+  // ... and the advisory does NOT flip the overall verdict.
+  const all = validateAll(fw);
+  assert.equal(all.passed, true, `expected validateAll to pass, got: ${JSON.stringify(all.violations, null, 2)}`);
+  assert.ok(all.violations.some((v) => v.rule === "C12" && v.severity === "info"), "C12 info should surface through validateAll");
+});
+
+// An OR-list where any single condition triggers Yes also fires C12.
+test("C12 fires on an 'any of the following' OR-list gate", () => {
+  const fw = goodFramework({
+    measures: [
+      goodMeasure({
+        measureId: "1.3-orlist",
+        fallback_yes_criterion:
+          "Yes if ANY of the following conditions is met:\n(1) the entity names a nature and biodiversity policy,\n(2) the entity names a nature and biodiversity governance body,\n(3) the entity reports a nature and biodiversity metric.",
+      }),
+    ],
+  });
+  const c12 = validateC12(fw).violations.filter((v) => v.rule === "C12");
+  assert.equal(c12.length, 1);
+  assert.equal(c12[0].severity, "info");
+});
+
+// (b) A measure already framed as a conjunctive hard-token bundle produces NO
+// C12 advisory (it is treated as already hardened).
+test("C12 stays silent on a conjunctive hard-token bundle", () => {
+  const fw = goodFramework({
+    measures: [
+      goodMeasure({
+        measureId: "1.4-bundle",
+        fallback_yes_criterion:
+          "Return Yes ONLY if a single verbatim quote satisfies ALL of the following: (1) it names an enterprise risk register entry covering a nature or biodiversity risk, AND (2) it binds to that entry a named accountable committee or a quantified/dated nature and biodiversity metric.",
+        scoringGuidance:
+          "Score Yes only when all of the required tokens co-occur in one quote. When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context.",
+      }),
+    ],
+  });
+  const c12 = validateC12(fw).violations.filter((v) => v.rule === "C12");
+  assert.equal(c12.length, 0, `expected no C12 advisory on a conjunctive bundle, got: ${JSON.stringify(c12)}`);
+});
+
+// (c) C11 (degree-word) behaviour is UNCHANGED by the addition of C12: a bare
+// degree-word gate still errors under C11, and adding C12 does not alter that.
+test("C12 does not change C11 degree-word behaviour", () => {
+  const fw = goodFramework({
+    measures: [
+      goodMeasure({
+        measureId: "9.9-degree",
+        fallback_yes_criterion:
+          "Yes if the entity has a substantive approach to nature and biodiversity management.",
+      }),
+    ],
+  });
+  // C11 still fires as an error.
+  const c11 = validateC11(fw).violations.filter((v) => v.rule === "C11");
+  assert.equal(c11.length, 1);
+  assert.equal(c11[0].severity, "error");
+  // This bare degree-word gate has no M-of-N / OR-list structure → no C12.
+  const c12 = validateC12(fw).violations.filter((v) => v.rule === "C12");
+  assert.equal(c12.length, 0);
+  // validateAll still blocks on the C11 error (C12 is advisory-only).
+  const all = validateAll(fw);
+  assert.equal(all.passed, false);
+  assert.ok(all.violations.some((v) => v.rule === "C11" && v.severity === "error"));
 });
 
 // ─── Aggregate ───────────────────────────────────────────────────────────

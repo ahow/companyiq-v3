@@ -895,6 +895,134 @@ export function validateC11(fw: FrameworkDraft): ValidationResult {
   return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };
 }
 
+// ─── C12 — Prefer a conjunctive hard-token bundle over an M-of-N soft gate ──
+//
+// ADVISORY (severity: "info", never error/warning). Detects a measure whose
+// deciding gate is an "M-of-N" / OR-list SOFT gate — "Yes if ANY of the
+// following...", "at least N of the following...", "any N of...", a low N over
+// easily-satisfied single conditions — and SUGGESTS tightening it to a
+// CONJUNCTIVE HARD-TOKEN BUNDLE (require the co-occurrence of ALL of a small
+// set of hard, quote-verifiable tokens in a single quote).
+//
+// WHY: an M-of-N gate is itself a run-to-run flip source. When a disclosure
+// satisfies exactly N or N±1 of the conditions, *which* soft conditions count
+// and whether the count clears the bar is a degree judgement made near a
+// boundary — two scoring models split on it. Empirically (fw10 → hardened
+// clone, 22 Sept 2026), replacing four such gates with ALL-of hard-token
+// bundles cut those measures' flip cells 31 → 14 (−55%) while the 30 untouched
+// measures stayed flat. See Flip_Rate_Real_Run_Results.md.
+//
+// This is DISTINCT from C11 (degree words). C11 fires when a degree WORD is the
+// deciding test; C12 fires on the OR-list STRUCTURE even when every listed
+// condition is individually clean. C12 does NOT set passed=false, is never
+// targeted by the repair loop (info-severity, like the set-level diagnostics),
+// and is fully dismissible. It fires at most once per measure. A measure that
+// already frames its gate conjunctively ("ALL of the following", "simultaneously
+// satisfies", "BOTH (i)...AND (ii)...", "must co-occur") is treated as already
+// hardened and produces NO advisory.
+
+// A soft M-of-N / OR-list selection gate: any single (or low-N) condition out
+// of a list is enough to trigger Yes. Pattern-based, not hardcoded to any
+// measure. Deliberately EXCLUDES "all of the following" (a conjunctive bundle).
+const SOFT_SELECTION_GATE_PATTERNS: RegExp[] = (() => {
+  const numWord = "(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten)";
+  return [
+    new RegExp(`\\bat least\\s+${numWord}\\s+of the following\\b`, "i"),
+    new RegExp(`\\bat least\\s+${numWord}\\s+of\\b(?!\\s+the\\s+following\\s+are\\s+all)`, "i"),
+    new RegExp(`\\bany\\s+${numWord}\\s+of\\b`, "i"),
+    new RegExp(`\\b${numWord}\\s+or more of the following\\b`, "i"),
+    new RegExp(`\\b${numWord}\\s+of the following\\b`, "i"),
+    /\bany of the following\b/i,
+    /\bany one of\b/i,
+    /\byes if any of\b/i,
+  ];
+})();
+
+// A conjunctive hard-token bundle frame — the hardened form. Its presence means
+// the gate already requires co-occurrence, so no advisory is emitted.
+const CONJUNCTIVE_BUNDLE_PATTERNS: RegExp[] = [
+  /\ball of the following\b/i,
+  /\bsimultaneously satisf/i,
+  /\bmust (?:all )?co-?occur\b/i,
+  /\bco-?occur (?:in|within) (?:a|the same|one) (?:single )?(?:verbatim )?quote\b/i,
+  /\brequires? all of\b/i,
+  /\ball of\b[^.]{0,40}\bmust be present\b/i,
+  /\bboth\b[^.]{0,80}?\band\b[^.]{0,80}?\b(?:present|co-?occur|in the same)\b/i,
+  /\((?:i|1|a)\)[^.]{0,160}?\bAND\b[^.]{0,160}?\((?:ii|2|b)\)/,
+];
+
+function hasSoftSelectionGate(text: string): boolean {
+  if (!text) return false;
+  return SOFT_SELECTION_GATE_PATTERNS.some((p) => p.test(text));
+}
+
+function hasConjunctiveBundle(text: string): boolean {
+  if (!text) return false;
+  return CONJUNCTIVE_BUNDLE_PATTERNS.some((p) => p.test(text));
+}
+
+// Best-effort N (the selection threshold) and M (number of enumerated options),
+// used only to enrich the advisory message. Returns nulls when not parseable.
+function describeSoftGate(text: string): { n: number | null; m: number | null } {
+  const numMap: Record<string, number> = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  };
+  let n: number | null = null;
+  const nMatch = text.match(/\b(?:at least|any)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+of\b/i);
+  if (nMatch) {
+    const raw = nMatch[1].toLowerCase();
+    n = /^\d+$/.test(raw) ? parseInt(raw, 10) : (numMap[raw] ?? null);
+  } else if (/\bany of the following\b|\bany one of\b|\byes if any of\b/i.test(text)) {
+    n = 1;
+  }
+  // Count top-level enumerated options via the existing condition splitter.
+  const conds = splitIntoConditions(text);
+  const m = conds.length > 1 ? conds.length : null;
+  return { n, m };
+}
+
+export function validateC12(fw: FrameworkDraft): ValidationResult {
+  const violations: Violation[] = [];
+  for (const m of fw.measures) {
+    const fallbackText = toText(m.fallback_yes_criterion);
+    const guidanceText = toText(m.scoringGuidance);
+
+    // The measure is already hardened (conjunctive frame) → no advisory.
+    if (hasConjunctiveBundle(fallbackText) || hasConjunctiveBundle(guidanceText)) continue;
+
+    // Prefer to anchor the advisory on the fallback_yes_criterion (the gate the
+    // arbiter reads first); fall back to scoringGuidance. One advisory / measure.
+    let sourceField: string | null = null;
+    let sourceText = "";
+    if (hasSoftSelectionGate(fallbackText)) {
+      sourceField = "fallback_yes_criterion";
+      sourceText = fallbackText;
+    } else if (hasSoftSelectionGate(guidanceText)) {
+      sourceField = "scoringGuidance";
+      sourceText = guidanceText;
+    }
+    if (!sourceField) continue;
+
+    const { n, m: mCount } = describeSoftGate(sourceText);
+    const gateDesc =
+      n !== null && mCount !== null
+        ? `an M-of-N / OR-list soft gate (any ${n} of ${mCount} conditions)`
+        : n === 1
+          ? "an OR-list soft gate (any single listed condition triggers Yes)"
+          : "an M-of-N / OR-list soft gate";
+
+    violations.push({
+      measureId: m.measureId,
+      rule: "C12",
+      severity: "info",
+      message: `${sourceField} uses ${gateDesc}. Where the measurable signal permits, a conjunctive HARD-TOKEN BUNDLE is more flip-resistant: require the co-occurrence, in a SINGLE verbatim quote, of ALL of a small set of hard, quote-verifiable tokens (e.g. a named artefact/function AND a hard qualifier — a quantified target, a present-tense deployment verb, a named production indicator, or a proprietary asset tied to an explicit advantage) rather than letting any one soft condition suffice. An M-of-N count near its boundary is itself a run-to-run flip source. Advisory only — dismiss if a bundle would be too strict for this measure.`,
+      suggestion: `Rewrite the gate as: "Return Yes ONLY if a single verbatim quote satisfies ALL of the following: (1) it names <the topic artefact/function + topic term>, AND (2) it contains at least one HARD qualifier bound to it — <a number/percentage/date, a present-tense deployment verb, a named production indicator, or a proprietary asset + explicit advantage>." If a conjunctive bundle is genuinely too strict, keep an N-of-M fallback but RAISE N and use NAMED hard tokens (avoid low-bar single-token conditions).`,
+    });
+  }
+  // Advisory-only: never blocks. `passed` stays true (no error-severity items).
+  return { passed: true, violations };
+}
+
 // ─── Set-level diagnostics (definition-of-good dimensions 2, 3, 4) ──────────
 //
 // These check the SET as a whole, not each measure. They implement the
@@ -1057,6 +1185,9 @@ export function validateAll(fw: FrameworkDraft): ValidationResult {
     ["C9", validateC9],
     ["C10", validateC10],
     ["C11", validateC11],
+    // C12 — advisory (info only): prefer a conjunctive hard-token bundle over an
+    // M-of-N / OR-list soft gate. Never sets passed=false, never blocks.
+    ["C12", validateC12],
     // Set-level advisory diagnostics — emits ONLY `severity: "info"`, which is
     // excluded from the repair trigger and grouping (see validateSetLevel).
     ["set-level", validateSetLevel],
@@ -1196,6 +1327,12 @@ const RULE_ISSUE_META: Record<
     reason:
       "A degree word (e.g. 'substantive', 'integrated') is the deciding test but is not decidable from a verbatim quote — two scoring models read the same anchor sentence and split on whether it clears the bar.",
     implication: "This is the direct cause of run-to-run verdict flips; the measure's score is not reproducible.",
+  },
+  C12: {
+    field: "fallback_yes_criterion / scoringGuidance",
+    reason:
+      "The deciding gate is an M-of-N / OR-list soft gate (any one of several conditions triggers Yes), so a disclosure sitting near the count boundary depends on which soft conditions a run happens to credit — a conjunctive hard-token bundle (require ALL of a small set of quote-verifiable tokens) removes that boundary.",
+    implication: "Borderline companies flip Yes/No run-to-run on the M-of-N count. Advisory — tighten to a hard-token bundle where the signal permits, or dismiss if a bundle would be too strict.",
   },
   "evidence-keyword-distinctiveness": {
     field: "evidenceKeywords",

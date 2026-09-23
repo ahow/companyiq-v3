@@ -92,7 +92,7 @@ Do not draft measures now, but keep in mind the properties every measure will ne
 - C1: Position-testing phrasing with per-measure achievement-implies-commitment guidance. Achievement claims that entail a stated position count as evidence (e.g. "we have achieved net zero" is evidence of a net-zero policy). Factual outcomes without target-state language do not (e.g. "emissions fell 30%").
 - C2: Substantive-only exclusions. Do NOT reject on tense; DO reject on wrong subject, missing specificity, third-party attribution, adjacent-topic evidence.
 - C3: Every measure requires ≥120 characters of quote context.
-- C4: Fallback conditions are numbered OR-lists of ≥3 substantive conditions, each explicitly referencing the topic.
+- C4: The PREFERRED fallback gate is a conjunctive hard-token bundle (require ALL of a small set of hard, quote-verifiable tokens — a named artefact/function AND a hard qualifier), NOT an OR-list where any one soft condition suffices. An N-of-M list is a second-choice fallback only (raise N; use NAMED hard tokens). Every condition must explicitly reference the topic.
 - C5: Adjacent-topic exclusions in every measure's substantive_definition, drawn from the intake list.
 - C6: Every measure has ≥2 positive examples AND ≥2 adversarial negative examples.
 - C7: Coverage measures declare explicit thresholds and a per-measure whitelist of plain-language coverage phrases.
@@ -259,25 +259,33 @@ DO include:
 For every measure, set min_quote_context_chars: 120. In scoringGuidance, include verbatim: "When returning evidence, provide a verbatim quote of at least 120 characters. Include the full sentence containing the topic term plus at least one adjacent sentence for context. Do not truncate at the topic term."
 
 ## C4 — Topic-anchored fallback conditions
-Every measure has fallback_yes_criterion structured as a numbered OR-list of at least 3 countable conditions. Every numbered condition MUST reference the framework's topicTerm or a registered synonym MEANINGFULLY, not decoratively.
+Every measure has a fallback_yes_criterion whose deciding gate is countable from a verbatim quote and whose every condition references the framework's topicTerm or a registered synonym MEANINGFULLY, not decoratively.
 
-Template:
-Yes if ANY of the following conditions is met, regardless of vocabulary or disclosure vehicle:
-(1) The entity discloses a policy, commitment, target, or statement specifically on [TOPIC], at any level of detail — including forward-looking commitments and framework alignments (e.g. [anchor framework names]).
-(2) The entity discloses a monitoring, audit, KPI, or measurement programme specifically addressing [TOPIC].
-(3) The entity discloses a governance structure (board committee, executive owner, working group) with [TOPIC] explicitly in its mandate.
-(4) The entity discloses a contractual clause, supplier code provision, employee code provision, or legal instrument specifically addressing [TOPIC].
+PREFERRED DECISION RULE — a conjunctive hard-token bundle (use this WHENEVER the measurable signal permits):
+The most flip-resistant gate requires the CO-OCCURRENCE, in a SINGLE verbatim quote, of ALL of a small set of hard, quote-verifiable tokens — an AND over hard tokens, NOT an OR over soft ones. The canonical shape is:
+  A named artefact/function (the topic term bound to a concrete named thing) AND at least one HARD qualifier bound to it — a quantified/dated target (number, %, date, timeline, owner/team), a present-tense deployment verb, a named production/operational indicator, or a proprietary/in-house named asset explicitly tied to an advantage.
+Template (preferred):
+Return Yes ONLY if a single verbatim quote satisfies ALL of the following:
+(1) it names [the topic artefact/function together with the topic term], AND
+(2) it contains at least one HARD qualifier bound to that artefact — [a number/percentage/date/target, OR a present-tense deployment verb, OR a named production indicator, OR a proprietary asset + an explicit advantage].
+A named artefact ALONE, without a hard qualifier in the same quote, is NOT sufficient.
 
-Substitute [TOPIC] with the actual topic term or a narrower sub-topic that appears in the measure's substantive scope. A condition like "The entity discloses a policy" with the topic term appended at the end is NOT sufficient — the topic must be central to the condition's meaning.
+WHY prefer the bundle: an "at least N of the following" / "any of the following" OR-list lets a Yes rest on a single easily-satisfied soft condition, and when a disclosure sits near the count boundary, WHICH soft conditions count and whether the count clears the bar is a degree judgement made near a boundary — two scoring models split on it and the verdict flips run-to-run. Requiring ALL of a few HARD tokens removes both the count boundary and the soft-condition ambiguity.
 
-DECIDABLE THRESHOLD (each Yes-condition must be countable from a verbatim quote):
-- Do NOT phrase any Yes-condition as a matter of DEGREE. Forbidden judgment words include: substantive, substantially, systematic, integrated, integration, sufficient, robust, meaningful, adequate, appropriate, comprehensive, holistic, effective, strong, well-developed. Two scoring models read the same anchor sentence and split on whether it clears a degree bar — that produces run-to-run verdict flips.
-- Write every condition as a COUNTABLE / NAMED test that a reader can verify true or false from a single verbatim quote: a named body, a named document/register/process step, a quantified or dated metric, an explicit percentage/threshold, or a named framework alignment.
-- When a substantive/quality bar is genuinely unavoidable, express it as an explicit N-of-M test over NAMED artefacts rather than as a judgment word. Format: "Yes if at least N of the following NAMED artefacts are present in a verbatim quote: (a) …, (b) …, (c) …". Each artefact must be individually checkable from the quote.
+SECOND-CHOICE FALLBACK — N-of-M, only when a single conjunctive bundle would be genuinely too strict for the signal:
+Keep an N-of-M test, but harden it: RAISE N (do not let any single condition trigger Yes), and make every option a NAMED HARD token — a named body, a named document/register/process step, a quantified or dated metric, an explicit percentage/threshold, or a named framework alignment. Format: "Yes if at least N of the following NAMED artefacts appear in a verbatim quote: (a) …, (b) …, (c) …". Each artefact must be individually checkable from the quote. Avoid low-N-over-soft-conditions gates (e.g. "any 1 of ..." or a list mixing hard tokens with soft ones like "a named business function").
 
-DO / DON'T contrast:
+Whichever shape is used, every numbered condition MUST reference the framework's topicTerm or a registered synonym MEANINGFULLY, not decoratively. A condition like "The entity discloses a policy" with the topic term appended at the end is NOT sufficient — the topic must be central to the condition's meaning.
+
+DECIDABLE THRESHOLD (applies to BOTH shapes above — each token/condition must be countable from a verbatim quote):
+- Do NOT phrase any token or condition as a matter of DEGREE. Forbidden judgment words include: substantive, substantially, systematic, integrated, integration, sufficient, robust, meaningful, adequate, appropriate, comprehensive, holistic, effective, strong, well-developed. Two scoring models read the same anchor sentence and split on whether it clears a degree bar — that produces run-to-run verdict flips.
+- Write every token/condition as a COUNTABLE / NAMED test that a reader can verify true or false from a single verbatim quote: a named body, a named document/register/process step, a quantified or dated metric, an explicit percentage/threshold, or a named framework alignment.
+
+DO / DON'T contrast (express the GENERAL principle — prefer AND-over-hard-tokens to OR-over-soft-conditions):
 - DON'T (degree judgment, not decidable): "Yes if nature-risk integration into ERM is substantive."
-- DO (countable N-of-M over named artefacts): "Yes if at least 2 of the following are present in a verbatim quote: (a) a named board or management body with nature explicitly in its mandate, (b) a named ERM process step or risk-register entry covering a nature/biodiversity risk, (c) a quantified or dated nature/biodiversity risk metric."
+- DON'T (OR-list soft gate — any one soft condition triggers Yes): "Yes if ANY of: (a) a named body with nature in its mandate, (b) mention of a nature risk in the risk register, (c) a nature-related disclosure — any single item clears the bar even when it is a bare mention."
+- DO (conjunctive hard-token bundle — PREFERRED): "Return Yes ONLY if a single verbatim quote satisfies ALL of: (1) it names a specific ERM process step or risk-register entry covering a nature/biodiversity risk, AND (2) it binds to that entry a HARD qualifier — a named accountable body, a quantified/dated nature metric, or an explicit threshold. A bare mention of nature risk without a named process step and a hard qualifier is No."
+- DO (hardened N-of-M, only if a single bundle is too strict — raise N, named hard tokens): "Yes if at least 2 of the following NAMED artefacts appear in a verbatim quote: (a) a named board or management body with nature explicitly in its mandate, (b) a named ERM process step or risk-register entry covering a nature/biodiversity risk, (c) a quantified or dated nature/biodiversity risk metric."
 
 ## C5 — Adjacent-topic exclusion in substantive_definition
 Every measure's substantive_definition must include: "This measure specifically tests [TOPIC]. Evidence attributed to adjacent topics does NOT satisfy this measure, even if language overlaps. Adjacent topics that must be excluded include: [list from intake artefact]."
@@ -486,7 +494,7 @@ Same C1–C11 rules as the single-shot drafter. In particular:
 - C1: Position-testing phrasing with c1_achievement_guidance (yes_cases, no_cases, distinguishing_test).
 - C2: whatDoesNotConstituteEvidence must be substantive (wrong subject, missing specificity, third-party attribution, adjacent-topic evidence). Do NOT reject on tense.
 - C3: min_quote_context_chars = 120 by default; scoringGuidance must instruct verbatim-quote-plus-adjacent-sentence.
-- C4: fallback_yes_criterion is a numbered list of ≥3 substantive conditions, each explicitly referencing the topic term.
+- C4: PREFER a conjunctive hard-token bundle for fallback_yes_criterion (require ALL of a small set of hard, quote-verifiable tokens — a named artefact/function AND a hard qualifier), rather than an OR-list where any single soft condition triggers Yes. Use a hardened N-of-M list (raised N, NAMED hard tokens) only as a second choice. Every condition must explicitly reference the topic term.
 - C5: substantive_definition MUST include an adjacent-topic exclusion clause naming ≥1 adjacent topic from the intake list. Use rejection language like "Evidence attributed to X does NOT satisfy this measure".
 - C6: ≥2 positive_examples AND ≥2 negative_examples per measure.
 - C7: For coverage measures, coverage_whitelist has ≥3 phrases; title states the threshold explicitly (e.g. "enterprise-wide", "≥70% of portfolio").
