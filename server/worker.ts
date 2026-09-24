@@ -16,7 +16,7 @@ import * as storage from "./storage.js";
 import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
 import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
-import { isCreditAlertActive, ProviderScoringError } from "./lib/credit-breaker.js";
+import { isCreditAlertActive, isProxyCreditAlertActive, ProviderScoringError } from "./lib/credit-breaker.js";
 import { hasAnyLiveScoringProvider } from "./lib/ai-providers.js";
 import {
   classifyProviderError,
@@ -246,6 +246,29 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       }
     }
     return { success: false, error: "Paused: all scoring providers credit-exhausted", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
+  }
+
+  // PROXY CREDIT BREAKER PAUSE: unlike the LLM breaker above (which only pauses
+  // when the ENTIRE scoring fallback chain is exhausted), the residential proxy
+  // has NO fallback route. When it runs out of credit (Evomi returns HTTP 402)
+  // document fetches through it silently fail and every company would be scored
+  // on missing evidence. So we halt UNCONDITIONALLY while the proxy alert is
+  // active and re-queue the job so it auto-resumes once credit is topped up and
+  // the alert is cleared (via /system/alerts/resume or a successful probe fetch).
+  if (process.env.CREDIT_PAUSE_ENABLED !== "false" && (await isProxyCreditAlertActive())) {
+    if (!(cancelledBatches.has(batchId) || isBatchCancelledCached(batchId))) {
+      const delayMs = parseInt(process.env.CREDIT_PAUSE_REQUEUE_MS || "60000", 10);
+      try {
+        const { getQueue } = await import("./queue.js");
+        const q = getQueue();
+        const jobIdStr = "batch-" + batchId + "-company-" + companyId + "-proxypause-" + Date.now();
+        await q.add("analysis-proxypause-" + batchId + "-" + companyId, job.data, { delay: delayMs, priority: 1, jobId: jobIdStr });
+        console.warn("[Worker] RESIDENTIAL PROXY CREDIT EXHAUSTED — job " + jobId + " re-queued with " + delayMs + "ms delay (add credit in the Evomi dashboard, then resume to continue)");
+      } catch (err: any) {
+        console.error("[Worker] Proxy credit-pause re-enqueue failed for job " + jobId + ": " + err.message);
+      }
+    }
+    return { success: false, error: "Paused: residential proxy credit-exhausted", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
   // OFF-PEAK SCHEDULING GATE: If this batch is marked offPeakOnly and we are

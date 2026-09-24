@@ -254,7 +254,9 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   });
 
   const resumeMutation = useMutation({
-    mutationFn: () => api.resumeSystem("credit_exhaustion"),
+    // Clear the alert that is actually showing (LLM credit vs. residential-proxy
+    // credit) so the single Resume button works for either kind.
+    mutationFn: () => api.resumeSystem(batchStatus?.alert?.kind || "credit_exhaustion"),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["batchStatus"] }),
     onError: (error: any) => alert(`Resume failed: ${error.message}`),
   });
@@ -443,7 +445,10 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
               <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
               <div>
                 <p className="text-sm font-semibold text-amber-900">
-                  Processing paused — API credit exhausted{batchStatus.alert.provider ? ` (${batchStatus.alert.provider})` : ""}
+                  {batchStatus.alert.kind === "proxy_credit_exhaustion"
+                    ? "Processing paused — residential proxy out of credit"
+                    : "Processing paused — API credit exhausted"}
+                  {batchStatus.alert.provider ? ` (${batchStatus.alert.provider})` : ""}
                 </p>
                 <p className="text-xs text-amber-800 mt-1">{batchStatus.alert.message}</p>
                 <p className="text-[11px] text-amber-700 mt-1">
