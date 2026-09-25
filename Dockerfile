@@ -18,6 +18,7 @@ RUN apt-get update && \
       poppler-utils \
       tesseract-ocr \
       tesseract-ocr-eng \
+      tini \
       ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -44,5 +45,18 @@ ARG CACHEBUST=1
 RUN cd client && ../node_modules/.bin/vite build
 
 EXPOSE 3000
+
+# Run tini as PID 1 so orphaned/reparented child processes are reaped.
+# Root cause: with `node` as PID 1 and no init, when Chromium (spawned by
+# Puppeteer) crashes or is killed its helper/child processes are reparented to
+# PID 1. Node as PID 1 does not reap arbitrary reparented children, so they
+# accumulate as zombies holding PID slots until the container's pids cgroup /
+# RLIMIT_NPROC cap is hit, after which every fork() fails with EAGAIN
+# ("Cannot fork" / posix_spawn errno 11) and no further browser can launch.
+# tini reaps zombies, and `-g` forwards signals to the whole process group so
+# Chromium subprocess trees are cleaned up on shutdown. ENTRYPOINT persists even
+# when CMD is overridden, so every Railway service (worker + app) gets a proper
+# init as PID 1 regardless of its start command.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 
 CMD ["node", "--import", "tsx", "server/index.ts"]
