@@ -776,7 +776,12 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
     // dashboard can render a banner without an extra request.
     let alert: any = null;
     try {
-      const a = await storage.getActiveSystemAlert("credit_exhaustion");
+      // Surface either an LLM credit alert OR a residential-proxy credit alert.
+      // The banner renders provider + message, so it already distinguishes an
+      // out-of-credit proxy ("evomi_proxy") from an out-of-credit LLM provider.
+      const a =
+        (await storage.getActiveSystemAlert("credit_exhaustion")) ||
+        (await storage.getActiveSystemAlert("proxy_credit_exhaustion"));
       if (a) alert = { kind: a.kind, provider: a.provider, message: a.message, since: a.created_at };
     } catch { /* non-fatal */ }
 
@@ -814,7 +819,15 @@ apiRouter.get("/system/alerts", async (_req: Request, res: Response) => {
 apiRouter.post("/system/alerts/resume", async (req: Request, res: Response) => {
   try {
     const { kind } = req.body || {};
-    await storage.clearSystemAlert(kind || "credit_exhaustion");
+    if (kind) {
+      await storage.clearSystemAlert(kind);
+    } else {
+      // No kind specified: clear BOTH an LLM credit alert and a residential-proxy
+      // credit alert so the single dashboard Resume button works regardless of
+      // which service ran out of credit.
+      await storage.clearSystemAlert("credit_exhaustion");
+      await storage.clearSystemAlert("proxy_credit_exhaustion");
+    }
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

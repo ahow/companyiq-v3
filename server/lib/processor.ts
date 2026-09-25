@@ -10,6 +10,24 @@ import { promises as fsp } from "fs";
 import os from "os";
 import path from "path";
 import { capDocumentText } from "./doc-size-guard";
+import {
+  isCreditExhaustionError,
+  recordCreditExhaustion,
+  isProviderTripped,
+  shouldProbe,
+  resetProvider,
+  raiseCreditAlert,
+  clearCreditAlert,
+  isProxyCreditAlertActive,
+  EVOMI_PROXY_PROVIDER,
+  PROXY_CREDIT_ALERT_KIND,
+} from "./credit-breaker.js";
+
+// User-facing message shown on the dashboard banner when the residential proxy
+// runs out of credit. Kept as a constant so the raise + any future references
+// stay in sync.
+const EVOMI_PROXY_CREDIT_MESSAGE =
+  "Evomi residential proxy is out of credit (HTTP 402). Add credit in the Evomi dashboard, then resume.";
 
 /**
  * Thrown when a document URL fails for a reason that will NOT resolve on retry
@@ -839,6 +857,19 @@ async function launchChromiumWithRetry(executablePath: string): Promise<any> {
     // ERR_HTTP2_PROTOCOL_ERROR and yielding zero bytes. Over HTTP/1.1 the same
     // requests are served normally (verified: Adobe 10-K + AI Ethics PDFs).
     "--disable-http2",
+    // Disable the crash-reporter / crashpad handler. On the Railway worker the
+    // container hits its process/thread limit (RLIMIT_NPROC / pids cgroup cap)
+    // and Chromium's attempt to posix_spawn the separate crash_crashpad_handler
+    // fails with EAGAIN ("Resource temporarily unavailable" / errno 11), which it
+    // retries ~15×/launch and ultimately aborts the browser (zero successful
+    // fetches). We never consume crash dumps, so suppressing crashpad/breakpad
+    // removes those extra forks entirely and lets the browser launch under
+    // process pressure. (Belt-and-braces: three overlapping switches because the
+    // effective flag name has varied across Chromium builds.)
+    "--disable-crash-reporter",
+    "--no-crashpad",
+    "--disable-features=Crashpad",
+    "--disable-breakpad",
   ];
   // Inject residential proxy args if configured (env-gated, no-op when unset).
   const { args: proxyArgs } = getProxyBrowserConfig();
@@ -1166,6 +1197,13 @@ export async function fetchPdfDirectRetry(
   try {
     if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     const proxyAgent = getProxyAgent();
+    // If the residential proxy is out of credit (breaker tripped) and we are not
+    // due a cooldown probe, skip the proxy round-trip entirely — hammering a 402
+    // wastes time and burns nothing useful. One probe per cooldown still runs so
+    // a top-up is detected and the breaker can auto-reset.
+    if (proxyAgent && isProviderTripped(EVOMI_PROXY_PROVIDER) && !shouldProbe(EVOMI_PROXY_PROVIDER)) {
+      return null;
+    }
     const response = await axios.get(url, {
       responseType: "arraybuffer",
       maxRedirects: 5,
@@ -1184,6 +1222,22 @@ export async function fetchPdfDirectRetry(
     });
     const status: number = response?.status ?? 0;
     if (status < 200 || status >= 300) {
+      // Residential-proxy credit exhaustion. Evomi returns HTTP 402 once the
+      // account balance is spent. Record it against the DISTINCT proxy provider
+      // in the shared rolling-window breaker; when it trips (or the persisted
+      // alert has since been cleared while still failing), raise a dashboard
+      // alert naming the proxy so the operator tops up. The worker halts on this
+      // alert (proxy has no fallback) — see worker.ts.
+      if (proxyAgent && (status === 402 || isCreditExhaustionError({ status, response }))) {
+        const newlyTripped = recordCreditExhaustion(EVOMI_PROXY_PROVIDER);
+        if (newlyTripped || !(await isProxyCreditAlertActive())) {
+          void raiseCreditAlert(EVOMI_PROXY_PROVIDER, EVOMI_PROXY_CREDIT_MESSAGE, PROXY_CREDIT_ALERT_KIND);
+          console.error(
+            `[Processor] Evomi residential proxy OUT OF CREDIT (HTTP ${status}) — tripped proxy credit breaker; ` +
+            `worker will pause new work until credit is added and the alert is resumed.`,
+          );
+        }
+      }
       console.log(`[Processor] Strategy D${proxyAgent ? " (proxy)" : ""}: non-2xx (${status}) for ${url.slice(0, 80)}`);
       return null;
     }
@@ -1196,11 +1250,32 @@ export async function fetchPdfDirectRetry(
     }
     const text = await extractTextFromPdf(buf);
     if (text && text.length > 0) {
+      // A successful proxy fetch proves credit has been topped up — clear the
+      // breaker + dashboard alert so paused processing auto-resumes (mirrors how
+      // a successful AI call clears the AI credit alert in ai-providers.ts).
+      if (proxyAgent && isProviderTripped(EVOMI_PROXY_PROVIDER)) {
+        resetProvider(EVOMI_PROXY_PROVIDER);
+        void clearCreditAlert(EVOMI_PROXY_PROVIDER, PROXY_CREDIT_ALERT_KIND);
+        console.log("[Processor] Evomi proxy fetch succeeded — cleared proxy credit breaker + alert.");
+      }
       console.log(`[Processor] Strategy D: recovered ${text.length} chars from ${url.slice(0, 80)}`);
       return text;
     }
     return null;
   } catch (e: any) {
+    // A proxy that is out of credit can also surface as a thrown CONNECT tunnel
+    // error (rather than a clean 402 status). Detect that too so credit
+    // exhaustion is caught on both the response and the exception path.
+    if (getProxyAgent() && isCreditExhaustionError(e)) {
+      const newlyTripped = recordCreditExhaustion(EVOMI_PROXY_PROVIDER);
+      if (newlyTripped || !(await isProxyCreditAlertActive())) {
+        void raiseCreditAlert(EVOMI_PROXY_PROVIDER, EVOMI_PROXY_CREDIT_MESSAGE, PROXY_CREDIT_ALERT_KIND);
+        console.error(
+          `[Processor] Evomi residential proxy OUT OF CREDIT (proxy error) — tripped proxy credit breaker; ` +
+          `worker will pause new work until credit is added and the alert is resumed.`,
+        );
+      }
+    }
     console.log(`[Processor] Strategy D: error for ${url.slice(0, 80)}: ${String(e?.message ?? e).slice(0, 120)}`);
     return null;
   }

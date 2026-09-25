@@ -29,6 +29,19 @@ export const CREDIT_BREAKER_THRESHOLD = parseInt(process.env.CREDIT_BREAKER_THRE
 export const CREDIT_BREAKER_WINDOW_MS = parseInt(process.env.CREDIT_BREAKER_WINDOW_MS || "60000", 10);
 export const CREDIT_BREAKER_COOLDOWN_MS = parseInt(process.env.CREDIT_BREAKER_COOLDOWN_MS || "120000", 10);
 
+// Default alert kind (LLM/scoring provider credit exhaustion).
+export const CREDIT_ALERT_KIND = "credit_exhaustion";
+
+// ─── Residential proxy (Evomi) identity ──────────────────────────────────────
+// The residential proxy is tracked as a DISTINCT provider in the same rolling-
+// window breaker, and its alert uses a DISTINCT kind. This matters because
+// storage.setSystemAlert() de-duplicates on `kind` alone — sharing the LLM
+// `credit_exhaustion` kind would let a proxy alert clobber an active LLM alert
+// (and vice-versa). Using a separate kind keeps the two independent while still
+// reusing the exact same breaker + alert plumbing.
+export const EVOMI_PROXY_PROVIDER = "evomi_proxy";
+export const PROXY_CREDIT_ALERT_KIND = "proxy_credit_exhaustion";
+
 // ─── Error classification ────────────────────────────────────────────────────
 
 const CREDIT_MESSAGE_SIGNATURES = [
@@ -170,12 +183,16 @@ export function anyProviderTripped(): boolean {
 
 let lastPersistAttempt = 0;
 
-export async function raiseCreditAlert(provider: string, message: string): Promise<void> {
+export async function raiseCreditAlert(
+  provider: string,
+  message: string,
+  kind: string = CREDIT_ALERT_KIND,
+): Promise<void> {
   try {
     const storage = await import("../storage.js");
     if (typeof (storage as any).setSystemAlert === "function") {
       await (storage as any).setSystemAlert({
-        kind: "credit_exhaustion",
+        kind,
         provider,
         message,
         active: true,
@@ -186,11 +203,14 @@ export async function raiseCreditAlert(provider: string, message: string): Promi
   }
 }
 
-export async function clearCreditAlert(provider?: string): Promise<void> {
+export async function clearCreditAlert(
+  provider?: string,
+  kind: string = CREDIT_ALERT_KIND,
+): Promise<void> {
   try {
     const storage = await import("../storage.js");
     if (typeof (storage as any).clearSystemAlert === "function") {
-      await (storage as any).clearSystemAlert("credit_exhaustion", provider);
+      await (storage as any).clearSystemAlert(kind, provider);
     }
   } catch (e: any) {
     console.warn(`[CreditBreaker] Failed to clear credit alert: ${e?.message || e}`);
@@ -227,6 +247,36 @@ export async function isCreditAlertActive(): Promise<boolean> {
 /** Synchronous best-effort view for hot paths (uses last cached value). */
 export function isCreditAlertActiveCached(): boolean {
   return cachedAlertActive;
+}
+
+// Separate cache for the residential-proxy alert (distinct kind, distinct state).
+let cachedProxyAlertActive = false;
+let cachedProxyAlertAt = 0;
+
+/**
+ * Is the residential-proxy credit alert active? Read from the shared DB alert
+ * (kind = PROXY_CREDIT_ALERT_KIND), cached briefly like isCreditAlertActive().
+ * The proxy has NO fallback route, so the worker halts unconditionally while
+ * this is true (see worker.ts) — unlike the LLM breaker which only halts when
+ * every scoring provider is also down.
+ */
+export async function isProxyCreditAlertActive(): Promise<boolean> {
+  const now = Date.now();
+  if (now - cachedProxyAlertAt < ALERT_CACHE_MS) return cachedProxyAlertActive;
+  cachedProxyAlertAt = now;
+  try {
+    const storage = await import("../storage.js");
+    if (typeof (storage as any).getActiveSystemAlert === "function") {
+      const alert = await (storage as any).getActiveSystemAlert(PROXY_CREDIT_ALERT_KIND);
+      cachedProxyAlertActive = !!alert;
+    } else {
+      cachedProxyAlertActive = false;
+    }
+  } catch {
+    // Fail OPEN (don't halt) so a transient DB blip can't freeze the worker.
+    cachedProxyAlertActive = false;
+  }
+  return cachedProxyAlertActive;
 }
 
 export class CreditExhaustedError extends Error {
