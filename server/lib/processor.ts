@@ -765,25 +765,42 @@ const BROWSER_FETCH_TIMEOUT = parseInt(process.env.BROWSER_FETCH_TIMEOUT_MS || "
 // Chromium contexts concurrently exhausts the container's process/fork and
 // memory budget ("fork: Resource temporarily unavailable"), which previously
 // cascaded into an unhandled rejection that crashed the whole process.
-// Instruction 12: Reduced from 2 to 1 to prevent Chromium fork storms.
-// With 8 worker replicas, even 1 per worker = 8 concurrent browser processes cluster-wide.
+// Instruction 12: historically reduced from 2 to 1 to prevent Chromium fork
+// storms. The tini PID-1 fix (PR #35) reaps orphaned Chromium helpers, which
+// removed the leak that motivated the hard cap, so the gate below now safely
+// honours MAX_CONCURRENT_BROWSER values > 1. The DEFAULT is kept conservative
+// (1) — the production value is set via the env var, not hardcoded here.
+// The shared-browser model is safe for concurrent pages: each fetch opens its
+// own page (browser.newPage()) on the one shared Chromium instance, and
+// getSharedBrowser() serialises the launch itself behind sharedBrowserLaunching.
 const MAX_CONCURRENT_BROWSER = parseInt(process.env.MAX_CONCURRENT_BROWSER || "1", 10);
 let activeBrowserFetches = 0;
 const browserWaiters: Array<() => void> = [];
 
+// Counting semaphore with direct slot hand-off. When releasing, if a waiter is
+// queued we resolve it WITHOUT decrementing the count (the slot is transferred),
+// and the resolved waiter does NOT re-increment. This avoids the over-subscription
+// race of the previous decrement-then-waiter-reincrements design, where a fresh
+// acquire could observe the transient (count-1) window and push activeBrowserFetches
+// above MAX_CONCURRENT_BROWSER — important now that MAX may be > 1.
 async function acquireBrowserSlot(): Promise<void> {
   if (activeBrowserFetches < MAX_CONCURRENT_BROWSER) {
     activeBrowserFetches++;
     return;
   }
+  // At capacity — wait until releaseBrowserSlot() hands a slot directly to us.
   await new Promise<void>((resolve) => browserWaiters.push(resolve));
-  activeBrowserFetches++;
+  // Slot count was retained on our behalf by the releaser; do not increment.
 }
 
 function releaseBrowserSlot(): void {
-  activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
   const next = browserWaiters.shift();
-  if (next) next();
+  if (next) {
+    // Hand our slot straight to the next waiter without touching the count.
+    next();
+    return;
+  }
+  activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
 }
 
 // A single shared Chromium instance is reused across fetches (one new *page* per
@@ -1281,6 +1298,87 @@ export async function fetchPdfDirectRetry(
   }
 }
 
+// CHANGE 4 — Firecrawl LAST-RESORT fallback. When the direct-HTTP path, the
+// residential proxy, and the local headless browser have all failed on a
+// Cloudflare fingerprint block / JS challenge / non-2xx, Firecrawl's managed
+// browser fleet can still return the rendered content (verified against the
+// CF-blocked www.3i.com pages and the alphaspread.com JS-challenge page that a
+// bare local browser cannot solve). Gated behind FIRECRAWL_BASE_URL +
+// FIRECRAWL_API_KEY — skips SILENTLY (returns null) when either is unset, so it
+// is a no-op in environments without Firecrawl configured. Bounded by
+// FIRECRAWL_TIMEOUT_MS (default 30s). Never throws: returns markdown text or
+// null. Fully generic — works for any URL/company.
+const FIRECRAWL_TIMEOUT_MS = parseInt(process.env.FIRECRAWL_TIMEOUT_MS || "30000", 10);
+
+export async function fetchViaFirecrawl(url: string): Promise<string | null> {
+  const base = (process.env.FIRECRAWL_BASE_URL || "").replace(/\/+$/, "");
+  const key = process.env.FIRECRAWL_API_KEY || "";
+  if (!base || !key) return null; // not configured — skip silently
+
+  // axios timeout is the socket/response ceiling; add a small margin over the
+  // Firecrawl-side scrape timeout so we prefer Firecrawl's own error over ours.
+  const httpTimeout = FIRECRAWL_TIMEOUT_MS + 5000;
+  try {
+    const response = await axios.post(
+      `${base}/v1/scrape`,
+      { url, formats: ["markdown"], timeout: FIRECRAWL_TIMEOUT_MS },
+      {
+        timeout: httpTimeout,
+        validateStatus: () => true, // never throw on non-2xx; inspect below
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+    const httpStatus: number = response?.status ?? 0;
+    const j: any = response?.data;
+    const httpOk = httpStatus >= 200 && httpStatus < 300;
+    const scrapeStatus = j?.data?.metadata?.statusCode;
+    const scrapeStatusOk =
+      scrapeStatus == null || (scrapeStatus >= 200 && scrapeStatus < 300);
+    const markdown: unknown = j?.data?.markdown;
+    if (
+      httpOk &&
+      j?.success === true &&
+      scrapeStatusOk &&
+      typeof markdown === "string" &&
+      markdown.trim().length > 50
+    ) {
+      console.log(
+        `[Processor] Strategy Firecrawl: recovered ${markdown.length} chars from ${url.slice(0, 80)}`,
+      );
+      return markdown;
+    }
+    console.log(
+      `[Processor] Strategy Firecrawl: no usable content for ${url.slice(0, 80)} ` +
+      `(http=${httpStatus} success=${j?.success} scrapeStatus=${scrapeStatus ?? "-"})`,
+    );
+    return null;
+  } catch (e: any) {
+    console.log(
+      `[Processor] Strategy Firecrawl: error for ${url.slice(0, 80)}: ${String(e?.message ?? e).slice(0, 120)}`,
+    );
+    return null;
+  }
+}
+
+// CHANGE 4 helper — run Firecrawl as the FINAL recovery step and, on success,
+// cap + cache the recovered text exactly like the normal fetch paths so callers
+// treat it identically. Returns the recovered text, or "" when Firecrawl is
+// unconfigured / yields nothing. Never throws (fetchViaFirecrawl swallows its
+// own errors). Wired only at genuine "all cheaper paths failed" points below.
+async function firecrawlRecover(url: string): Promise<string> {
+  const fc = await fetchViaFirecrawl(url);
+  if (fc && fc.trim().length > 50) {
+    const capped = capDocumentText(fc, url, "Processor");
+    setCachedContent(url, capped);
+    console.log(`[Processor] Strategy Firecrawl (last-resort): using ${capped.length} chars for ${url.slice(0, 80)}`);
+    return capped;
+  }
+  return "";
+}
+
 // Fix 2b/E (pre-browser strategy) — DEPRECATED / DO NOT WIRE INTO THE PIPELINE.
 // Google retired the webcache feature in early 2024: webcache.googleusercontent.com
 // now returns a generic "Google Search" stub page for EVERY url (verified against
@@ -1523,7 +1621,19 @@ export async function fetchIssuerPdfsWithPrimedSession(
   const note = (o: PdfRecoveryOutcome) => { if (outcomes) outcomes.push(o); };
   if (!origin || urls.length === 0) return recovered;
 
-  const overallBudgetMs = opts?.overallBudgetMs ?? parseInt(process.env.PDF_RECOVERY_BUDGET_MS || "180000", 10); // 3 min
+  // CHANGE 3 — scale the per-origin recovery budget by the number of pending
+  // URLs so a large issuer (e.g. 3i with ~74 documents) is not starved by a
+  // single flat budget sized for a small origin. The flat PDF_RECOVERY_BUDGET_MS
+  // remains the FLOOR; the budget grows to PDF_RECOVERY_PER_URL_BUDGET_MS × the
+  // URL count, capped by PDF_RECOVERY_MAX_BUDGET_MS so a huge origin can never
+  // let recovery run away. An explicit opts.overallBudgetMs (callers/tests)
+  // still wins over the env-derived value.
+  const baseBudgetMs = parseInt(process.env.PDF_RECOVERY_BUDGET_MS || "180000", 10); // 3 min floor
+  const perUrlBudgetMs = parseInt(process.env.PDF_RECOVERY_PER_URL_BUDGET_MS || "15000", 10); // 15s / URL
+  const maxBudgetMs = parseInt(process.env.PDF_RECOVERY_MAX_BUDGET_MS || "600000", 10); // 10 min hard cap
+  const overallBudgetMs =
+    opts?.overallBudgetMs ??
+    Math.min(maxBudgetMs, Math.max(baseBudgetMs, perUrlBudgetMs * urls.length));
   const perPdfTimeoutMs = opts?.perPdfTimeoutMs ?? BROWSER_FETCH_TIMEOUT;
   const deadline = Date.now() + overallBudgetMs;
 
@@ -1811,7 +1921,21 @@ export async function processDocument(
         if (sc === 401) {
           throw new PermanentFetchError(`401 paywall: ${url}`, 401);
         }
-        console.log(`[Processor] Direct PDF fetch failed for ${url} (${pdfHttpError.message}) — trying WAF-aware browser-PDF fetch`);
+        console.log(`[Processor] Direct PDF fetch failed for ${url} (${pdfHttpError.message}) — trying Strategy D (direct-retry) then WAF-aware browser-PDF fetch`);
+        // CHANGE 1: attempt the cheap direct-PDF retry (Strategy D) BEFORE the
+        // ~45s browser-PDF path. Some WAFs only fingerprint Chromium's CDP fetch,
+        // not a plain HTTP client presenting browser-like headers, so this
+        // recovers PDFs that answer a direct GET with 200 (e.g. the 3i TCFD PDF)
+        // WITHOUT consuming a budget-limited browser slot. delayMs:0 — we already
+        // made one direct attempt above, so skip the anti-hammer sleep here.
+        try {
+          const directText = await fetchPdfDirectRetry(url, originOf(url) || "", { delayMs: 0 });
+          if (directText && directText.trim().length > 50) {
+            const capped = capDocumentText(directText, url, "Processor");
+            setCachedContent(url, capped);
+            return capped;
+          }
+        } catch { /* Strategy D never throws; fall through to browser-PDF */ }
         try {
           let viaBrowser = await fetchPdfViaBrowser(url);
           if (viaBrowser) {
@@ -1918,9 +2042,18 @@ export async function processDocument(
           // browser-PDF path; only mark permanent if THAT also fails. This is the
           // fix for high-value IR PDFs (e.g. Adobe AI Ethics, 10-K) that were
           // previously discarded, artificially deflating well-governed firms.
-          console.log(`[Processor] HTTP 403 on direct file ${url} — trying WAF-aware browser-PDF fetch`);
+          console.log(`[Processor] HTTP 403 on direct file ${url} — trying Strategy D (direct-retry) then WAF-aware browser-PDF fetch`);
+          // CHANGE 1: cheap direct-PDF retry (Strategy D) before the browser-PDF
+          // path here too. Returns null for non-PDF file types, so it is a no-op
+          // for xlsx/docx/csv/zip and only recovers genuine PDFs.
           try {
-            content = await fetchPdfViaBrowser(url);
+            const directText = await fetchPdfDirectRetry(url, originOf(url) || "", { delayMs: 0 });
+            if (directText && directText.trim().length > 50) {
+              content = directText;
+            }
+          } catch { /* Strategy D never throws; fall through to browser-PDF */ }
+          try {
+            if (!content) content = await fetchPdfViaBrowser(url);
           } catch (browserErr: any) {
             // Browser couldn't RUN — TRANSIENT; keep retryable.
             if (browserErr instanceof BrowserUnavailableError) throw browserErr;
@@ -1942,6 +2075,14 @@ export async function processDocument(
       setCachedContent(url, content);
     }
 
+    // CHANGE 4 — last-resort Firecrawl. If every cheaper path (direct HTTP,
+    // proxy, cookie warm-up, local browser) produced no usable content but did
+    // NOT throw (e.g. an unsolved JS/CF challenge that returned an empty string),
+    // try Firecrawl before returning empty. No-op when Firecrawl is unconfigured.
+    if (!content) {
+      content = await firecrawlRecover(url);
+    }
+
     return content;
   } catch (error: any) {
     // Propagate terminal failures unchanged so the pipeline can mark the URL
@@ -1961,6 +2102,13 @@ export async function processDocument(
     // retryable fetch FAILURE rather than swallowing it (return "" would look like
     // a successful empty fetch). The per-document failure cap still retires it.
     if (error instanceof TransientFetchError) {
+      // CHANGE 4 — before leaving this URL retryable (which costs another whole
+      // pass through the budget-limited browser/recovery queue), try Firecrawl.
+      // Transient PDF/CF failures here are exactly the CF-block / JS-challenge
+      // cases Firecrawl can pass. On success we return content like a normal
+      // fetch; otherwise we re-throw and keep the URL retryable as before.
+      const fcTransient = await firecrawlRecover(url);
+      if (fcTransient) return fcTransient;
       console.log(`[Processor] Transient fetch failure for ${url} — leaving retryable`);
       throw error;
     }
@@ -1987,6 +2135,15 @@ export async function processDocument(
       }
     } else {
       console.log(`[Processor] Skipping final browser fallback for ${url} (${isPaywall ? '401 paywall' : '403 CDN block'})`);
+    }
+    // CHANGE 4 — final last-resort Firecrawl. The local browser fallback above
+    // has now also failed (or was skipped for a CDN block). Firecrawl is the last
+    // strategy in the chain; it can pass CF blocks / JS challenges the local
+    // browser cannot. Skip for a 401 paywall (Firecrawl has no credentials
+    // either). No-op when Firecrawl is unconfigured.
+    if (!isPaywall) {
+      const fcFinal = await firecrawlRecover(url);
+      if (fcFinal) return fcFinal;
     }
     return "";
   }

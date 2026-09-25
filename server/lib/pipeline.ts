@@ -1500,9 +1500,12 @@ async function runFetchPhase(opts: {
       try {
         const { fetchIssuerPdfsWithPrimedSession } = await import("./processor.js") as any;
         if (typeof fetchIssuerPdfsWithPrimedSession === 'function') {
-          // Cap total recovery attempts across origins at 15 (highest-priority
-          // DB-sourced URLs come first per the ordering above).
-          let attemptBudget = 15;
+          // CHANGE 3 — cap total recovery attempts across origins. This was a
+          // hard-coded 15, which starved large issuers (e.g. 3i needed ~18 and
+          // lost its tail). It is now env-configurable via
+          // PDF_RECOVERY_ATTEMPT_BUDGET and defaults higher (40). Highest-priority
+          // DB-sourced URLs still come first per the ordering above.
+          let attemptBudget = parseInt(process.env.PDF_RECOVERY_ATTEMPT_BUDGET || "40", 10);
           for (const [origin, urls] of candidatesByOrigin) {
             if (attemptBudget <= 0) break;
             const slice = urls.slice(0, attemptBudget);
@@ -1607,6 +1610,70 @@ async function runFetchPhase(opts: {
         }
       }
     }
+  }
+
+  // ─── CHANGE 5 — Deferred retry sweep ───────────────────────────────────────
+  // The main fetch phase and the session-primed recovery phase both mark URLs
+  // dead with a budget reason ("budget_exceeded" / "budget_exhausted") when a
+  // per-run budget is exhausted BEFORE the URL was ever genuinely attempted. By
+  // this point those budgets are freed (recovery has finished). Re-attempt those
+  // budget-starved URLs ONCE more, with low concurrency and a hard wall-clock
+  // cap, so a large issuer's tail (e.g. 3i's ~74 docs) is not permanently lost
+  // to a transient budget cap. Fully bounded: at most DEFERRED_RETRY_MAX_DOCS
+  // documents, DEFERRED_RETRY_BUDGET_MS wall-clock, DEFERRED_RETRY_CONCURRENCY in
+  // flight — and it retries ONLY budget-reason deaths (never real 401/403/404),
+  // so it can neither loop nor re-punish permanently-dead URLs. Successful
+  // recoveries flip to 'ok' (so they are not re-selected); failures leave the
+  // existing dead status/reason untouched.
+  try {
+    const DEFERRED_RETRY_MAX_DOCS = parseInt(process.env.DEFERRED_RETRY_MAX_DOCS || "40", 10);
+    const DEFERRED_RETRY_BUDGET_MS = parseInt(process.env.DEFERRED_RETRY_BUDGET_MS || "120000", 10);
+    const DEFERRED_RETRY_CONCURRENCY = Math.max(1, parseInt(process.env.DEFERRED_RETRY_CONCURRENCY || "2", 10));
+    if (DEFERRED_RETRY_MAX_DOCS > 0 && DEFERRED_RETRY_BUDGET_MS > 0) {
+      const allDocs = await storage.getAcceptedDocuments(companyId);
+      const budgetReason = /budget_exhausted|budget_exceeded/i;
+      const deferredCandidates = allDocs
+        .filter(d => d.fetchStatus === "dead" && budgetReason.test(String((d as any).failureReason || "")))
+        .slice(0, DEFERRED_RETRY_MAX_DOCS);
+      if (deferredCandidates.length > 0) {
+        console.log(`[${companyName}] CHANGE 5: deferred retry sweep — re-attempting ${deferredCandidates.length} budget-starved doc(s) (cap ${DEFERRED_RETRY_MAX_DOCS}, ${Math.round(DEFERRED_RETRY_BUDGET_MS / 1000)}s, conc ${DEFERRED_RETRY_CONCURRENCY})`);
+        const sweepDeadline = Date.now() + DEFERRED_RETRY_BUDGET_MS;
+        let deferredRecovered = 0;
+        let idx = 0;
+        const worker = async () => {
+          while (idx < deferredCandidates.length && Date.now() < sweepDeadline) {
+            const doc = deferredCandidates[idx++]; // synchronous: no double-processing
+            const remaining = sweepDeadline - Date.now();
+            if (remaining <= 0) break;
+            try {
+              const type = inferDocumentType(doc.url);
+              const content = await withTimeout(
+                processDocument(doc.url, type),
+                Math.min(PER_DOCUMENT_TIMEOUT_MS, remaining),
+                `[${companyName}] deferred-retry ${doc.url.slice(0, 80)}`
+              );
+              if (content && content.length > 50) {
+                await storage.recordFetchSuccess(companyId, doc.url, content);
+                deferredRecovered++;
+                console.log(`[${companyName}] CHANGE 5: deferred retry recovered ${content.length} chars from ${doc.url.slice(0, 80)}`);
+              }
+            } catch (retryErr: any) {
+              // Best-effort extra attempt — leave the existing dead status/reason
+              // untouched. Do not re-mark, escalate, or re-queue (no loop).
+              console.log(`[${companyName}] CHANGE 5: deferred retry failed for ${doc.url.slice(0, 80)}: ${String(retryErr?.message || retryErr).slice(0, 100)}`);
+            }
+          }
+        };
+        const workers = Array.from(
+          { length: Math.min(DEFERRED_RETRY_CONCURRENCY, deferredCandidates.length) },
+          () => worker()
+        );
+        await Promise.all(workers);
+        console.log(`[${companyName}] CHANGE 5: deferred retry sweep complete — recovered ${deferredRecovered}/${deferredCandidates.length}`);
+      }
+    }
+  } catch (sweepErr: any) {
+    console.warn(`[${companyName}] CHANGE 5: deferred retry sweep error: ${sweepErr?.message || sweepErr}`);
   }
 
   // ─── One-Hop PDF Harvest (P2a + Fix 3: headless DOM + latest-year bias) ────────
