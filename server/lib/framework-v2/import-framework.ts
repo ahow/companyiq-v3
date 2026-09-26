@@ -13,6 +13,7 @@
  *       -> { InsertFramework, Omit<InsertFrameworkMeasure,"frameworkId">[] }
  */
 import type { InsertFramework, InsertFrameworkMeasure } from "../../../shared/schema.js";
+import { promoteHardeningFields } from "./promote-hardening-fields.js";
 
 /** Schema marker + version stamped onto every export payload. */
 export const FRAMEWORK_EXPORT_MARKER = "companyiqFrameworkExport";
@@ -67,11 +68,15 @@ export function buildFrameworkExport(
   framework: Record<string, any>,
   measures: Record<string, any>[],
 ): FrameworkExportPayload {
-  const fw: Record<string, any> = {};
+  const fw0: Record<string, any> = {};
   for (const [k, v] of Object.entries(framework ?? {})) {
     if (FRAMEWORK_STRIP_FIELDS.has(k)) continue;
-    fw[k] = v;
+    fw0[k] = v;
   }
+  // Ensure the exported framework carries its hardening in top-level fields (not
+  // only buried in the intake artefact) so an import round-trip is faithful even
+  // for a source framework whose top-level columns were never populated.
+  const { framework: fw } = promoteHardeningFields(fw0);
   const ms = (Array.isArray(measures) ? measures : []).map((m) => {
     const mc: Record<string, any> = {};
     for (const [k, v] of Object.entries(m ?? {})) {
@@ -128,7 +133,11 @@ export function buildFrameworkInserts(
   const taken = new Set(existingNames);
   fwCopy.name = taken.has(baseName) ? `${baseName} (imported)` : baseName;
 
-  const framework = fwCopy as InsertFramework;
+  // Promote hardening fields from the incoming intake artefact into the top-level
+  // columns when the payload left them empty, so an imported framework is hardened
+  // for the scorer regardless of how the source payload was shaped. Non-destructive.
+  const { framework: fwPromoted } = promoteHardeningFields(fwCopy);
+  const framework = fwPromoted as InsertFramework;
 
   const rawMeasures = Array.isArray(payload.measures) ? payload.measures : [];
   const measures = rawMeasures

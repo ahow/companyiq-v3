@@ -511,3 +511,62 @@ void main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Change #2 — Replayable Evidence Ledger tests (pure, DB-free)
+// ═══════════════════════════════════════════════════════════════════════════
+async function ledgerMain() {
+  const {
+    freezeLedgerCell, freezeRunLedger, serializeRunLedger, deserializeRunLedger,
+    replayLedgerCell, computeBundleHash, LedgerIntegrityError,
+  } = await import("./corpus-replay.js");
+
+  const raw = [
+    { passageId: "p2", documentId: 20, content: "Audit & Compliance Committee oversees the topic." },
+    { passageId: "p1", documentId: 10, content: "The board reviews strategy annually." },
+  ];
+  const cell = freezeLedgerCell(158, "board-oversight", [20, 10, 10], raw);
+  assert.deepEqual(cell.retrievedDocumentIds, [10, 20], "retrieved ids sorted+deduped");
+  assert.equal(cell.passages.length, 2, "two passages frozen");
+  assert.match(cell.bundleHash, /^[0-9a-f]{64}$/, "bundle hash is SHA-256");
+
+  // Order-insensitivity: reversed raw order yields identical bundle hash.
+  const cellRev = freezeLedgerCell(158, "board-oversight", [10, 20], [raw[1], raw[0]]);
+  assert.equal(cellRev.bundleHash, cell.bundleHash, "bundle hash is order-insensitive");
+
+  // Round-trip: freeze run -> serialize -> deserialize -> replay OK.
+  const ledger = freezeRunLedger("run-1", 42, [cell]);
+  assert.match(ledger.ledgerFingerprint, /^[0-9a-f]{64}$/, "run fingerprint is SHA-256");
+  const restored = deserializeRunLedger(serializeRunLedger(ledger));
+  assert.equal(restored.ledgerFingerprint, ledger.ledgerFingerprint, "fingerprint survives round-trip");
+
+  const ordered = replayLedgerCell(restored.cells[0], raw);
+  assert.deepEqual(ordered.map(p => p.passageId), ["p2", "p1"], "replay returns frozen order");
+
+  // Fail-loud: changed content -> LedgerIntegrityError.
+  assert.throws(
+    () => replayLedgerCell(cell, [raw[0], { ...raw[1], content: "TAMPERED" }]),
+    (e: any) => e instanceof LedgerIntegrityError && /content-hash divergence/.test(e.message),
+    "changed content must throw LedgerIntegrityError",
+  );
+  // Fail-loud: missing passage (wrong count) -> throws.
+  assert.throws(
+    () => replayLedgerCell(cell, [raw[0]]),
+    (e: any) => e instanceof LedgerIntegrityError && /count mismatch/.test(e.message),
+    "missing passage must throw LedgerIntegrityError",
+  );
+  // Fail-loud: renamed passage id (count matches, id absent) -> throws.
+  assert.throws(
+    () => replayLedgerCell(cell, [raw[0], { ...raw[1], passageId: "pX" }]),
+    (e: any) => e instanceof LedgerIntegrityError,
+    "renamed passage must throw LedgerIntegrityError",
+  );
+
+  assert.equal(computeBundleHash([]).length, 64, "empty bundle still hashes");
+  console.log("evidence-ledger tests: PASS (freeze, order-insensitive, round-trip, replay, fail-loud x3)");
+}
+
+void ledgerMain().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

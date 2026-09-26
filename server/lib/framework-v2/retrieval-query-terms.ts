@@ -34,6 +34,14 @@ export const REFERENCE_FILING_CORPUS: string[] = [
   "This annual report contains forward-looking statements that involve risks and uncertainties. Actual results may differ materially from those expressed or implied. The company undertakes no obligation to update these statements except as required by law.",
   "The directors present their report together with the audited financial statements for the year ended. The results for the year and the financial position of the company and the group are set out in the accompanying statements and related notes.",
   "Shareholders are invited to attend the annual general meeting. The notice of meeting sets out the resolutions to be proposed. The board recommends that shareholders vote in favour of each of the resolutions as they intend to do in respect of their own holdings.",
+  // SEC EDGAR cover-page / check-box scaffolding — the structural machinery of a
+  // filing, present in filings on every topic. Included so the DF gate treats
+  // cover-page boilerplate ("all boxes", "check mark", "emerging growth company")
+  // as filing-generic rather than as a topic discriminator.
+  "Indicate by check mark whether the registrant is a well-known seasoned issuer. Indicate by check mark whether the registrant is an emerging growth company or a shell company. Check the appropriate box. If all boxes apply, check all boxes that are applicable to the registrant as defined in the rules.",
+  "Securities registered pursuant to the applicable section of the Act. Indicate by check mark whether the registrant company has filed all reports required to be filed, and whether it has submitted electronically every interactive data file required. Documents incorporated herein by reference are listed as exhibits, as amended.",
+  // EX-FILING-FEE exhibit fee-table language — again structural, topic-neutral.
+  "Calculation of filing fee tables. The filing fee is computed in the table below. Fee paid previously with preliminary materials. Amount of filing fee previously paid by the company and total offering amount are set out in the computed table exhibit. Fees offset against amounts paid previously.",
 ];
 
 // Generic business / stop words that are never useful corpus discriminators.

@@ -10,6 +10,8 @@
  * questions.
  */
 
+import { promoteHardeningFields } from "./promote-hardening-fields.js";
+
 export interface FullExportInput {
   framework: any;
   measures: any[];
@@ -88,7 +90,11 @@ function aggregateExamples(measures: any[], ...keys: string[]): string[] {
 // ── main export ────────────────────────────────────────────────────────────
 
 export function exportFrameworkAsFullDetail(input: FullExportInput): string {
-  const fw = input.framework || {};
+  // Promote hardening fields from the intake artefact so the export reflects the
+  // configuration the scorer would actually resolve — a framework whose top-level
+  // antiInferenceRules / negativeKeywords are null but whose intake artefact has
+  // them should export the promoted values, not "(not set)". Non-destructive copy.
+  const { framework: fw } = promoteHardeningFields(input.framework || {});
   const measures = asArray<any>(input.measures);
 
   const name = pick(fw, "name", "title") || "Untitled Framework";

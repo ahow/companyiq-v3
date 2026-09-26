@@ -1721,6 +1721,39 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       retrievalQueryTerms = [];
     }
 
+    // ─── B2: topic-agnostic boilerplate hygiene on topicSynonyms ──────────────
+    // Strip filing/report boilerplate + generic filler from the synonym list at
+    // BUILD time (generic across all topics), protecting the framework's own
+    // lexicon (topicTerm + surviving synonyms). Non-fatal: any failure leaves the
+    // synonyms unchanged so creation proceeds exactly as before.
+    let sanitizedTopicSynonyms: string[] | null = fwDraft.topicSynonyms || null;
+    try {
+      const { sanitizeTopicTerms } = await import("../lib/framework-v2/boilerplate-hygiene.js");
+      const inputSyn = fwDraft.topicSynonyms || [];
+      if (inputSyn.length > 0) {
+        // Protect the framework's CANONICAL lexicon only (topic term + adjacent-topic
+        // names) — NOT the candidate list itself, or boilerplate that slipped into
+        // the synonyms would protect itself and never be dropped.
+        const adjacentNames = Array.isArray(fwDraft.adjacentTopics)
+          ? fwDraft.adjacentTopics.map((a: any) => (typeof a === "string" ? a : a?.name)).filter(Boolean)
+          : [];
+        const protectTokens = [fwDraft.topicTerm, ...adjacentNames].filter(
+          (t): t is string => typeof t === "string" && t.trim().length > 0,
+        );
+        const { kept, dropped } = sanitizeTopicTerms(inputSyn, { topicTokens: protectTokens });
+        sanitizedTopicSynonyms = kept.length > 0 ? kept : null;
+        if (dropped.length > 0) {
+          console.log(
+            `[v2/save] topicSynonyms boilerplate hygiene dropped ${dropped.length} term(s): ` +
+              dropped.map((d) => `${d.term} (${d.reason})`).join(", "),
+          );
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[v2/save] topicSynonyms boilerplate hygiene failed (non-fatal): ${e?.message ?? e}`);
+      sanitizedTopicSynonyms = fwDraft.topicSynonyms || null;
+    }
+
     // Create framework row
     const created = await storage.createFramework({
       workspaceId: ctx.workspaceId,
@@ -1731,8 +1764,14 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       // v2 fields
       builderVersion: "v2",
       topicTerm: fwDraft.topicTerm,
-      topicSynonyms: fwDraft.topicSynonyms || null,
+      topicSynonyms: sanitizedTopicSynonyms,
       retrievalQueryTerms,
+      // Hardening fields the scorer reads — promoted at build time so a freshly
+      // BUILT framework is hardened, not only ones imported later. buildFrameworkDraft
+      // already resolves these from the draft/intake; persist them explicitly here
+      // (createFramework also promotes defensively from the intake artefact).
+      negativeKeywords: fwDraft.negativeKeywords || null,
+      antiInferenceRules: fwDraft.antiInferenceRules || null,
       adjacentTopics: (fwDraft.adjacentTopics as any) || null,
       anchorFrameworks: (fwDraft.anchorFrameworks as any) || null,
       sensitivityPreference: fwDraft.sensitivityPreference || "balanced",

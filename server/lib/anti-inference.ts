@@ -104,11 +104,26 @@ export const MEASURE_FAMILY_RULES: MeasureFamilyRule[] = [
   {
     pattern: /(?:^|[\-\_\s])(training|reskilling|upskilling|literacy|education)/i,
     description: "Workforce training / literacy measures",
+    // NOTE: the example clause is templated on the framework's own topicTerm at
+    // composition time (see composeAntiInferenceRules) so this family rule stays
+    // topic-agnostic. The literal below is only the fallback used when no
+    // topicTerm is available; {TOPIC} is substituted per framework.
     rules: [
-      "Training / reskilling / literacy measures require an explicit programme (named or described), a defined scope (all employees, technical staff, community group), and an indication of scale (headcount, hours, budget, or 'company-wide'). A single-sentence mention that 'we invest in AI training' is insufficient without a named programme or scale indicator.",
+      "Training / reskilling / literacy measures require an explicit programme (named or described), a defined scope (all employees, technical staff, community group), and an indication of scale (headcount, hours, budget, or 'company-wide'). A single-sentence mention that 'we invest in {TOPIC} training' is insufficient without a named programme or scale indicator.",
     ],
   },
 ];
+
+/**
+ * Substitute the {TOPIC} placeholder in a family rule with the framework's own
+ * topic term (falling back to a neutral phrase). Keeps Layer 2 rules generic:
+ * the training-measure example reads "…invest in <this framework's topic>
+ * training…" rather than hardcoding any single topic. Pure/deterministic.
+ */
+function applyTopicPlaceholder(rule: string, topicTerm: string | null | undefined): string {
+  const topic = (typeof topicTerm === "string" && topicTerm.trim()) ? topicTerm.trim() : "the topic";
+  return rule.replace(/\{TOPIC\}/g, topic);
+}
 
 // ─── Composition ─────────────────────────────────────────────────────────────
 /**
@@ -118,24 +133,31 @@ export const MEASURE_FAMILY_RULES: MeasureFamilyRule[] = [
  * @param measureId - the measure's measureId (e.g. "4.1-ai-policy-published")
  * @param measureTitle - the measure's title (used as a secondary match target)
  * @param frameworkRules - Layer 3 rules from framework.antiInferenceRules
+ * @param topicTerm - the framework's own topic term, used to template any
+ *   {TOPIC} placeholder in Layer 2 family rules so they stay topic-agnostic
+ *   (optional; backward-compatible — omitting it yields "the topic").
  */
 export function composeAntiInferenceRules(
   measureId: string,
   measureTitle: string,
   frameworkRules: string[] | null | undefined,
+  topicTerm?: string | null,
 ): string {
   const rules: string[] = [];
 
   // Layer 1: universal
   for (const r of UNIVERSAL_ANTI_INFERENCE_RULES) rules.push(r);
 
-  // Layer 2: family — deduplicate by regex match against measureId + title
+  // Layer 2: family — deduplicate by regex match against measureId + title.
+  // Family rules may carry a {TOPIC} placeholder templated on the framework's
+  // own topic term so no single topic is hardcoded into the shared rule text.
   const combined = `${measureId} ${measureTitle}`.toLowerCase();
   const matchedFamilies: string[] = [];
   for (const fam of MEASURE_FAMILY_RULES) {
     if (fam.pattern.test(combined)) {
       matchedFamilies.push(fam.description);
-      for (const r of fam.rules) {
+      for (const r0 of fam.rules) {
+        const r = applyTopicPlaceholder(r0, topicTerm);
         if (!rules.includes(r)) rules.push(r);
       }
     }

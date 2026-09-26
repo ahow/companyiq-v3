@@ -4,6 +4,7 @@ import * as schema from "../shared/schema.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironment, isHeartbeatStalled, type DeploymentFingerprint, type RunKeyInput, type RunLifecycleState } from "./lib/reliability.js";
+import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 
 // ─── URL Hashing for Content Deduplication ─────────────────────────────────
 
@@ -402,7 +403,17 @@ export async function getFrameworkById(frameworkId: number, workspaceId: number)
 }
 
 export async function createFramework(data: schema.InsertFramework) {
-  const [framework] = await db.insert(schema.frameworks).values(data).returning();
+  // Belt-and-suspenders promotion of the hardening fields the scorer reads
+  // (antiInferenceRules / negativeKeywords) from the intake artefact into the
+  // top-level columns whenever the caller left them empty. Central choke point
+  // for every creation path (v2/save, v2/import, …) so a framework can never be
+  // persisted with a populated intake artefact but null top-level hardening.
+  // Non-destructive: never overwrites values the caller already set.
+  const { framework: promoted, changed, promoted: fields } = promoteHardeningFields(data as any);
+  if (changed) {
+    console.log(`[storage.createFramework] promoted hardening field(s) from intake: ${fields.join(", ")}`);
+  }
+  const [framework] = await db.insert(schema.frameworks).values(promoted as schema.InsertFramework).returning();
   return framework;
 }
 
@@ -2510,7 +2521,19 @@ export async function getCompanyByIsin(isin: string, workspaceId: number) {
 
 // ─── Framework Editor Operations ───────────────────────────────────────────
 export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; requiredDocTypes: string[]; dataPatterns: string[]; isShared: boolean; legacyQueryTemplates: string[]; multiDocumentQueryTemplates: string[]; authoritativeRegistries: string[]; authoritativeFilingTypes: any[]; scoringExamples: string[]; antiInferenceRules: string[]; documentPriorityUrlPatterns: string[] }>) {
-  await db.update(schema.frameworks).set(updates as any).where(eq(schema.frameworks.id, frameworkId));
+  // Defensive promotion: when an update carries a fresh intake artefact but no
+  // explicit top-level hardening fields, promote them from the intake so an
+  // update path can't silently null-out the scorer's hardening. No-op for the
+  // common case (updates without an intakeArtefact). Non-destructive.
+  let toSet: any = updates;
+  if ((updates as any)?.intakeArtefact) {
+    const { framework: promoted, changed, promoted: fields } = promoteHardeningFields(updates as any);
+    if (changed) {
+      console.log(`[storage.updateFramework] promoted hardening field(s) from intake: ${fields.join(", ")}`);
+      toSet = promoted;
+    }
+  }
+  await db.update(schema.frameworks).set(toSet as any).where(eq(schema.frameworks.id, frameworkId));
 }
 
 export async function deleteMeasure(frameworkId: number, measureId: string) {

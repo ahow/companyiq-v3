@@ -1,0 +1,16 @@
+{
+  "$schema": "See ./README.md for the gold-set format.",
+  "description": "Adjudicated gold cells for the generic scoring regression harness. Each row is a human-signed-off (company, measure, expected verdict) control. Re-scored against its FROZEN evidence bundle via the Change #2 replay ledger and compared to expectedVerdict to catch scoring drift. TOPIC-AGNOSTIC: the harness hardcodes nothing about any framework; the single seeded row below is DATA, not logic.",
+  "cells": [
+    {
+      "companyId": 158,
+      "companyName": "3i Group plc",
+      "measureId": "board-oversight",
+      "measureTitle": "Board-level oversight of the topic",
+      "expectedVerdict": "Yes",
+      "note": "Documented false-negative control. The board Audit & Compliance Committee evidence IS present in 3i's corpus but the cell was scored No. Expected verdict is Yes. This is the ONLY seeded example row.",
+      "signedOffBy": "reviewer (documented control)",
+      "signedOffAt": "2026-09-26"
+    }
+  ]
+}
