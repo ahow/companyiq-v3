@@ -19,6 +19,7 @@
 
 import type { MeasureResult } from "../analyzer.js";
 import { DEGREE_WORDS } from "./rules.js";
+import { isFilingBoilerplateTerm } from "./boilerplate-hygiene.js";
 
 // ─── Module constants ────────────────────────────────────────────────────
 
@@ -619,10 +620,41 @@ export function detectTerminologyGaps(
   }
 
   // Filter: must appear in ≥2 companies, rank by company coverage
-  const candidates = Array.from(termCounts.entries())
+  let ranked = Array.from(termCounts.entries())
     .filter(([, companies]) => companies.size >= 2)
-    .sort((a, b) => b[1].size - a[1].size)
-    .slice(0, 10); // top 10 candidates
+    .sort((a, b) => b[1].size - a[1].size);
+
+  // ── Filing-boilerplate hygiene (topic-agnostic) ──────────────────────────
+  // The stopword-led/trailed filter above catches function-word pollution, but
+  // CONTENT-word filing boilerplate (SEC cover-page / fee-table / exhibit
+  // language such as "filing fee", "all boxes", "computed table", "paid
+  // previously") passes it and would otherwise become a topicSynonym. Drop those
+  // here — generically, protecting the framework's own lexicon (topicTerm +
+  // existing topicSynonyms) so a genuine topic term is never removed. Logged, not
+  // a violation.
+  try {
+    const protectTokens = new Set<string>();
+    for (const t of [topicTerm, ...topicSynonyms]) {
+      for (const tok of String(t || "").toLowerCase().split(/\s+/).filter(Boolean)) protectTokens.add(tok);
+    }
+    const droppedBoiler: string[] = [];
+    ranked = ranked.filter(([term]) => {
+      if (isFilingBoilerplateTerm(term, { topicTokens: protectTokens })) {
+        if (droppedBoiler.length < 50) droppedBoiler.push(term);
+        return false;
+      }
+      return true;
+    });
+    if (droppedBoiler.length > 0) {
+      console.log(
+        `[test-drive] filing-boilerplate filter dropped ${droppedBoiler.length} content-word candidate phrase(s) (filing/report scaffolding, not topic vocabulary). Sample: ${droppedBoiler.slice(0, 20).join(", ")}`,
+      );
+    }
+  } catch (e: any) {
+    console.warn(`[test-drive] filing-boilerplate filter unavailable (non-fatal): ${e?.message ?? e}`);
+  }
+
+  const candidates = ranked.slice(0, 10); // top 10 candidates
 
   return {
     missingTerms: candidates.map(([term, companies]) => ({

@@ -480,7 +480,7 @@ CONFIDENCE LEVELS:
 - Low: Document corpus may be incomplete or in a language not fully analyzed
 
 CRITICAL ANTI-INFERENCE RULES:
-${composeAntiInferenceRules(measure.measureId, measure.title || "", (framework as any)?.antiInferenceRules)}
+${composeAntiInferenceRules(measure.measureId, measure.title || "", (framework as any)?.antiInferenceRules, (framework as any)?.topicTerm)}
 
 ${CSRD_TABLE_NOTATION_NOTE}
 
@@ -638,7 +638,7 @@ CONFIDENCE LEVELS:
 - Low: Document corpus may be incomplete or in a language not fully analyzed
 
 CRITICAL ANTI-INFERENCE RULES:
-${composeAntiInferenceRules(measure.measureId, measure.title || "", (framework as any)?.antiInferenceRules)}
+${composeAntiInferenceRules(measure.measureId, measure.title || "", (framework as any)?.antiInferenceRules, (framework as any)?.topicTerm)}
 
 ${CSRD_TABLE_NOTATION_NOTE}
 
