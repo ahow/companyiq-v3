@@ -19,6 +19,8 @@ import { corpusSourceTypes } from "./discovery.js";
 import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./corpus-hygiene.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
+import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scoring-contract.js";
+import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from "./eligibility-flags.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
 import { extractGuidanceObject, stripStructuredGuidanceBlock } from "./framework-guidance-audit.js";
@@ -128,6 +130,17 @@ export interface MeasureResult {
   rationaleScoreInconsistent?: boolean;
   inconsistencyReason?: string | null;
   needsReadjudication?: boolean;
+  // Change #4 (single scoring contract): explicit, NAMED record of any
+  // confidence-downgrade that converted a proposed positive verdict to Partial.
+  // Surfaced in cell output so the conversion is reported, never silent. When a
+  // rationale meets the Yes bar and no named rule fired, `applied` is false and
+  // the verdict stands as Yes. See scoring-contract.ts.
+  downgradeDecision?: DowngradeDecision | null;
+  // Change #3 (advisory eligibility flags): the five non-blocking, dismissible
+  // evidence-integrity flags computed for a positive cell. ADVISORY ONLY — these
+  // never change the verdict/score and never block a run or save. See
+  // eligibility-flags.ts.
+  eligibilityFlags?: EligibilityFlag[] | null;
 }
 
 export interface AnalysisResult {
@@ -2417,13 +2430,21 @@ export async function analyzeCompanyMeasures(opts: {
               downgradeSuppressed: true,
             };
           } else if (settings.lowConfidenceHandling === "downgrade") {
-            // Downgrade to Partial (0.5) — preserves the evidence but reduces the score
-            if (measureResult.score === 1) {
+            // Downgrade to Partial (0.5) — preserves the evidence but reduces the score.
+            // Change #4: the conversion is now recorded as an EXPLICIT, NAMED decision
+            // (rule id, proposed verdict, final verdict, reason) on the cell output so
+            // it is reported rather than silently rewritten. The verdict is only
+            // changed when the named rule actually fires; a Yes that clears the bar and
+            // is not Low-confidence stands as Yes (no unnamed downgrade path).
+            const proposed = measureResult.verdict;
+            const decision = describeDowngrade(proposed, measureResult.confidence, "downgrade", measureResult.score);
+            if (decision.applied && measureResult.score === 1) {
               measureResult.score = 0.5;
               measureResult.verdict = "Partial";
               measureResult.verdictNuance = (measureResult.verdictNuance || "") +
-                " [Auto-downgraded: Low confidence positive reduced to Partial]";
+                ` [${decision.ruleId}: ${proposed}→Partial — ${decision.reason}]`;
             }
+            measureResult.downgradeDecision = decision;
           } else if (settings.lowConfidenceHandling === "flag") {
             // Flag for review — keep score but mark in nuance
             measureResult.verdictNuance = (measureResult.verdictNuance || "") +
@@ -2661,12 +2682,40 @@ export async function analyzeCompanyMeasures(opts: {
     // Fix B gate. Kept as a closure over the outer analyzeCompanyMeasures
     // scope so we don't have to thread the company row through every return.
     function runProvenanceGate(mr: MeasureResult): MeasureResult {
-      if (!isScoringTimeGateEnabled()) return mr;
-      const outcome = applyProvenanceGate(mr, company ?? null);
-      if (outcome.action === "downgraded") {
-        console.log(`[${companyName}] U17-FIX-B DOWNGRADE ${mr.measureId}: ${mr.verdict} → No (all ${outcome.decisions.length} quotes third-party)`);
+      let result = mr;
+      if (isScoringTimeGateEnabled()) {
+        const outcome = applyProvenanceGate(mr, company ?? null);
+        if (outcome.action === "downgraded") {
+          console.log(`[${companyName}] U17-FIX-B DOWNGRADE ${mr.measureId}: ${mr.verdict} → No (all ${outcome.decisions.length} quotes third-party)`);
+        }
+        result = outcome.result;
       }
-      return outcome.result;
+      // Change #3: compute the advisory eligibility flags on the FINAL verdict
+      // (after any provenance-gate downgrade), for positive cells only. ADVISORY
+      // ONLY — this attaches non-blocking, dismissible flags and NEVER changes the
+      // verdict/score or blocks the run/save. computeEligibilityFlags never throws.
+      try {
+        if (isPositiveVerdict(result.verdict)) {
+          const { flags, triggeredCount } = computeEligibilityFlags({
+            verdict: result.verdict,
+            quotes: result.quotes || [],
+            evidenceSummary: result.evidenceSummary,
+            company: {
+              name: company?.name || companyName,
+              ticker: company?.ticker ?? null,
+              domain: company?.domain ?? null,
+              relatedDomains: company?.relatedDomains ?? null,
+            },
+          });
+          result.eligibilityFlags = flags;
+          if (triggeredCount > 0) {
+            console.log(`[${companyName}] eligibility-flags ${result.measureId}: ${triggeredCount} advisory flag(s) — ${flags.filter((f) => f.triggered).map((f) => f.id).join(", ")} (non-blocking)`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[${companyName}] eligibility-flags ${result.measureId}: computation skipped (${(err as Error)?.message ?? "error"}) — advisory only, not blocking`);
+      }
+      return result;
     }
 
     // Process measures in concurrent batches
