@@ -268,12 +268,35 @@ function tryParseDraftObject(candidate: string): any | null {
   return null;
 }
 
-function parseDraftJson(response: string): { ok: true; draft: any } | { ok: false; error: string; recovered?: boolean; raw?: string } {
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\{[\s\S]*\}/);
-  const candidate = jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : response;
-  try {
-    return { ok: true, draft: JSON.parse(candidate) };
-  } catch (e: any) {
+export function parseDraftJson(response: string): { ok: true; draft: any } | { ok: false; error: string; recovered?: boolean; raw?: string } {
+  // Extract the JSON payload. A ```json code fence can legitimately appear INSIDE a
+  // string field value (models sometimes embed an evidence-format example in fields
+  // like whatConstitutesEvidence). A NON-GREEDY fence match (```json ...*?... ```)
+  // stops at that FIRST embedded ``` and truncates the JSON before later fields
+  // (e.g. evidenceKeywords), so a well-formed, fully-populated repair response gets
+  // silently discarded and the measure keeps its original (empty) value. Prefer a
+  // GREEDY fence match (to the LAST ```), then a greedy generic fence, then the
+  // greedy brace span, then the raw response — returning the first candidate that
+  // JSON.parses cleanly.
+  const candidates: string[] = [];
+  const pushIf = (s: string | undefined | null) => { if (s && !candidates.includes(s)) candidates.push(s); };
+  pushIf(response.match(/```json\s*([\s\S]*)```/)?.[1]);
+  pushIf(response.match(/```\s*([\s\S]*)```/)?.[1]);
+  pushIf(response.match(/\{[\s\S]*\}/)?.[0]);
+  pushIf(response);
+  // The most-complete candidate (greedy fence when present) is used for the
+  // defense-in-depth recovery paths below if every direct parse fails.
+  const candidate = candidates[0] ?? response;
+  let lastErr: any;
+  for (const c of candidates) {
+    try {
+      return { ok: true, draft: JSON.parse(c) };
+    } catch (e: any) {
+      lastErr = e;
+    }
+  }
+  {
+    const e: any = lastErr;
     // Defense-in-depth: recover double-escaped / stringified JSON returned by
     // fallback providers before treating this as an unrecoverable parse failure.
     const recoveredObj = tryParseDraftObject(candidate);
@@ -1092,6 +1115,20 @@ async function repairMeasuresTargeted(
         ? parsed.draft
         : [];
     rec.measuresReturned = correctedBatch.length;
+    rec.rawResponseChars = resp.text.length;
+    // [fb2-diag] Per-measure evidenceKeywords the LLM actually returned. The parser
+    // previously truncated any response that embedded a ```json example fence inside
+    // a string field (non-greedy fence match), silently dropping the populated
+    // evidenceKeywords and leaving the measure's warning unresolved. Recording the
+    // returned counts here makes such a regression visible in the DB telemetry so it
+    // can be caught without another live investigation. Diagnostic-only; never
+    // affects control flow.
+    try {
+      rec.returnedEvidenceKeywordCounts = correctedBatch.map((m: any) => ({
+        measureId: m?.measureId ?? null,
+        evidenceKeywordCount: Array.isArray(m?.evidenceKeywords) ? m.evidenceKeywords.length : 0,
+      }));
+    } catch { /* diagnostic only — never break the repair */ }
     rec.outcome = correctedBatch.length > 0 ? "parsed" : "no-measures-returned";
     return { corrected: correctedBatch as any[], rec };
   };
