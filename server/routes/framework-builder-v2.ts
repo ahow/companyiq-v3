@@ -859,6 +859,13 @@ async function repairMeasuresTargeted(
   targetSeverities: Array<"error" | "warning"> = ["error"],
 ): Promise<{ patched: any | null; telem: any }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
+  // FIX (b): the deterministic checks (evidence-keyword-distinctiveness, C4, C11)
+  // rejected every rewrite across BOTH refine passes because the repair prompt did
+  // not carry what those checks actually require. We import the SAME tokeniser and
+  // filler stoplist the validator uses so the guidance we inject is aligned with
+  // the check byte-for-byte (topic-neutral — no per-topic hardcoding).
+  const { tokenize } = await import("../lib/passage-retrieval.js");
+  const { GENERIC_FILLER_TOKENS } = await import("../lib/framework-v2/evidence-keyword-distinctiveness.js");
 
   // [fb2-telemetry] Per-pass diagnostic record. Instrumentation ONLY — it never
   // changes the repair control flow, thresholds, or what is returned to the
@@ -908,6 +915,90 @@ async function repairMeasuresTargeted(
   }
   if (targetMeasures.length === 0) { telem.outcome = "no-target-measures"; return { patched: null, telem }; }
 
+  // ── FIX (b): build the guidance context the deterministic checks require ─────
+  // The 0-resolved result was NOT a "patches not applied" failure — refine ran
+  // both passes and merged rewritten measures (repairAttempts=2). The rewrites
+  // simply kept FAILING the same checks because the prompt never told the model
+  // what those checks measure. We compute that context ONCE per pass, from the
+  // whole draft + intake, exactly as the validator does, and inject a rule-keyed
+  // clause per batch. Everything here is topic-neutral (derived from the intake
+  // lexicon), never hardcoded to any topic.
+  const allMeasures: any[] = [];
+  for (const c of cats) {
+    const ms = Array.isArray(c?.measures) ? c.measures : [];
+    for (const m of ms) if (m) allMeasures.push(m);
+  }
+  // (1) Topic-lexicon tokens the distinctiveness check strips (intake topicTerm +
+  // synonyms), tokenised the SAME way as passage-retrieval.tokenize.
+  const topicLexiconTokens = new Set<string>();
+  for (const s of [intake.topicTerm, intake.topic, ...(intake.topicSynonyms || [])]) {
+    if (s) for (const t of tokenize(String(s))) topicLexiconTokens.add(t);
+  }
+  // (2) Cross-measure shared tokens: a token present in ≥ sharedThreshold measures
+  // is "generic". Mirror analyzeEvidenceKeywordDistinctiveness: threshold =
+  // max(2, ceil(0.5 * measureCount)).
+  const measureCount = allMeasures.length;
+  const sharedThreshold = Math.max(2, Math.ceil(0.5 * measureCount));
+  const docFreq = new Map<string, number>();
+  for (const m of allMeasures) {
+    const toks = new Set<string>();
+    for (const kw of (m.evidenceKeywords || [])) for (const t of tokenize(String(kw))) toks.add(t);
+    for (const t of toks) docFreq.set(t, (docFreq.get(t) || 0) + 1);
+  }
+  const sharedTokens = new Set<string>();
+  for (const [t, n] of docFreq) if (n >= sharedThreshold) sharedTokens.add(t);
+  // The union that the check treats as NON-distinctive. New evidenceKeywords must
+  // contribute ≥5 single-token terms OUTSIDE this set.
+  const nonDistinctiveTokens = new Set<string>([
+    ...topicLexiconTokens,
+    ...GENERIC_FILLER_TOKENS,
+    ...sharedTokens,
+  ]);
+  // Cap the printed list so the prompt stays compact but representative.
+  const nonDistinctivePreview = Array.from(nonDistinctiveTokens).slice(0, 120);
+
+  // Rule-keyed repair guidance. Only the clauses for rules ACTUALLY present in a
+  // batch are appended, keeping each prompt focused on its real failures.
+  const guidanceForRules = (rules: Set<string>): string => {
+    const clauses: string[] = [];
+    if (rules.has("evidence-keyword-distinctiveness")) {
+      clauses.push(
+        `EVIDENCE-KEYWORD-DISTINCTIVENESS (retrieval): the validator tokenises each measure's ` +
+        `evidenceKeywords and DISCARDS any token that is a topic-lexicon word, a generic filler word, ` +
+        `or shared across ≥${sharedThreshold} measures. Each flagged measure must end up with AT LEAST 5 ` +
+        `remaining DISTINCTIVE single-token terms. To comply, ADD concrete, measure-specific evidenceKeywords ` +
+        `— named mechanisms, instruments, methods, standards, artefact names, or quantified-metric words that ` +
+        `are unique to THIS measure. A term counts only if its lowercased word tokens are NONE of the ` +
+        `following NON-DISTINCTIVE tokens (these are stripped, so do not rely on them):\n` +
+        `[${nonDistinctivePreview.join(", ")}]\n` +
+        `Prefer single words or short two-word phrases whose head token is outside that list. Keep the ` +
+        `existing keywords; just add enough distinctive ones to clear 5.`,
+      );
+    }
+    if (rules.has("C4")) {
+      clauses.push(
+        `C4 (fallback structure): fallback_yes_criterion MUST contain AT LEAST 3 TOP-LEVEL numbered ` +
+        `conditions, each ≥10 characters and each independently checkable from a verbatim quote. Accepted ` +
+        `formats are numbered ONLY: "(1) ... (2) ... (3) ...", or "1. ... 2. ... 3. ...", or "1) ... 2) ... 3) ...". ` +
+        `IMPORTANT: lettered sub-items "(a)(b)(c)" are treated as sub-items WITHIN a single condition and do ` +
+        `NOT count toward the 3 — do NOT collapse the criterion into one "N of (a),(b),(c)" sentence. Provide ` +
+        `three or more genuinely separate numbered conditions.`,
+      );
+    }
+    if (rules.has("C11")) {
+      clauses.push(C11_REPAIR_CLAUSE);
+    }
+    if (rules.has("C4") && rules.has("C11")) {
+      clauses.push(
+        `RECONCILING C4 + C11: satisfy BOTH — write ≥3 numbered top-level conditions (C4) AND make each ` +
+        `condition decidable from a quote with no degree word as its deciding test (C11). If a single ` +
+        `condition needs an N-of-M artefact test, keep it INSIDE one numbered condition using (a)(b)(c) ` +
+        `sub-items, and still provide at least two other numbered conditions.`,
+      );
+    }
+    return clauses.join("\n\n");
+  };
+
   // FIX (c): Split the offending measures into batches of
   // CHUNK_MEASURES_PER_CALL and repair them IN PARALLEL. A single giant call
   // carrying every offending measure can exceed Claude's non-streaming output
@@ -934,22 +1025,33 @@ async function repairMeasuresTargeted(
       llmElapsedMs: null as number | null,
       outcome: "unknown",
     };
+    // Collect the rules that actually appear in THIS batch, so we inject only the
+    // guidance clauses that match its real failures (FIX (b)).
+    const batchRules = new Set<string>();
     const violationBlock = batchMeasures
       .map((m: any) => {
         const vs = byMeasure.get(m.measureId) || [];
         const lines = vs
-          .map((v: any) => `  - [${v.rule}][${v.severity}] ${v.message}${v.suggestion ? ` — SUGGESTION: ${v.suggestion}` : ""}`)
+          .map((v: any) => {
+            if (v.rule) batchRules.add(v.rule);
+            return `  - [${v.rule}][${v.severity}] ${v.message}${v.suggestion ? ` — SUGGESTION: ${v.suggestion}` : ""}`;
+          })
           .join("\n");
         return `${m.measureId}:\n${lines}`;
       })
       .join("\n\n");
+    // Rule-keyed, check-aligned guidance for the rules present in this batch. This
+    // is the fix for 0-resolved re-drafts: previously only a generic C11 clause was
+    // sent, so C4 and evidence-keyword-distinctiveness rewrites had no way to know
+    // what the deterministic checks require.
+    const repairGuidance = guidanceForRules(batchRules);
 
     const userPrompt =
       `Intake artefact (JSON, for context — topic term, synonyms, adjacent topics):\n${JSON.stringify(intake, null, 2)}\n\n` +
       `The following measures FAILED validation. Each is given in full, followed by the exact violations to fix:\n\n` +
       `Measures to repair (JSON array):\n${JSON.stringify(batchMeasures, null, 2)}\n\n` +
       `Violations, grouped by measureId:\n${violationBlock}\n\n` +
-      `${C11_REPAIR_CLAUSE}\n\n` +
+      `HOW TO SATISFY EACH FAILED CHECK (follow exactly — these checks are deterministic):\n${repairGuidance}\n\n` +
       `Rewrite ONLY the fields that trigger these violations; leave every other field of each measure unchanged. ` +
       `Do NOT invent new measures and do NOT drop any. Preserve every measureId EXACTLY. ` +
       `Return a JSON object of the form {"measures": [ ...corrected measure objects... ]} containing ONLY the ` +
@@ -1377,14 +1479,24 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
           return;
         }
 
+        // [fb2-telemetry] Per-pass diagnostic sidecar for the refine path. The
+        // executeDraft (initial-draft) path already persists telemetry; the refine
+        // path did NOT, which is exactly why the 0-resolved re-draft could not be
+        // root-caused from the DB alone. We now capture each pass's repair telem
+        // plus the before/after violation counts and persist them to
+        // framework_v2_jobs.telemetry. Instrumentation only — it never alters
+        // control flow.
+        const refineTelemetryPasses: any[] = [];
         let repairAttempts = 0;
         while (repairAttempts < MAX_REPAIRS && hasActionable(currentValidation)) {
           repairAttempts++;
+          const beforeErr = countErr(currentValidation);
+          const beforeWarn = countWarn(currentValidation);
           // ISSUE 2: user-initiated refine targets BOTH errors AND warnings that
           // carry a measureId (per-measure repairable). This is the explicit
           // "address the warnings" request — distinct from the errors-only
           // auto-repair during initial drafting.
-          const { patched } = await repairMeasuresTargeted(
+          const { patched, telem } = await repairMeasuresTargeted(
             intake,
             currentDraft,
             currentValidation.violations,
@@ -1392,12 +1504,30 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
             ["error", "warning"],
           );
           if (!patched) {
+            refineTelemetryPasses.push({
+              pass: repairAttempts,
+              beforeErrorCount: beforeErr,
+              beforeWarningCount: beforeWarn,
+              afterErrorCount: beforeErr,
+              afterWarningCount: beforeWarn,
+              patched: false,
+              repair: telem,
+            });
             console.warn(`[framework-builder v2 /draft/refine] repair attempt ${repairAttempts} produced no usable draft; keeping prior draft.`);
             break;
           }
           currentDraft = patched;
           currentFwDraft = buildFrameworkDraft(currentDraft, intake);
           currentValidation = revalidate(currentFwDraft);
+          refineTelemetryPasses.push({
+            pass: repairAttempts,
+            beforeErrorCount: beforeErr,
+            beforeWarningCount: beforeWarn,
+            afterErrorCount: countErr(currentValidation),
+            afterWarningCount: countWarn(currentValidation),
+            patched: true,
+            repair: telem,
+          });
         }
 
         if (repairAttempts === 0) {
@@ -1472,9 +1602,24 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
           repairAttempts,
           designDiagnostic: buildDraftDesignDiagnostic(currentDraft, intake),
         };
+        // [fb2-telemetry] Persist the per-pass refine telemetry so a 0/partial-
+        // resolved re-draft is diagnosable directly from framework_v2_jobs.telemetry
+        // (parseOk, measuresReplaced, per-pass before/after counts, outcome).
+        const refineTelemetry = {
+          kind: "refine",
+          maxRepairs: MAX_REPAIRS,
+          repairAttempts,
+          initialErrorCount,
+          initialWarningCount,
+          finalErrorCount,
+          finalWarningCount: finalWarnings.length,
+          errorsResolved,
+          warningsResolved,
+          passes: refineTelemetryPasses,
+        };
         await db.execute(sql`
           UPDATE framework_v2_jobs
-          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, updated_at = NOW()
+          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, telemetry = ${JSON.stringify(refineTelemetry)}::jsonb, updated_at = NOW()
           WHERE id = ${jobId}
         `);
       } catch (err: any) {
