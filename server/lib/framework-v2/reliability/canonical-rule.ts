@@ -154,8 +154,11 @@ export function decomposeYesBar(yesBar: string): Decomposition {
 
 // ─── buildCanonicalRule ───────────────────────────────────────────────────────
 
-/** Stable content hash of a measure's decision-relevant fields. */
-function measureContentHash(measure: any): string {
+/** Stable content hash of a measure's decision-relevant fields. Exported so the
+ *  per-decision traceability layer (decision-trace.ts) can compose an immutable
+ *  framework-content hash from the SAME per-measure hash used inside the rule,
+ *  keeping the two in lockstep. */
+export function measureContentHash(measure: any): string {
   const decisionFields = {
     measureId: measure?.measureId ?? measure?.measure_id ?? "",
     substantiveDefinition: measure?.substantiveDefinition ?? measure?.substantive_definition ?? "",

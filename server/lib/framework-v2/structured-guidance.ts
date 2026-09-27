@@ -37,6 +37,19 @@ export const STRUCTURED_GUIDANCE_FIELDS_SPEC = `The four PER-MEASURE structured 
 - "anchors" (object): EXACTLY ONE canonical "yes" worked example (say why it qualifies) and EXACTLY ONE canonical "no" worked example (say why it superficially looks relevant but fails). NEVER author a "partial" anchor.
 - "yesRequiresQuote" (string): one sentence stating that a Yes is permissible only when a verbatim quote from the evidence contains the qualifyingInstance above.`;
 
+// WS-A: passage-level co-location + semantic/non-English equivalence. Topic-agnostic
+// clause reused by the INTAKE/DRAFT authoring block AND the REFINE regenerators, so
+// every (re)built/hardened framework durably carries these semantics — not just a
+// runtime prompt patch. Relaxes multi-element Yes-bars from "all tokens in ONE
+// verbatim span, exact lexical match" (a false-negative source when facts are
+// dispersed across sentences or expressed as synonyms / another language) to
+// passage-level co-location with per-element verbatim anchors and semantic matching.
+// Nothing here is framework/measure/topic-specific.
+export const PASSAGE_LEVEL_EQUIVALENCE_CLAUSE = `PASSAGE-LEVEL CO-LOCATION AND SEMANTIC EQUIVALENCE (applies to EVERY multi-element Yes-bar — any bar that requires N≥2 named elements/tokens/artefacts):
+- CO-LOCATION IS PASSAGE-LEVEL, NOT SPAN-LEVEL. The required elements do NOT all have to appear inside one single verbatim sentence or quote. They are satisfied when each element is concretely evidenced within ONE BOUNDED DISCLOSURE PASSAGE — a contiguous window of a few sentences (guideline: up to ~5 sentences, a single paragraph, a table row, or one bullet group) that share the SAME disclosure context (the same programme, policy, initiative, system, or reporting section). Do NOT accept elements gathered from "anywhere in the document": evidence pulled from an unrelated section or a different disclosure context does NOT co-locate and does NOT satisfy the bar.
+- EACH ELEMENT STILL NEEDS ITS OWN VERBATIM ANCHOR. Every required element must be individually and concretely evidenced by a verbatim quote span drawn from that same passage, and a Yes still names the specific, on-topic qualifying instance. Passage-level co-location relaxes WHERE the elements may sit relative to one another; it never relaxes WHETHER each element is verbatim-evidenced, specific, and on-topic.
+- SEMANTIC AND NON-ENGLISH EQUIVALENCE. Match each element on MEANING, not exact lexical tokens. A vocabulary variant, synonym, paraphrase, or non-English equivalent that substantively denotes a required element SATISFIES that element (judged against this measure's substantive definition and the framework's topic term/synonyms). A specific, named qualifying instance must NOT be rejected merely because it uses different wording, a synonym, or another language than the token literally listed in the rule.`;
+
 // The canonical fenced-JSON example the authoring prompts show the LLM. Kept as a
 // string constant so create + intake render an identical example. (Escaped so it
 // can be embedded inside a template literal in the consuming prompt strings.)
@@ -58,7 +71,9 @@ export const STRUCTURED_GUIDANCE_AUTHORING_BLOCK = `RUBRIC-TIGHTENING STRUCTURED
 
 ${STRUCTURED_GUIDANCE_JSON_EXAMPLE}
 
-"anchors" has EXACTLY ONE "yes" and ONE "no" — NEVER a Partial anchor. All four fields are mandatory and measure-specific. The prose scoringGuidance (with the canonical quote-context sentence) comes first; this JSON block is appended last. The scorer parses this block generically; it is stored inside scoring_guidance.`;
+"anchors" has EXACTLY ONE "yes" and ONE "no" — NEVER a Partial anchor. All four fields are mandatory and measure-specific. The prose scoringGuidance (with the canonical quote-context sentence) comes first; this JSON block is appended last. The scorer parses this block generically; it is stored inside scoring_guidance.
+
+${PASSAGE_LEVEL_EQUIVALENCE_CLAUSE}`;
 
 // Instruction fragment for the REFINE regenerators (which return a JSON `updates`
 // array rather than appending prose). Tells the LLM to ALSO return a
@@ -66,7 +81,9 @@ ${STRUCTURED_GUIDANCE_JSON_EXAMPLE}
 // deciding criteria. Uses the shared field spec so the definition never diverges.
 export const STRUCTURED_GUIDANCE_REGEN_INSTRUCTION = `In ADDITION to rewriting the definition, author a fresh per-measure "scoring_guidance" object re-derived from THIS measure's REWRITTEN deciding criteria.
 
-${STRUCTURED_GUIDANCE_FIELDS_SPEC}`;
+${STRUCTURED_GUIDANCE_FIELDS_SPEC}
+
+${PASSAGE_LEVEL_EQUIVALENCE_CLAUSE}`;
 
 // The `scoring_guidance` schema fragment to embed in a regenerator's JSON schema.
 export const STRUCTURED_GUIDANCE_SCHEMA_FRAGMENT =

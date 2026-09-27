@@ -1224,6 +1224,10 @@ function buildFullMeasureScores(allMeasures: any[], scores: any[]): any[] {
         rationaleScoreInconsistent: s.rationaleScoreInconsistent === true,
         inconsistencyReason: s.inconsistencyReason ?? undefined,
         needsReadjudication: s.needsReadjudication === true,
+        // WS-B (P1): surface the per-decision traceability record into the persisted
+        // snapshot so it flows through to the results view and CSV export. Additive;
+        // never overwrites existing fields.
+        decisionTrace: s.decisionTrace ?? undefined,
       };
     }
     // Back-filled: measure was not scored for this company (no data) — include it

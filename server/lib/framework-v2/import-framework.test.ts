@@ -13,6 +13,8 @@ import {
   buildFrameworkExport,
   buildFrameworkInserts,
   isFrameworkExportPayload,
+  assertMeasureSetPreserved,
+  PreserveMeasuresViolation,
   FRAMEWORK_EXPORT_MARKER,
   FRAMEWORK_EXPORT_VERSION,
 } from "./import-framework.js";
@@ -181,4 +183,89 @@ test("isFrameworkExportPayload rejects unrecognizable bodies", () => {
   assert.equal(isFrameworkExportPayload({ measures: [] }), false); // no framework
   assert.equal(isFrameworkExportPayload({ framework: [], measures: [] }), false); // framework not object
   assert.equal(isFrameworkExportPayload("nope"), false);
+});
+
+// ── WS-C: keep-same-measures verbatim preservation ─────────────────────────────
+
+test("keep-same-measures: titles, order and count are byte-identical after import", () => {
+  const payload = buildFrameworkExport(framework, measures);
+  const preserved = buildFrameworkInserts(payload, 1, [], { preserveMeasures: true });
+
+  // Count identical.
+  assert.equal(preserved.measures.length, measures.length);
+  // Titles + order byte-identical (compared against the SOURCE order verbatim).
+  const srcTitles = measures.map((m) => m.title);
+  const outTitles = preserved.measures.map((m: any) => m.title);
+  assert.deepEqual(outTitles, srcTitles, "titles preserved in exact source order");
+});
+
+test("keep-same-measures: ADDITIVE criteria hardening survives while the set is preserved", () => {
+  // Harden a criterion field on the payload BEFORE import (additive: no title/order/count change).
+  const payload = buildFrameworkExport(framework, measures);
+  payload.measures[0].scoringGuidance =
+    (payload.measures[0].scoringGuidance || "") +
+    " Additionally require a named board committee AND a dated mandate in one bounded passage.";
+  payload.measures[0].fallbackYesCriterion = "A dated board mandate referencing AI risk.";
+
+  const preserved = buildFrameworkInserts(payload, 1, [], { preserveMeasures: true });
+
+  // Set is preserved …
+  assert.deepEqual(
+    preserved.measures.map((m: any) => m.title),
+    measures.map((m) => m.title),
+  );
+  assert.equal(preserved.measures.length, measures.length);
+  // … and the additive hardening is carried through verbatim.
+  assert.match((preserved.measures[0] as any).scoringGuidance, /bounded passage/);
+  assert.equal((preserved.measures[0] as any).fallbackYesCriterion, "A dated board mandate referencing AI risk.");
+});
+
+test("keep-same-measures: preserves the EXACT payload order even when displayOrder disagrees", () => {
+  // Payload order is [2.1, 1.1] but displayOrder values are [99, 1]. Non-preserve mode
+  // would re-sort by displayOrder; preserve mode must keep the payload order verbatim.
+  const payload = {
+    framework: { name: "x" },
+    measures: [
+      { measureId: "2.1", title: "Second", displayOrder: 99 },
+      { measureId: "1.1", title: "First", displayOrder: 1 },
+    ],
+  };
+  const preserved = buildFrameworkInserts(payload as any, 1, [], { preserveMeasures: true });
+  assert.deepEqual(preserved.measures.map((m: any) => m.title), ["Second", "First"]);
+  // displayOrder is re-stamped to the preserved sequence.
+  assert.deepEqual(preserved.measures.map((m: any) => m.displayOrder), [0, 1]);
+
+  // Without preserveMeasures the legacy behaviour re-sorts by displayOrder.
+  const resorted = buildFrameworkInserts(payload as any, 1, []);
+  assert.deepEqual(resorted.measures.map((m: any) => m.title), ["First", "Second"]);
+});
+
+test("assertMeasureSetPreserved throws PreserveMeasuresViolation when count changes", () => {
+  assert.throws(
+    () => assertMeasureSetPreserved([{ title: "a" }, { title: "b" }], [{ title: "a" }]),
+    (err: any) => err instanceof PreserveMeasuresViolation && /count changed/.test(err.message),
+  );
+});
+
+test("assertMeasureSetPreserved throws PreserveMeasuresViolation when a title is reworded", () => {
+  assert.throws(
+    () => assertMeasureSetPreserved([{ title: "Board-level AI oversight" }], [{ title: "Board oversight of AI" }]),
+    (err: any) => err instanceof PreserveMeasuresViolation && /title at position 0 changed/.test(err.message),
+  );
+});
+
+test("assertMeasureSetPreserved throws PreserveMeasuresViolation when order changes", () => {
+  assert.throws(
+    () => assertMeasureSetPreserved([{ title: "a" }, { title: "b" }], [{ title: "b" }, { title: "a" }]),
+    (err: any) => err instanceof PreserveMeasuresViolation,
+  );
+});
+
+test("assertMeasureSetPreserved passes for an identical set (criteria differences ignored)", () => {
+  assert.doesNotThrow(() =>
+    assertMeasureSetPreserved(
+      [{ title: "a", scoringGuidance: "old" }, { title: "b" }],
+      [{ title: "a", scoringGuidance: "hardened" }, { title: "b" }],
+    ),
+  );
 });

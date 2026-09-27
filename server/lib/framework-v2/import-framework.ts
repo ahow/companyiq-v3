@@ -131,6 +131,70 @@ export interface FrameworkInserts {
   measures: Omit<InsertFrameworkMeasure, "frameworkId">[];
 }
 
+/** Options controlling how an import materialises measures. */
+export interface BuildFrameworkInsertsOptions {
+  /**
+   * WS-C: when true, the imported measure SET is retained VERBATIM — identical
+   * titles, identical order, identical count. Measures are copied in the exact
+   * order they appear in the payload (no re-sort), and an assertion guard verifies
+   * the result is byte-identical to the source on those three axes. ADDITIVE
+   * criteria hardening (adding/strengthening scoring criteria fields) is still
+   * permitted — the guard checks ONLY titles/order/count, never criteria content —
+   * but no measure may be regenerated, reworded, reordered, split, merged, or
+   * dropped. Topic-agnostic: nothing here depends on any specific framework/measure.
+   */
+  preserveMeasures?: boolean;
+}
+
+/**
+ * WS-C fail-loud guard. Thrown when a keep-same-measures import would alter the
+ * measure SET (title text, ordering, or count). This protects data integrity; it
+ * is NOT a user-facing save block on the builder.
+ */
+export class PreserveMeasuresViolation extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PreserveMeasuresViolation";
+  }
+}
+
+/** Normalise a measure title to the exact string used for byte-identical compare. */
+function measureTitleOf(m: any): string {
+  return typeof m?.title === "string" ? m.title : m?.title == null ? "" : String(m.title);
+}
+
+/**
+ * WS-C: assert the resulting measure set is byte-identical to the source on the
+ * three protected axes — count, per-position title text, and order. Criteria
+ * fields are intentionally NOT compared (additive hardening is allowed). Throws
+ * PreserveMeasuresViolation on any divergence. Pure; topic-agnostic.
+ */
+export function assertMeasureSetPreserved(
+  sourceMeasures: any[],
+  resultMeasures: any[],
+): void {
+  const src = Array.isArray(sourceMeasures) ? sourceMeasures : [];
+  const out = Array.isArray(resultMeasures) ? resultMeasures : [];
+
+  if (src.length !== out.length) {
+    throw new PreserveMeasuresViolation(
+      `keep-same-measures: measure count changed (source ${src.length} → result ${out.length}). ` +
+        `Measures must not be added, dropped, split, or merged.`,
+    );
+  }
+
+  for (let i = 0; i < src.length; i++) {
+    const a = measureTitleOf(src[i]);
+    const b = measureTitleOf(out[i]);
+    if (a !== b) {
+      throw new PreserveMeasuresViolation(
+        `keep-same-measures: measure title at position ${i} changed (source ${JSON.stringify(a)} → ` +
+          `result ${JSON.stringify(b)}). Titles and order must be preserved byte-for-byte.`,
+      );
+    }
+  }
+}
+
 /**
  * Pure transform: export payload -> DB insert shapes for a NEW framework in the
  * current workspace. Deterministic and LLM-free.
@@ -148,6 +212,7 @@ export function buildFrameworkInserts(
   payload: FrameworkExportPayload,
   workspaceId: number,
   existingNames: string[] = [],
+  options: BuildFrameworkInsertsOptions = {},
 ): FrameworkInserts {
   const rawFw = payload.framework ?? {};
   const fwCopy: Record<string, any> = {};
@@ -173,20 +238,42 @@ export function buildFrameworkInserts(
   const framework = fwPromoted as InsertFramework;
 
   const rawMeasures = Array.isArray(payload.measures) ? payload.measures : [];
-  const measures = rawMeasures
-    .map((m, idx) => {
+
+  let measures: Omit<InsertFrameworkMeasure, "frameworkId">[];
+  if (options.preserveMeasures) {
+    // WS-C: keep the measure SET verbatim. Copy in the EXACT payload order (no
+    // re-sort), stamping a monotonic displayOrder so the preserved sequence is
+    // persisted deterministically. Every field is copied faithfully — titles are
+    // never touched — so additive criteria hardening applied to the payload before
+    // import survives untouched.
+    measures = rawMeasures.map((m, idx) => {
       const mc: Record<string, any> = {};
       for (const [k, v] of Object.entries(m ?? {})) {
         if (MEASURE_STRIP_FIELDS.has(k)) continue;
         mc[k] = v;
       }
-      const order =
-        typeof mc.displayOrder === "number" ? mc.displayOrder : idx;
-      if (mc.displayOrder == null) mc.displayOrder = order;
-      return { order, idx, measure: mc };
-    })
-    .sort((a, b) => a.order - b.order || a.idx - b.idx)
-    .map((e) => e.measure as Omit<InsertFrameworkMeasure, "frameworkId">);
+      mc.displayOrder = idx;
+      return mc as Omit<InsertFrameworkMeasure, "frameworkId">;
+    });
+    // Fail-loud: the materialised set must be byte-identical to the source on
+    // count, per-position title, and order. Throws PreserveMeasuresViolation.
+    assertMeasureSetPreserved(rawMeasures, measures);
+  } else {
+    measures = rawMeasures
+      .map((m, idx) => {
+        const mc: Record<string, any> = {};
+        for (const [k, v] of Object.entries(m ?? {})) {
+          if (MEASURE_STRIP_FIELDS.has(k)) continue;
+          mc[k] = v;
+        }
+        const order =
+          typeof mc.displayOrder === "number" ? mc.displayOrder : idx;
+        if (mc.displayOrder == null) mc.displayOrder = order;
+        return { order, idx, measure: mc };
+      })
+      .sort((a, b) => a.order - b.order || a.idx - b.idx)
+      .map((e) => e.measure as Omit<InsertFrameworkMeasure, "frameworkId">);
+  }
 
   return { framework, measures };
 }

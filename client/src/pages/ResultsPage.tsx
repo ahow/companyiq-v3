@@ -113,6 +113,17 @@ export default function ResultsPage() {
       measureHeaders.push(`${title} - Source Document`);
       measureHeaders.push(`${title} - Source Link`);
       measureHeaders.push(`${title} - Confidence`);
+      // WS-B (P1) per-decision traceability: additive columns appended AFTER the
+      // existing six so no existing column position/order changes. Sourced from the
+      // decisionTrace record persisted per measure score (topic-agnostic).
+      measureHeaders.push(`${title} - Rule ID`);
+      measureHeaders.push(`${title} - Rule Version`);
+      measureHeaders.push(`${title} - Rule Provenance`);
+      measureHeaders.push(`${title} - Rule Source Field`);
+      measureHeaders.push(`${title} - Framework Hash`);
+      measureHeaders.push(`${title} - Fallback Reason`);
+      measureHeaders.push(`${title} - Validation Status`);
+      measureHeaders.push(`${title} - Trace Diagnostics`);
     }
     const headers = [...baseHeaders, ...measureHeaders, "Source Documents"];
 
@@ -190,8 +201,24 @@ export default function ResultsPage() {
 
           // (vi) Confidence level
           measureValues.push(ms.confidence || "Low");
+
+          // WS-B (P1) per-decision traceability (additive; appended after the six
+          // existing columns). Fail-loud: an un-attributable decision surfaces its
+          // diagnostics here rather than being silently blank.
+          const dt = ms.decisionTrace || null;
+          const cr = dt?.canonicalRule || null;
+          measureValues.push(cr?.ruleId ?? "");
+          measureValues.push(cr?.ruleVersion != null ? String(cr.ruleVersion) : "");
+          measureValues.push(cr?.provenance ?? "");
+          measureValues.push(cr?.sourceField ?? "");
+          measureValues.push(dt?.frameworkHash ?? "");
+          measureValues.push(dt?.fallbackActivated ? (dt?.fallbackReason ?? "") : "");
+          measureValues.push(dt?.validation?.status ?? "");
+          measureValues.push((dt?.diagnostics || []).join(" | "));
         } else {
           measureValues.push("", "", "", "", "", "");
+          // WS-B trace columns (8) kept aligned for measures absent on this row.
+          measureValues.push("", "", "", "", "", "", "", "");
         }
       }
 

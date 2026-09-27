@@ -220,16 +220,16 @@ export async function batchRewriteCountable(
   ctx: FrameworkContext,
   providerName?: string,
 ): Promise<RegenerationResult> {
-  const system = `You are a framework editor. Your job is to REWRITE the substantive_definition of each provided measure so its DECIDING criteria are countable and quote-verifiable — decidable true/false from a single verbatim quote — rather than a matter of degree.
+  const system = `You are a framework editor. Your job is to REWRITE the substantive_definition of each provided measure so its DECIDING criteria are countable and quote-verifiable — decidable true/false from a verbatim quote or from a single bounded disclosure passage (see the passage-level co-location clause below) — rather than a matter of degree.
 
 Framework context:
 - Topic: ${ctx.topicTerm}${ctx.topicSynonyms && ctx.topicSynonyms.length ? ` (synonyms: ${ctx.topicSynonyms.join(", ")})` : ""}
 ${ctx.adjacentTopics && ctx.adjacentTopics.length ? `- Adjacent topics to exclude: ${ctx.adjacentTopics.join(", ")}` : ""}
 
-DECIDABLE THRESHOLD (each Yes-condition must be countable from a verbatim quote):
+DECIDABLE THRESHOLD (each Yes-condition must be countable from a verbatim quote or a bounded disclosure passage):
 - Do NOT phrase any Yes-condition as a matter of DEGREE. Forbidden judgment words include: substantive, substantially, systematic, integrated, integration, sufficient, robust, meaningful, adequate, appropriate, comprehensive, holistic, effective, strong, well-developed. Two scoring models read the same anchor sentence and split on whether it clears a degree bar — that produces run-to-run verdict flips.
-- Write every condition as a COUNTABLE / NAMED test that a reader can verify true or false from a single verbatim quote: a named body, a named document/register/process step, a quantified or dated metric, an explicit percentage/threshold, or a named framework alignment.
-- When a substantive/quality bar is genuinely unavoidable, express it as an explicit N-of-M test over NAMED artefacts rather than as a judgment word. Format: "Yes if at least N of the following NAMED artefacts are present in a verbatim quote: (a) …, (b) …, (c) …". Each artefact must be individually checkable from the quote.
+- Write every condition as a COUNTABLE / NAMED test that a reader can verify true or false from a verbatim quote: a named body, a named document/register/process step, a quantified or dated metric, an explicit percentage/threshold, or a named framework alignment.
+- When a substantive/quality bar is genuinely unavoidable, express it as an explicit N-of-M test over NAMED artefacts rather than as a judgment word. Format: "Yes if at least N of the following NAMED artefacts are present within a bounded disclosure passage: (a) …, (b) …, (c) …". Each artefact must be individually checkable from a verbatim quote in that passage. Do NOT require all artefacts to co-occur in one single verbatim span — see the passage-level co-location and semantic-equivalence clause below.
 
 CRITICAL RULES:
 1. Preserve the ORIGINAL scope of each measure. Do NOT change what the measure is asking about.
@@ -280,7 +280,7 @@ ${ctx.adjacentTopics && ctx.adjacentTopics.length ? `- Adjacent topics to exclud
 CRITICAL RULES:
 1. Preserve the measure's TOPIC scope — redefine the deciding artefact, not the subject of the measure.
 2. Anchor the Yes-condition on a specific, named, quote-verifiable artefact (a named programme, a quantified/dated metric, a named governance body, an explicit threshold) that is realistically disclosed by SOME but not all entities — not a near-universal boilerplate statement.
-3. Keep the criteria countable and decidable from a single verbatim quote (no degree words: substantive, robust, meaningful, adequate, comprehensive, etc.).
+3. Keep the criteria countable and decidable from a verbatim quote or a bounded disclosure passage (no degree words: substantive, robust, meaningful, adequate, comprehensive, etc.); see the passage-level co-location and semantic-equivalence clause below.
 4. Keep any existing adjacent-topic exclusion clause intact. Keep each definition under 600 characters.
 5. Output MUST be valid JSON in the exact schema below. No prose outside the JSON.
 
@@ -330,7 +330,7 @@ Framework context:
 
 CRITICAL RULES:
 1. Keep the TARGET within the framework's topic scope; sharpen it onto an artefact the OTHER measure does not already cover.
-2. Keep criteria countable and decidable from a single verbatim quote (no degree words).
+2. Keep criteria countable and decidable from a verbatim quote or a bounded disclosure passage (no degree words); see the passage-level co-location and semantic-equivalence clause below.
 3. Do not modify the OTHER measure. Keep the definition under 600 characters.
 
 ${STRUCTURED_GUIDANCE_REGEN_INSTRUCTION}

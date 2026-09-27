@@ -21,6 +21,7 @@ import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scoring-contract.js";
 import { buildCanonicalRuleTrace, buildCanonicalRule, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
+import { PASSAGE_LEVEL_EQUIVALENCE_CLAUSE } from "./framework-v2/structured-guidance.js";
 import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from "./eligibility-flags.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
@@ -444,6 +445,18 @@ export function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Frame
   const yesRuleLine = authoredYesRule
     || `A "Yes" is permissible ONLY when at least one VERBATIM quote copied from the supplied evidence contains ${yesQuoteBasis}. If the evidence contains no such verbatim quote, you MUST NOT score Yes. Generic, aspirational, or forward-looking language — or the topic being named without a specific qualifying instance — does NOT meet this bar.`;
   v2Block += `\n\nYES REQUIRES A VERBATIM QUOTE (precondition — evaluate this BEFORE assigning any Yes):\n${yesRuleLine}`;
+
+  // WS-A: runtime reinforcement of passage-level co-location + semantic/non-English
+  // equivalence. ALWAYS emitted and fully GENERIC (topic-agnostic; no framework/
+  // measure/topic literals) so it binds on every measure — including prose-only and
+  // legacy measures whose stored definitions predate the builder-side authoring of
+  // this clause. It relaxes multi-element Yes-bars from "all tokens in ONE verbatim
+  // span, exact lexical match" to passage-level co-location with per-element verbatim
+  // anchors and semantic matching, WITHOUT loosening to "anywhere in the document"
+  // (the clause explicitly rejects cross-context evidence). This is additive prompt
+  // text — no post-hoc override and no extra LLM call — so it does not disturb the
+  // SCORING_CANONICAL_RULE_GOVERNS demotion semantics above.
+  v2Block += `\n\n${PASSAGE_LEVEL_EQUIVALENCE_CLAUSE}`;
 
   // C3: quote-context requirement
   const minCtx = typeof m.minQuoteContextChars === "number" ? m.minQuoteContextChars : null;
