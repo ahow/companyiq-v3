@@ -2325,15 +2325,10 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   const [iterations, setIterations] = useState<IterationSnapshot[]>([]);
   const [rescoring, setRescoring] = useState(false);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
-  // ITEM 2: per-measure run-to-run flip stats + auto-continue guard. The guard
-  // counts how many auto-rescores we have KICKED OFF. Batches ever started =
-  // 1 (initial) + this counter, so we cap it at scoringRunsTarget - 1 to
-  // guarantee exactly scoringRunsTarget batches are scored (no overshoot). We
-  // count started batches rather than iterations.length because the snapshot of
-  // a completed batch lands asynchronously and lags the isComplete transition —
-  // gating on iterations.length alone let the last rescore start one extra batch.
+  // Per-measure run-to-run flip stats. Additional scoring iterations are started
+  // manually via "Run scoring again" (no auto-continue), so no rescore guard ref
+  // is needed any more.
   const [flipStats, setFlipStats] = useState<MeasureFlipStat[]>([]);
-  const autoRescoreGuard = useRef(0);
   const [applyingIterate, setApplyingIterate] = useState(false);
   const [applyIterateResult, setApplyIterateResult] = useState<string | null>(null);
   const [applyIterateError, setApplyIterateError] = useState<string | null>(null);
@@ -2384,7 +2379,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
         if (started) {
           setBatch(b);
           setApplyRecovering(null);
-          setApplyIterateResult("Recovered — a fresh iteration is running. Watch the counter above.");
+          setApplyIterateResult("Edits applied. Click \"Run scoring again\" to test the updated framework.");
           void fetchIterations();
           void fetchMeasureEdits();
           stop();
@@ -2393,7 +2388,7 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       } catch { /* keep polling through transient errors */ }
       if (Date.now() > deadline) {
         stop();
-        setApplyRecovering("The apply connection dropped and no new iteration was detected within 15 minutes. Your edits may already be applied — click \"Re-score now\" to start the iteration.");
+        setApplyRecovering("The apply connection dropped. Your edits may already be applied — reload to refresh proposals, then click \"Run scoring again\" to test the updated framework.");
       }
     }, 15_000);
   };
@@ -2404,7 +2399,6 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
     setApplyIterateResult(null);
     setApplyIterateError(null);
     setApplyRecovering(null);
-    const prevBatchId = (batch as any)?.id as number | undefined;
     try {
       // Build one apply_edit action per accepted proposal. Send the stable
       // identity tuple (measure + flagRule + patch op/path) so the server can
@@ -2429,38 +2423,32 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
       });
       const applyResp = await api.request("/framework-builder/v2/improvement/apply", {
         method: "POST",
-        body: JSON.stringify({ frameworkId, listId, actions }),
+        // Scoring is strictly user-triggered: apply the edits only and never
+        // auto-start a scoring pass. The operator runs the updated framework
+        // via "Run scoring again".
+        body: JSON.stringify({ frameworkId, listId, actions, skipRescore: true }),
       });
       const summary = summariseApplyResult(applyResp);
-      // Refresh the edit-audit so any silently-skipped accepts are visible.
+      // Refresh the edit-audit so any silently-skipped accepts are visible, and
+      // refresh the proposal set / status from the already-completed batch (no
+      // new batch is started here).
       void fetchMeasureEdits();
-      // The server now auto-triggers the re-score at the tail of apply. Do NOT
-      // fire a second /v2/rescore here — that would create a duplicate batch and
-      // trip the single-active-batch 409. Reflect the server's outcome instead.
-      if (applyResp?.rescoreTriggered) {
-        // Set the local batch to running and let the existing results poller pick
-        // it up (same effect triggerRescore had on success).
-        setBatch({ status: "running", completedJobs: 0, totalJobs: applyResp.rescoreTotalJobs || 10, failedJobs: 0 });
-        void fetchIterations();
-        setApplyIterateResult(`${summary} Started a fresh iteration — watch the counter above.`);
-      } else if (applyResp?.rescoreSkippedReason === "no edits applied") {
-        setApplyIterateResult(`${summary} No edits were applied, so no re-score was started.`);
+      await fetchStatus();
+      const appliedCount = applyResp?.appliedCount ?? (applyResp?.applied?.length || 0);
+      if (appliedCount > 0) {
+        setApplyIterateResult(`${summary} Edits applied. Click "Run scoring again" to test the updated framework.`);
       } else {
-        // Apply succeeded but the re-score did not start (a batch already running/
-        // pending review, or a trigger error). Not a dead-end: surface a
-        // recoverable message plus the manual "Re-score now" button.
-        const why = applyResp?.rescoreError || applyResp?.rescoreSkippedReason || "the re-score did not start";
-        setApplyIterateResult(summary);
-        setApplyRecovering(`Edits applied, but the re-score did not start (${why}). Click "Re-score now" to start the iteration.`);
+        setApplyIterateResult(`${summary} No edits were applied.`);
       }
     } catch (e: any) {
-      // The apply request itself may have exceeded the ~300s edge timeout and had
-      // its connection cut. The server is very likely still applying and will
-      // auto-trigger the re-score when done — so do NOT show a dead-end red error.
-      // Enter a recovering state and poll for the newly-created running batch.
-      setApplyRecovering("The apply is taking a while and the connection dropped — the server is still working; watching for the new iteration…");
-      startApplyRecoveryPolling(prevBatchId);
+      // The apply request may exceed the ~300s edge timeout and have its
+      // connection cut, while the server keeps applying. No scoring pass is
+      // started either way, so show a calm, non-alarming message rather than a
+      // dead-end red error.
       void fetchMeasureEdits();
+      setApplyIterateResult(
+        "Edits applied (or applying) \u2014 if proposals don't refresh, reload; then click \"Run scoring again\".",
+      );
     } finally {
       setApplyingIterate(false);
     }
@@ -2625,27 +2613,11 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
   // cancelled auto-rescore) — surface a hint and always offer a manual re-score.
   const staleNewestBatch = resultsReady && !isComplete;
 
-  // ITEM 2: auto-continue the multi-run test-drive. Analyze is async and
-  // single-active-batch, so we cannot fire N batches at once — instead, each
-  // time a batch completes we kick one rescore, which starts a fresh batch (the
-  // completed batch is snapshotted server-side when polling observes it).
-  //
-  // Overshoot fix: cap on batches STARTED, not on iterations.length. Batches
-  // ever started = 1 (initial) + autoRescoreGuard.current (rescores kicked off),
-  // so we stop once autoRescoreGuard.current reaches scoringRunsTarget - 1 —
-  // giving exactly scoringRunsTarget batches. The second guard
-  // (autoRescoreGuard.current >= iterations.length) makes us fire at most once
-  // per recorded snapshot, so remounts / extra polls do not double-fire.
-  useEffect(() => {
-    if (scoringRunsTarget <= 1) return;
-    if (!isComplete || rescoring) return;
-    if (autoRescoreGuard.current >= scoringRunsTarget - 1) return;
-    if (autoRescoreGuard.current >= iterations.length) return;
-    autoRescoreGuard.current += 1;
-    void triggerRescore();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isComplete, iterations.length, rescoring, scoringRunsTarget]);
-
+  // Scoring is strictly user-triggered. Multi-run iterations are NOT auto-
+  // continued: opening or returning to this panel only READS status and never
+  // starts a batch. The operator runs each additional iteration by clicking
+  // "Run scoring again" (triggerRescore), which snapshots the prior iteration
+  // and starts a fresh pass, so flip-stats still accumulate across manual runs.
   const multiRunActive = scoringRunsTarget > 1;
   const iterationsRecorded = iterations.length;
   const multiRunDone = multiRunActive && iterationsRecorded >= scoringRunsTarget;
@@ -2694,8 +2666,8 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
           ) : (
             <>
               Multi-run test-drive: {iterationsRecorded} scoring iteration{iterationsRecorded === 1 ? "" : "s"} recorded (target {scoringRunsTarget})
-              {(rescoring || isRunning) && " — next iteration scoring…"}
-              . The same sample is scored repeatedly so the flip detector can measure run-to-run stability. This runs automatically; you can leave and return to this page.
+              {(rescoring || isRunning) && " — iteration scoring…"}
+              . The same sample is scored repeatedly so the flip detector can measure run-to-run stability. Click "Run scoring again" above to run the next iteration.
             </>
           )}
         </div>
@@ -3224,15 +3196,15 @@ function TestDriveResultsPanel({ frameworkId, listId, listName, scoringRunsTarge
         <div className="pt-2 border-t border-gray-200 dark:border-gray-700 space-y-2">
           <div className="flex items-center justify-between gap-3">
             <div className="text-xs text-gray-500">
-              When ready, apply {acceptedCount} accepted edit{acceptedCount === 1 ? "" : "s"} to regenerate affected measures and re-score. Rejected edits are dropped. LLM regenerations run in one batched call per patch type.
+              When ready, apply {acceptedCount} accepted edit{acceptedCount === 1 ? "" : "s"} to regenerate affected measures. Rejected edits are dropped. LLM regenerations run in one batched call per patch type. This does not start a scoring pass — click "Run scoring again" to test the updated framework.
             </div>
             <button
               onClick={() => void applyAcceptedAndIterate()}
               disabled={acceptedCount === 0 || applyingIterate}
               className={`px-3 py-1.5 rounded text-sm font-medium flex items-center gap-1 ${(acceptedCount === 0 || applyingIterate) ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-700"}`}
-              title={acceptedCount === 0 ? "Accept at least one edit to enable iteration" : "Apply accepted edits and immediately re-score"}
+              title={acceptedCount === 0 ? "Accept at least one edit to apply" : "Apply accepted edits (does not start scoring)"}
             >
-              {applyingIterate ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying…</> : `Apply ${acceptedCount} edit${acceptedCount === 1 ? "" : "s"} → iterate`}
+              {applyingIterate ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying…</> : `Apply ${acceptedCount} edit${acceptedCount === 1 ? "" : "s"}`}
             </button>
           </div>
           {applyIterateResult && <div className="text-xs text-green-700 dark:text-green-400">{applyIterateResult}</div>}
