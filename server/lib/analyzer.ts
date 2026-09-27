@@ -20,6 +20,7 @@ import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./c
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scoring-contract.js";
+import { buildCanonicalRuleTrace, buildCanonicalRule, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
 import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from "./eligibility-flags.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
@@ -141,6 +142,11 @@ export interface MeasureResult {
   // never change the verdict/score and never block a run or save. See
   // eligibility-flags.ts.
   eligibilityFlags?: EligibilityFlag[] | null;
+  // WS4 (canonical decision rule): the identity, version, source field and clauses
+  // of the canonical rule that governed THIS decision. Populated on every scored
+  // measure so the authoritative Yes-bar is auditable on the live scoring path.
+  // Back-compat optional field; never changes verdict/score.
+  canonicalRuleTrace?: CanonicalRuleTrace | null;
 }
 
 export interface AnalysisResult {
@@ -283,7 +289,9 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
 // Sprint 10 P2 helper: build the v2 guidance block shared by binary + partial prompts.
 // Returns { guidanceBlock, quoteContextInstr }. Both empty for v1 measures (all v2
 // fields null), which makes v1 behaviour byte-identical to pre-P2.
-function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | undefined, topicDescription: string): { guidanceBlock: string; quoteContextInstr: string } {
+// Exported for regression testing of the canonical-rule governance of the prompt
+// (SCORING_CANONICAL_RULE_GOVERNS). Pure function: no DB / LLM / network access.
+export function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | undefined, topicDescription: string): { guidanceBlock: string; quoteContextInstr: string } {
   const m: any = measure;
   const fw: any = framework;
   let v2Block = "";
@@ -352,7 +360,27 @@ function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | 
 
   // C4: topic-anchored fallback
   if (typeof m.fallbackYesCriterion === "string" && m.fallbackYesCriterion.trim().length > 0) {
-    v2Block += `\n\nFALLBACK YES CRITERION (if primary evidence is weak, fall back to this — ANY numbered condition below being satisfied triggers Yes):\n${m.fallbackYesCriterion}`;
+    // WS4: canonical rule governs the runtime prompt. When SCORING_CANONICAL_RULE_GOVERNS
+    // is ON and this measure has a SUBSTANTIVE (or qualifying) canonical bar, the strict
+    // fallbackYesCriterion must NOT reach the scorer as an independent, co-equal "ANY
+    // numbered condition triggers Yes" instruction — that is precisely the contradictory-
+    // rule mechanism the reviewer flagged (e.g. a substantive positive example rejected
+    // for lacking a second attribution token). We demote it to clearly-subordinate context
+    // that only applies when the substantive bar cannot be assessed. When the canonical bar
+    // is itself fallback-derived (no substantive criterion exists), behaviour is unchanged.
+    // Flag default OFF preserves current live behaviour until validated in prod.
+    let fallbackGoverned = false;
+    if (process.env.SCORING_CANONICAL_RULE_GOVERNS === "1" || process.env.SCORING_CANONICAL_RULE_GOVERNS === "true") {
+      try {
+        const canon = buildCanonicalRule(m);
+        fallbackGoverned = canon.provenance === "substantive" || canon.provenance === "qualifying";
+      } catch { /* fail-open to current behaviour */ }
+    }
+    if (fallbackGoverned) {
+      v2Block += `\n\nFALLBACK CRITERION (SUBORDINATE — this measure has an authoritative substantive/qualifying bar above, which is the sole basis for a Yes. The text below is a LAST-RESORT tie-breaker ONLY when the substantive bar genuinely cannot be assessed from the evidence; it does NOT, on its own, trigger a Yes, and it must NEVER override or add requirements to the substantive bar):\n${m.fallbackYesCriterion}`;
+    } else {
+      v2Block += `\n\nFALLBACK YES CRITERION (if primary evidence is weak, fall back to this — ANY numbered condition below being satisfied triggers Yes):\n${m.fallbackYesCriterion}`;
+    }
   }
 
   // Change A: GENERIC exclusion-precedence rule. Applies to EVERY measure of
@@ -2927,8 +2955,16 @@ async function scoreSingleMeasure(opts: {
   // Set SCORING_SELF_CONSISTENCY=1 to disable (single pass).
   const passes = Math.max(1, parseInt(process.env.SCORING_SELF_CONSISTENCY || "3", 10));
 
+  // WS4: attach the canonical-rule trace to every scored result (identity,
+  // version, source field, clauses used, decision basis). Pure/deterministic;
+  // never changes verdict/score. See framework-v2/reliability/canonical-rule.ts.
+  const withCanonicalTrace = (r: MeasureResult): MeasureResult => ({
+    ...r,
+    canonicalRuleTrace: buildCanonicalRuleTrace(measure, { finalVerdict: r.verdict }),
+  });
+
   if (passes === 1) {
-    return scoreSingleMeasurePass({ ...opts, providerIndex: 0 });
+    return withCanonicalTrace(await scoreSingleMeasurePass({ ...opts, providerIndex: 0 }));
   }
 
   const passResults: MeasureResult[] = [];
@@ -2947,7 +2983,7 @@ async function scoreSingleMeasure(opts: {
   const substantivePasses = passResults.filter((r) => !(r as any)._scoringFailure);
   if (substantivePasses.length === 0) {
     console.error(`[${companyName}] All ${passes} scoring passes crashed for ${measure.measureId} — abstaining (excluded from totals), NOT emitting a substantive zero`);
-    return passResults[0];
+    return withCanonicalTrace(passResults[0]);
   }
 
   // Majority verdict by score bucket (0 / 0.5 / 1). Ties resolve toward the
@@ -2988,6 +3024,9 @@ async function scoreSingleMeasure(opts: {
     `[Self-consistency ${winningCount}/${substantiveCount} on ${gradedByLabel}]`;
   // Propagate model identity for methodology stamping
   (chosen as any)._gradedBy = gradedByLabel;
+
+  // WS4: attach the canonical-rule trace before caching so cached hits carry it too.
+  chosen.canonicalRuleTrace = buildCanonicalRuleTrace(measure, { finalVerdict: chosen.verdict });
 
   // I36-B: Store in verdict cache
   verdictCache.set(vKey, { result: { ...chosen }, ts: Date.now() });

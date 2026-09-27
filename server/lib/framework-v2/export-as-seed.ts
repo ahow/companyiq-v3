@@ -17,6 +17,7 @@
  */
 
 import type { Framework, FrameworkMeasure } from "../../../shared/schema.js";
+import { resolveConfig } from "./reliability/resolve-config.js";
 
 export interface ExistingFrameworkForExport {
   framework: Framework & {
@@ -45,6 +46,10 @@ export function exportFrameworkAsSeedTemplate(
   const fw = input.framework;
   const measures = input.measures || [];
 
+  // Canonical anchors / scope / lexicon come from the single resolved config, so
+  // the seed template can never disagree with the JSON/full exports or the runtime.
+  const resolved = resolveConfig({ framework: fw as Record<string, any>, measures });
+
   // Aggregate examples (dedupe, take top 3 each)
   const posSet = new Set<string>();
   const negSet = new Set<string>();
@@ -57,18 +62,18 @@ export function exportFrameworkAsSeedTemplate(
 
   const topicSection = fw.topicDescription
     ? fw.topicDescription
-    : fw.topicTerm
-      ? `(Topic term: ${fw.topicTerm}${fw.topicSynonyms && fw.topicSynonyms.length ? `; synonyms: ${fw.topicSynonyms.join(", ")}` : ""})\n\nDescribe the topic in your own words in 2–5 sentences. What makes it distinct from adjacent topics?`
+    : resolved.topicTerm
+      ? `(Topic term: ${resolved.topicTerm}${resolved.topicSynonyms.length ? `; synonyms: ${resolved.topicSynonyms.join(", ")}` : ""})\n\nDescribe the topic in your own words in 2–5 sentences. What makes it distinct from adjacent topics?`
       : "Describe the topic in 2–5 sentences.";
 
   const scopeLines: string[] = [];
-  scopeLines.push(`- Entity type: [${fw.entityType || "listed companies"}]`);
-  scopeLines.push(`- Sector scope: [${fw.sectorScope || "agnostic"}]`);
-  scopeLines.push(`- Universe: [${fw.universe || "global"}]`);
-  scopeLines.push(`- Reporting period: [${fw.reportingPeriod || "last 3 years, most recent preferred"}]`);
+  scopeLines.push(`- Entity type: [${resolved.entityType || "listed companies"}]`);
+  scopeLines.push(`- Sector scope: [${resolved.sectorScope || "agnostic"}]`);
+  scopeLines.push(`- Universe: [${resolved.universe || "global"}]`);
+  scopeLines.push(`- Reporting period: [${resolved.reportingPeriod || "last 3 years, most recent preferred"}]`);
   scopeLines.push(`- Explicit exclusions: []`);
 
-  const anchorLines = (fw.anchorFrameworks || []).map((a) => `  - ${a.name}${a.source ? ` (${a.source})` : ""}`);
+  const anchorLines = resolved.anchorFrameworks.map((a) => `  - ${a.name}${a.source ? ` (${a.source})` : ""}`);
 
   const posLines = topPos.map((p) => `  - ${JSON.stringify(p)}`);
   const negLines = topNeg.map((n) => `  - ${JSON.stringify(n)}`);

@@ -11,6 +11,7 @@
  */
 
 import { promoteHardeningFields } from "./promote-hardening-fields.js";
+import { resolveConfig } from "./reliability/resolve-config.js";
 
 export interface FullExportInput {
   framework: any;
@@ -97,6 +98,13 @@ export function exportFrameworkAsFullDetail(input: FullExportInput): string {
   const { framework: fw } = promoteHardeningFields(input.framework || {});
   const measures = asArray<any>(input.measures);
 
+  // Canonical anchors / scope / lexicon are taken from the single resolved config so
+  // this full export cannot silently disagree with the JSON/seed exports or runtime.
+  const resolved = resolveConfig({
+    framework: input.framework || {},
+    measures,
+  });
+
   const name = pick(fw, "name", "title") || "Untitled Framework";
   const version = pick(fw, "version") ?? "1";
   const topicDescription =
@@ -106,22 +114,22 @@ export function exportFrameworkAsFullDetail(input: FullExportInput): string {
   const intakeArtefact = {
     topicTerm: pick(fw, "topicTerm", "topicName") ?? null,
     topicDescription: topicDescription || null,
-    topicSynonyms: asArray(pick(fw, "topicSynonyms")),
+    topicSynonyms: resolved.topicSynonyms,
     adjacentTopics: asArray(pick(fw, "adjacentTopics")),
-    anchorFrameworks: asArray(pick(fw, "anchorFrameworks")),
-    entityType: pick(fw, "entityType") ?? null,
-    sectorScope: pick(fw, "sectorScope") ?? null,
-    universe: pick(fw, "universe") ?? null,
-    reportingPeriod: pick(fw, "reportingPeriod") ?? null,
+    anchorFrameworks: resolved.anchorFrameworks,
+    entityType: resolved.entityType,
+    sectorScope: resolved.sectorScope,
+    universe: resolved.universe,
+    reportingPeriod: resolved.reportingPeriod,
     sensitivityPreference: pick(fw, "sensitivityPreference") ?? null,
     subAreaStructure: pick(fw, "subAreaStructure") ?? null,
     requiredDocTypes: asArray(pick(fw, "requiredDocTypes")),
     dataPatterns: asArray(pick(fw, "dataPatterns")),
     documentPriorityUrlPatterns: asArray(pick(fw, "documentPriorityUrlPatterns")),
-    negativeKeywords: asArray(pick(fw, "negativeKeywords")),
+    negativeKeywords: resolved.negativeKeywords,
     searchTemplates: asArray(pick(fw, "searchTemplates")),
     scoringExamples: pick(fw, "scoringExamples") ?? null,
-    antiInferenceRules: asArray(pick(fw, "antiInferenceRules")),
+    antiInferenceRules: resolved.antiInferenceRules,
     targetMeasureCount: measures.length,
     basePositiveExamples: aggregateExamples(
       measures,
@@ -169,23 +177,23 @@ export function exportFrameworkAsFullDetail(input: FullExportInput): string {
     ["Version", version],
     ["Topic term", pick(fw, "topicTerm", "topicName")],
     ["Topic description", topicDescription],
-    ["Topic synonyms", pick(fw, "topicSynonyms")],
+    ["Topic synonyms", resolved.topicSynonyms],
     ["Adjacent topics", pick(fw, "adjacentTopics")],
-    ["Anchor frameworks", pick(fw, "anchorFrameworks")],
-    ["Entity type", pick(fw, "entityType")],
-    ["Sector scope", pick(fw, "sectorScope")],
-    ["Universe", pick(fw, "universe")],
-    ["Reporting period", pick(fw, "reportingPeriod")],
+    ["Anchor frameworks", resolved.anchorFrameworks],
+    ["Entity type", resolved.entityType],
+    ["Sector scope", resolved.sectorScope],
+    ["Universe", resolved.universe],
+    ["Reporting period", resolved.reportingPeriod],
     ["Sensitivity preference", pick(fw, "sensitivityPreference")],
     ["Sub-area structure", pick(fw, "subAreaStructure")],
     ["Required doc types", pick(fw, "requiredDocTypes")],
     ["Data patterns", pick(fw, "dataPatterns")],
     ["Document priority URL patterns", pick(fw, "documentPriorityUrlPatterns")],
-    ["Negative keywords", pick(fw, "negativeKeywords")],
+    ["Negative keywords", resolved.negativeKeywords],
     ["Search templates", pick(fw, "searchTemplates")],
     ["Legacy query templates", pick(fw, "legacyQueryTemplates")],
     ["Scoring examples", pick(fw, "scoringExamples")],
-    ["Anti-inference rules", pick(fw, "antiInferenceRules")],
+    ["Anti-inference rules", resolved.antiInferenceRules],
   ];
   for (const [label, value] of configFields) {
     lines.push(`- **${label}**: ${fmtInline(value)}`);

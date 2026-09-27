@@ -1,0 +1,119 @@
+{
+  "$schema": "See ./README.md. FROZEN canonical-rule adjudication set (WS4).",
+  "description": "A FROZEN set of canonical-rule adjudication cases drawn from the reviewer's framework-13 follow-up. Each case builds THE canonical rule (substantive-first precedence) from a measure's own decision fields and evaluates a supplied passage's structured facts against it. ADJUDICATION HONESTY: the implementer is NOT the independent adjudicator — an expectedStatus of \"pass\"/\"fail\" is recorded ONLY where the reviewer explicitly stated the intended outcome; every other case is \"pending-adjudication\", which the harness surfaces and EXCLUDES from the pass tally (never silently green). The test suite must NOT edit these expected values to pass. Structured facts encode the SUBSTANTIVE reading the reviewer describes; extracting facts from prose is a separate, uncertain step and is not claimed here beyond the reviewer's own words.",
+  "cases": [
+    {
+      "caseId": "1.1-ai-strategy-published/positive",
+      "measureId": "1.1-ai-strategy-published",
+      "polarity": "positive",
+      "passage": "Our AI Strategic Plan identifies three focus areas: operational efficiency through automation, customer experience enhancement via generative AI, and innovation in product development.",
+      "measureContract": {
+        "substantiveDefinition": "A named AI strategy is disclosed together with substantive content describing its focus areas.",
+        "fallbackYesCriterion": "Requires at least two attribution constructions such as 'we published' and 'the Board approved'."
+      },
+      "facts": { "clausePresence": { "r0": true } },
+      "expectedStatus": "pass",
+      "reason": "Reviewer §1: the example satisfies the substantive criterion (a named strategy + substantive content). Under the SUBSTANTIVE canonical bar it must PASS, and must NOT fail merely for lacking a second attribution token (a fallback-only requirement). Guards the strict-fallback-as-authoritative false negative.",
+      "source": "CompanyIQ-framework-13-follow-up.md §1 (Markdown lines 340, 374, 382)",
+      "signedOffBy": "reviewer (explicit intended outcome)"
+    },
+    {
+      "caseId": "3.5-ai-compliance-standards/positive",
+      "measureId": "3.5-ai-compliance-standards",
+      "polarity": "positive",
+      "passage": "Our AI governance framework is aligned with the NIST AI Risk Management Framework, ensuring systematic identification and mitigation of AI-related risks.",
+      "measureContract": {
+        "substantiveDefinition": "A named AI standard is identified together with a current relationship to it.",
+        "fallbackYesCriterion": "Additionally demands two further named artefacts."
+      },
+      "facts": { "clausePresence": { "r0": true } },
+      "expectedStatus": "pass",
+      "reason": "Reviewer §3: the main guidance and evidence definition accept a named AI standard plus a current relationship, which this example supplies. Under the canonical (substantive) bar it must PASS; the fallback's demand for two additional named artefacts must not silently become the bar.",
+      "source": "CompanyIQ-framework-13-follow-up.md §3 (Markdown lines 1934, 1960, 1968, 1973)",
+      "signedOffBy": "reviewer (explicit intended outcome)"
+    },
+    {
+      "caseId": "3i-board-oversight/considered",
+      "measureId": "board-oversight",
+      "polarity": "positive",
+      "passage": "The committee considered AI opportunities and risks.",
+      "measureContract": {
+        "substantiveDefinition": "The board (or a board committee) substantively reviews or discusses the topic, including where the committee 'considered' the topic's opportunities and risks."
+      },
+      "facts": { "clausePresence": { "r0": true, "o0a0": true } },
+      "expectedStatus": "pass",
+      "reason": "Reviewer: 3i's report says the committee 'considered' AI opportunities and risks; the reviewer requires THIS exact passage to pass the intended semantic test rather than assume the revised wording fixed the prior false negative. The strict fallback's fixed verb list (which omits 'considered') must not override the substantive board-review criterion.",
+      "source": "CompanyIQ-framework-13-follow-up.md (3i control, new 3.1)",
+      "signedOffBy": "reviewer (explicit intended outcome)"
+    },
+    {
+      "caseId": "1.3-ai-scope-functions/contradiction",
+      "measureId": "1.3-ai-scope-functions",
+      "polarity": "positive",
+      "passage": null,
+      "measureContract": {
+        "substantiveDefinition": "Two functions are named and EACH is explicitly linked to AI.",
+        "fallbackYesCriterion": "Two function names are present and AI is linked to at least one of them."
+      },
+      "facts": null,
+      "expectedStatus": "pending-adjudication",
+      "reason": "Reviewer §2 describes the contradiction (main rule requires AI linked to BOTH functions; fallback requires AI linked to at least one) but supplies no concrete passage and no explicit expected outcome. Left pending: a passage and its agreed outcome must be adjudicated before this becomes a scored control.",
+      "source": "CompanyIQ-framework-13-follow-up.md §2 (Markdown lines 1063, 1078, 1085, 1097)"
+    },
+    {
+      "caseId": "gerdau-committee-only",
+      "measureId": "board-oversight",
+      "polarity": "unknown",
+      "passage": null,
+      "measureContract": null,
+      "facts": null,
+      "expectedStatus": "pending-adjudication",
+      "reason": "Reviewer's frozen-replay list requires Gerdau's committee-only evidence be replayed with an AGREED expected outcome. The exact prior passage text is not reproduced in the follow-up doc and no expected outcome is stated; no text is invented. Pending adjudication.",
+      "source": "CompanyIQ-framework-13-follow-up.md (frozen-replay list, ~line 118)"
+    },
+    {
+      "caseId": "industrial-bank-planned-office",
+      "measureId": "pending",
+      "polarity": "unknown",
+      "passage": null,
+      "measureContract": null,
+      "facts": null,
+      "expectedStatus": "pending-adjudication",
+      "reason": "Reviewer's frozen-replay list requires Industrial Bank's 'planned office' evidence be replayed with an agreed outcome. No passage text or expected outcome supplied in the doc; nothing invented. Pending adjudication.",
+      "source": "CompanyIQ-framework-13-follow-up.md (frozen-replay list, ~line 118)"
+    },
+    {
+      "caseId": "paychex-advice-to-readers",
+      "measureId": "pending",
+      "polarity": "unknown",
+      "passage": null,
+      "measureContract": null,
+      "facts": null,
+      "expectedStatus": "pending-adjudication",
+      "reason": "Reviewer's frozen-replay list requires Paychex's 'advice to readers' evidence be replayed with an agreed outcome. No passage text or expected outcome supplied; nothing invented. Pending adjudication.",
+      "source": "CompanyIQ-framework-13-follow-up.md (frozen-replay list, ~line 118)"
+    },
+    {
+      "caseId": "hyundai-glovis-boston-dynamics-attribution",
+      "measureId": "pending",
+      "polarity": "unknown",
+      "passage": null,
+      "measureContract": null,
+      "facts": null,
+      "expectedStatus": "pending-adjudication",
+      "reason": "Reviewer's frozen-replay list requires Hyundai Glovis / Boston Dynamics attribution evidence be replayed with an agreed outcome. No passage text or expected outcome supplied; nothing invented. Pending adjudication.",
+      "source": "CompanyIQ-framework-13-follow-up.md (frozen-replay list, ~line 118)"
+    },
+    {
+      "caseId": "obayashi-old-source",
+      "measureId": "pending",
+      "polarity": "unknown",
+      "passage": null,
+      "measureContract": null,
+      "facts": null,
+      "expectedStatus": "pending-adjudication",
+      "reason": "Reviewer's frozen-replay list requires Obayashi's old source be replayed with an agreed outcome. No passage text or expected outcome supplied; nothing invented. Pending adjudication.",
+      "source": "CompanyIQ-framework-13-follow-up.md (frozen-replay list, ~line 118)"
+    }
+  ]
+}
