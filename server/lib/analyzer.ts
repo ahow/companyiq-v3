@@ -20,7 +20,7 @@ import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./c
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scoring-contract.js";
-import { buildCanonicalRuleTrace, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
+import { buildCanonicalRuleTrace, buildCanonicalRule, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
 import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from "./eligibility-flags.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
@@ -289,7 +289,9 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
 // Sprint 10 P2 helper: build the v2 guidance block shared by binary + partial prompts.
 // Returns { guidanceBlock, quoteContextInstr }. Both empty for v1 measures (all v2
 // fields null), which makes v1 behaviour byte-identical to pre-P2.
-function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | undefined, topicDescription: string): { guidanceBlock: string; quoteContextInstr: string } {
+// Exported for regression testing of the canonical-rule governance of the prompt
+// (SCORING_CANONICAL_RULE_GOVERNS). Pure function: no DB / LLM / network access.
+export function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | undefined, topicDescription: string): { guidanceBlock: string; quoteContextInstr: string } {
   const m: any = measure;
   const fw: any = framework;
   let v2Block = "";
@@ -358,7 +360,27 @@ function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Framework | 
 
   // C4: topic-anchored fallback
   if (typeof m.fallbackYesCriterion === "string" && m.fallbackYesCriterion.trim().length > 0) {
-    v2Block += `\n\nFALLBACK YES CRITERION (if primary evidence is weak, fall back to this — ANY numbered condition below being satisfied triggers Yes):\n${m.fallbackYesCriterion}`;
+    // WS4: canonical rule governs the runtime prompt. When SCORING_CANONICAL_RULE_GOVERNS
+    // is ON and this measure has a SUBSTANTIVE (or qualifying) canonical bar, the strict
+    // fallbackYesCriterion must NOT reach the scorer as an independent, co-equal "ANY
+    // numbered condition triggers Yes" instruction — that is precisely the contradictory-
+    // rule mechanism the reviewer flagged (e.g. a substantive positive example rejected
+    // for lacking a second attribution token). We demote it to clearly-subordinate context
+    // that only applies when the substantive bar cannot be assessed. When the canonical bar
+    // is itself fallback-derived (no substantive criterion exists), behaviour is unchanged.
+    // Flag default OFF preserves current live behaviour until validated in prod.
+    let fallbackGoverned = false;
+    if (process.env.SCORING_CANONICAL_RULE_GOVERNS === "1" || process.env.SCORING_CANONICAL_RULE_GOVERNS === "true") {
+      try {
+        const canon = buildCanonicalRule(m);
+        fallbackGoverned = canon.provenance === "substantive" || canon.provenance === "qualifying";
+      } catch { /* fail-open to current behaviour */ }
+    }
+    if (fallbackGoverned) {
+      v2Block += `\n\nFALLBACK CRITERION (SUBORDINATE — this measure has an authoritative substantive/qualifying bar above, which is the sole basis for a Yes. The text below is a LAST-RESORT tie-breaker ONLY when the substantive bar genuinely cannot be assessed from the evidence; it does NOT, on its own, trigger a Yes, and it must NEVER override or add requirements to the substantive bar):\n${m.fallbackYesCriterion}`;
+    } else {
+      v2Block += `\n\nFALLBACK YES CRITERION (if primary evidence is weak, fall back to this — ANY numbered condition below being satisfied triggers Yes):\n${m.fallbackYesCriterion}`;
+    }
   }
 
   // Change A: GENERIC exclusion-precedence rule. Applies to EVERY measure of
