@@ -220,6 +220,15 @@ const CHUNKED_DRAFT_THRESHOLD = Number(process.env.FRAMEWORK_V2_CHUNK_THRESHOLD 
 // Max measures expanded per chunked sub-call. Large categories are split into
 // batches of this size so no single expansion call approaches the token cap.
 const CHUNK_MEASURES_PER_CALL = Number(process.env.FRAMEWORK_V2_MEASURES_PER_CALL || 8);
+// Repair batch size is DECOUPLED from the draft chunk size. Repair does full-measure
+// rewrites (large output), so batching several measures into a single repair call can
+// overflow the 16000 output-token cap and truncate/hang. Default to 1 measure per repair
+// call so it fits under the cap regardless of how large CHUNK_MEASURES_PER_CALL is set for
+// drafting-speed tuning. Overridable via FRAMEWORK_V2_REPAIR_MEASURES_PER_CALL.
+const REPAIR_MEASURES_PER_CALL = Math.max(
+  1,
+  Number(process.env.FRAMEWORK_V2_REPAIR_MEASURES_PER_CALL || 1),
+);
 
 // C11 repair instruction, mirrored from CHUNKED_MEASURES_SYSTEM_PROMPT so repair
 // passes target the degree-word class of error that the initial-draft prompts
@@ -1023,7 +1032,7 @@ async function repairMeasuresTargeted(
   };
 
   // FIX (c): Split the offending measures into batches of
-  // CHUNK_MEASURES_PER_CALL and repair them IN PARALLEL. A single giant call
+  // REPAIR_MEASURES_PER_CALL and repair them IN PARALLEL. A single giant call
   // carrying every offending measure can exceed Claude's non-streaming output
   // window and fall through to the slow OpenAI fallback — see telemetry job
   // 316678be, where one 340k-char repair call dominated a 30-min build.
@@ -1031,9 +1040,13 @@ async function repairMeasuresTargeted(
   // concurrently. Cross-call concurrency is already bounded globally by the
   // single semaphore inside completeWithFallback, so no extra semaphore is
   // needed here (this mirrors expandBatch).
+  // NOTE: repair uses REPAIR_MEASURES_PER_CALL (default 1), NOT the draft-chunk
+  // size CHUNK_MEASURES_PER_CALL. Repair rewrites whole measures (large output),
+  // so a large draft chunk size must not force multi-measure repair calls that
+  // overflow the 16000 output-token cap and truncate.
   const batches: any[][] = [];
-  for (let i = 0; i < targetMeasures.length; i += CHUNK_MEASURES_PER_CALL) {
-    batches.push(targetMeasures.slice(i, i + CHUNK_MEASURES_PER_CALL));
+  for (let i = 0; i < targetMeasures.length; i += REPAIR_MEASURES_PER_CALL) {
+    batches.push(targetMeasures.slice(i, i + REPAIR_MEASURES_PER_CALL));
   }
   telem.batchCount = batches.length;
 
@@ -1198,7 +1211,7 @@ async function repairMeasuresTargeted(
   return { patched, telem };
 }
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; provider?: string; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
+async function executeDraft(intake: IntakeArtefact, providerName?: string, onDraftReady?: (bestEffort: any) => Promise<void>): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; provider?: string; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport; telemetry?: any; repairWarning?: string | null } | { error: string; raw?: string; telemetry?: any }> {
   // Attempt 1: initial draft.
   const first = await callDraftingLLM(intake, providerName);
   if ("error" in first) return first;
@@ -1241,6 +1254,46 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
   let validation: any = validate(draft);
   const initialValidateMs = Date.now() - initialValidateStart;
 
+  // Assemble a full, client-consumable result object from the current draft +
+  // validation. Used BOTH for the pre-repair best-effort persist and (optionally)
+  // by callers, so the drafted content shape is identical whether or not repair
+  // completes. LLM-free and synchronous.
+  const buildDraftResult = (curDraft: any, curValidation: any, curRepairAttempts: number, warning: string | null = null) => {
+    const measures = flattenMeasures(curDraft);
+    const issuePayload = buildIssuePayload(curValidation);
+    return {
+      draft: curDraft,
+      measures,
+      validation: curValidation,
+      summary: summariseViolations(curValidation.violations),
+      repairAttempts: curRepairAttempts,
+      truncationRecovered: Boolean((curDraft as any).__truncationRecovered),
+      targetMeasureCount: resolveTargetCount(intake),
+      measureCount: measures.length,
+      failedCategories: Number((curDraft as any).__failedCategories || 0),
+      failedCategoryNames: ((curDraft as any).__failedCategoryNames as string[] | undefined) || undefined,
+      provider: draftProvider,
+      designDiagnostic: buildDraftDesignDiagnostic(curDraft, intake),
+      telemetry: draftTelemetry,
+      repairWarning: warning,
+      ...issuePayload,
+    };
+  };
+
+  // FAIL-LOUD SETTLE (step 1): persist the drafted framework as the job result
+  // BEFORE the repair pass runs. Drafting has already succeeded here; a truncating
+  // or hanging repair pass must never be able to discard this content or leave the
+  // job as status='running' with a NULL result. The caller writes this best-effort
+  // result while the job stays 'running'; the final settle overwrites it with the
+  // repaired result (or keeps it, on repair failure). Non-fatal on error.
+  if (onDraftReady) {
+    try {
+      await onDraftReady(buildDraftResult(draft, validation, 0));
+    } catch (persistErr: any) {
+      console.error("[framework-builder v2] onDraftReady pre-repair persist failed (non-fatal):", persistErr?.message || persistErr);
+    }
+  }
+
   // Up to MAX_REPAIRS targeted repair passes for hard errors. Warnings don't
   // trigger a repair.
   //
@@ -1276,6 +1329,20 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
   let bestDraft = draft;
   let bestValidation = validation;
   let bestErrorCount = initialCounts.errorCount;
+  // FAIL-LOUD SETTLE (step 2): the repair phase is an ENHANCEMENT on top of the
+  // already-persisted draft. It runs under an overall timeout and a catch-all so a
+  // truncating, throwing, or hanging repair pass can never wedge the job. On any
+  // repair failure we KEEP the best-effort draft (bestDraft/bestValidation, seeded
+  // with the initial draft and updated after each accepted pass) and record a
+  // fail-loud warning — we never discard the drafted content and never rethrow.
+  const REPAIR_PHASE_TIMEOUT_MS = Math.max(
+    60_000,
+    Number(process.env.FRAMEWORK_V2_REPAIR_TIMEOUT_MS || 8 * 60_000),
+  );
+  let repairFailure: { reason: string; detail: string } | null = null;
+  try {
+    await Promise.race([
+      (async () => {
   while (
     repairAttempts < MAX_REPAIRS &&
     validation.violations.some((v: any) => v.severity === "error")
@@ -1361,6 +1428,28 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
       bestErrorCount = afterCounts.errorCount;
     }
   }
+      })(),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`repair phase exceeded ${REPAIR_PHASE_TIMEOUT_MS}ms`)),
+          REPAIR_PHASE_TIMEOUT_MS,
+        ),
+      ),
+    ]);
+  } catch (repairErr: any) {
+    // Repair did not complete (truncation/throw/timeout). Keep the best-effort
+    // draft — it is already persisted — and surface the shortfall loudly. The
+    // orphaned in-flight repair call (if any) resolves harmlessly in the background.
+    const detail = repairErr?.message || String(repairErr);
+    repairFailure = {
+      reason: /exceeded \d+ms$/.test(detail) ? "timeout" : "error",
+      detail,
+    };
+    console.error(
+      `[framework-builder v2] Repair phase did not complete (${repairFailure.reason}): ${detail}. ` +
+      `Keeping best-effort draft with ${bestErrorCount} unresolved error(s); job will still settle.`,
+    );
+  }
   // FIX (a): return the fewest-error draft observed (keep-best).
   draft = bestDraft;
   validation = bestValidation;
@@ -1383,6 +1472,13 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
         // FIX (a): fewest-error count of the draft actually returned (keep-best).
         finalErrorCount: bestErrorCount,
         passes: repairPasses,
+        // FAIL-LOUD SETTLE: if repair did not complete, record why and how many
+        // errors remain unrepaired, so the shortfall is queryable in telemetry
+        // rather than silently swallowed.
+        repairIncomplete: repairFailure ? true : false,
+        repairFailureReason: repairFailure?.reason || null,
+        repairFailureDetail: repairFailure?.detail || null,
+        unrepairedErrorCount: repairFailure ? bestErrorCount : 0,
       };
       draftTelemetry.validationPhase = {
         initialValidateMs,
@@ -1433,6 +1529,14 @@ async function executeDraft(intake: IntakeArtefact, providerName?: string): Prom
     // BEFORE the draft is proposed as ready. Advisory only — never auto-applied.
     designDiagnostic: designDiagnosticReport,
     telemetry: draftTelemetry,
+    // FAIL-LOUD SETTLE: non-null when the repair pass did not complete
+    // (truncated / threw / timed out). The job still settles as succeeded with
+    // the best-effort draft, but this warning is surfaced to the caller so it can
+    // be persisted to framework_v2_jobs.error_message for loud DB-level visibility.
+    repairWarning: repairFailure
+      ? `Repair pass did not complete (${repairFailure.reason}): ${repairFailure.detail}. ` +
+        `Draft persisted best-effort with ${bestErrorCount} unresolved error(s).`
+      : null,
     ...issuePayload,
   };
 }
@@ -1708,7 +1812,28 @@ router.post("/v2/draft/start", requireWorkspace, async (req: Request, res: Respo
     // We do NOT await; the client polls /v2/draft/status/:jobId.
     (async () => {
       try {
-        const result = await executeDraft(intake, providerName);
+        // FAIL-LOUD SETTLE (step 1 wiring): persist the drafted framework as the
+        // job result the moment drafting completes, BEFORE the repair pass runs.
+        // This guarantees the ~34-measure draft content can never be lost if the
+        // repair pass truncates, throws, hangs, or times out. Written while the
+        // job stays 'running' (guarded by `AND status = 'running'`) so the client
+        // — which only fetches the result once status === 'succeeded' — does not
+        // pick it up prematurely. Non-fatal: a failed pre-repair persist must not
+        // abort the draft.
+        const onDraftReady = async (bestEffort: any) => {
+          try {
+            const teleJson = bestEffort?.telemetry ? JSON.stringify(bestEffort.telemetry) : null;
+            await db.execute(sql`
+              UPDATE framework_v2_jobs
+              SET result = ${JSON.stringify(bestEffort)}::jsonb, provider_name = COALESCE(${bestEffort?.provider || null}, provider_name), telemetry = ${teleJson}::jsonb, updated_at = NOW()
+              WHERE id = ${jobId} AND status = 'running'
+            `);
+            console.log(`[framework-builder v2 /draft/start] job ${jobId}: persisted best-effort draft before repair`);
+          } catch (persistErr: any) {
+            console.error(`[framework-builder v2 /draft/start] job ${jobId}: pre-repair persist failed (non-fatal):`, persistErr?.message || persistErr);
+          }
+        };
+        const result = await executeDraft(intake, providerName, onDraftReady);
         // [fb2-telemetry] Persist the diagnostic sidecar to the dedicated JSONB
         // column on BOTH outcomes so a failed/under-produced run survives beyond
         // Railway's short log-retention window and is queryable after the fact.
@@ -1724,9 +1849,16 @@ router.post("/v2/draft/start", requireWorkspace, async (req: Request, res: Respo
         // FIX F: persist the ACTUAL provider that produced the draft (not just the
         // requested one recorded at INSERT) so a succeeded-but-under-produced job
         // still has provider_name for diagnostics.
+        //
+        // FAIL-LOUD SETTLE (step 2 wiring): the job ALWAYS settles as 'succeeded'
+        // once drafting produced content — even if the repair pass did not
+        // complete — because the best-effort draft is real, usable output. When
+        // repair fell short, `result.repairWarning` is non-null and is written to
+        // error_message so the shortfall (which/how many measures unrepaired, and
+        // why) is loudly queryable at the DB level without failing the job.
         await db.execute(sql`
           UPDATE framework_v2_jobs
-          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, provider_name = COALESCE(${(result as any).provider || null}, provider_name), telemetry = ${telemetryJson}::jsonb, updated_at = NOW()
+          SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, provider_name = COALESCE(${(result as any).provider || null}, provider_name), error_message = ${(result as any).repairWarning || null}, telemetry = ${telemetryJson}::jsonb, updated_at = NOW()
           WHERE id = ${jobId}
         `);
       } catch (err: any) {
