@@ -10,6 +10,8 @@
  * Design ref: CompanyIQ-Framework-Creation-Design-v2.md
  */
 
+import { runLexiconHygiene, type SurfaceInput } from "./reliability/lexicon-hygiene.js";
+
 // ─── Types ───────────────────────────────────────────────────────────────
 
 export interface MeasureDraft {
@@ -1162,6 +1164,39 @@ export function validateSetLevel(fw: FrameworkDraft): ValidationResult {
       severity: "info",
       message: `antiInferenceRules is empty. Anti-inference rules keep scoring disclosure-grounded (no inference from absence); populating them matters more when adjacency risk is high.`,
       suggestion: `Populate antiInferenceRules at intake (the intake schema now generates them). Advisory only — this does not block drafting.`,
+    });
+  }
+
+  // ── Dimension 5: lexicon hygiene (multi-surface, admission-gated) ──
+  // Surfaces every SURVIVING suspect term (flagged-for-review, kept in the lexicon) as
+  // one dismissible `info` violation, so drops/flags are visible in structured output
+  // rather than console-only. Auto-cleaned debris is not surfaced here (it was removed
+  // deterministically). Evidence keywords are checked defensively: MeasureDraft does not
+  // declare the field, but frameworks carry per-measure evidenceKeywords at runtime.
+  const topicLexicon = [
+    fw.topicTerm,
+    ...(Array.isArray(fw.topicSynonyms) ? fw.topicSynonyms : []),
+    ...(Array.isArray(fw.adjacentTopics) ? fw.adjacentTopics : []),
+  ].filter((t): t is string => typeof t === "string" && t.length > 0);
+
+  const hygieneSurfaces: SurfaceInput[] = [
+    { surface: "topicSynonyms", terms: fw.topicSynonyms, origin: "llm" },
+  ];
+  for (const m of measures) {
+    const ek = (m as { evidenceKeywords?: unknown }).evidenceKeywords;
+    if (Array.isArray(ek) && ek.length > 0) {
+      hygieneSurfaces.push({ surface: "evidenceKeywords", terms: ek, origin: "llm" });
+    }
+  }
+
+  const hygiene = runLexiconHygiene({ surfaces: hygieneSurfaces, topicTokens: topicLexicon });
+  for (const p of hygiene.provenance) {
+    if (p.action !== "flagged-for-review") continue;
+    violations.push({
+      rule: "lexicon-hygiene",
+      severity: "info",
+      message: `Suspect retrieval term kept for review on ${p.surface}: "${p.term}" (${p.flagReason}). It was not auto-removed, but it may be filing/notice residue or off-topic — confirm it belongs in the lexicon.`,
+      suggestion: `Review this term. If it is boilerplate or off-topic, remove it; otherwise dismiss this notice. Advisory only — this does not block drafting.`,
     });
   }
 

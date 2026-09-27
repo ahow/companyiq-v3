@@ -78,6 +78,31 @@ export const FILING_BOILERPLATE_PATTERNS: RegExp[] = [
   // — Signature / attestation scaffolding —
   /\bformer (?:name|address|managing)\b/i,
   /\bmanaging (?:member|general partner)\b/i,
+  // — Proxy / notice / meeting-logistics scaffolding —
+  // The machinery of a proxy statement and its "notice of internet availability":
+  // how to receive/vote materials, meeting logistics, contact details. GENERIC —
+  // it describes the delivery of a document, never the subject the framework is
+  // about, and topicTokens overlap still protects a framework genuinely about
+  // (e.g.) shareholder voting.
+  /\bproxy (?:statement|materials|card|solicitation)\b/i,
+  /\bnotice of (?:internet )?availability\b/i,
+  /\b(?:regarding|availability) of (?:the )?proxy\b/i,
+  /\bimportant notice\b/i,
+  /\bannual meeting of (?:share|stock)holders\b/i,
+  /\bspecial meeting of (?:share|stock)holders\b/i,
+  /\brecord date\b/i,
+  /\bvote (?:your shares|by (?:internet|telephone|mail|phone))\b/i,
+  /\bvoting instructions?\b/i,
+  /\bboxes? that apply\b/i,
+  // — Contact-detail / delivery residue —
+  /\breceive (?:email|e-mail|paper copies|future)\b/i,
+  /\b(?:e-?mail|telephone|toll-free) (?:address|number)\b/i,
+  /\bwww\.[^\s]+/i,
+  /\b[^\s@]+@[^\s@]+\.[^\s@]+\b/i,
+  // — Registrar / transfer-agent scaffolding —
+  /\btransfer agent\b/i,
+  /\bregistrar and\b/i,
+  /\bstock (?:transfer|registrar)\b/i,
 ];
 
 function normalise(term: unknown): string {
