@@ -81,6 +81,50 @@ interface TestDriveCandidate {
   isKnownDiscloser: boolean;
 }
 
+// ── Active draft/refine job persistence ──────────────────────────────────────
+// A draft/refine job runs server-side for several minutes. If the user reloads
+// (or a mobile browser backgrounds/throttles the tab and drops the live poll),
+// the in-memory jobId/startTime are lost and the finished result is never
+// re-attached — the spinner appears stuck forever even though the job already
+// succeeded on the server. We persist the active job to localStorage so a
+// mount-time effect can re-attach to it (see the re-attach useEffect). The key
+// uses the same `fw-builder-v2-*` prefix as the other persisted builder state.
+const ACTIVE_JOB_KEY = "fw-builder-v2-activeDraftJob";
+type DraftFlow = "draft" | "refine";
+interface ActiveJobRecord {
+  jobId: string;
+  startTime: number; // epoch ms — carried across reloads so elapsed stays honest
+  flow: DraftFlow;
+}
+function persistActiveJob(rec: ActiveJobRecord) {
+  try {
+    localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(rec));
+  } catch { /* private-mode / quota — non-fatal */ }
+}
+function clearActiveJob() {
+  try {
+    localStorage.removeItem(ACTIVE_JOB_KEY);
+  } catch { /* non-fatal */ }
+}
+function readActiveJob(): ActiveJobRecord | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_JOB_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.jobId === "string" &&
+      typeof parsed.startTime === "number" &&
+      (parsed.flow === "draft" || parsed.flow === "refine")
+    ) {
+      return parsed as ActiveJobRecord;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFrameworks?: () => void }) {
   const [stage, setStage] = useState<Stage>("intake");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -106,6 +150,10 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
   const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Guards against two concurrent poll loops (e.g. the mount re-attach effect
+  // firing while a user-initiated draft is already polling, or React StrictMode
+  // double-invoking the mount effect in dev).
+  const pollActiveRef = useRef(false);
 
   // ── Chat file attachments ────────────────────────────────────────────────
   // The user can attach reference files (CSV/TXT/MD/JSON read client-side; PDF
@@ -459,6 +507,75 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // FIX 1 — Mount-time re-attach to an in-flight or already-finished draft/refine
+  // job. Before this, a job that finished server-side while the tab was closed (or
+  // a poll that never resumed after a reload) left the user stranded on the
+  // drafting spinner or a "still not finished" error, even though the result was
+  // ready to download. On mount we read the persisted active job and re-attach:
+  //   - succeeded -> download the result and load it into review (identical to the
+  //     live poll success branch, via applyDraftResult);
+  //   - running/pending -> resume the SAME poll loop carrying the ORIGINAL start
+  //     time so the elapsed timer and hard deadline stay honest across the reload;
+  //   - failed -> surface the honest error and fall back to a sane stage;
+  //   - 404 / gone / network error -> clear and fall back gracefully.
+  // Saved-framework restore takes PRECEDENCE: if a ?frameworkId= deep link or a
+  // saved framework is present we do nothing here, so the two mount effects never
+  // fight over the stage. (savedFrameworkId is read synchronously from localStorage
+  // at init, so it is reliable at mount.)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("frameworkId")) return;
+    if (savedFrameworkId != null) return;
+    const active = readActiveJob();
+    if (!active) return;
+    (async () => {
+      try {
+        const status = await api.request(
+          `/framework-builder/v2/draft/status/${active.jobId}`,
+          {},
+          15000,
+        );
+        if (status?.status === "succeeded") {
+          let result: any;
+          try {
+            result = await fetchJobResult(active.jobId);
+          } catch (resultErr: any) {
+            setError(
+              `A finished ${active.flow} was found but its result could not be downloaded (${
+                resultErr?.message || resultErr
+              }). It is saved server-side \u2014 try again.`,
+            );
+            clearActiveJob();
+            setStage(active.flow === "refine" ? "review" : "intake");
+            return;
+          }
+          applyDraftResult(result, active.flow);
+          setStage("review");
+          clearActiveJob();
+        } else if (status?.status === "failed") {
+          setError(
+            status.errorMessage ||
+              (active.flow === "refine" ? "Refine job failed" : "Draft job failed"),
+          );
+          clearActiveJob();
+          setStage(active.flow === "refine" ? "review" : "intake");
+        } else if (status?.status === "running" || status?.status === "pending") {
+          // Resume the SAME poll loop, carrying the ORIGINAL start time so the
+          // elapsed timer and the hard deadline stay honest across the reload.
+          void pollDraftJob(active.jobId, active.startTime, active.flow);
+        } else {
+          // Unknown/unexpected status shape: don't strand the user, just clear.
+          clearActiveJob();
+        }
+      } catch {
+        // 404 (job gone) or a network error: clear and fall back gracefully
+        // rather than leaving the user on a stale spinner.
+        clearActiveJob();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // One-shot fetch of a finished job's (potentially large) result, separated from
   // the lightweight status poll. Generous timeout + bounded retry so a transient
   // stall on the big body is retried a few times, but a persistent failure throws
@@ -480,40 +597,58 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     throw lastErr || new Error("failed to download job result");
   }
 
-  async function draftFramework() {
-    if (!intake?.topicTerm) {
-      setError("Intake not ready");
-      return;
+  // Load a finished job result into review state. Mirrors EXACTLY the setters the
+  // draft/refine poll success branches used before, so behaviour is identical
+  // whether the result arrives via the live poll or a mount-time re-attach. The
+  // draft flow reports shortfall fields (truncation/target/failed categories);
+  // the refine flow reports the honest refine outcome message instead.
+  function applyDraftResult(result: any, flow: DraftFlow) {
+    setDraft(result.draft);
+    setValidation(result.validation);
+    setDesignDiagnostic(result.designDiagnostic || null);
+    if (typeof result.repairAttempts === "number") setRepairAttempts(result.repairAttempts);
+    if (flow === "draft") {
+      setTruncationRecovered(Boolean(result.truncationRecovered));
+      setTargetMeasureCount(
+        typeof result.targetMeasureCount === "number" ? result.targetMeasureCount : null,
+      );
+      setFailedCategories(Number(result.failedCategories || 0));
+      setFailedCategoryNames(
+        Array.isArray(result.failedCategoryNames) ? result.failedCategoryNames : [],
+      );
+    } else {
+      // ISSUE 2: surface the honest server-computed outcome of the refine run.
+      if (typeof result.refineMessage === "string") setRefineMessage(result.refineMessage);
     }
-    setError(null);
-    setLoading(true);
+  }
+
+  // Shared poll loop for a started draft/refine job. Used by BOTH the initial
+  // user-triggered flows (after they start the job) AND the mount-time re-attach
+  // effect (resuming an in-flight job after a reload). Centralising it guarantees
+  // the resumed poll behaves identically to the original one. The deadline is
+  // computed from the ORIGINAL startTime so elapsed/time-remaining stay honest
+  // across reloads. Persists the active job for re-attach, and always clears it +
+  // resets the poll guard when the job settles (success/failure/deadline).
+  async function pollDraftJob(jobId: string, startTime: number, flow: DraftFlow) {
+    if (pollActiveRef.current) return; // never double-start a poll
+    pollActiveRef.current = true;
+    persistActiveJob({ jobId, startTime, flow });
+    setDraftJobId(jobId);
+    setDraftJobStartTime(startTime);
     setStage("drafting");
+    setLoading(true);
+    const deadlineMs = flow === "refine" ? 15 * 60_000 : 25 * 60_000;
+    const deadline = startTime + deadlineMs;
+    let consecutivePollFailures = 0;
     try {
-      const confirmedIntake = { ...intake, confirmed: true };
-      // Start an async draft job — the LLM call takes several minutes and
-      // mobile browsers drop long-running fetch sockets. We poll instead.
-      const startRes = await api.request("/framework-builder/v2/draft/start", {
-        method: "POST",
-        body: JSON.stringify({ intake: confirmedIntake }),
-      });
-      const jobId = startRes.jobId;
-      setDraftJobId(jobId);
-      setDraftJobStartTime(Date.now());
-      // Poll every 5s for up to 15 minutes. Each poll is a fresh short-lived
-      // request that survives socket drops.
-      // 25 minutes: chunked drafts of 25–50 measures with an auto-repair pass
-      // legitimately take 15–20 minutes. Below this we saw false timeouts.
-      const deadline = Date.now() + 25 * 60_000;
-      // Track CONSECUTIVE poll failures. A single transient blip is retried, but a
-      // sustained loss of contact (~25s) stops loudly instead of silently looping to
-      // the deadline and printing a misleading "LLM provider may be down."
-      let consecutivePollFailures = 0;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         await new Promise((r) => setTimeout(r, 5000));
         if (Date.now() > deadline) {
           throw new Error(
-            "Draft still not finished after 25 minutes. You can try again \u2014 your intake is preserved. If this keeps happening the LLM provider may be down.",
+            flow === "refine"
+              ? "Refine still not finished after 15 minutes."
+              : "Draft still not finished after 25 minutes. You can try again \u2014 your intake is preserved. If this keeps happening the LLM provider may be down.",
           );
         }
         let status: any = null;
@@ -524,14 +659,14 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
         } catch (pollErr: any) {
           consecutivePollFailures++;
           console.warn(
-            `draft-status poll transient error (${consecutivePollFailures}):`,
+            `${flow}-status poll transient error (${consecutivePollFailures}):`,
             pollErr?.message || pollErr,
           );
           if (consecutivePollFailures > 5) {
             throw new Error(
-              `Lost contact with the server while waiting for the draft (last error: ${
+              `Lost contact with the server while waiting for the ${flow} (last error: ${
                 pollErr?.message || pollErr
-              }). Your intake is preserved \u2014 try again.`,
+              }). Your ${flow === "refine" ? "draft" : "intake"} is preserved \u2014 try again.`,
             );
           }
           continue;
@@ -544,41 +679,63 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
             result = await fetchJobResult(jobId);
           } catch (resultErr: any) {
             throw new Error(
-              `Draft finished but the result could not be downloaded (${
+              `${flow === "refine" ? "Refine" : "Draft"} finished but the result could not be downloaded (${
                 resultErr?.message || resultErr
               }). It is saved server-side \u2014 try again.`,
             );
           }
-          setDraft(result.draft);
-          setValidation(result.validation);
-          setDesignDiagnostic(result.designDiagnostic || null);
-          if (typeof result.repairAttempts === "number") {
-            setRepairAttempts(result.repairAttempts);
-          }
-          setTruncationRecovered(Boolean(result.truncationRecovered));
-          setTargetMeasureCount(
-            typeof result.targetMeasureCount === "number" ? result.targetMeasureCount : null,
-          );
-          setFailedCategories(Number(result.failedCategories || 0));
-          setFailedCategoryNames(
-            Array.isArray(result.failedCategoryNames) ? result.failedCategoryNames : [],
-          );
+          applyDraftResult(result, flow);
           setStage("review");
-          setDraftJobId(null);
           break;
         }
         if (status?.status === "failed") {
-          throw new Error(status.errorMessage || "Draft job failed");
+          throw new Error(status.errorMessage || (flow === "refine" ? "Refine job failed" : "Draft job failed"));
         }
         // status === "running" or "pending": keep polling
       }
     } catch (err: any) {
       setError(err?.message || String(err));
-      setStage("intake");
-      setDraftJobId(null);
+      // Draft failures fall back to intake; refine failures keep the existing draft.
+      setStage(flow === "refine" ? "review" : "intake");
     } finally {
+      setDraftJobId(null);
+      clearActiveJob();
+      pollActiveRef.current = false;
       setLoading(false);
     }
+  }
+
+  async function draftFramework() {
+    if (!intake?.topicTerm) {
+      setError("Intake not ready");
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    setStage("drafting");
+    let jobId: string;
+    try {
+      const confirmedIntake = { ...intake, confirmed: true };
+      // Start an async draft job — the LLM call takes several minutes and
+      // mobile browsers drop long-running fetch sockets. We poll instead.
+      const startRes = await api.request("/framework-builder/v2/draft/start", {
+        method: "POST",
+        body: JSON.stringify({ intake: confirmedIntake }),
+      });
+      jobId = startRes.jobId;
+    } catch (err: any) {
+      // Failed before the job even started — nothing to persist/resume.
+      setError(err?.message || String(err));
+      setStage("intake");
+      setLoading(false);
+      return;
+    }
+    // Hand off to the shared poller. It persists the active job (jobId + start
+    // time + flow) so a reload can re-attach, runs the poll loop with a 25-min
+    // deadline, loads the result on success, and clears the persisted job + loading
+    // state when it settles. Poll every 5s; chunked drafts of 25–50 measures with
+    // an auto-repair pass legitimately take up to ~20 minutes.
+    await pollDraftJob(jobId, Date.now(), "draft");
   }
 
   async function selectTestDriveSample() {
@@ -612,74 +769,24 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     setRepairAttempts(0);
     setRefineMessage(null);
     setTruncationRecovered(false);
+    let jobId: string;
     try {
       // Start a refine job and poll to completion (same pattern as draftFramework).
       const startRes = await api.request("/framework-builder/v2/draft/refine", {
         method: "POST",
         body: JSON.stringify({ draft, intake }),
       });
-      const jobId = startRes.jobId;
-      setDraftJobId(jobId);
-      setDraftJobStartTime(Date.now());
-      const deadline = Date.now() + 15 * 60_000;
-      let consecutivePollFailures = 0;
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        await new Promise((r) => setTimeout(r, 5000));
-        if (Date.now() > deadline) {
-          throw new Error("Refine still not finished after 15 minutes.");
-        }
-        let status: any = null;
-        try {
-          status = await api.request(`/framework-builder/v2/draft/status/${jobId}`, {}, 15000);
-          consecutivePollFailures = 0;
-        } catch (pollErr: any) {
-          consecutivePollFailures++;
-          console.warn(
-            `refine poll transient (${consecutivePollFailures}):`,
-            pollErr?.message || pollErr,
-          );
-          if (consecutivePollFailures > 5) {
-            throw new Error(
-              `Lost contact with the server while waiting for the refine (last error: ${
-                pollErr?.message || pollErr
-              }). Your draft is preserved \u2014 try again.`,
-            );
-          }
-          continue;
-        }
-        if (status?.status === "succeeded") {
-          let result: any;
-          try {
-            result = await fetchJobResult(jobId);
-          } catch (resultErr: any) {
-            throw new Error(
-              `Refine finished but the result could not be downloaded (${
-                resultErr?.message || resultErr
-              }). It is saved server-side \u2014 try again.`,
-            );
-          }
-          setDraft(result.draft);
-          setValidation(result.validation);
-          setDesignDiagnostic(result.designDiagnostic || null);
-          if (typeof result.repairAttempts === "number") setRepairAttempts(result.repairAttempts);
-          // ISSUE 2: surface the honest server-computed outcome of the refine run.
-          if (typeof result.refineMessage === "string") setRefineMessage(result.refineMessage);
-          setStage("review");
-          setDraftJobId(null);
-          break;
-        }
-        if (status?.status === "failed") {
-          throw new Error(status.errorMessage || "Refine job failed");
-        }
-      }
+      jobId = startRes.jobId;
     } catch (err: any) {
+      // Failed before the job even started — keep the existing draft in review.
       setError(err?.message || String(err));
       setStage("review");
-      setDraftJobId(null);
-    } finally {
       setLoading(false);
+      return;
     }
+    // Hand off to the shared poller (15-min deadline for refine). It persists the
+    // active job for reload re-attach and clears it when the job settles.
+    await pollDraftJob(jobId, Date.now(), "refine");
   }
 
   // Toggle explicit acceptance of a single outstanding design issue.
@@ -2040,19 +2147,40 @@ function DraftingProgress({ startTime, jobId }: { startTime: number | null; jobI
   }, [startTime]);
   const mm = Math.floor(elapsed / 60);
   const ss = String(elapsed % 60).padStart(2, "0");
+  // FIX 2 — Soft threshold: past ~13 minutes an honest draft has usually finished
+  // (or is finishing) server-side, so an ever-climbing timer with the normal
+  // "4–12 minutes" copy reads as a hang. Rather than let it silently climb toward
+  // the 25-minute hard deadline, we swap in a calm, non-alarming message that tells
+  // the user the truth: the draft may already be done on the server, and reloading
+  // will re-attach to it (now actually true — see the mount-time re-attach effect).
+  // This is non-blocking and non-dismissible-by-necessity (the spinner + elapsed
+  // timer stay visible); the existing hard-deadline throw is unchanged.
+  const SOFT_THRESHOLD_S = 13 * 60;
+  const pastSoftThreshold = elapsed >= SOFT_THRESHOLD_S;
   return (
     <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg space-y-2">
       <div className="flex items-center gap-2 text-purple-800 dark:text-purple-200 font-medium text-sm">
         <Loader2 className="w-4 h-4 animate-spin" />
         Drafting framework… {mm}:{ss} elapsed
       </div>
-      <div className="text-xs text-purple-700 dark:text-purple-300">
-        The LLM is generating ~30–40 measures with C1–C10 guidance, then runs up to two
-        auto-repair passes if any measure violates a construction rule. Total time is
-        typically 4–12 minutes. You can safely leave this tab open. If you close it, come
-        back to the same page and the draft will still be waiting.
-        {jobId && <div className="mt-1 text-xs text-purple-600 opacity-70">Job {jobId.slice(0, 8)}</div>}
-      </div>
+      {pastSoftThreshold ? (
+        <div className="text-xs text-purple-700 dark:text-purple-300">
+          This is taking longer than usual. The draft may already be finished on the
+          server — if it looks stuck, reload this page and it will automatically
+          re-attach to the job and load the result (or resume waiting). You won&rsquo;t
+          lose anything: your intake is preserved and the draft is still being generated
+          server-side.
+          {jobId && <div className="mt-1 text-xs text-purple-600 opacity-70">Job {jobId.slice(0, 8)}</div>}
+        </div>
+      ) : (
+        <div className="text-xs text-purple-700 dark:text-purple-300">
+          The LLM is generating ~30–40 measures with C1–C10 guidance, then runs up to two
+          auto-repair passes if any measure violates a construction rule. Total time is
+          typically 4–12 minutes. You can safely leave this tab open. If you close it, come
+          back to the same page and the draft will still be waiting.
+          {jobId && <div className="mt-1 text-xs text-purple-600 opacity-70">Job {jobId.slice(0, 8)}</div>}
+        </div>
+      )}
     </div>
   );
 }
