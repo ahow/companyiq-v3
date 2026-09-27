@@ -308,6 +308,13 @@ export const measureScores = pgTable("measure_scores", {
   rationaleScoreInconsistent: boolean("rationale_score_inconsistent").notNull().default(false),
   inconsistencyReason: text("inconsistency_reason"),
   needsReadjudication: boolean("needs_readjudication").notNull().default(false),
+  // WS-B (P1 per-decision traceability): the complete, immutable record proving
+  // WHAT governed this decision — run/analysis ID, immutable framework hash +
+  // id/version, canonical rule id/version/provenance/sourceField, selected clauses,
+  // fallback-activation reason, the evidence passage bound to the decision, and the
+  // three-valued validation status. Additive JSONB sidecar; see
+  // server/lib/framework-v2/reliability/decision-trace.ts (DecisionTrace).
+  decisionTrace: jsonb("decision_trace"),
   displayOrder: integer("display_order").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({

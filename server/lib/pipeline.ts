@@ -36,6 +36,7 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
 import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
+import { buildDecisionTrace, computeFrameworkContentHash } from "./framework-v2/reliability/decision-trace.js"; // WS-B: per-decision traceability
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
 import { classifyProvenance, provenanceToSourceType, isProvenanceRobustnessEnabled, type IrTenantBinding } from "./provenance.js";
@@ -2638,6 +2639,10 @@ async function runAnalyzePhase(opts: {
   // forceIncludedDocUrl is annotated forceInclude=true. The /api/companies/:id
   // payload returns quotes verbatim, so validators can confirm the path fired.
   const normUrl = (u?: string) => (u || "").trim().toLowerCase().replace(/[#?].*$/, "").replace(/\/$/, "");
+  // WS-B (P1): compute the IMMUTABLE framework-content hash ONCE for this run, from
+  // the framework + the measures AS EXECUTED. Each per-decision trace binds to it so
+  // a decision can be tied back to the exact framework content that produced it.
+  const runFrameworkHash = computeFrameworkContentHash(framework as any, measures as any[]);
   const scoreRows = analysis.categories.flatMap((cat) =>
     cat.measures.map((m) => {
       const fiUrl = normUrl((m as any).forceIncludedDocUrl);
@@ -2729,6 +2734,24 @@ async function runAnalyzePhase(opts: {
         rationaleScoreInconsistent: (m as any).rationaleScoreInconsistent === true,
         inconsistencyReason: (m as any).inconsistencyReason ?? null,
         needsReadjudication: (m as any).needsReadjudication === true,
+
+        // WS-B (P1): immutable per-decision traceability record. Binds this cell to
+        // its run/analysis ID, the immutable framework hash, the canonical rule that
+        // governed it, the clauses used, the fallback-activation reason, the evidence
+        // passage(s), and a three-valued validation status. FAIL-LOUD: an
+        // un-attributable decision surfaces its reason in decisionTrace.diagnostics
+        // (never a silently blank record).
+        decisionTrace: buildDecisionTrace({
+          companyId,
+          measureId: m.measureId,
+          verdict: m.verdict,
+          quotes: finalQuotes,
+          canonicalRuleTrace: (m as any).canonicalRuleTrace ?? null,
+          runId: batchId ?? null,
+          frameworkId: framework.id,
+          frameworkVersion: (framework as any).version ?? null,
+          frameworkHash: runFrameworkHash,
+        }),
       };
     })
   );

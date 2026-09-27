@@ -4104,7 +4104,24 @@ router.post("/v2/import", requireWorkspace, async (req: Request, res: Response) 
     const existing = await storage.getFrameworks(ctx.workspaceId);
     const existingNames = (existing as any[] | undefined)?.map((f) => f?.name) ?? [];
 
-    const { framework, measures } = buildFrameworkInserts(body, ctx.workspaceId, existingNames);
+    // WS-C: when the caller asks to keep the same measures, the imported measure
+    // SET is retained verbatim (identical titles, order, count). buildFrameworkInserts
+    // runs a fail-loud guard (PreserveMeasuresViolation) that only additive criteria
+    // hardening survives — no regenerate/reword/reorder/split/merge/drop.
+    const keepSameMeasures =
+      (req.body as any)?.keepSameMeasures === true || req.query?.keepSameMeasures === "true";
+
+    let framework, measures;
+    try {
+      ({ framework, measures } = buildFrameworkInserts(body, ctx.workspaceId, existingNames, {
+        preserveMeasures: keepSameMeasures,
+      }));
+    } catch (guardErr: any) {
+      if (guardErr?.name === "PreserveMeasuresViolation") {
+        return res.status(422).json({ error: guardErr.message, code: "PRESERVE_MEASURES_VIOLATION" });
+      }
+      throw guardErr;
+    }
 
     const created = await storage.createFramework(framework as any);
 
