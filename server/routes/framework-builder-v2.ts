@@ -1753,17 +1753,26 @@ router.get("/v2/draft/status/:jobId", requireWorkspace, async (req: Request, res
     const ctx = getSessionContext(req);
     if (!ctx || !ctx.workspaceId) return res.status(401).json({ error: "session context missing" });
     const jobId = req.params.jobId;
+    // Lightweight status poll: we deliberately do NOT select the (potentially ~2MB)
+    // result jsonb here. Returning it on every poll pushed a large uncached body
+    // through the edge/CDN and could stall the terminal poll, making a finished job
+    // look like it never completed. Instead we return a boolean `resultReady` and
+    // the client fetches the full result once via GET /v2/draft/result/:jobId.
     const rows = await db.execute(sql`
-      SELECT id, status, result, error_message, error_stack, created_at, updated_at
+      SELECT id, status, error_message, error_stack, created_at, updated_at,
+             (result IS NOT NULL) AS has_result
       FROM framework_v2_jobs
       WHERE id = ${jobId} AND workspace_id = ${ctx.workspaceId}
     `);
     const row = (rows as any).rows?.[0];
     if (!row) return res.status(404).json({ error: "job not found" });
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     return res.json({
       jobId: row.id,
       status: row.status,
-      result: row.result || null,
+      resultReady: Boolean(row.has_result),
       errorMessage: row.error_message || null,
       errorStack: row.error_stack || null,
       createdAt: row.created_at,
@@ -1771,6 +1780,39 @@ router.get("/v2/draft/status/:jobId", requireWorkspace, async (req: Request, res
     });
   } catch (err: any) {
     console.error("[framework-builder v2 /draft/status] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── GET /v2/draft/result/:jobId ─────────────────────────────────────
+// One-shot fetch of the full (potentially large) job result, separated from the
+// status poll so the large body is delivered exactly once when the client knows
+// the job is done. Serves BOTH draft and refine jobs (shared framework_v2_jobs).
+router.get("/v2/draft/result/:jobId", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx || !ctx.workspaceId) return res.status(401).json({ error: "session context missing" });
+    const jobId = req.params.jobId;
+    const rows = await db.execute(sql`
+      SELECT id, status, result, error_message, error_stack
+      FROM framework_v2_jobs
+      WHERE id = ${jobId} AND workspace_id = ${ctx.workspaceId}
+    `);
+    const row = (rows as any).rows?.[0];
+    if (!row) return res.status(404).json({ error: "job not found" });
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    if (row.status !== "succeeded") {
+      return res.status(409).json({ error: "result not ready", status: row.status });
+    }
+    if (row.result == null) {
+      // Fail loud: the job is marked succeeded but the persisted result is missing.
+      return res.status(500).json({ error: "job succeeded but result missing" });
+    }
+    return res.json({ jobId: row.id, status: row.status, result: row.result });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /draft/result] error:", err);
     return res.status(500).json({ error: err?.message || "internal error" });
   }
 });

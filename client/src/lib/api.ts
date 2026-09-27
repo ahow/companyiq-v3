@@ -1,14 +1,34 @@
 const API_BASE = "/api";
 
-async function request(path: string, options: RequestInit = {}): Promise<any> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-    credentials: "include",
-  });
+async function request(path: string, options: RequestInit = {}, timeoutMs: number = 30000): Promise<any> {
+  // Per-request timeout so a stalled response (e.g. a large body wedged behind the
+  // edge/CDN) fails loudly instead of hanging forever. Callers that expect a large
+  // payload can pass a more generous timeoutMs.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+      credentials: "include",
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      const timeoutErr = new Error(`Request timed out after ${timeoutMs}ms: ${path}`) as Error & {
+        timeout?: boolean;
+      };
+      timeoutErr.timeout = true;
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (res.status === 401) {
     throw new Error("Unauthorized");
