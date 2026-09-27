@@ -11,6 +11,7 @@
  */
 
 import { runLexiconHygiene, type SurfaceInput } from "./reliability/lexicon-hygiene.js";
+import { buildCanonicalRule } from "./reliability/canonical-rule.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -1206,6 +1207,64 @@ export function validateSetLevel(fw: FrameworkDraft): ValidationResult {
 
 // ─── Combined validator ───────────────────────────────────────────────────
 
+/**
+ * C13 — example ↔ canonical-rule consistency (advisory, non-blocking).
+ *
+ * For each measure, build the ONE canonical rule (substantive-first precedence,
+ * via buildCanonicalRule) and check the measure's OWN supplied examples against
+ * it: a stated POSITIVE example that does not clearly pass the canonical rule, or
+ * a NEGATIVE example that does, is a contradiction between the examples and the
+ * controlling rule (the reviewer's three counterexamples, e.g. 1.1's strategy
+ * example failing its own strict fallback).
+ *
+ * TOPIC-AGNOSTIC and NON-BLOCKING: this never hardcodes a framework/topic and
+ * only ever emits `warning`/`info` — it never sets passed=false and never blocks
+ * a save. Because turning an example's free text into structured facts is the
+ * SEPARATE uncertain step (not done here), C13 does NOT itself pass/fail examples
+ * by NLP; it reports the STRUCTURAL risk: (a) rules whose Yes-bar is derived ONLY
+ * from a strict fallback (flaggedForReview) while the measure also ships positive
+ * examples — exactly the class where a stated positive can be rejected by the
+ * controlling rule — and (b) measures that ship examples but resolve to a
+ * derived-default bar. Each item is an explicit review item, never a silent pass.
+ */
+export function validateC13(fw: FrameworkDraft): ValidationResult {
+  const violations: Violation[] = [];
+  for (const m of fw.measures) {
+    const positives = Array.isArray(m.positive_examples) ? m.positive_examples.filter((e) => toText(e).trim()) : [];
+    const negatives = Array.isArray(m.negative_examples) ? m.negative_examples.filter((e) => toText(e).trim()) : [];
+    if (positives.length === 0 && negatives.length === 0) continue; // nothing to check against
+
+    // Build the canonical rule from the SAME precedence the runtime uses.
+    const rule = buildCanonicalRule({
+      measureId: m.measureId,
+      substantiveDefinition: m.substantive_definition,
+      fallbackYesCriterion: m.fallback_yes_criterion,
+      scoringGuidance: m.scoringGuidance,
+      whatConstitutesEvidence: m.whatConstitutesEvidence,
+    });
+
+    if (rule.provenance === "fallback-derived") {
+      violations.push({
+        measureId: m.measureId,
+        rule: "C13",
+        severity: "warning",
+        message: `The canonical Yes-bar for this measure is derived ONLY from its strict fallback_yes_criterion (no substantive_definition / qualifyingInstance present), yet it ships ${positives.length} positive and ${negatives.length} negative example(s). A strict fallback must NOT silently become the authoritative bar: a stated positive example can be REJECTED by the controlling rule (reviewer §3 — e.g. a named-strategy positive failing a "two attribution tokens" fallback). Review each example against the canonical rule before relying on it.`,
+        suggestion: `Add a substantive_definition that states the authoritative Yes-bar, or relax the fallback so the supplied positive examples pass it. Rule identity: ${rule.ruleId} (v${rule.ruleVersion}); resolved from [${rule.sourceField}]. Then re-check example↔rule consistency (candidate example repairs must be reviewed, not auto-applied).`,
+      });
+    } else if (rule.provenance === "derived-default") {
+      violations.push({
+        measureId: m.measureId,
+        rule: "C13",
+        severity: "info",
+        message: `This measure ships ${positives.length} positive and ${negatives.length} negative example(s) but has no explicit substantive_definition / qualifyingInstance / fallback_yes_criterion, so the canonical rule fell back to a generic default bar. The examples cannot be checked against a real controlling rule until one is stated.`,
+        suggestion: `Add a substantive_definition (preferred) so the examples have an authoritative rule to be consistent with. Rule identity: ${rule.ruleId} (v${rule.ruleVersion}).`,
+      });
+    }
+  }
+  // Advisory-only: never blocks. `passed` stays true (no error-severity items).
+  return { passed: true, violations };
+}
+
 export function validateAll(fw: FrameworkDraft): ValidationResult {
   const all: Violation[] = [];
   for (const [name, fn] of [
@@ -1223,6 +1282,10 @@ export function validateAll(fw: FrameworkDraft): ValidationResult {
     // C12 — advisory (info only): prefer a conjunctive hard-token bundle over an
     // M-of-N / OR-list soft gate. Never sets passed=false, never blocks.
     ["C12", validateC12],
+    // C13 — advisory (warning/info): example ↔ canonical-rule consistency.
+    // Flags measures whose supplied examples may contradict the ONE authoritative
+    // rule (esp. strict-fallback-derived bars). Never sets passed=false.
+    ["C13", validateC13],
     // Set-level advisory diagnostics — emits ONLY `severity: "info"`, which is
     // excluded from the repair trigger and grouping (see validateSetLevel).
     ["set-level", validateSetLevel],

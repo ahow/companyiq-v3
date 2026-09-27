@@ -148,6 +148,46 @@ export interface StructuredRule {
   exclusions: string[];
   thresholds: RuleThreshold[];
   evidenceBindings: EvidenceBinding[];
+  /**
+   * Which measure field the authoritative Yes-bar was resolved FROM, most
+   * authoritative first (e.g. "substantiveDefinition"). This is the precedence
+   * winner recorded by resolveScoringContract; it is what makes the rule's
+   * authority auditable rather than implied. Added by Stage 3 (WS4).
+   */
+  sourceField?: string;
+  /**
+   * Provenance of the rule. "substantive"/"qualifying" mean a substantive
+   * criterion won the precedence. "fallback-derived" means NO substantive or
+   * qualifying criterion existed and the rule was derived ONLY from a strict
+   * `fallbackYesCriterion` — which must NOT silently become the canonical bar
+   * (reviewer §3): such a rule is flagged for review, never treated as an
+   * authoritative substantive bar.
+   */
+  provenance?: "substantive" | "qualifying" | "fallback-derived" | "derived-default";
+  /**
+   * True iff provenance is "fallback-derived" (or "derived-default"): the rule
+   * needs human review before its Yes-bar is trusted as authoritative. Advisory
+   * only — never blocks. Kept explicit so consumers do not have to re-derive it.
+   */
+  flaggedForReview?: boolean;
+}
+
+/**
+ * A structured fact set consumed by evaluateCanonicalRule. It is DELIBERATELY
+ * NOT free text: extracting facts from prose is a separate, uncertain step that
+ * happens BEFORE evaluation. A clause whose truth is not present here is treated
+ * as "unknown" (never silently false), so the evaluator can return
+ * "unknown-review-required" rather than a falsely-certain pass/fail.
+ */
+export interface StructuredFacts {
+  /**
+   * Per-clause truth of a structured fact, keyed by clauseId (see the trace
+   * `clauseId` emitted by buildCanonicalRule). `true`/`false` are definite;
+   * `"unknown"` (or a missing key) means the fact could not be determined.
+   */
+  clausePresence: Record<string, boolean | "unknown">;
+  /** Optional numeric/string measurements for threshold clauses, keyed by threshold subject. */
+  measurements?: Record<string, number | string>;
 }
 
 /**
@@ -166,6 +206,12 @@ export interface StructuredRuleResult {
     clause: string;
     status: StructuredRuleStatus;
     reason?: string;
+    /** Stable clause identifier (matches StructuredFacts.clausePresence keys). */
+    clauseId?: string;
+    /** The clause expression / kind (e.g. "required", "or-group", "exclusion", "threshold"). */
+    expression?: string;
+    /** The structured fact keys this clause consulted. */
+    factRefs?: string[];
   }>;
   /** Why the overall status is what it is (esp. for unknown-review-required). */
   rationale?: string;

@@ -20,6 +20,7 @@ import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./c
 import { composeAntiInferenceRules } from "./anti-inference.js";
 import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate.js";
 import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scoring-contract.js";
+import { buildCanonicalRuleTrace, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
 import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from "./eligibility-flags.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
@@ -141,6 +142,11 @@ export interface MeasureResult {
   // never change the verdict/score and never block a run or save. See
   // eligibility-flags.ts.
   eligibilityFlags?: EligibilityFlag[] | null;
+  // WS4 (canonical decision rule): the identity, version, source field and clauses
+  // of the canonical rule that governed THIS decision. Populated on every scored
+  // measure so the authoritative Yes-bar is auditable on the live scoring path.
+  // Back-compat optional field; never changes verdict/score.
+  canonicalRuleTrace?: CanonicalRuleTrace | null;
 }
 
 export interface AnalysisResult {
@@ -2927,8 +2933,16 @@ async function scoreSingleMeasure(opts: {
   // Set SCORING_SELF_CONSISTENCY=1 to disable (single pass).
   const passes = Math.max(1, parseInt(process.env.SCORING_SELF_CONSISTENCY || "3", 10));
 
+  // WS4: attach the canonical-rule trace to every scored result (identity,
+  // version, source field, clauses used, decision basis). Pure/deterministic;
+  // never changes verdict/score. See framework-v2/reliability/canonical-rule.ts.
+  const withCanonicalTrace = (r: MeasureResult): MeasureResult => ({
+    ...r,
+    canonicalRuleTrace: buildCanonicalRuleTrace(measure, { finalVerdict: r.verdict }),
+  });
+
   if (passes === 1) {
-    return scoreSingleMeasurePass({ ...opts, providerIndex: 0 });
+    return withCanonicalTrace(await scoreSingleMeasurePass({ ...opts, providerIndex: 0 }));
   }
 
   const passResults: MeasureResult[] = [];
@@ -2947,7 +2961,7 @@ async function scoreSingleMeasure(opts: {
   const substantivePasses = passResults.filter((r) => !(r as any)._scoringFailure);
   if (substantivePasses.length === 0) {
     console.error(`[${companyName}] All ${passes} scoring passes crashed for ${measure.measureId} — abstaining (excluded from totals), NOT emitting a substantive zero`);
-    return passResults[0];
+    return withCanonicalTrace(passResults[0]);
   }
 
   // Majority verdict by score bucket (0 / 0.5 / 1). Ties resolve toward the
@@ -2988,6 +3002,9 @@ async function scoreSingleMeasure(opts: {
     `[Self-consistency ${winningCount}/${substantiveCount} on ${gradedByLabel}]`;
   // Propagate model identity for methodology stamping
   (chosen as any)._gradedBy = gradedByLabel;
+
+  // WS4: attach the canonical-rule trace before caching so cached hits carry it too.
+  chosen.canonicalRuleTrace = buildCanonicalRuleTrace(measure, { finalVerdict: chosen.verdict });
 
   // I36-B: Store in verdict cache
   verdictCache.set(vKey, { result: { ...chosen }, ts: Date.now() });
