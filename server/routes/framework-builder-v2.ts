@@ -3206,12 +3206,16 @@ interface ImprovementApplyBody {
   frameworkId: number;
   listId: number;
   actions: Array<{ type: string; attrs: Record<string, string> }>;
+  // When true, apply the edits WITHOUT auto-starting a scoring pass. Scoring is
+  // strictly user-triggered (the "Run scoring again" button); the client always
+  // sends this. Absent/false preserves the legacy auto-rescore behaviour.
+  skipRescore?: boolean;
 }
 router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res: Response) => {
   try {
     const ctx = getSessionContext(req);
     if (!ctx?.workspaceId) return res.status(401).json({ error: "workspace required" });
-    const { frameworkId, listId, actions } = req.body as ImprovementApplyBody;
+    const { frameworkId, listId, actions, skipRescore } = req.body as ImprovementApplyBody;
     if (!frameworkId || !Array.isArray(actions)) {
       return res.status(400).json({ error: "frameworkId and actions[] required" });
     }
@@ -3903,7 +3907,12 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
     let rescoreTotalJobs: number | undefined;
     let rescoreSkippedReason: string | undefined;
     let rescoreError: string | undefined;
-    if (applied.length > 0) {
+    if (skipRescore) {
+      // Scoring is strictly user-triggered. Apply the edits only; the operator
+      // starts the next scoring pass explicitly via "Run scoring again". Do NOT
+      // snapshot or call /api/analyze here.
+      rescoreSkippedReason = "manual";
+    } else if (applied.length > 0) {
       try {
         // Idempotent snapshot of the batch about to be replaced in measure_scores.
         await snapshotIteration(frameworkId, listId, ctx.workspaceId);
