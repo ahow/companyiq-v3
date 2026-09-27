@@ -459,6 +459,27 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // One-shot fetch of a finished job's (potentially large) result, separated from
+  // the lightweight status poll. Generous timeout + bounded retry so a transient
+  // stall on the big body is retried a few times, but a persistent failure throws
+  // loudly rather than silently looping to the deadline. Serves draft AND refine.
+  async function fetchJobResult(jobId: string): Promise<any> {
+    let lastErr: any = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      try {
+        const res = await api.request(`/framework-builder/v2/draft/result/${jobId}`, {}, 120000);
+        if (res?.result) return res.result;
+        lastErr = new Error("result payload was empty");
+      } catch (err: any) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error("failed to download job result");
+  }
+
   async function draftFramework() {
     if (!intake?.topicTerm) {
       setError("Intake not ready");
@@ -483,6 +504,10 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
       // 25 minutes: chunked drafts of 25–50 measures with an auto-repair pass
       // legitimately take 15–20 minutes. Below this we saw false timeouts.
       const deadline = Date.now() + 25 * 60_000;
+      // Track CONSECUTIVE poll failures. A single transient blip is retried, but a
+      // sustained loss of contact (~25s) stops loudly instead of silently looping to
+      // the deadline and printing a misleading "LLM provider may be down."
+      let consecutivePollFailures = 0;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         await new Promise((r) => setTimeout(r, 5000));
@@ -493,26 +518,50 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
         }
         let status: any = null;
         try {
-          status = await api.request(`/framework-builder/v2/draft/status/${jobId}`);
+          // Short timeout on the lightweight status poll so a stalled poll fails fast.
+          status = await api.request(`/framework-builder/v2/draft/status/${jobId}`, {}, 15000);
+          consecutivePollFailures = 0;
         } catch (pollErr: any) {
-          // Transient poll error — do not abort; try again next tick.
-          console.warn("draft-status poll transient error:", pollErr?.message || pollErr);
+          consecutivePollFailures++;
+          console.warn(
+            `draft-status poll transient error (${consecutivePollFailures}):`,
+            pollErr?.message || pollErr,
+          );
+          if (consecutivePollFailures > 5) {
+            throw new Error(
+              `Lost contact with the server while waiting for the draft (last error: ${
+                pollErr?.message || pollErr
+              }). Your intake is preserved \u2014 try again.`,
+            );
+          }
           continue;
         }
-        if (status?.status === "succeeded" && status?.result) {
-          setDraft(status.result.draft);
-          setValidation(status.result.validation);
-          setDesignDiagnostic(status.result.designDiagnostic || null);
-          if (typeof status.result.repairAttempts === "number") {
-            setRepairAttempts(status.result.repairAttempts);
+        if (status?.status === "succeeded") {
+          // The slim status endpoint no longer inlines the result. Download it once
+          // via the dedicated result endpoint (generous timeout + bounded retry).
+          let result: any;
+          try {
+            result = await fetchJobResult(jobId);
+          } catch (resultErr: any) {
+            throw new Error(
+              `Draft finished but the result could not be downloaded (${
+                resultErr?.message || resultErr
+              }). It is saved server-side \u2014 try again.`,
+            );
           }
-          setTruncationRecovered(Boolean(status.result.truncationRecovered));
+          setDraft(result.draft);
+          setValidation(result.validation);
+          setDesignDiagnostic(result.designDiagnostic || null);
+          if (typeof result.repairAttempts === "number") {
+            setRepairAttempts(result.repairAttempts);
+          }
+          setTruncationRecovered(Boolean(result.truncationRecovered));
           setTargetMeasureCount(
-            typeof status.result.targetMeasureCount === "number" ? status.result.targetMeasureCount : null,
+            typeof result.targetMeasureCount === "number" ? result.targetMeasureCount : null,
           );
-          setFailedCategories(Number(status.result.failedCategories || 0));
+          setFailedCategories(Number(result.failedCategories || 0));
           setFailedCategoryNames(
-            Array.isArray(status.result.failedCategoryNames) ? status.result.failedCategoryNames : [],
+            Array.isArray(result.failedCategoryNames) ? result.failedCategoryNames : [],
           );
           setStage("review");
           setDraftJobId(null);
@@ -573,6 +622,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
       setDraftJobId(jobId);
       setDraftJobStartTime(Date.now());
       const deadline = Date.now() + 15 * 60_000;
+      let consecutivePollFailures = 0;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         await new Promise((r) => setTimeout(r, 5000));
@@ -581,18 +631,40 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
         }
         let status: any = null;
         try {
-          status = await api.request(`/framework-builder/v2/draft/status/${jobId}`);
+          status = await api.request(`/framework-builder/v2/draft/status/${jobId}`, {}, 15000);
+          consecutivePollFailures = 0;
         } catch (pollErr: any) {
-          console.warn("refine poll transient:", pollErr?.message || pollErr);
+          consecutivePollFailures++;
+          console.warn(
+            `refine poll transient (${consecutivePollFailures}):`,
+            pollErr?.message || pollErr,
+          );
+          if (consecutivePollFailures > 5) {
+            throw new Error(
+              `Lost contact with the server while waiting for the refine (last error: ${
+                pollErr?.message || pollErr
+              }). Your draft is preserved \u2014 try again.`,
+            );
+          }
           continue;
         }
-        if (status?.status === "succeeded" && status?.result) {
-          setDraft(status.result.draft);
-          setValidation(status.result.validation);
-          setDesignDiagnostic(status.result.designDiagnostic || null);
-          if (typeof status.result.repairAttempts === "number") setRepairAttempts(status.result.repairAttempts);
+        if (status?.status === "succeeded") {
+          let result: any;
+          try {
+            result = await fetchJobResult(jobId);
+          } catch (resultErr: any) {
+            throw new Error(
+              `Refine finished but the result could not be downloaded (${
+                resultErr?.message || resultErr
+              }). It is saved server-side \u2014 try again.`,
+            );
+          }
+          setDraft(result.draft);
+          setValidation(result.validation);
+          setDesignDiagnostic(result.designDiagnostic || null);
+          if (typeof result.repairAttempts === "number") setRepairAttempts(result.repairAttempts);
           // ISSUE 2: surface the honest server-computed outcome of the refine run.
-          if (typeof status.result.refineMessage === "string") setRefineMessage(status.result.refineMessage);
+          if (typeof result.refineMessage === "string") setRefineMessage(result.refineMessage);
           setStage("review");
           setDraftJobId(null);
           break;
