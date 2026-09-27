@@ -14,6 +14,35 @@
  */
 import type { InsertFramework, InsertFrameworkMeasure } from "../../../shared/schema.js";
 import { promoteHardeningFields } from "./promote-hardening-fields.js";
+import { resolveConfig } from "./reliability/resolve-config.js";
+
+/**
+ * Overlay the canonical, fully-resolved anchor / scope / lexicon surfaces onto a
+ * framework-shaped object so the EXPORT is literally the resolved config for those
+ * surfaces rather than an independent re-derivation. This is what makes the
+ * canonical JSON export, the Markdown exports, and the runtime agree: they all read
+ * the same `resolveConfig` output. Every other field is preserved verbatim.
+ */
+function overlayResolvedCanonicalSurfaces(
+  fw: Record<string, any>,
+  measures: Record<string, any>[],
+): Record<string, any> {
+  const resolved = resolveConfig({ framework: fw, measures });
+  return {
+    ...fw,
+    anchorFrameworks: resolved.anchorFrameworks,
+    entityType: resolved.entityType,
+    sectorScope: resolved.sectorScope,
+    universe: resolved.universe,
+    reportingPeriod: resolved.reportingPeriod,
+    topicSynonyms: resolved.topicSynonyms,
+    evidenceKeywords: resolved.evidenceKeywords,
+    documentFilingHints: resolved.documentFilingHints,
+    retrievalQueryTerms: resolved.retrievalQueryTerms ?? [],
+    negativeKeywords: resolved.negativeKeywords,
+    antiInferenceRules: resolved.antiInferenceRules,
+  };
+}
 
 /** Schema marker + version stamped onto every export payload. */
 export const FRAMEWORK_EXPORT_MARKER = "companyiqFrameworkExport";
@@ -76,7 +105,7 @@ export function buildFrameworkExport(
   // Ensure the exported framework carries its hardening in top-level fields (not
   // only buried in the intake artefact) so an import round-trip is faithful even
   // for a source framework whose top-level columns were never populated.
-  const { framework: fw } = promoteHardeningFields(fw0);
+  const { framework: fwPromoted } = promoteHardeningFields(fw0);
   const ms = (Array.isArray(measures) ? measures : []).map((m) => {
     const mc: Record<string, any> = {};
     for (const [k, v] of Object.entries(m ?? {})) {
@@ -85,6 +114,10 @@ export function buildFrameworkExport(
     }
     return mc;
   });
+  // Overlay the canonical resolved anchor/scope/lexicon surfaces so the exported
+  // JSON IS the resolved config for those surfaces (single source of truth), not a
+  // second independent derivation. All other fields remain verbatim.
+  const fw = overlayResolvedCanonicalSurfaces(fwPromoted, ms);
   return {
     [FRAMEWORK_EXPORT_MARKER]: FRAMEWORK_EXPORT_VERSION,
     framework: fw,
