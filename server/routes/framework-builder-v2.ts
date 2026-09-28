@@ -1949,6 +1949,66 @@ router.get("/v2/draft/result/:jobId", requireWorkspace, async (req: Request, res
   }
 });
 
+// ─── POST /v2/draft/poll-telemetry ───────────────────────────────────────
+// [fb2-poll-telemetry] Client→DB telemetry sidecar for the drafting poll loop.
+// The draft/refine spinner polls /v2/draft/status every ~5s entirely in the
+// browser, so a stuck-spinner report has no server-side trace. This endpoint
+// records one tiny row per poll (or terminal event) into framework_v2_poll_telemetry
+// so we can query, after the fact, exactly what the client observed: the
+// server-reported status per poll, elapsed ms since the client started the job,
+// and the outcome (polling | succeeded | failed | soft_threshold | lost_contact |
+// 404). workspace_id/user_id are taken from the authenticated context — never
+// trusted from the client body. The insert is best-effort but LOGGED LOUDLY on
+// failure (never silently swallowed) and NEVER carries the framework result.
+router.post("/v2/draft/poll-telemetry", requireWorkspace, async (req: Request, res: Response) => {
+  try {
+    const ctx = getSessionContext(req);
+    if (!ctx || !ctx.workspaceId) return res.status(401).json({ error: "session context missing" });
+    const { jobId, flow, pollStatus, elapsedMs, outcome, detail, clientTs } = (req.body || {}) as {
+      jobId?: string;
+      flow?: string;
+      pollStatus?: string;
+      elapsedMs?: number;
+      outcome?: string;
+      detail?: any;
+      clientTs?: string;
+    };
+    if (!jobId || typeof jobId !== "string") {
+      return res.status(400).json({ error: "jobId required" });
+    }
+    // Bound the stored strings/blob so a misbehaving client can't bloat the table.
+    const flowVal = typeof flow === "string" ? flow.slice(0, 32) : null;
+    const pollStatusVal = typeof pollStatus === "string" ? pollStatus.slice(0, 64) : null;
+    const outcomeVal = typeof outcome === "string" ? outcome.slice(0, 32) : null;
+    const elapsedVal =
+      typeof elapsedMs === "number" && Number.isFinite(elapsedMs) ? Math.round(elapsedMs) : null;
+    const detailVal = detail == null ? null : JSON.stringify(detail).slice(0, 4000);
+    const clientTsVal = typeof clientTs === "string" && clientTs.length <= 40 ? clientTs : null;
+    try {
+      await db.execute(sql`
+        INSERT INTO framework_v2_poll_telemetry
+          (job_id, workspace_id, user_id, flow, poll_status, elapsed_ms, outcome, detail, client_ts)
+        VALUES (
+          ${jobId}, ${ctx.workspaceId}, ${ctx.userId ?? null}, ${flowVal}, ${pollStatusVal},
+          ${elapsedVal}, ${outcomeVal}, ${detailVal ? sql`${detailVal}::jsonb` : sql`NULL`},
+          ${clientTsVal ? sql`${clientTsVal}::timestamptz` : sql`NULL`}
+        )
+      `);
+    } catch (insertErr: any) {
+      // Fail loud (do NOT swallow) — but never break the client's poll loop.
+      console.error(
+        "[framework-builder v2 /draft/poll-telemetry] INSERT failed:",
+        insertErr?.message || insertErr,
+      );
+      return res.status(200).json({ ok: false, persisted: false });
+    }
+    return res.status(200).json({ ok: true, persisted: true });
+  } catch (err: any) {
+    console.error("[framework-builder v2 /draft/poll-telemetry] error:", err);
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
 // ─── POST /v2/validate — re-validate an edited draft ─────────────────────
 
 router.post("/v2/validate", async (req: Request, res: Response) => {
