@@ -173,11 +173,31 @@ async function postPollTelemetry(rec: {
 
 export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFrameworks?: () => void }) {
   const [stage, setStage] = useState<Stage>("intake");
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Intake-stage session state is persisted to localStorage (see persistence
+  // effects below) and rehydrated here via lazy initializers so a plain reload
+  // of the intake stage does not lose the conversation, the intake artefact, or
+  // the robustness gate. (The ?frameworkId= deep-link and active-job re-attach
+  // paths still own the stage when they apply — see the mount effects.)
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const stored = localStorage.getItem("fw-builder-v2-messages");
+      return stored ? (JSON.parse(stored) as Message[]) : [];
+    } catch { return []; }
+  });
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [intake, setIntake] = useState<IntakeArtefact | null>(null);
-  const [robustnessGate, setRobustnessGate] = useState<RobustnessGate | null>(null);
+  const [intake, setIntake] = useState<IntakeArtefact | null>(() => {
+    try {
+      const stored = localStorage.getItem("fw-builder-v2-intake");
+      return stored ? (JSON.parse(stored) as IntakeArtefact) : null;
+    } catch { return null; }
+  });
+  const [robustnessGate, setRobustnessGate] = useState<RobustnessGate | null>(() => {
+    try {
+      const stored = localStorage.getItem("fw-builder-v2-robustnessGate");
+      return stored ? (JSON.parse(stored) as RobustnessGate) : null;
+    } catch { return null; }
+  });
   const [draft, setDraft] = useState<any>(null);
   const [validation, setValidation] = useState<Validation | null>(null);
   // PRE-DRAFT design diagnostic (static, LLM-free) attached to every draft
@@ -193,7 +213,11 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     } catch { return null; }
   });
   const [lastFailedUserMessage, setLastFailedUserMessage] = useState<string | null>(null);
-  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("fw-builder-v2-warningsAcknowledged") === "true";
+    } catch { return false; }
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Guards against two concurrent poll loops (e.g. the mount re-attach effect
@@ -493,6 +517,44 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
       } catch (e) { /* non-fatal; localStorage still works */ }
     })();
   }, [savedFrameworkId, stage, testDriveListId, testDriveListName, draft, validation, hasHydrated]);
+
+  // Persist intake-stage session state (conversation, intake artefact, robustness
+  // gate, warnings-acknowledged) to localStorage so a plain reload rehydrates it
+  // via the lazy initializers above. Guarded by hasHydrated so we never write
+  // during the initial mount read (which would race the deep-link/re-attach load).
+  // Reset-safe: when a value is empty/null/false we removeItem instead of storing,
+  // so the reset paths (setMessages([]) / setIntake(null) / setRobustnessGate(null)
+  // / setWarningsAcknowledged(false)) naturally clear storage — starting a brand-new
+  // framework leaves no stale intake/gate/messages behind. All access is wrapped in
+  // try/catch for private-mode safety.
+  useEffect(() => {
+    if (!hasHydrated) return;
+    try {
+      if (messages.length > 0) localStorage.setItem("fw-builder-v2-messages", JSON.stringify(messages));
+      else localStorage.removeItem("fw-builder-v2-messages");
+    } catch {}
+  }, [messages, hasHydrated]);
+  useEffect(() => {
+    if (!hasHydrated) return;
+    try {
+      if (intake) localStorage.setItem("fw-builder-v2-intake", JSON.stringify(intake));
+      else localStorage.removeItem("fw-builder-v2-intake");
+    } catch {}
+  }, [intake, hasHydrated]);
+  useEffect(() => {
+    if (!hasHydrated) return;
+    try {
+      if (robustnessGate) localStorage.setItem("fw-builder-v2-robustnessGate", JSON.stringify(robustnessGate));
+      else localStorage.removeItem("fw-builder-v2-robustnessGate");
+    } catch {}
+  }, [robustnessGate, hasHydrated]);
+  useEffect(() => {
+    if (!hasHydrated) return;
+    try {
+      if (warningsAcknowledged) localStorage.setItem("fw-builder-v2-warningsAcknowledged", "true");
+      else localStorage.removeItem("fw-builder-v2-warningsAcknowledged");
+    } catch {}
+  }, [warningsAcknowledged, hasHydrated]);
 
   // On mount: check URL params for ?frameworkId= (deep-link from Framework page's
   // 'Continue in v2 builder' action). If present, load server-side state.
@@ -830,7 +892,13 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
       jobId = startRes.jobId;
     } catch (err: any) {
       // Failed before the job even started — nothing to persist/resume.
+      // The server is the source of truth for readiness: /v2/draft/start
+      // re-evaluates the robustness gate and rejects with a non-2xx carrying
+      // { error, robustnessGate }. Surface the error loudly (never swallow) and,
+      // if the rejection carried an updated gate, repopulate the right panel so
+      // the outstanding items reappear for the user to address.
       setError(err?.message || String(err));
+      if (err?.body?.robustnessGate) setRobustnessGate(err.body.robustnessGate);
       setStage("intake");
       setLoading(false);
       return;
@@ -848,6 +916,10 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     setError(null);
     setLoading(true);
     try {
+      // This endpoint is a SYNCHRONOUS LLM call that generates up to ~50 test-drive
+      // companies and legitimately runs well past the 30s api.request default, so we
+      // pass an explicit 180s timeout. 180s stays safely under the 300s platform edge
+      // cut-off while comfortably exceeding real generation time.
       const res = await api.request("/framework-builder/v2/test-drive/select", {
         method: "POST",
         body: JSON.stringify({
@@ -856,7 +928,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
           topicSynonyms: draft.framework.topicSynonyms,
           sectorScope: draft.framework.sensitivityPreference || "agnostic",
         }),
-      });
+      }, 180000);
       setTestDriveCompanies(res.companies || []);
       setStage("test-drive");
     } catch (err: any) {
@@ -1281,7 +1353,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                       <Send className="w-4 h-4" /> Send
                     </button>
                   </div>
-                  {(robustnessGate?.ready || warningsAcknowledged) && (
+                  {(robustnessGate?.ready || warningsAcknowledged || Boolean(intake)) && (
                     <div className="mt-3 flex justify-end">
                       <button
                         onClick={draftFramework}
