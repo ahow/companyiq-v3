@@ -125,6 +125,52 @@ function readActiveJob(): ActiveJobRecord | null {
   }
 }
 
+// Soft threshold (ms) after which the drafting UI calmly notes the run is taking
+// longer than usual — WITHOUT aborting. Kept in sync with DraftingProgress'
+// SOFT_THRESHOLD_S (13 min). There is deliberately NO hard client deadline: real
+// successful drafts run well past the old 25-min cap, so the server's job status
+// is the single source of truth for when a run ends.
+const SOFT_THRESHOLD_MS = 13 * 60_000;
+
+// [fb2-poll-telemetry] Best-effort client→DB telemetry for the draft/refine poll
+// loop. Fire-and-forget: a telemetry failure MUST NEVER break the poll loop, but
+// it is logged loudly so a silent telemetry outage is still visible in the console.
+// Payloads are tiny — we NEVER send the framework result, only the server-reported
+// status, elapsed ms and an outcome marker.
+type PollOutcome = "polling" | "succeeded" | "failed" | "soft_threshold" | "lost_contact" | "404";
+async function postPollTelemetry(rec: {
+  jobId: string;
+  flow: DraftFlow;
+  startTime: number;
+  pollStatus: string;
+  outcome: PollOutcome;
+  detail?: any;
+}) {
+  try {
+    await api.request(
+      "/framework-builder/v2/draft/poll-telemetry",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          jobId: rec.jobId,
+          flow: rec.flow,
+          pollStatus: rec.pollStatus,
+          elapsedMs: Date.now() - rec.startTime,
+          outcome: rec.outcome,
+          detail: rec.detail ?? null,
+          clientTs: new Date().toISOString(),
+        }),
+      },
+      8000,
+    );
+  } catch (telemetryErr: any) {
+    console.warn(
+      "[fb2-poll-telemetry] telemetry POST failed (non-fatal):",
+      telemetryErr?.message || telemetryErr,
+    );
+  }
+}
+
 export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFrameworks?: () => void }) {
   const [stage, setStage] = useState<Stage>("intake");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -515,7 +561,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
   //   - succeeded -> download the result and load it into review (identical to the
   //     live poll success branch, via applyDraftResult);
   //   - running/pending -> resume the SAME poll loop carrying the ORIGINAL start
-  //     time so the elapsed timer and hard deadline stay honest across the reload;
+  //     time so the elapsed timer stays honest across the reload;
   //   - failed -> surface the honest error and fall back to a sane stage;
   //   - 404 / gone / network error -> clear and fall back gracefully.
   // Saved-framework restore takes PRECEDENCE: if a ?frameworkId= deep link or a
@@ -535,6 +581,24 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
           {},
           15000,
         );
+        // [fb2-poll-telemetry] One record for the mount-time re-attach's initial
+        // status read. The running/pending branch below hands off to pollDraftJob
+        // (which then emits per-poll telemetry itself), so this captures the
+        // otherwise-untraced succeeded/failed re-attach outcomes without
+        // duplicating the poll loop. Best-effort, non-blocking.
+        void postPollTelemetry({
+          jobId: active.jobId,
+          startTime: active.startTime,
+          flow: active.flow,
+          pollStatus: typeof status?.status === "string" ? status.status : "unknown",
+          outcome:
+            status?.status === "succeeded"
+              ? "succeeded"
+              : status?.status === "failed"
+                ? "failed"
+                : "polling",
+          detail: { reattach: true },
+        });
         if (status?.status === "succeeded") {
           let result: any;
           try {
@@ -561,7 +625,8 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
           setStage(active.flow === "refine" ? "review" : "intake");
         } else if (status?.status === "running" || status?.status === "pending") {
           // Resume the SAME poll loop, carrying the ORIGINAL start time so the
-          // elapsed timer and the hard deadline stay honest across the reload.
+          // elapsed timer stays honest across the reload. (The loop trusts server
+          // status and has no hard client deadline.)
           void pollDraftJob(active.jobId, active.startTime, active.flow);
         } else {
           // Unknown/unexpected status shape: don't strand the user, just clear.
@@ -637,41 +702,63 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     setDraftJobStartTime(startTime);
     setStage("drafting");
     setLoading(true);
-    const deadlineMs = flow === "refine" ? 15 * 60_000 : 25 * 60_000;
-    const deadline = startTime + deadlineMs;
+    // CHANGE A — the server's job status is the SINGLE SOURCE OF TRUTH for when a
+    // run ends. There is deliberately NO hard client deadline: live drafts have
+    // succeeded well past the old 25-min cap (e.g. 43.7 min / 42.3 min), so the
+    // old "still not finished after 25 minutes" throw was aborting real,
+    // still-running jobs. We now (1) poll status FIRST every iteration, before any
+    // elapsed-time consideration, so an already-succeeded job — or a re-attach
+    // carrying a stale startTime — ALWAYS loads from status and is never pre-empted
+    // by a timer; (2) stop ONLY on server `failed`, a genuine 404 (job gone), or
+    // true lost-contact (>5 consecutive poll failures); (3) past a soft threshold,
+    // calmly note it (DraftingProgress shows the message) and KEEP polling.
     let consecutivePollFailures = 0;
+    let softThresholdReported = false;
     try {
       // eslint-disable-next-line no-constant-condition
       while (true) {
-        await new Promise((r) => setTimeout(r, 5000));
-        if (Date.now() > deadline) {
-          throw new Error(
-            flow === "refine"
-              ? "Refine still not finished after 15 minutes."
-              : "Draft still not finished after 25 minutes. You can try again \u2014 your intake is preserved. If this keeps happening the LLM provider may be down.",
-          );
-        }
+        // STATUS-FIRST: read the server status before anything time-based.
         let status: any = null;
         try {
           // Short timeout on the lightweight status poll so a stalled poll fails fast.
           status = await api.request(`/framework-builder/v2/draft/status/${jobId}`, {}, 15000);
           consecutivePollFailures = 0;
         } catch (pollErr: any) {
+          // A genuine 404 means the job no longer exists on the server — stop like
+          // the re-attach 404 path rather than retrying to no end.
+          if (pollErr?.status === 404) {
+            void postPollTelemetry({ jobId, startTime, flow, pollStatus: "404", outcome: "404" });
+            throw new Error(
+              flow === "refine"
+                ? "The refine job could not be found on the server \u2014 it may have expired. Your draft is preserved \u2014 try again."
+                : "The draft job could not be found on the server \u2014 it may have expired. Your intake is preserved \u2014 try again.",
+            );
+          }
           consecutivePollFailures++;
           console.warn(
             `${flow}-status poll transient error (${consecutivePollFailures}):`,
             pollErr?.message || pollErr,
           );
           if (consecutivePollFailures > 5) {
+            void postPollTelemetry({
+              jobId,
+              startTime,
+              flow,
+              pollStatus: "lost_contact",
+              outcome: "lost_contact",
+              detail: { error: pollErr?.message || String(pollErr) },
+            });
             throw new Error(
               `Lost contact with the server while waiting for the ${flow} (last error: ${
                 pollErr?.message || pollErr
               }). Your ${flow === "refine" ? "draft" : "intake"} is preserved \u2014 try again.`,
             );
           }
+          await new Promise((r) => setTimeout(r, 5000));
           continue;
         }
         if (status?.status === "succeeded") {
+          void postPollTelemetry({ jobId, startTime, flow, pollStatus: "succeeded", outcome: "succeeded" });
           // The slim status endpoint no longer inlines the result. Download it once
           // via the dedicated result endpoint (generous timeout + bounded retry).
           let result: any;
@@ -689,9 +776,27 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
           break;
         }
         if (status?.status === "failed") {
+          void postPollTelemetry({
+            jobId,
+            startTime,
+            flow,
+            pollStatus: "failed",
+            outcome: "failed",
+            detail: { errorMessage: status.errorMessage || null },
+          });
           throw new Error(status.errorMessage || (flow === "refine" ? "Refine job failed" : "Draft job failed"));
         }
-        // status === "running" or "pending": keep polling
+        // status === "running" or "pending": keep polling. Past the soft threshold,
+        // emit a one-time soft_threshold telemetry event (the calm, non-blocking
+        // message is rendered by DraftingProgress) and KEEP going — never abort.
+        const pollStatus = typeof status?.status === "string" ? status.status : "running";
+        if (Date.now() - startTime >= SOFT_THRESHOLD_MS && !softThresholdReported) {
+          softThresholdReported = true;
+          void postPollTelemetry({ jobId, startTime, flow, pollStatus, outcome: "soft_threshold" });
+        } else {
+          void postPollTelemetry({ jobId, startTime, flow, pollStatus, outcome: "polling" });
+        }
+        await new Promise((r) => setTimeout(r, 5000));
       }
     } catch (err: any) {
       setError(err?.message || String(err));

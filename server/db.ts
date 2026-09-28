@@ -214,6 +214,33 @@ export async function initializeDatabase(): Promise<void> {
     // live draft to root-cause category under-production. Purely additive.
     await db.execute(sql`ALTER TABLE framework_v2_jobs ADD COLUMN IF NOT EXISTS telemetry JSONB`);
 
+    // ─── Framework v2 poll telemetry sidecar ─────────────────────────────────
+    // [fb2-poll-telemetry] Diagnostic-first, queryable record of the CLIENT's
+    // draft/refine poll loop. The drafting UI polls /v2/draft/status every ~5s; a
+    // stuck-spinner report is otherwise invisible server-side because the poll
+    // loop lives entirely in the browser. Each row captures one poll (or terminal
+    // event): the server-reported status, elapsed ms since the client started the
+    // job, and an outcome marker (polling | succeeded | failed | soft_threshold |
+    // lost_contact | 404). workspace_id/user_id are scoped from the authenticated
+    // context server-side (never trusted from the client). Purely additive.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS framework_v2_poll_telemetry (
+        id SERIAL PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        workspace_id INTEGER NOT NULL,
+        user_id INTEGER,
+        flow TEXT,
+        poll_status TEXT,
+        elapsed_ms BIGINT,
+        outcome TEXT,
+        detail JSONB,
+        client_ts TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS framework_v2_poll_telemetry_job_idx ON framework_v2_poll_telemetry(job_id, created_at DESC)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS framework_v2_poll_telemetry_ws_idx ON framework_v2_poll_telemetry(workspace_id, created_at DESC)`);
+
     // ─── Company Lists ──────────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS company_lists (
