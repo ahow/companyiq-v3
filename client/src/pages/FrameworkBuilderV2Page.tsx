@@ -916,6 +916,10 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     setError(null);
     setLoading(true);
     try {
+      // This endpoint is a SYNCHRONOUS LLM call that generates up to ~50 test-drive
+      // companies and legitimately runs well past the 30s api.request default, so we
+      // pass an explicit 180s timeout. 180s stays safely under the 300s platform edge
+      // cut-off while comfortably exceeding real generation time.
       const res = await api.request("/framework-builder/v2/test-drive/select", {
         method: "POST",
         body: JSON.stringify({
@@ -924,7 +928,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
           topicSynonyms: draft.framework.topicSynonyms,
           sectorScope: draft.framework.sensitivityPreference || "agnostic",
         }),
-      });
+      }, 180000);
       setTestDriveCompanies(res.companies || []);
       setStage("test-drive");
     } catch (err: any) {
