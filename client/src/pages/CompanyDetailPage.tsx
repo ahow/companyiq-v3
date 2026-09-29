@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useState } from "react";
-import { ArrowLeft, Play, Camera, Upload, ExternalLink, FileText, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
+import { ArrowLeft, Play, Camera, Upload, ExternalLink, FileText, CheckCircle2, XCircle } from "lucide-react";
+import { isMet } from "@shared/verdict";
 
 interface CompanyDetailPageProps {
   companyId: number;
@@ -90,7 +91,7 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
         <div className="bg-white rounded-lg border p-4">
           <div className="text-sm text-gray-500">Measures Met</div>
           <div className="text-3xl font-bold text-gray-900">
-            {scores ? `${scores.filter((s: any) => s.score > 0).length} / ${scores.length}` : "-"}
+            {scores ? `${scores.filter((s: any) => isMet(s.verdict, s.score)).length} / ${scores.length}` : "-"}
           </div>
         </div>
         <div className="bg-white rounded-lg border p-4">
@@ -138,61 +139,65 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                     <div className="space-y-2">
                       {measures.sort((a: any, b: any) => (a.displayOrder || 0) - (b.displayOrder || 0)).map((m: any) => (
                         <div key={m.id} className="px-4 py-3 border-b last:border-b-0">
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                {m.score > 0 ? (
-                                  <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
-                                ) : m.verdict === "Partial" ? (
-                                  <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0" />
-                                ) : (
-                                  <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-                                )}
-                                <span className="text-sm font-medium text-gray-900">{m.title}</span>
+                          {/* Slim per-measure detail: exactly 6 fields in order —
+                              (i) Conclusion (tick/cross), (ii) Measure name,
+                              (iii) Requirements to score Yes, (iv) Rationale,
+                              (v) Evidence quote, (vi) Source (hyperlinked). */}
+                          <div className="flex-1">
+                            {/* (i) Conclusion + (ii) Measure name */}
+                            <div className="flex items-center gap-2">
+                              {isMet(m.verdict, m.score) ? (
+                                <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+                              ) : (
+                                <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                              )}
+                              <span className="text-sm font-medium text-gray-900">{m.title}</span>
+                            </div>
+                            {/* (iii) Requirements to score Yes */}
+                            {m.requirementsToScoreYes && (
+                              <div className="mt-2 ml-6">
+                                <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                                  Requirements to score Yes
+                                </div>
+                                <p className="text-xs text-gray-600 mt-0.5">{m.requirementsToScoreYes}</p>
                               </div>
-                              {m.evidenceSummary && (
-                                <p className="text-xs text-gray-600 mt-2 ml-6 bg-gray-50 p-2 rounded">
+                            )}
+                            {/* (iv) Rationale */}
+                            {m.evidenceSummary && (
+                              <div className="mt-2 ml-6">
+                                <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                                  Rationale
+                                </div>
+                                <p className="text-xs text-gray-600 mt-0.5 bg-gray-50 p-2 rounded">
                                   {m.evidenceSummary}
                                 </p>
-                              )}
-                              {m.verdict && m.verdict !== "Yes" && m.verdict !== "No" && (
-                                <p className="text-xs text-gray-500 mt-1 ml-6 italic">{m.verdict}</p>
-                              )}
-                              {m.quotes && m.quotes.length > 0 && (
-                                <div className="ml-6 mt-2 space-y-1">
-                                  {m.quotes.map((q: any, idx: number) => (
-                                    <blockquote key={idx} className="text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic">
-                                      "{q.text}"
-                                      {q.source && (
-                                        q.sourceUrl ? (
-                                          <a
-                                            href={q.sourceUrl}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="text-blue-500 hover:text-blue-700 underline ml-1"
-                                            title={q.sourceUrl}
-                                          >
-                                            — {q.source}
-                                          </a>
-                                        ) : (
-                                          <span className="text-gray-400 ml-1">— {q.source}</span>
-                                        )
-                                      )}
-                                    </blockquote>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 ml-4">
-                              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                m.confidence === "High" ? "bg-green-100 text-green-700" :
-                                m.confidence === "Medium" ? "bg-yellow-100 text-yellow-700" :
-                                m.confidence === "Review-required" ? "bg-red-100 text-red-700" :
-                                "bg-gray-100 text-gray-600"
-                              }`} title={m.confidence === "Review-required" ? "Cascade: DeepSeek, GLM, and Claude produced three different verdicts — analyst review recommended." : undefined}>
-                                {m.confidence === "Review-required" ? "Review" : m.confidence}
-                              </span>
-                            </div>
+                              </div>
+                            )}
+                            {/* (v) Evidence quote + (vi) Source (hyperlinked where a URL exists) */}
+                            {m.quotes && m.quotes.length > 0 && (
+                              <div className="ml-6 mt-2 space-y-1">
+                                {m.quotes.map((q: any, idx: number) => (
+                                  <blockquote key={idx} className="text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic">
+                                    "{q.text}"
+                                    {q.source && (
+                                      q.sourceUrl ? (
+                                        <a
+                                          href={q.sourceUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-blue-500 hover:text-blue-700 underline ml-1"
+                                          title={q.sourceUrl}
+                                        >
+                                          — {q.source}
+                                        </a>
+                                      ) : (
+                                        <span className="text-gray-400 ml-1">— {q.source}</span>
+                                      )
+                                    )}
+                                  </blockquote>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                       ))}

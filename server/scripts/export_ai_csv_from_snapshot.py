@@ -19,6 +19,30 @@ CSV layout (per client/src/pages/ResultsPage.tsx handleExportCSV):
 import psycopg2, psycopg2.extras, csv, sys, json
 from collections import OrderedDict
 
+
+# --- Binary verdict normalization (mirror of shared/verdict.ts) -------------
+# Partial collapses to No everywhere; abstain/error sentinels pass through.
+# Kept in lock-step with the canonical TS helper at shared/verdict.ts.
+def norm_verdict(v):
+    if not isinstance(v, str):
+        return "No"
+    s = v.strip()
+    if s == "":
+        return "No"
+    if s.lower() == "partial":
+        return "No"
+    return s
+
+
+def is_met(verdict, score):
+    v = norm_verdict(verdict)
+    if v == "Yes":
+        return True
+    # blank/absent verdict -> fall back to numeric score (met iff score == 1)
+    if not isinstance(verdict, str) or verdict.strip() == "":
+        return score == 1
+    return False
+
 AR_ID = int(sys.argv[2]) if len(sys.argv) > 2 else 35
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/home/ubuntu/companyiq-v3/CompanyIQ_AI_Governance_full_portfolio_dedup.csv"
 
@@ -96,13 +120,20 @@ with open(OUT, "w", newline="", encoding="utf-8") as f:
         missing = comp.get("missingTier1")
         if isinstance(missing, list):
             missing = "; ".join(str(x) for x in missing)
+        # Recompute Total Score (%) and Measures Met from binary-normalized
+        # measure scores (assessed = non-backfilled rows; met = is_met). This
+        # keeps the snapshot export in lock-step with the binary scoring rules
+        # (Partial counts as No, not met, not contributing).
+        assessed = [m for m in comp.get("measureScores", []) if not m.get("backfilled")]
+        bin_measures_met = sum(1 for m in assessed if is_met(m.get("verdict"), m.get("score")))
+        bin_total_score = round(100 * bin_measures_met / len(assessed)) if assessed else ""
         rowv = [
             comp.get("companyName") or "",
             comp.get("isin") or "",
             comp.get("sector") or "",
             comp.get("country") or "",
-            comp.get("totalScore") if comp.get("totalScore") is not None else "",
-            comp.get("measuresMetCount") if comp.get("measuresMetCount") is not None else "",
+            bin_total_score,
+            bin_measures_met,
             comp.get("measuresTotalCount") if comp.get("measuresTotalCount") is not None else "",
             comp.get("coverageLevel") or "",
             missing or "",
@@ -112,9 +143,13 @@ with open(OUT, "w", newline="", encoding="utf-8") as f:
             if not m:
                 rowv += ["", "", "", "", "", ""]
                 continue
-            qt, qsrc, qurl = first_quote(m)
+            # Supporting quote is only meaningful for a met (Yes) measure.
+            if is_met(m.get("verdict"), m.get("score")):
+                qt, qsrc, qurl = first_quote(m)
+            else:
+                qt, qsrc, qurl = ("", "", "")
             rowv += [
-                m.get("verdict") or "",
+                norm_verdict(m.get("verdict")) if not m.get("backfilled") else (m.get("verdict") or ""),
                 m.get("evidenceSummary") or "",
                 qt, qsrc, qurl,
                 m.get("confidence") if m.get("confidence") is not None else "",

@@ -16,6 +16,28 @@ CSV layout (per ResultsPage):
 """
 import psycopg2, psycopg2.extras, csv, sys
 
+# BINARY SCORING: collapse the legacy tri-state verdict to Yes/No. A "Partial" is
+# recorded and displayed exactly as a "No" (never met, never contributes to the
+# score). Mirrors shared/verdict.ts so the python export stays consistent with the
+# app. Only "Partial" is collapsed; abstain/error sentinels pass through.
+def norm_verdict(v):
+    if not isinstance(v, str):
+        return "No"
+    t = v.strip()
+    if t == "":
+        return "No"
+    if t.lower() == "partial":
+        return "No"
+    return v
+
+def is_met(verdict, score):
+    v = verdict.strip().lower() if isinstance(verdict, str) else ""
+    if v == "yes":
+        return True
+    if v == "":
+        return score == 1
+    return False
+
 WORKSPACE_ID = 3
 FRAMEWORK_ID = 7
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/home/ubuntu/companyiq-v3/CompanyIQ_AI_Governance_full_portfolio.csv"
@@ -61,7 +83,7 @@ print(f"{len(companies)} companies")
 # 3) Preload all measure scores for ws3 (one query), grouped by company
 cur.execute("""
   SELECT ms.company_id, ms.title, ms.score, ms.verdict, ms.confidence,
-         ms.evidence_summary, ms.quotes
+         ms.evidence_summary, ms.quotes, ms.abstained
   FROM measure_scores ms
   JOIN companies c ON c.id = ms.company_id
   WHERE c.workspace_id=%s AND ms.framework_id=%s
@@ -99,13 +121,26 @@ rows_out = []
 for c in companies:
     cid = c["id"]
     cov_level, missing_t1 = coverage_of(c["discovery_diagnostics"])
+    # BINARY SCORING: recompute Total Score (%) and Measures Met over ANSWERED
+    # (non-abstained) measures so a former "Partial" (0.5) counts exactly as a No
+    # (0) and the stored partial-credit aggregate is replaced. Matches the read
+    # boundary in server/routes/api.ts (answered-measures denominator).
+    company_scores = list(scores_by_company.get(cid, {}).values())
+    answered = [s for s in company_scores if not s.get("abstained")]
+    met = [s for s in answered if is_met(s["verdict"], s["score"] or 0)]
+    if answered:
+        bin_total_score = round(len(met) / len(answered) * 100)
+        bin_measures_met = len(met)
+    else:
+        bin_total_score = c["total_score"] if c["total_score"] is not None else 0
+        bin_measures_met = c["measures_met_count"] if c["measures_met_count"] is not None else ""
     base_values = [
         c["name"] or "",
         c["isin"] or "",
         c["sector"] or "",
         c["country"] or "",
-        c["total_score"] if c["total_score"] is not None else 0,
-        c["measures_met_count"] if c["measures_met_count"] is not None else "",
+        bin_total_score,
+        bin_measures_met,
         c["measures_total_count"] if c["measures_total_count"] is not None else "",
         cov_level or "unknown",
         "; ".join(missing_t1),
@@ -125,12 +160,13 @@ for c in companies:
         ms = cscores.get(t)
         if ms:
             score = ms["score"] or 0
-            verdict = ms["verdict"] or ("Yes" if score > 0 else "No")
+            # BINARY: collapse Partial -> No; a former Partial counts exactly as No.
+            verdict = norm_verdict(ms["verdict"] or ("Yes" if score > 0 else "No"))
             measure_values.append(verdict)                       # (i) Score = verdict
             measure_values.append(ms["evidence_summary"] or "")  # (ii) Rationale
             quotes = ms["quotes"] or []
             quote_texts = [q.get("text") for q in quotes if isinstance(q, dict) and q.get("text")]
-            if score > 0 or verdict in ("Yes", "Partial"):
+            if is_met(ms["verdict"], score):
                 measure_values.append(" | ".join([q for q in quote_texts if q]))
             else:
                 measure_values.append("")
