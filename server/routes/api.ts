@@ -19,6 +19,7 @@ import { assertProductionFingerprint, computeRecoveryLabels, deploymentFingerpri
 import { analyzeCompanyMeasures } from "../lib/analyzer.js";
 import { loadPriceTable, lookupPrice, computeCost } from "../lib/llm-usage.js";
 import { runMeasureDesignDiagnostic } from "../lib/measure-design-diagnostic.js";
+import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -90,10 +91,65 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
     const company = await storage.getCompanyById(parseInt(req.params.id), workspaceId);
     if (!company) return res.status(404).json({ error: "Company not found" });
 
-    const scores = await storage.getMeasureScores(company.id);
+    const rawScores = await storage.getMeasureScores(company.id);
     const documents = await storage.getAcceptedDocuments(company.id);
 
-    res.json({ company, scores, documents });
+    // ─── Binary scoring + Task 2 field enrichment (read boundary) ─────────────
+    // This endpoint is the single read boundary for a company's per-measure
+    // results. We normalize EXISTING stored data on output (no destructive
+    // migration) so any legacy "Partial" verdict/0.5 score is presented as a
+    // binary "No"/0, and we recompute the company's aggregate score + met count
+    // over ANSWERED (non-abstained) measures from the normalized values so the
+    // dashboard cards reflect binary scoring for old and new runs alike.
+    //
+    // We also attach a generic, topic-agnostic `requirementsToScoreYes` string to
+    // each measure, pulled from the framework's stored measure definition
+    // (substantiveDefinition → fallbackYesCriterion → definition), for the slim
+    // per-company detail view. No hardcoding — works for every framework.
+    const frameworkIds = Array.from(
+      new Set(rawScores.map((s: any) => s.frameworkId).filter((id: any) => id != null))
+    );
+    const measureDefByFramework = new Map<number, Map<string, any>>();
+    for (const fid of frameworkIds) {
+      const measures = await storage.getFrameworkMeasures(fid as number);
+      const byMeasureId = new Map<string, any>();
+      for (const m of measures) byMeasureId.set(m.measureId, m);
+      measureDefByFramework.set(fid as number, byMeasureId);
+    }
+    const requirementsToScoreYes = (def: any): string | null => {
+      if (!def) return null;
+      const candidate =
+        (typeof def.substantiveDefinition === "string" && def.substantiveDefinition.trim()) ||
+        (typeof def.fallbackYesCriterion === "string" && def.fallbackYesCriterion.trim()) ||
+        (typeof def.definition === "string" && def.definition.trim()) ||
+        "";
+      return candidate.length > 0 ? candidate : null;
+    };
+
+    const scores = rawScores.map((s: any) => {
+      const def = measureDefByFramework.get(s.frameworkId)?.get(s.measureId);
+      return {
+        ...s,
+        verdict: normalizeVerdict(s.verdict),
+        score: normalizedScore(s.verdict, s.score),
+        requirementsToScoreYes: requirementsToScoreYes(def),
+      };
+    });
+
+    // Recompute aggregates over answered (non-abstained) measures from normalized
+    // values so EXISTING data reflects binary scoring immediately.
+    const answered = scores.filter((s: any) => !s.abstained);
+    const met = answered.filter((s: any) => isMet(s.verdict, s.score));
+    const enrichedCompany = {
+      ...company,
+      totalScore:
+        answered.length > 0
+          ? Math.round((met.length / answered.length) * 100)
+          : company.totalScore,
+      measuresMetCount: met.length,
+    };
+
+    res.json({ company: enrichedCompany, scores, documents });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

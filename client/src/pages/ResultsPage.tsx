@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { Download, Share2, Trash2, X, CheckSquare } from "lucide-react";
+import { normalizeVerdict, isMet } from "@shared/verdict";
 
 export default function ResultsPage() {
   const queryClient = useQueryClient();
@@ -129,13 +130,27 @@ export default function ResultsPage() {
 
     // Build rows
     const csvRows = rows.map((row: any) => {
+      // BINARY SCORING: recompute Total Score (%) and Measures Met from the
+      // per-measure snapshot so a former "Partial" (0.5) counts exactly as a No
+      // (0) — never as met and never contributing to the score. Denominator is
+      // the ASSESSED (non-backfilled) measures, matching how the snapshot's own
+      // aggregates were built; we only remove the partial-credit contribution.
+      const assessedMeasures = (row.measureScores || []).filter((m: any) => !m.backfilled);
+      const metMeasures = assessedMeasures.filter((m: any) => isMet(m.verdict, m.score));
+      const binaryTotalScore =
+        assessedMeasures.length > 0
+          ? Math.round((metMeasures.length / assessedMeasures.length) * 100)
+          : (row.totalScore ?? 0);
+      const binaryMeasuresMet =
+        assessedMeasures.length > 0 ? metMeasures.length : (row.measuresMetCount ?? "");
+
       const baseValues = [
         row.companyName || "",
         row.isin || "",
         row.sector || "",
         row.country || "",
-        row.totalScore ?? 0,
-        row.measuresMetCount ?? "",
+        binaryTotalScore,
+        binaryMeasuresMet,
         row.measuresTotalCount ?? "",
         row.coverageLevel || "unknown",
         (row.missingTier1 || []).join("; "),
@@ -158,15 +173,17 @@ export default function ResultsPage() {
       for (const title of measureTitles) {
         const ms = (row.measureScores || []).find((m: any) => m.title === title);
         if (ms) {
-          // (i) Score: verdict (Yes/No/Partial)
-          measureValues.push(ms.verdict || (ms.score > 0 ? "Yes" : "No"));
+          // (i) Score: BINARY verdict (Yes/No only — a former "Partial" collapses
+          // to "No"). "not_assessed"/abstain sentinels pass through unchanged.
+          measureValues.push(normalizeVerdict(ms.verdict || (ms.score > 0 ? "Yes" : "No")));
 
           // (ii) Rationale: evidenceSummary
           measureValues.push(ms.evidenceSummary || "");
 
-          // (iii) Supporting Quote: verbatim quotes (only for positive scores)
+          // (iii) Supporting Quote: verbatim quotes (only for MET measures — a
+          // former Partial no longer surfaces quotes since it now scores No).
           const quotes = (ms.quotes || []).map((q: any) => q.text).filter(Boolean);
-          if (ms.score > 0 || ms.verdict === "Yes" || ms.verdict === "Partial") {
+          if (isMet(ms.verdict, ms.score)) {
             measureValues.push(quotes.join(" | "));
           } else {
             measureValues.push("");

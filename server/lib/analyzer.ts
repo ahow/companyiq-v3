@@ -11,6 +11,7 @@ import { isSemanticHybridEnabled, isEmbeddingConfigured, embedTextsCached, cosin
 // PR 1 · Change 4: auto re-retrieval on Low-confidence cells (behind autoReretrieval flag).
 import { runTargetedReretrieval, type RetrievalReviewQueue } from "./retrieval-review-queue.js";
 import type { Company, TrustedSource } from "../../shared/schema.js";
+import { normalizeVerdict, normalizedScore } from "../../shared/verdict.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash, generateContentStableHash } from "./processor.js";
@@ -523,10 +524,10 @@ Do not penalise evidence for using these terms instead of the framework's langua
 
 Topic: ${topicDescription}${baseRateBlock}
 
-SCORING RULES (Binary Mode):
+SCORING RULES (Binary Mode — Yes/No ONLY):
 - Score 1 (Yes): The company provides clear, specific evidence that directly addresses this measure. At least one verbatim quote from the source documents must support the score.
-- Score 0 (No): No evidence found, or evidence is too vague/generic to confirm the specific requirement.
-- Partial verdicts: Use verdict "Partial" with score 0 when some evidence exists but does not fully satisfy the measure.
+- Score 0 (No): No evidence found, OR evidence is too vague/generic to confirm the specific requirement, OR some evidence exists but does not FULLY satisfy the measure. Anything short of a clear Yes is a No.
+- There is NO "Partial" outcome. Do NOT return "Partial". Evidence that only partially satisfies the measure scores 0 (No).
 
 CONFIDENCE LEVELS:
 - High: Clear evidence found (for Yes) or thorough search with no evidence (for No)
@@ -580,7 +581,10 @@ ${terminologyBlock}`;
       }
     }
     if (sg) {
-    scoringGuidance = `\nScoring guidance:\n- Yes: ${sg.yes || "Clear evidence present"}\n- No: ${sg.no || "No evidence found"}\n- Partial: ${sg.partial || "Some evidence but incomplete"}`;
+    // BINARY SCORING: only Yes / No buckets are surfaced. Any "partial" guidance
+    // bucket is folded into No (evidence that is merely partial does not meet the
+    // measure).
+    scoringGuidance = `\nScoring guidance:\n- Yes: ${sg.yes || "Clear evidence present"}\n- No: ${sg.no || "No evidence found"}${sg.partial ? `\n- Note (does NOT meet the measure — score No): ${sg.partial}` : ""}`;
     // Add explicit exclusions if present in the template
     if (sg.explicit_exclusions && Array.isArray(sg.explicit_exclusions) && sg.explicit_exclusions.length > 0) {
       scoringGuidance += `\n\nEXPLICIT EXCLUSIONS (do NOT score Yes if only this evidence exists):\n${sg.explicit_exclusions.map((e: string) => `- ${e}`).join("\n")}`;
@@ -605,8 +609,10 @@ ${terminologyBlock}`;
     if (sg.positive_examples && Array.isArray(sg.positive_examples) && sg.positive_examples.length > 0) {
       scoringGuidance += `\n\nILLUSTRATIVE POSITIVE PATTERNS (for calibration ONLY — NOT source evidence; NEVER quote, paraphrase, or cite these as a disclosure. Any quote returned must be a verbatim span from the provided evidence pack):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
+    // BINARY SCORING: former "partial" examples are disclosures that do NOT fully
+    // meet the measure, so under binary scoring they are examples of a No.
     if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
-      scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
+      scoringGuidance += `\n\nEXAMPLES THAT DO NOT MEET THE MEASURE (score No — evidence is only partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
     }
   }
@@ -631,7 +637,7 @@ ${SELF_CHECK_INSTRUCTION}
 Evaluate this measure and return a JSON object with exactly these fields:
 {
   "score": 0 or 1,
-  "verdict": "Yes" | "No" | "Partial",
+  "verdict": "Yes" | "No",
   "confidence": "High" | "Medium" | "Low",
   "evidenceSummary": "One paragraph explaining your assessment",
   "quotes": [{"text": "verbatim quote from evidence", "source": "exact document title from --- DOCUMENT: <title> [url] --- header"}],
@@ -674,17 +680,10 @@ Do not penalise evidence for using these terms instead of the framework's langua
 
 Topic: ${topicDescription}${baseRateBlock}
 
-SCORING RULES (Partial Credit Mode):
+SCORING RULES (Binary Mode — Yes/No ONLY):
 - Score 1 (Yes): The company provides clear, specific evidence that FULLY addresses this measure. At least one verbatim quote from the source documents must support the score.
-- Score 0.5 (Partial): The company provides SOME evidence that partially addresses this measure, but it is incomplete, indirect, or does not fully satisfy all aspects of the requirement. A supporting quote should be provided where possible.
-- Score 0 (No): No evidence found, or evidence is too vague/generic to confirm any aspect of the specific requirement.
-
-WHEN TO USE PARTIAL (0.5):
-- ${((framework as any)?.scoringExamples as string[] | null || [])[0] || "The company addresses the topic generally but not the specific requirement"}
-- Evidence exists for some but not all components of a multi-part measure
-- The evidence is from a related initiative or programme that implies but does not explicitly confirm the requirement
-- A policy or commitment exists but lacks specificity, metrics, or implementation details
-- Evidence is outdated or from a superseded document but no current replacement is found
+- Score 0 (No): Anything short of a clear, full Yes. This includes: no evidence found; evidence too vague/generic; evidence that only PARTIALLY addresses the measure (incomplete, indirect, or not satisfying all aspects); evidence for some but not all components of a multi-part measure; a related initiative that implies but does not explicitly confirm the requirement; a policy or commitment lacking specificity, metrics, or implementation details; or outdated/superseded evidence with no current replacement.
+- There is NO "Partial" outcome and NO 0.5 score. Do NOT return "Partial". Evidence that only partially satisfies the measure scores 0 (No).
 
 CONFIDENCE LEVELS:
 - High: Clear evidence found (for Yes) or thorough search with no evidence (for No)
@@ -730,7 +729,9 @@ ${terminologyBlock}`;
       }
     }
     if (sg) {
-    scoringGuidance = `\nScoring guidance:\n- Yes (1): ${sg.yes || "Clear evidence fully satisfying the requirement"}\n- Partial (0.5): ${sg.partial || "Some evidence but incomplete or indirect"}\n- No (0): ${sg.no || "No evidence found"}`;
+    // BINARY SCORING: Yes / No buckets only. Any "partial" guidance bucket folds
+    // into No (partial evidence does not meet the measure).
+    scoringGuidance = `\nScoring guidance:\n- Yes (1): ${sg.yes || "Clear evidence fully satisfying the requirement"}\n- No (0): ${sg.no || "No evidence found"}${sg.partial ? `\n- Note (does NOT meet the measure — score No): ${sg.partial}` : ""}`;
     if (sg.explicit_exclusions && Array.isArray(sg.explicit_exclusions) && sg.explicit_exclusions.length > 0) {
       scoringGuidance += `\n\nEXPLICIT EXCLUSIONS (do NOT score Yes if only this evidence exists):\n${sg.explicit_exclusions.map((e: string) => `- ${e}`).join("\n")}`;
     }
@@ -745,8 +746,10 @@ ${terminologyBlock}`;
     if (sg.positive_examples && Array.isArray(sg.positive_examples) && sg.positive_examples.length > 0) {
       scoringGuidance += `\n\nILLUSTRATIVE POSITIVE PATTERNS (for calibration ONLY — NOT source evidence; NEVER quote, paraphrase, or cite these as a disclosure. Any quote returned must be a verbatim span from the provided evidence pack):\n${sg.positive_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
+    // BINARY SCORING: former "partial" examples are disclosures that do NOT fully
+    // meet the measure, so under binary scoring they are examples of a No.
     if (sg.partial_examples && Array.isArray(sg.partial_examples) && sg.partial_examples.length > 0) {
-      scoringGuidance += `\n\nPARTIAL EXAMPLES (concrete disclosures that SHOULD score Partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
+      scoringGuidance += `\n\nEXAMPLES THAT DO NOT MEET THE MEASURE (score No — evidence is only partial):\n${sg.partial_examples.map((e: string) => `- ${e}`).join("\n")}`;
     }
     }
   }
@@ -770,8 +773,8 @@ ${SELF_CHECK_INSTRUCTION}
 
 Evaluate this measure and return a JSON object with exactly these fields:
 {
-  "score": 0 or 0.5 or 1,
-  "verdict": "Yes" | "No" | "Partial",
+  "score": 0 or 1,
+  "verdict": "Yes" | "No",
   "confidence": "High" | "Medium" | "Low",
   "evidenceSummary": "One paragraph explaining your assessment",
   "quotes": [{"text": "verbatim quote from evidence", "source": "exact document title from --- DOCUMENT: <title> [url] --- header"}],
@@ -2471,19 +2474,23 @@ export async function analyzeCompanyMeasures(opts: {
               downgradeSuppressed: true,
             };
           } else if (settings.lowConfidenceHandling === "downgrade") {
-            // Downgrade to Partial (0.5) — preserves the evidence but reduces the score.
-            // Change #4: the conversion is now recorded as an EXPLICIT, NAMED decision
-            // (rule id, proposed verdict, final verdict, reason) on the cell output so
-            // it is reported rather than silently rewritten. The verdict is only
-            // changed when the named rule actually fires; a Yes that clears the bar and
-            // is not Low-confidence stands as Yes (no unnamed downgrade path).
+            // BINARY SCORING: a Low-confidence positive is downgraded straight to
+            // "No" (score 0) rather than the former "Partial" (0.5). Scoring is now
+            // binary — a Partial no longer exists as a distinct outcome, so a
+            // low-confidence positive that does not clear the bar counts exactly as
+            // a No and contributes nothing to the score.
+            // Change #4: the conversion is still recorded as an EXPLICIT, NAMED
+            // decision (rule id, proposed verdict, final verdict, reason) on the
+            // cell output so it is reported rather than silently rewritten. The
+            // verdict is only changed when the named rule actually fires; a Yes that
+            // clears the bar and is not Low-confidence stands as Yes.
             const proposed = measureResult.verdict;
             const decision = describeDowngrade(proposed, measureResult.confidence, "downgrade", measureResult.score);
             if (decision.applied && measureResult.score === 1) {
-              measureResult.score = 0.5;
-              measureResult.verdict = "Partial";
+              measureResult.score = 0;
+              measureResult.verdict = "No";
               measureResult.verdictNuance = (measureResult.verdictNuance || "") +
-                ` [${decision.ruleId}: ${proposed}→Partial — ${decision.reason}]`;
+                ` [${decision.ruleId}: ${proposed}→No (binary; low-confidence positive not counted as met) — ${decision.reason}]`;
             }
             measureResult.downgradeDecision = decision;
           } else if (settings.lowConfidenceHandling === "flag") {
@@ -2763,7 +2770,22 @@ export async function analyzeCompanyMeasures(opts: {
     for (let i = 0; i < categoryMeasures.length; i += MEASURE_CONCURRENCY) {
       const batch = categoryMeasures.slice(i, i + MEASURE_CONCURRENCY);
       const batchResults = await Promise.all(batch.map(scoreMeasure));
-      allResults.push(...batchResults);
+      // BINARY SCORING: collapse any residual "Partial" verdict/0.5 score to a
+      // "No"/0 at the single collection chokepoint so every downstream rollup
+      // (totalScore, measuresMet, summary counts) and persisted result is binary.
+      // Abstained results ("Insufficient evidence") are left untouched so they
+      // stay excluded from the answered-measures denominator. This is the safety
+      // net; new runs should already avoid Partial via the scoring prompt/schema.
+      const normalizedBatch = batchResults.map((r) =>
+        r.abstained
+          ? r
+          : {
+              ...r,
+              verdict: normalizeVerdict(r.verdict) as MeasureResult["verdict"],
+              score: normalizedScore(r.verdict, r.score),
+            }
+      );
+      allResults.push(...normalizedBatch);
     }
   }
 
