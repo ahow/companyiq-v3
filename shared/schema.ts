@@ -180,6 +180,12 @@ export const frameworks = pgTable("frameworks", {
   productionReady: boolean("production_ready").notNull().default(false),
   rulesActive: jsonb("rules_active").$type<Record<string, boolean>>(),
   intakeArtefact: jsonb("intake_artefact").$type<any>(),
+  // Completeness validator report (Part B). Nullable/additive. Written at
+  // finalisation (framework-builder /save) and by the retroactive audit
+  // endpoint (/audit-completeness). Records, per required field, whether it was
+  // present / deterministically derived / LLM-filled / justified-empty / MISSING,
+  // so a framework can never again be finalised with silently-empty metadata.
+  completenessReport: jsonb("completeness_report").$type<any>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

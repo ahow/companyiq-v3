@@ -20,6 +20,7 @@ import { analyzeCompanyMeasures } from "../lib/analyzer.js";
 import { loadPriceTable, lookupPrice, computeCost } from "../lib/llm-usage.js";
 import { runMeasureDesignDiagnostic } from "../lib/measure-design-diagnostic.js";
 import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.js";
+import { runCompletenessValidator } from "../lib/framework-completeness.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -607,7 +608,7 @@ apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
     if (!framework) return res.status(404).json({ error: "Framework not found" });
 
-    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared", "requiredDocTypes", "dataPatterns", "legacyQueryTemplates", "multiDocumentQueryTemplates", "authoritativeRegistries", "authoritativeFilingTypes", "scoringExamples", "antiInferenceRules"];
+    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared", "requiredDocTypes", "dataPatterns", "legacyQueryTemplates", "multiDocumentQueryTemplates", "authoritativeRegistries", "authoritativeFilingTypes", "scoringExamples", "antiInferenceRules", "documentPriorityUrlPatterns"];
     const updates: Record<string, any> = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
@@ -621,6 +622,72 @@ apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
 
     const updated = await storage.getFrameworkById(frameworkId, workspaceId);
     res.json(updated);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Part D: Retroactive completeness audit / backfill ──────────────────────
+// Runs the SAME shared completeness validator used at finalisation (Part B) over
+// an EXISTING framework: derive → LLM-fill → report. User-triggered only (never
+// auto-run). Framework-level fills are applied via the standard updateFramework
+// path (the exact allowedFields set the PATCH handler enforces); per-measure
+// fills via the whitelisted measure-field update path. Returns the full report.
+// The framework is never blocked or deleted — this only backfills + records.
+apiRouter.post("/frameworks/:id/audit-completeness", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const frameworkId = parseInt(req.params.id as string);
+    if (Number.isNaN(frameworkId)) return res.status(400).json({ error: "Invalid framework id" });
+    const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+    if (!framework) return res.status(404).json({ error: "Framework not found" });
+    const measures = await storage.getFrameworkMeasures(frameworkId);
+
+    // Opt-in LLM fill: default on, disable with ?llmFill=false for a dry, derive-only audit.
+    const useLlm = String(req.query.llmFill ?? "true") !== "false";
+    let llmComplete: any = undefined;
+    if (useLlm) {
+      const mod = await import("../lib/ai-providers.js");
+      llmComplete = mod.completeWithFallback;
+    }
+    const justifiedEmpty = (req.body && typeof req.body.justifiedEmpty === "object" && req.body.justifiedEmpty) || {};
+
+    const { report, frameworkUpdates, measureUpdates } = await runCompletenessValidator({
+      framework: framework as any,
+      measures: measures as any,
+      llmComplete,
+      justifiedEmpty,
+    });
+
+    // The standard framework update path enforces the same allowedFields the
+    // PATCH handler uses — never write a field outside that allow-list.
+    const allowedFrameworkFields = new Set(["requiredDocTypes", "dataPatterns", "negativeKeywords", "antiInferenceRules", "authoritativeRegistries", "authoritativeFilingTypes", "documentPriorityUrlPatterns"]);
+    const appliedFrameworkUpdates: Record<string, any> = {};
+    for (const [k, v] of Object.entries(frameworkUpdates)) {
+      if (allowedFrameworkFields.has(k)) appliedFrameworkUpdates[k] = v;
+    }
+    const applyBackfill = String(req.query.apply ?? "true") !== "false";
+    if (applyBackfill && Object.keys(appliedFrameworkUpdates).length > 0) {
+      await storage.updateFramework(frameworkId, appliedFrameworkUpdates as any);
+    }
+    if (applyBackfill) {
+      for (const [measureId, fields] of Object.entries(measureUpdates)) {
+        if (fields && Object.keys(fields).length > 0) {
+          await storage.updateFrameworkMeasureFields(frameworkId, measureId, fields as any);
+        }
+      }
+    }
+    // Persist the report on the framework row regardless of apply flag.
+    await storage.updateFramework(frameworkId, { completenessReport: report } as any);
+
+    res.json({
+      frameworkId,
+      applied: applyBackfill,
+      frameworkUpdatesApplied: Object.keys(appliedFrameworkUpdates),
+      measureUpdatesApplied: Object.keys(measureUpdates),
+      incomplete: report.hasIncompleteness,
+      report,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

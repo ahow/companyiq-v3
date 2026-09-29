@@ -3,6 +3,7 @@ import multer from "multer";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import * as storage from "../storage.js";
 import { STRUCTURED_GUIDANCE_FIELDS_SPEC } from "../lib/framework-v2/structured-guidance.js";
+import { runCompletenessValidator, deriveDataPatterns, deriveRequiredDocTypes } from "../lib/framework-completeness.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -561,7 +562,10 @@ WHEN YOU HAVE ENOUGH INFORMATION, generate the complete framework as a JSON bloc
             "required_evidence_type": "Must be an explicit, quantified target with base year, target year, and percentage reduction stated in company's own disclosure (not inferred from alliance membership)",
             "temporal_note": "Score based on most recent disclosure only. If target has been withdrawn or company has left the relevant alliance, score No regardless of historical commitment."
           },
-          "evidenceKeywords": ["MINIMUM 10, MAXIMUM 15 highly specific keywords per measure", "include technical terms", "acronyms like PCAF", "SBTi", "specific metric names", "common phrasings used in disclosures", "sector names", "target types", "synonyms and abbreviations", "regulatory references"]
+          "evidenceKeywords": ["MINIMUM 10, MAXIMUM 15 highly specific keywords per measure", "include technical terms", "acronyms like PCAF", "SBTi", "specific metric names", "common phrasings used in disclosures", "sector names", "target types", "synonyms and abbreviations", "regulatory references"],
+          "requiredSourceTypes": ["MANDATORY, non-empty. The document/source TYPES required to answer THIS measure — topic-agnostic source categories such as 'regulatory-filing', 'proxy-statement', 'annual-report', 'standalone-policy', 'sustainability-report', 'transcript'. Derive them from THIS measure's own evidence requirement (scoringGuidance / required_evidence_type). NOT topic keywords. 1-4 entries."],
+          "substantiveDefinition": "MANDATORY, non-empty. A precise, self-contained restatement of what THIS measure assesses: the observable evidence in public documents and the explicit boundary conditions (what counts and what does NOT). Derive from this measure's definition — never a generic template.",
+          "fallbackYesCriterion": "MANDATORY, non-empty. The single explicit minimum bar that still justifies a YES for THIS measure when the strongest evidence form is absent. Specific to this measure — never a generic template."
         }
       ]
     }
@@ -589,6 +593,8 @@ NOTE ON FRAMEWORK-LEVEL DISCOVERY FIELDS (ALL SEVEN FIELDS ARE MANDATORY FOR A H
 
 9. "dataPatterns" (array of strings): 5-10 regex fragments that prove the topic's actual DATA is present in a document's text (specific figures, standard names, target phrasings for THIS topic). These distinguish a topic-relevant report with real data from a landing page or generic mention. E.g., for climate: ["scope\\s*[123]", "financed.?emission", "\\bMtCO2", "PCAF"]; for slavery: ["modern.?slavery.?(?:act|statement)", "forced.?labo"]; for tax: ["country.?by.?country", "effective.?tax.?rate"].
 
+10. "documentPriorityUrlPatterns" (array of strings): URL-substring / regex patterns that identify THIS topic's highest-value DEDICATED disclosures by their URL, so the PDF-candidate recovery step attempts them first within its bounded budget (critical when an issuer hosts many PDFs on one ESG subdomain). Same authoring style as requiredDocTypes but matched against the document URL, not its name. Each entry MUST be a valid regex fragment. E.g., for biodiversity: ["biodivers", "nature", "tnfd", "/csr"]; for climate: ["climate", "tcfd", "net-?zero"]; for tax: ["tax-?transparency", "country-?by-?country"]. Empty array is acceptable ONLY if the topic has no dedicated-disclosure URL signature — and only if you say so explicitly.
+
 NOTE ON SCORING GUIDANCE FIELDS:
 ${STRUCTURED_GUIDANCE_FIELDS_SPEC}
 - "explicit_exclusions" (array of strings): List specific types of evidence that should NOT be accepted as sufficient. This is the most powerful tool for preventing false positives.
@@ -610,7 +616,9 @@ IMPORTANT RULES:
 - Include explicit_exclusions for EVERY measure where there is any risk of false positives
 - Include temporal_note for any measure involving targets, commitments, or policies that could change over time
 - Include evidenceKeywords for every measure. STRICT COUNT: minimum 10, maximum 15 per measure. Verify the count before you emit each measure. Fewer than 10 is a validation failure.
+- Each measure MUST include a non-empty "requiredSourceTypes" (1-4 topic-agnostic source categories the measure's evidence must come from), a non-empty "substantiveDefinition", and a non-empty "fallbackYesCriterion" — each derived from THAT measure's own definition/evidence requirement, never a generic template reused across measures. Emitting an empty value for any of these is a validation failure.
 - MANDATORY framework-level fields (all seven MUST be populated non-empty): topicDescription (200-400 words), searchTemplates (10-14), multiDocumentQueryTemplates (8-14), authoritativeRegistries (4-15 or empty ONLY with research confirmation of no registries), authoritativeFilingTypes (5-10 weight-plus-pattern objects), antiInferenceRules (5-10 DO-NOT rules), scoringExamples (3-6 measurePattern-plus-example objects). Emitting an empty array or null for any of these fields is a validation failure — the discovery engine and scorer both rely on them, and a framework missing them typically achieves less than 30% recall vs a fully-populated equivalent.
+- Also populate "requiredDocTypes", "dataPatterns" and "documentPriorityUrlPatterns" (each described in the framework-level field notes above). documentPriorityUrlPatterns entries MUST each be a valid regex fragment; leave it empty ONLY when the topic genuinely has no dedicated-disclosure URL signature.
 - Generate the number of measures the user requested (or that was agreed in the category structure proposal). There is NO fixed maximum — generate as many as needed.
 - MINIMUM RULE: Every category MUST have at least 3 measures. If a category would have fewer than 3, merge it into a related category or expand it with additional relevant measures.
 - Distribute measures across categories according to the approved structure. If no structure was explicitly approved, use your judgment based on topic complexity.
@@ -1008,6 +1016,9 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       knownDisclosureUrls: framework.knownDisclosureUrls || null,
       requiredDocTypes: framework.requiredDocTypes || null,
       dataPatterns: framework.dataPatterns || null,
+      // Part C: persist the (previously orphaned) documentPriorityUrlPatterns
+      // field when the generator authors it, so it survives finalisation.
+      documentPriorityUrlPatterns: framework.documentPriorityUrlPatterns || null,
     } as any);
 
     // Create measures from categories
@@ -1022,6 +1033,14 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
           definition: measure.definition || "",
           scoringGuidance: typeof measure.scoringGuidance === "string" ? measure.scoringGuidance : JSON.stringify(measure.scoringGuidance || {}),
           evidenceKeywords: measure.evidenceKeywords || [],
+          // Part A: persist the per-measure completeness fields the generation
+          // prompt now requires. Previously these were dropped on save, so B8's
+          // requiredDocTypes aggregation always saw undefined even when the LLM
+          // emitted them — the second root cause of silently-empty framework
+          // metadata. Persist them so downstream derivation actually has inputs.
+          requiredSourceTypes: measure.requiredSourceTypes || null,
+          substantiveDefinition: measure.substantiveDefinition || null,
+          fallbackYesCriterion: measure.fallbackYesCriterion || null,
           category: category.name,
           categoryNumber,
           displayOrder,
@@ -1035,25 +1054,19 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
     const allMeasures = await storage.getFrameworkMeasures(created.id);
     const derivedUpdates: Record<string, any> = {};
 
-    // Derive dataPatterns from evidenceKeywords if not already set
+    // Derive dataPatterns from evidenceKeywords if not already set.
+    // Uses the SAME deriveDataPatterns helper the completeness validator uses,
+    // so finalisation and the audit endpoint never diverge (single source of truth).
     if (!framework.dataPatterns || framework.dataPatterns.length === 0) {
-      const patterns = new Set<string>();
-      for (const m of allMeasures) {
-        for (const kw of ((m as any).evidenceKeywords || [])) {
-          const t = (kw as string).toLowerCase().trim();
-          if (t.length >= 4) patterns.add(t.replace(/\s+/g, ".?"));
-        }
-      }
-      if (patterns.size > 0) derivedUpdates.dataPatterns = Array.from(patterns).slice(0, 15);
+      const patterns = deriveDataPatterns(allMeasures as any);
+      if (patterns.length > 0) derivedUpdates.dataPatterns = patterns;
     }
 
     // Derive requiredDocTypes from measure requiredSourceTypes if not already set
+    // (shared deriveRequiredDocTypes helper — single source of truth with the validator).
     if (!framework.requiredDocTypes || framework.requiredDocTypes.length === 0) {
-      const types = new Set<string>();
-      for (const m of allMeasures) {
-        for (const t of ((m as any).requiredSourceTypes || [])) types.add(t as string);
-      }
-      if (types.size > 0) derivedUpdates.requiredDocTypes = Array.from(types);
+      const types = deriveRequiredDocTypes(allMeasures as any);
+      if (types.length > 0) derivedUpdates.requiredDocTypes = types;
     }
 
     // Derive legacyQueryTemplates from evidenceKeywords if not already set
@@ -1075,9 +1088,54 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
     if (framework.scoringExamples) derivedUpdates.scoringExamples = framework.scoringExamples;
     if (framework.antiInferenceRules) derivedUpdates.antiInferenceRules = framework.antiInferenceRules;
     if (framework.multiDocumentQueryTemplates) derivedUpdates.multiDocumentQueryTemplates = framework.multiDocumentQueryTemplates;
+    // Part C: pass through documentPriorityUrlPatterns when authored (already
+    // persisted on createFramework; re-assert here so it survives if the create
+    // path left it null and a later payload carries it).
+    if (framework.documentPriorityUrlPatterns) derivedUpdates.documentPriorityUrlPatterns = framework.documentPriorityUrlPatterns;
 
     if (Object.keys(derivedUpdates).length > 0) {
       await storage.updateFramework(created.id, derivedUpdates);
+    }
+
+    // ─── Part B: Completeness validation (fail-loud but DISMISSIBLE) ─────────
+    // Runs the single shared validator over the just-persisted framework +
+    // measures: for every required field it attempts deterministic derivation,
+    // then an LLM-authored fill, and records anything still empty as MISSING with
+    // a machine-readable reason. Fills are applied via the standard update paths.
+    // Finalisation is NEVER blocked — the report is attached to the framework and
+    // returned so the UI can surface incompleteness, and the user may proceed.
+    let completenessReport: any = null;
+    let completenessHasIncompleteness = false;
+    try {
+      const measuresForValidation = await storage.getFrameworkMeasures(created.id);
+      const frameworkForValidation = await storage.getFrameworkById(created.id, workspaceId);
+      const { completeWithFallback } = await import("../lib/ai-providers.js");
+      const { report, frameworkUpdates, measureUpdates } = await runCompletenessValidator({
+        framework: (frameworkForValidation || { id: created.id }) as any,
+        measures: measuresForValidation as any,
+        llmComplete: completeWithFallback as any,
+        justifiedEmpty: (framework.justifiedEmpty && typeof framework.justifiedEmpty === "object") ? framework.justifiedEmpty : {},
+      });
+      // Apply framework-level fills via the standard update path.
+      if (Object.keys(frameworkUpdates).length > 0) {
+        await storage.updateFramework(created.id, frameworkUpdates as any);
+      }
+      // Apply per-measure fills via the additive measure-field update path.
+      for (const [measureId, fields] of Object.entries(measureUpdates)) {
+        if (fields && Object.keys(fields).length > 0) {
+          await storage.updateFrameworkMeasureFields(created.id, measureId, fields as any);
+        }
+      }
+      // Persist the report on the framework row (nullable jsonb column).
+      await storage.updateFramework(created.id, { completenessReport: report } as any);
+      completenessReport = report;
+      completenessHasIncompleteness = report.hasIncompleteness;
+      if (report.hasIncompleteness) {
+        console.warn(`[FrameworkBuilder] Framework '${framework.name}' (id=${created.id}) finalised with ${report.missing.length} still-missing required field(s):`, report.missing.map((r: any) => r.measureId ? `${r.measureId}:${r.field}` : r.field));
+      }
+    } catch (err) {
+      // The validator must never break finalisation. Record the failure loudly.
+      console.error(`[FrameworkBuilder] completeness validator failed for framework id=${created.id}:`, err);
     }
 
     // Activate the new framework
@@ -1110,7 +1168,14 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       }
     }
 
-    res.json({ success: true, frameworkId: created.id });
+    res.json({
+      success: true,
+      frameworkId: created.id,
+      // Part B: surface completeness so the client can warn the user. The save
+      // still succeeds regardless (fail-loud but dismissible).
+      completenessReport,
+      incomplete: completenessHasIncompleteness,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -941,6 +941,12 @@ export async function initializeDatabase(): Promise<void> {
     // unchanged when no curated terms have been generated yet.
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS retrieval_query_terms JSONB DEFAULT '[]'::jsonb`);
 
+    // Framework-completeness validator report (Part B). Additive/nullable jsonb.
+    // Written at finalisation and by the /audit-completeness endpoint; records per
+    // required field whether it was present / derived / LLM-filled / justified-empty
+    // / MISSING. Backward-compatible: existing rows read NULL and behave unchanged.
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS completeness_report JSONB`);
+
     // 41-C: Seed fw3 (climate) withdrawal patterns
     await db.execute(sql`
       UPDATE frameworks SET withdrawal_patterns = '{

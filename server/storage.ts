@@ -439,6 +439,39 @@ export async function createFrameworkMeasure(data: schema.InsertFrameworkMeasure
   return measure;
 }
 
+/**
+ * Additive, whitelisted per-measure field update used by the completeness
+ * validator's backfill (Parts B & D). Only the completeness-relevant measure
+ * fields may be written here; scoringGuidance is stringified if an object is
+ * passed. Matches on (frameworkId, measureId). Backward-compatible: unknown
+ * fields are ignored and existing values are only overwritten when a value is
+ * explicitly provided.
+ */
+export async function updateFrameworkMeasureFields(
+  frameworkId: number,
+  measureId: string,
+  fields: Partial<{
+    requiredSourceTypes: string[];
+    substantiveDefinition: string;
+    fallbackYesCriterion: string;
+    evidenceKeywords: string[];
+    scoringGuidance: any;
+  }>,
+) {
+  const allowed = ["requiredSourceTypes", "substantiveDefinition", "fallbackYesCriterion", "evidenceKeywords", "scoringGuidance"] as const;
+  const toSet: Record<string, any> = {};
+  for (const key of allowed) {
+    const v = (fields as any)[key];
+    if (v === undefined || v === null) continue;
+    toSet[key] = key === "scoringGuidance" && typeof v === "object" ? JSON.stringify(v) : v;
+  }
+  if (Object.keys(toSet).length === 0) return;
+  await db
+    .update(schema.frameworkMeasures)
+    .set(toSet as any)
+    .where(and(eq(schema.frameworkMeasures.frameworkId, frameworkId), eq(schema.frameworkMeasures.measureId, measureId)));
+}
+
 export async function deleteFrameworkMeasures(frameworkId: number) {
   await db.delete(schema.frameworkMeasures).where(eq(schema.frameworkMeasures.frameworkId, frameworkId));
 }
@@ -2520,7 +2553,7 @@ export async function getCompanyByIsin(isin: string, workspaceId: number) {
 }
 
 // ─── Framework Editor Operations ───────────────────────────────────────────
-export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; requiredDocTypes: string[]; dataPatterns: string[]; isShared: boolean; legacyQueryTemplates: string[]; multiDocumentQueryTemplates: string[]; authoritativeRegistries: string[]; authoritativeFilingTypes: any[]; scoringExamples: string[]; antiInferenceRules: string[]; documentPriorityUrlPatterns: string[] }>) {
+export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; requiredDocTypes: string[]; dataPatterns: string[]; isShared: boolean; legacyQueryTemplates: string[]; multiDocumentQueryTemplates: string[]; authoritativeRegistries: string[]; authoritativeFilingTypes: any[]; scoringExamples: string[]; antiInferenceRules: string[]; documentPriorityUrlPatterns: string[]; completenessReport: any }>) {
   // Defensive promotion: when an update carries a fresh intake artefact but no
   // explicit top-level hardening fields, promote them from the intake so an
   // update path can't silently null-out the scorer's hardening. No-op for the
