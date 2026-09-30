@@ -186,6 +186,16 @@ export const frameworks = pgTable("frameworks", {
   // present / deterministically derived / LLM-filled / justified-empty / MISSING,
   // so a framework can never again be finalised with silently-empty metadata.
   completenessReport: jsonb("completeness_report").$type<any>(),
+  // Synonym-adjudication gate (Option 3). Nullable/additive. Records the
+  // operator's per-term decisions (removed/kept) about suspect topicSynonyms so
+  // the lexicon-hygiene advisory terminates instead of recurring: an adjudicated
+  // term is never re-flagged, and a "removed" term is dropped from topicSynonyms.
+  // Backward-compatible: existing rows read NULL and behave unchanged.
+  synonymAdjudications: jsonb("synonym_adjudications").$type<any[]>(),
+  // Report from the last synonym-adjudication gate run (flagged/resolved/
+  // unresolved/removed). Nullable/additive; surfaced so the UI can show what
+  // still needs deciding. Fail-loud but dismissible (never blocks finalisation).
+  synonymGateReport: jsonb("synonym_gate_report").$type<any>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

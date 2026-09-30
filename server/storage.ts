@@ -2553,7 +2553,7 @@ export async function getCompanyByIsin(isin: string, workspaceId: number) {
 }
 
 // ─── Framework Editor Operations ───────────────────────────────────────────
-export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; requiredDocTypes: string[]; dataPatterns: string[]; isShared: boolean; legacyQueryTemplates: string[]; multiDocumentQueryTemplates: string[]; authoritativeRegistries: string[]; authoritativeFilingTypes: any[]; scoringExamples: string[]; antiInferenceRules: string[]; documentPriorityUrlPatterns: string[]; completenessReport: any }>) {
+export async function updateFramework(frameworkId: number, updates: Partial<{ name: string; topicDescription: string; trustedSourceIds: number[]; searchTemplates: string[]; negativeKeywords: string[]; negativeDomains: string[]; knownDisclosureUrls: string[]; requiredDocTypes: string[]; dataPatterns: string[]; isShared: boolean; legacyQueryTemplates: string[]; multiDocumentQueryTemplates: string[]; authoritativeRegistries: string[]; authoritativeFilingTypes: any[]; scoringExamples: string[]; antiInferenceRules: string[]; documentPriorityUrlPatterns: string[]; completenessReport: any; synonymAdjudications: any[]; synonymGateReport: any; topicSynonyms: string[] }>) {
   // Defensive promotion: when an update carries a fresh intake artefact but no
   // explicit top-level hardening fields, promote them from the intake so an
   // update path can't silently null-out the scorer's hardening. No-op for the

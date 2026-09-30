@@ -205,6 +205,9 @@ function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft
     sensitivityPreference: draft.framework?.sensitivityPreference || intake.sensitivityPreference,
     negativeKeywords: (Array.isArray(draft.framework?.negativeKeywords) ? draft.framework.negativeKeywords : null) || intake.negativeKeywords,
     antiInferenceRules: (Array.isArray(draft.framework?.antiInferenceRules) ? draft.framework.antiInferenceRules : null) || intake.antiInferenceRules,
+    // Carry operator synonym adjudications so the lexicon-hygiene advisory terminates
+    // (does not re-flag terms already decided). Absent on a fresh intake draft.
+    synonymAdjudications: Array.isArray(draft.framework?.synonymAdjudications) ? draft.framework.synonymAdjudications : undefined,
     measures,
   };
 }
@@ -2023,6 +2026,8 @@ router.post("/v2/validate", async (req: Request, res: Response) => {
       adjacentTopics: draft.framework?.adjacentTopics,
       anchorFrameworks: draft.framework?.anchorFrameworks,
       sensitivityPreference: draft.framework?.sensitivityPreference,
+      // Carry operator synonym adjudications so re-validation terminates the advisory loop.
+      synonymAdjudications: Array.isArray(draft.framework?.synonymAdjudications) ? draft.framework.synonymAdjudications : undefined,
       measures,
     };
     const validation = appendEvidenceKeywordWarnings(validateAll(fwDraft), fwDraft);
@@ -3427,8 +3432,18 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       // reply instead of throwing and cascading through fallbacks until the client aborts.
       allowTruncated: true,
     });
-    const { displayText, actions } = extractActionsFromReply(reply);
-    return res.json({ reply: displayText, actions, proposalCount: editsBundle.proposals.length });
+    const { displayText, actions, unappliedEditWarning } = extractActionsFromReply(reply);
+    if (unappliedEditWarning) {
+      // Fail-loud: the assistant claimed an edit but emitted no action to carry it.
+      // Surface it explicitly instead of returning a silent success (Task A gap).
+      console.warn("[framework-builder v2 /improvement/chat] unapplied-edit claim:", unappliedEditWarning);
+    }
+    return res.json({
+      reply: displayText,
+      actions,
+      proposalCount: editsBundle.proposals.length,
+      ...(unappliedEditWarning ? { unappliedEditWarning } : {}),
+    });
   } catch (err: any) {
     console.error("[framework-builder v2 /improvement/chat] error:", err);
     return res.status(500).json({ error: err?.message || "internal error" });

@@ -947,6 +947,14 @@ export async function initializeDatabase(): Promise<void> {
     // / MISSING. Backward-compatible: existing rows read NULL and behave unchanged.
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS completeness_report JSONB`);
 
+    // Synonym-adjudication gate (Option 3). Additive/nullable jsonb columns.
+    // synonym_adjudications records the operator's per-term decisions (removed/
+    // kept) about suspect topicSynonyms so the lexicon-hygiene advisory
+    // terminates instead of recurring; synonym_gate_report holds the last gate
+    // run. Backward-compatible: existing rows read NULL and behave unchanged.
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS synonym_adjudications JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS synonym_gate_report JSONB`);
+
     // 41-C: Seed fw3 (climate) withdrawal patterns
     await db.execute(sql`
       UPDATE frameworks SET withdrawal_patterns = '{

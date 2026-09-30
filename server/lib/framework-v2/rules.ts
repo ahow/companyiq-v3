@@ -11,6 +11,7 @@
  */
 
 import { runLexiconHygiene, type SurfaceInput } from "./reliability/lexicon-hygiene.js";
+import { isAdjudicated, normalizeTopicKey, type SynonymAdjudication } from "./synonym-adjudication.js";
 import { buildCanonicalRule } from "./reliability/canonical-rule.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -57,6 +58,10 @@ export interface FrameworkDraft {
   // (never error/warning) when they are absent/empty at validation time.
   negativeKeywords?: string[];
   antiInferenceRules?: string[];
+  // Recorded per-term decisions about suspect topicSynonyms (Option 3). When a
+  // flagged term already carries a decision here, the lexicon-hygiene advisory
+  // skips it so the notice terminates instead of recurring. Optional/additive.
+  synonymAdjudications?: SynonymAdjudication[];
   measures: MeasureDraft[];
 }
 
@@ -1191,8 +1196,16 @@ export function validateSetLevel(fw: FrameworkDraft): ValidationResult {
   }
 
   const hygiene = runLexiconHygiene({ surfaces: hygieneSurfaces, topicTokens: topicLexicon });
+  // Loop terminator: once an operator has adjudicated a flagged term (kept or removed),
+  // it is no longer surfaced here. Without this, non-anchored synonyms re-flag on EVERY
+  // pass ("I agree it's noise but it comes back") because the advisory is stateless.
+  // The adjudication record (persisted on the framework, carried onto FrameworkDraft) is
+  // the state that makes the notice dismissible-for-good. TOPIC-AGNOSTIC: keyed only on
+  // the normalized topicTerm + term, never on any specific framework or vocabulary.
+  const adjTopicKey = normalizeTopicKey(fw.topicTerm);
   for (const p of hygiene.provenance) {
     if (p.action !== "flagged-for-review") continue;
+    if (isAdjudicated(p.term, adjTopicKey, fw.synonymAdjudications)) continue;
     violations.push({
       rule: "lexicon-hygiene",
       severity: "info",

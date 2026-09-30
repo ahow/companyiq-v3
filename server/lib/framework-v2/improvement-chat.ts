@@ -172,11 +172,51 @@ export interface ExtractedAction {
 }
 
 /**
+ * Fail-loud detector for the Task A "silent no-op" gap.
+ *
+ * Root cause: an agreed edit only mutates persisted state when the assistant
+ * emits a machine-readable <action> block. When the assistant instead CLAIMS in
+ * prose that it has already made the change ("Done! I've updated measure 2.1…")
+ * but emits ZERO action blocks, the apply path receives an empty list and does
+ * nothing — the user is told the edit happened when it did not.
+ *
+ * This returns a warning string when the display prose asserts a completed edit
+ * yet no structured action exists to carry it. TOPIC-AGNOSTIC: it keys only on
+ * completion-claim verb shapes, never on any framework/measure/vocabulary.
+ * Returns null when there is nothing to warn about (actions present, or the prose
+ * is a question/proposal rather than a completion claim).
+ */
+export function detectUnappliedEditClaim(displayText: string, actionCount: number): string | null {
+  if (actionCount > 0) return null;
+  const t = (displayText || "").trim();
+  if (!t) return null;
+  // First-person completion assertion: "I've updated…", "I have added…", "I just removed…".
+  const firstPersonClaim =
+    /\b(?:I(?:['’]ve| have)|I just)\s+(updated|changed|added|removed|revised|reworded|tightened|broadened|loosened|adjusted|modified|edited|lowered|raised|dropped|renamed|set|applied|made)\b/i;
+  // Leading terse completion assertion: "Done! …", "Updated. …", "All set — …".
+  const terseClaim = /^(done|all done|all set|updated|changed|applied|there you go)\b\s*[!.,:—-]/i;
+  if (firstPersonClaim.test(t) || terseClaim.test(t)) {
+    return (
+      "The assistant claimed an edit was applied, but produced no executable action, " +
+      "so nothing was changed. Re-issue the request so it emits an <action> block, or " +
+      "make the change explicitly — this reply did NOT modify the framework."
+    );
+  }
+  return null;
+}
+
+/**
  * Parse assistant reply text and pull out any <action .../> blocks.
  * Returns both the display text (with action blocks stripped) and the
- * structured actions the client should render as buttons.
+ * structured actions the client should render as buttons. Also returns a
+ * fail-loud `unappliedEditWarning` when the prose claims a completed edit but no
+ * action block was emitted (the Task A silent-no-op gap).
  */
-export function extractActionsFromReply(text: string): { displayText: string; actions: ExtractedAction[] } {
+export function extractActionsFromReply(text: string): {
+  displayText: string;
+  actions: ExtractedAction[];
+  unappliedEditWarning?: string;
+} {
   const actions: ExtractedAction[] = [];
   // Capture everything up to the self-closing "/>". We must NOT exclude "/"
   // from the attribute span (free-text instruction="…" values legitimately
@@ -195,5 +235,6 @@ export function extractActionsFromReply(text: string): { displayText: string; ac
     if (type) actions.push({ type, attrs });
   }
   cleaned = cleaned.replace(actionRe, "").trim();
-  return { displayText: cleaned, actions };
+  const unappliedEditWarning = detectUnappliedEditClaim(cleaned, actions.length) ?? undefined;
+  return { displayText: cleaned, actions, unappliedEditWarning };
 }

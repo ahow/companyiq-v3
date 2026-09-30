@@ -4,6 +4,7 @@ import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import * as storage from "../storage.js";
 import { STRUCTURED_GUIDANCE_FIELDS_SPEC } from "../lib/framework-v2/structured-guidance.js";
 import { runCompletenessValidator, deriveDataPatterns, deriveRequiredDocTypes } from "../lib/framework-completeness.js";
+import { runSynonymAdjudicationGate, type SynonymAdjudication } from "../lib/framework-v2/synonym-adjudication.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -1138,6 +1139,72 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       console.error(`[FrameworkBuilder] completeness validator failed for framework id=${created.id}:`, err);
     }
 
+    // ─── Part B2: Synonym-adjudication gate (Option 3 — terminating) ─────────
+    // Runs the single shared synonym gate over the just-persisted framework's
+    // topicSynonyms. The gate mirrors the lexicon-hygiene advisory's detection,
+    // then (a) subtracts terms that already carry a recorded adjudication so the
+    // advisory can never recur, and (b) physically drops "removed" terms from
+    // topicSynonyms. Adjudications supplied in the request payload are honoured.
+    // Finalisation is NEVER blocked (fail-loud but dismissible): the report and
+    // any still-unresolved terms are attached and returned so the UI can surface
+    // what remains to decide, and the user may proceed.
+    let synonymGateReport: any = null;
+    let synonymGateHasUnresolved = false;
+    try {
+      const frameworkForGate = await storage.getFrameworkById(created.id, workspaceId);
+      const topicSynonyms = Array.isArray((frameworkForGate as any)?.topicSynonyms)
+        ? (frameworkForGate as any).topicSynonyms as string[]
+        : [];
+      // Accept operator adjudications supplied in the request; merge with any
+      // already recorded on the framework (request wins on key collision).
+      const priorAdj: SynonymAdjudication[] = Array.isArray((frameworkForGate as any)?.synonymAdjudications)
+        ? (frameworkForGate as any).synonymAdjudications
+        : [];
+      const requestAdj: SynonymAdjudication[] = Array.isArray((framework as any)?.synonymAdjudications)
+        ? (framework as any).synonymAdjudications
+        : [];
+      const adjudications = [...priorAdj, ...requestAdj];
+      // Topic lexicon protects genuine vocabulary (same inputs the advisory uses).
+      const adjacentTopicNames = Array.isArray((frameworkForGate as any)?.adjacentTopics)
+        ? ((frameworkForGate as any).adjacentTopics as any[])
+            .map((a) => (a && typeof a === "object" ? a.name : a))
+            .filter((n): n is string => typeof n === "string" && n.length > 0)
+        : [];
+      const topicTokens = [
+        (frameworkForGate as any)?.topicTerm,
+        ...topicSynonyms,
+        ...adjacentTopicNames,
+      ].filter((t): t is string => typeof t === "string" && t.length > 0);
+
+      const gateReport = runSynonymAdjudicationGate({
+        topicTerm: (frameworkForGate as any)?.topicTerm ?? framework.name ?? null,
+        topicSynonyms,
+        topicTokens,
+        adjudications,
+      });
+
+      // Apply removals to topicSynonyms via the standard update path.
+      if (gateReport.removedTerms.length > 0) {
+        await storage.updateFramework(created.id, { topicSynonyms: gateReport.resolvedSynonyms } as any);
+      }
+      // Persist the merged adjudications + the gate report (nullable jsonb cols).
+      await storage.updateFramework(created.id, {
+        synonymAdjudications: adjudications,
+        synonymGateReport: gateReport,
+      } as any);
+      synonymGateReport = gateReport;
+      synonymGateHasUnresolved = gateReport.unresolved.length > 0;
+      if (synonymGateHasUnresolved) {
+        console.warn(`[FrameworkBuilder] Framework '${framework.name}' (id=${created.id}) has ${gateReport.unresolved.length} unresolved synonym(s) awaiting adjudication:`, gateReport.unresolved.map((u: any) => u.term));
+      }
+      if (gateReport.removedTerms.length > 0) {
+        console.warn(`[FrameworkBuilder] Framework '${framework.name}' (id=${created.id}) dropped ${gateReport.removedTerms.length} adjudicated-removed synonym(s):`, gateReport.removedTerms);
+      }
+    } catch (err) {
+      // The gate must never break finalisation. Record the failure loudly.
+      console.error(`[FrameworkBuilder] synonym-adjudication gate failed for framework id=${created.id}:`, err);
+    }
+
     // Activate the new framework
     await storage.setActiveFramework(created.id, workspaceId);
 
@@ -1175,6 +1242,11 @@ router.post("/save", requireWorkspace, async (req: Request, res: Response) => {
       // still succeeds regardless (fail-loud but dismissible).
       completenessReport,
       incomplete: completenessHasIncompleteness,
+      // Part B2: surface the synonym-adjudication gate so the client can show
+      // still-unresolved suspect synonyms. Save still succeeds regardless
+      // (fail-loud but dismissible); the gate terminates the advisory loop.
+      synonymGateReport,
+      synonymGateHasUnresolved,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
