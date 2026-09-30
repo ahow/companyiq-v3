@@ -105,8 +105,60 @@ export const FILING_BOILERPLATE_PATTERNS: RegExp[] = [
   /\bstock (?:transfer|registrar)\b/i,
 ];
 
+/**
+ * Safe-harbour / forward-looking-statement disclaimer scaffolding (Issue 5).
+ *
+ * This is the boilerplate legal machinery that wraps risk disclosures in filings
+ * ("this document contains forward-looking statements ... actual results may
+ * differ materially ..."). It is NEVER topic vocabulary for any subject-matter
+ * framework — same class as FILING_BOILERPLATE_PATTERNS, kept separate only so the
+ * drop reason is reported distinctly. Protected by topicTokens like every other
+ * class, so a framework genuinely about securities-law disclosure is unaffected.
+ */
+export const SAFE_HARBOUR_PATTERNS: RegExp[] = [
+  /\bforward[- ]looking statements?\b/i,
+  /\bactual results\b/i,
+  /\bdiffer materially\b/i,
+  /\bno obligation to update\b/i,
+  /\bundertakes? no obligation\b/i,
+  /\bwithin the meaning of\b/i,
+  /\bprivate securities litigation reform act\b/i,
+  /\bsafe harbou?r\b/i,
+  /\brisks and uncertainties\b/i,
+  /\bcautionary (?:statement|note)\b/i,
+];
+
 function normalise(term: unknown): string {
   return typeof term === "string" ? term.trim().toLowerCase() : "";
+}
+
+/**
+ * Strip leading/trailing punctuation and collapse internal whitespace so that a
+ * punctuation-artefact variant ("artificial intelligence,") folds onto its clean
+ * form ("artificial intelligence"). Preserves internal casing. Issue 5(b).
+ */
+export function stripEdgePunctuation(term: unknown): string {
+  const s = typeof term === "string" ? term : "";
+  return s
+    .replace(/^[\s"'“”‘’.,;:!?()\[\]{}\-–—]+/, "")
+    .replace(/[\s"'“”‘’.,;:!?()\[\]{}\-–—]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * True when `term` is safe-harbour / forward-looking disclaimer scaffolding.
+ * Protected by the framework's own lexicon exactly like isFilingBoilerplateTerm.
+ */
+export function isSafeHarbourTerm(term: string, opts?: BoilerplateCheckOpts): boolean {
+  const s = normalise(term);
+  if (!s) return false;
+  const tokens = tokensOf(s);
+  const topicTokens = opts?.topicTokens;
+  if (topicTokens && topicTokens.size > 0 && tokens.some((t) => topicTokens.has(t))) {
+    return false;
+  }
+  return SAFE_HARBOUR_PATTERNS.some((re) => re.test(s));
 }
 
 /** Tokenise a candidate phrase into lowercased word tokens. */
@@ -157,7 +209,14 @@ export function isFilingBoilerplateTerm(term: string, opts?: BoilerplateCheckOpt
   return false;
 }
 
-export type DropReason = "empty" | "duplicate" | "boilerplate" | "high_df";
+export type DropReason =
+  | "empty"
+  | "duplicate"
+  | "boilerplate"
+  | "high_df"
+  | "safe_harbour"
+  | "cross_framework_leak"
+  | "punctuation_variant";
 
 export interface SanitizeTopicTermsResult {
   kept: string[];
@@ -176,6 +235,11 @@ export interface SanitizeTopicTermsOpts {
   /** When false (default) the DF gate is applied; set true to skip it (regex +
    * stoplist only) e.g. when no meaningful corpus is available. */
   skipDfGate?: boolean;
+  /** Registered adjacent-topic names for THIS framework (Issue 5). A candidate that
+   * equals or contains one of these is off-topic for this framework and dropped as
+   * `cross_framework_leak`. Uses the framework's OWN declared adjacency, so it is
+   * fully topic-agnostic (no global block-list). */
+  adjacentTopics?: Iterable<string>;
 }
 
 /**
@@ -202,21 +266,50 @@ export function sanitizeTopicTerms(
   }
   const checkOpts: BoilerplateCheckOpts = { topicTokens };
 
+  // Normalised adjacent-topic names for the cross_framework_leak class.
+  const adjacentNames: string[] = [];
+  for (const a of opts?.adjacentTopics ?? []) {
+    const n = normalise(stripEdgePunctuation(String(a)));
+    if (n) adjacentNames.push(n);
+  }
+
   const kept: string[] = [];
   const dropped: SanitizeTopicTermsResult["dropped"] = [];
   const seen = new Set<string>();
 
   for (const raw of list) {
-    const original = typeof raw === "string" ? raw.trim() : "";
-    const norm = normalise(raw);
-    if (!norm) { dropped.push({ term: original, reason: "empty" }); continue; }
-    if (seen.has(norm)) { dropped.push({ term: original, reason: "duplicate" }); continue; }
+    // Fold punctuation-artefact variants onto their clean form BEFORE dedup, so
+    // "artificial intelligence," collapses onto "artificial intelligence".
+    const rawTrimmed = typeof raw === "string" ? raw.trim() : "";
+    const original = stripEdgePunctuation(rawTrimmed);
+    const norm = normalise(original);
+    if (!norm) { dropped.push({ term: rawTrimmed, reason: "empty" }); continue; }
+    if (seen.has(norm)) {
+      // Distinguish a pure duplicate from a punctuation-only variant of a term we
+      // already kept (fold-and-drop) so the drop is reported accurately.
+      const hadEdgePunct = normalise(rawTrimmed) !== norm;
+      dropped.push({ term: rawTrimmed, reason: hadEdgePunct ? "punctuation_variant" : "duplicate" });
+      continue;
+    }
 
     // Is this candidate protected by the framework's own lexicon?
     const candTokens = tokensOf(norm);
     const isProtected = topicTokens.size > 0 && candTokens.some((t) => topicTokens.has(t));
 
     if (!isProtected) {
+      // Cross-framework leak: candidate equals or contains a registered adjacent
+      // topic of THIS framework (its own declared adjacency — topic-agnostic).
+      const leaks = adjacentNames.some(
+        (a) => norm === a || norm.includes(a) || a.includes(norm),
+      );
+      if (leaks) {
+        dropped.push({ term: original, reason: "cross_framework_leak" });
+        continue;
+      }
+      if (isSafeHarbourTerm(norm, checkOpts)) {
+        dropped.push({ term: original, reason: "safe_harbour" });
+        continue;
+      }
       if (isFilingBoilerplateTerm(norm, checkOpts)) {
         dropped.push({ term: original, reason: "boilerplate" });
         continue;
@@ -228,7 +321,64 @@ export function sanitizeTopicTerms(
     }
 
     seen.add(norm);
-    kept.push(original);
+    kept.push(original); // store the punctuation-folded clean form
+  }
+
+  return { kept, dropped };
+}
+
+/**
+ * Sanitise a list of anchor-framework references (Issue 5c). Anchors are saved raw
+ * today; this gives them the same treatment as synonyms:
+ *   - case-insensitive dedup (collapses GRI×3 / duplicated ISO padding),
+ *   - punctuation-variant folding,
+ *   - cross_framework_leak drop when an anchor maps to a registered adjacent topic.
+ *
+ * Anchors are proper names (standards/frameworks), so the filing-boilerplate and
+ * DF gates do NOT apply — only dedup + adjacency. Deterministic, topic-agnostic.
+ */
+export function sanitizeAnchorFrameworks(
+  anchors: unknown,
+  opts?: Pick<SanitizeTopicTermsOpts, "adjacentTopics">,
+): { kept: Array<{ name: string; source?: string }>; dropped: Array<{ term: string; reason: DropReason }> } {
+  const list = Array.isArray(anchors) ? anchors : [];
+  const adjacentNames: string[] = [];
+  for (const a of opts?.adjacentTopics ?? []) {
+    const n = normalise(stripEdgePunctuation(String(a)));
+    if (n) adjacentNames.push(n);
+  }
+  const kept: Array<{ name: string; source?: string }> = [];
+  const dropped: Array<{ term: string; reason: DropReason }> = [];
+  const seen = new Set<string>();
+
+  for (const raw of list) {
+    // Anchors may be plain strings or { name, source } objects.
+    const rawName =
+      typeof raw === "string"
+        ? raw
+        : raw && typeof raw === "object" && typeof (raw as any).name === "string"
+          ? (raw as any).name
+          : "";
+    const source =
+      raw && typeof raw === "object" && typeof (raw as any).source === "string"
+        ? (raw as any).source
+        : undefined;
+    const rawTrimmed = rawName.trim();
+    const name = stripEdgePunctuation(rawTrimmed);
+    const norm = normalise(name);
+    if (!norm) { dropped.push({ term: rawTrimmed, reason: "empty" }); continue; }
+    if (seen.has(norm)) {
+      const hadEdgePunct = normalise(rawTrimmed) !== norm;
+      dropped.push({ term: rawTrimmed, reason: hadEdgePunct ? "punctuation_variant" : "duplicate" });
+      continue;
+    }
+    const leaks = adjacentNames.some((a) => norm === a || norm.includes(a) || a.includes(norm));
+    if (leaks) {
+      dropped.push({ term: name, reason: "cross_framework_leak" });
+      continue;
+    }
+    seen.add(norm);
+    kept.push(source ? { name, source } : { name });
   }
 
   return { kept, dropped };

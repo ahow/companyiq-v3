@@ -155,6 +155,17 @@ merge_or_differentiate — resolve a near-duplicate measure pair. Attributes: me
 
 Emit blocks ONLY when the user should decide something, OR whenever the user has described a concrete change (then the block is required, not optional). Every attribute must reference a real ID from the data above. Do not emit blocks in the middle of your prose — put them at the end.
 
+INSTRUCTION MANIFEST (REQUIRED WHENEVER THE USER REQUESTS ONE OR MORE EDITS):
+Whenever the user's latest turn asks for any change to the framework, you MUST — in addition to your <action> blocks — emit one <intent> block per DISCRETE instruction you understood, immediately after the action blocks. This is a declaration of what you understood the operator to ask for, separate from the executable actions, so the system can reconcile "asked" against "done" and fail loudly if any instruction was dropped.
+
+  <intent summary="short paraphrase of the single instruction" measure="<measure-id or omit>" field="<field or omit>" />
+
+Rules for the manifest:
+  • Emit exactly one <intent> per distinct requested edit. If the user asked for three changes, emit three <intent> blocks — even if you only emit one <action>.
+  • Do NOT collapse multiple requested edits into one intent, and do NOT invent intents the user did not ask for.
+  • If the user's turn is purely a question / discussion (no requested edit), emit NO <intent> blocks.
+  • The manifest never replaces the <action> blocks — every implementable instruction still needs its own action.
+
 Reply in plain English. Be direct. If the framework is broadly healthy but the user is confused about one measure or company, focus on that one.`;
 }
 
@@ -215,6 +226,10 @@ export function detectUnappliedEditClaim(displayText: string, actionCount: numbe
 export function extractActionsFromReply(text: string): {
   displayText: string;
   actions: ExtractedAction[];
+  intents: IntentEntry[];
+  instructionLedger: InstructionLedger;
+  unimplementedInstructions: string[];
+  countParityWarning?: string;
   unappliedEditWarning?: string;
 } {
   const actions: ExtractedAction[] = [];
@@ -234,7 +249,169 @@ export function extractActionsFromReply(text: string): {
     delete attrs.type;
     if (type) actions.push({ type, attrs });
   }
-  cleaned = cleaned.replace(actionRe, "").trim();
+  // Parse the <intent> manifest and strip it from the display text too.
+  const intents = parseIntentManifest(text);
+  cleaned = cleaned.replace(actionRe, "").replace(/<intent\s+[^>]*?\s*\/>/g, "").trim();
+
+  // Primary signal (Issue 8): reconcile intended edits against emitted actions.
+  // This is independent of actionCount and of any completion-verb phrasing, so it
+  // closes both holes in detectUnappliedEditClaim (line-190 short-circuit + the
+  // claim-phrase dependency). The applied[]/skipped[] outcomes are folded in later
+  // by the apply route; at chat time we can already flag intents with no action.
+  const instructionLedger = reconcileInstructions(intents, actions);
+  const unimplementedInstructions = instructionLedger.entries
+    .filter((e) => e.status === "unimplemented")
+    .map((e) => e.summary);
+
   const unappliedEditWarning = detectUnappliedEditClaim(cleaned, actions.length) ?? undefined;
-  return { displayText: cleaned, actions, unappliedEditWarning };
+  return {
+    displayText: cleaned,
+    actions,
+    intents,
+    instructionLedger,
+    unimplementedInstructions,
+    unappliedEditWarning,
+  };
+}
+
+// ─── Issue 8: instruction-reconciliation ledger ──────────────────────────────
+
+/** One declared instruction the assistant understood from the operator's turn. */
+export interface IntentEntry {
+  summary: string;
+  measure?: string;
+  field?: string;
+}
+
+/** Per-instruction reconciliation outcome. */
+export interface LedgerEntry {
+  summary: string;
+  measure?: string;
+  field?: string;
+  /**
+   * implemented   — intent matched to an emitted action (and, once the apply
+   *                 route runs, to an applied[] outcome).
+   * unimplemented — intent with NO emitted action (dropped upstream).
+   * (skipped is assigned downstream by the apply route from skipped[] reasons.)
+   */
+  status: "implemented" | "unimplemented" | "skipped";
+  skipReason?: string;
+}
+
+export interface InstructionLedger {
+  entries: LedgerEntry[];
+  /** True when the reply carried no <intent> manifest at all (fallback territory). */
+  manifestAbsent: boolean;
+}
+
+/**
+ * Parse the `<intent .../>` manifest blocks out of an assistant reply.
+ * Topic-agnostic: reads only the structured attributes, never subject vocabulary.
+ */
+export function parseIntentManifest(text: string): IntentEntry[] {
+  const intents: IntentEntry[] = [];
+  const intentRe = /<intent\s+([^>]*?)\s*\/>/g;
+  let m: RegExpExecArray | null;
+  while ((m = intentRe.exec(text)) !== null) {
+    const attrs: Record<string, string> = {};
+    const attrRe = /(\w+)\s*=\s*"([^"]*)"/g;
+    let a: RegExpExecArray | null;
+    while ((a = attrRe.exec(m[1])) !== null) attrs[a[1]] = a[2];
+    const summary = (attrs.summary || "").trim();
+    if (!summary) continue; // an intent with no summary carries no information
+    intents.push({
+      summary,
+      ...(attrs.measure ? { measure: attrs.measure } : {}),
+      ...(attrs.field ? { field: attrs.field } : {}),
+    });
+  }
+  return intents;
+}
+
+/**
+ * Reconcile declared intents against emitted actions. Each intent is matched to
+ * at most one action; an intent with no matching action is `unimplemented`.
+ *
+ * Matching is structural and topic-agnostic: prefer a measure-id match (an action
+ * whose `measure`/`measureA` attribute equals the intent's measure), otherwise
+ * consume actions positionally. Every match is one-to-one (an action is consumed
+ * by at most one intent) so N intents against 1 action leave N-1 unimplemented —
+ * exactly the line-190 hole the design calls out.
+ */
+export function reconcileInstructions(
+  intents: IntentEntry[],
+  actions: ExtractedAction[],
+): InstructionLedger {
+  const manifestAbsent = intents.length === 0;
+  const consumed = new Array(actions.length).fill(false);
+
+  const actionMeasure = (act: ExtractedAction): string | undefined =>
+    act.attrs.measure || act.attrs.measureA || undefined;
+
+  const entries: LedgerEntry[] = intents.map((intent) => {
+    let matchIdx = -1;
+    // 1) Prefer an unconsumed action targeting the same measure id.
+    if (intent.measure) {
+      matchIdx = actions.findIndex(
+        (act, i) => !consumed[i] && actionMeasure(act) === intent.measure,
+      );
+    }
+    // 2) Otherwise consume the next unconsumed action positionally.
+    if (matchIdx === -1) matchIdx = consumed.findIndex((c) => !c);
+    if (matchIdx !== -1) {
+      consumed[matchIdx] = true;
+      return { ...intent, status: "implemented" as const };
+    }
+    return { ...intent, status: "unimplemented" as const };
+  });
+
+  return { entries, manifestAbsent };
+}
+
+/**
+ * Deterministic clause-split count of distinct imperative instructions in an
+ * operator message. Structure/punctuation only — NO subject vocabulary — used as
+ * the weaker count-parity backstop when the LLM omits the <intent> manifest.
+ *
+ * Splits on enumerated list markers (leading "1.", "-", "*" per line) and on
+ * coordinating conjunctions / sentence punctuation between clauses, then counts
+ * segments that contain at least one word. This is intentionally approximate and
+ * labelled as such by callers.
+ */
+export function countImperativeInstructionClauses(message: string): number {
+  const raw = (message || "").trim();
+  if (!raw) return 0;
+  // Normalise enumerated list markers and conjunctions into a single delimiter.
+  const delimited = raw
+    // line-leading list markers: "1)", "1.", "-", "*", "•"
+    .replace(/(^|\n)\s*(?:\d+[.)]|[-*•])\s+/g, "\u0001")
+    // sentence terminators
+    .replace(/[.;\n]+/g, "\u0001")
+    // coordinating conjunctions joining clauses (", and " / " and then " / " also ")
+    .replace(/\b(?:,?\s+and\s+then\s+|,?\s+and\s+also\s+|,?\s+then\s+|,?\s+and\s+|,?\s+also\s+)/gi, "\u0001");
+  const segments = delimited
+    .split("\u0001")
+    .map((s) => s.trim())
+    .filter((s) => /[A-Za-z0-9]/.test(s));
+  return segments.length;
+}
+
+/**
+ * Count-parity backstop: when the manifest is absent, compare the number of
+ * imperative clauses in the operator's message to the number of emitted actions.
+ * A deficit returns an advisory string; parity or surplus returns null. Weaker
+ * than the manifest and explicitly labelled so.
+ */
+export function detectCountParityDeficit(
+  operatorMessage: string,
+  actionCount: number,
+): string | null {
+  const clauses = countImperativeInstructionClauses(operatorMessage);
+  if (clauses <= actionCount) return null;
+  if (clauses < 2) return null; // a single clause is not a multi-instruction turn
+  return (
+    `Heuristic backstop: ${clauses} instruction clause(s) detected in your message but ` +
+    `only ${actionCount} action(s) were emitted. Some instructions may not have been ` +
+    `implemented — re-issue any that were dropped. (Weaker check than the intent manifest.)`
+  );
 }

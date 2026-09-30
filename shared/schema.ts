@@ -237,6 +237,12 @@ export const frameworkMeasures = pgTable("framework_measures", {
   }>(),
   minQuoteContextChars: integer("min_quote_context_chars"),
   expectedYesRate: doublePrecision("expected_yes_rate"),
+  // Issue 4 (the single ADD COLUMN across all builder-hardening fixes): captures
+  // the base-rate reasoning behind an expected_yes_rate. Nullable & backward-
+  // compatible — existing rows read null. REQUIRED (validated in C9) only when the
+  // rate is extreme (<0.10 or >0.80), so an extreme calibration is reviewable and
+  // regression-checkable instead of reading as unjustified.
+  expectedYesRateJustification: text("expected_yes_rate_justification"),
   disclosureVehicles: jsonb("disclosure_vehicles").$type<string[]>(),
   r31ExceptionMetrics: boolean("r3_1_exception_metrics").notNull().default(false),
   r31ExceptionCoverage: boolean("r3_1_exception_coverage").notNull().default(false),

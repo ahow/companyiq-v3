@@ -19,6 +19,8 @@ import { test } from "node:test";
 import {
   validateSetLevel,
   validateAll,
+  findDuplicateDisplayOrders,
+  renumberDisplayOrdersGlobally,
   type FrameworkDraft,
   type MeasureDraft,
 } from "./rules.js";
@@ -174,4 +176,51 @@ test("sanitizeSearchTemplates tolerates non-array / non-string input", () => {
   assert.deepEqual(sanitizeSearchTemplates([42, null, "modern slavery policy"]).cleaned, [
     "modern slavery policy",
   ]);
+});
+
+// ─── Issue 7: overlap structured payload + displayOrder uniqueness helpers ────
+
+test("overlap violation carries a structured meta payload (measures + sharedEvidence)", () => {
+  const overlaps = validateSetLevel(trippingFramework()).violations.filter(
+    (v) => v.rule === "overlap",
+  );
+  assert.ok(overlaps.length > 0, "expected an overlap diagnostic");
+  const meta = overlaps[0].meta as
+    | { measures?: unknown; sharedEvidence?: unknown }
+    | undefined;
+  assert.ok(meta, "overlap violation must carry a meta payload");
+  assert.ok(Array.isArray(meta!.measures), "meta.measures must be an array");
+  assert.equal((meta!.measures as unknown[]).length, 2, "meta.measures names both measures");
+  assert.deepEqual(meta!.measures, ["1.1-oversight", "1.3-strategy"]);
+  assert.ok(Array.isArray(meta!.sharedEvidence), "meta.sharedEvidence must be an array");
+  // The tripping framework shares both the anchor standard "TCFD" and a quote.
+  const shared = meta!.sharedEvidence as string[];
+  assert.ok(
+    shared.some((s) => s.startsWith("standard:")),
+    "expected a shared named standard entry",
+  );
+  assert.ok(shared.includes("anchor-quote"), "expected a shared anchor-quote entry");
+});
+
+test("findDuplicateDisplayOrders returns [] for a globally-unique sequence", () => {
+  assert.deepEqual(findDuplicateDisplayOrders([1, 2, 3, 4]), []);
+});
+
+test("findDuplicateDisplayOrders returns the sorted duplicated values", () => {
+  assert.deepEqual(findDuplicateDisplayOrders([1, 1, 2, 3, 3]), [1, 3]);
+  // Out-of-order input, duplicates still reported ascending.
+  assert.deepEqual(findDuplicateDisplayOrders([3, 1, 3, 1, 2]), [1, 3]);
+});
+
+test("findDuplicateDisplayOrders ignores null/undefined holes", () => {
+  assert.deepEqual(findDuplicateDisplayOrders([1, null, 2, undefined, 3]), []);
+  assert.deepEqual(findDuplicateDisplayOrders([1, null, 1]), [1]);
+});
+
+test("renumberDisplayOrdersGlobally yields a gap-free 1..N sequence", () => {
+  assert.deepEqual(renumberDisplayOrdersGlobally(0), []);
+  assert.deepEqual(renumberDisplayOrdersGlobally(1), [1]);
+  assert.deepEqual(renumberDisplayOrdersGlobally(5), [1, 2, 3, 4, 5]);
+  // The output is by construction duplicate-free.
+  assert.deepEqual(findDuplicateDisplayOrders(renumberDisplayOrdersGlobally(5)), []);
 });
