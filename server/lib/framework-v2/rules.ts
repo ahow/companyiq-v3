@@ -11,6 +11,7 @@
  */
 
 import { runLexiconHygiene, type SurfaceInput } from "./reliability/lexicon-hygiene.js";
+import { isAdjudicated, normalizeTopicKey, type SynonymAdjudication } from "./synonym-adjudication.js";
 import { buildCanonicalRule } from "./reliability/canonical-rule.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ export interface MeasureDraft {
   negative_examples?: string[];
   min_quote_context_chars?: number;
   expected_yes_rate?: number;
+  expected_yes_rate_justification?: string;
   coverage_whitelist?: string[];
   c1_achievement_guidance?: {
     yes_cases: string[];
@@ -57,6 +59,10 @@ export interface FrameworkDraft {
   // (never error/warning) when they are absent/empty at validation time.
   negativeKeywords?: string[];
   antiInferenceRules?: string[];
+  // Recorded per-term decisions about suspect topicSynonyms (Option 3). When a
+  // flagged term already carries a decision here, the lexicon-hygiene advisory
+  // skips it so the notice terminates instead of recurring. Optional/additive.
+  synonymAdjudications?: SynonymAdjudication[];
   measures: MeasureDraft[];
 }
 
@@ -72,6 +78,10 @@ export interface Violation {
   severity: "error" | "warning" | "info";
   message: string;
   suggestion?: string;
+  // Optional structured payload for advisories whose consumers need machine-
+  // readable detail beyond the human message (e.g. overlap pairs persisted into
+  // residualWarnings). Backward-compatible: every existing consumer ignores it.
+  meta?: Record<string, unknown>;
 }
 
 export interface ValidationResult {
@@ -104,13 +114,88 @@ const FORBIDDEN_EXCLUSION_PATTERNS: Array<{ pattern: RegExp; label: string }> = 
   { pattern: /the measure requires an existing disclosure, not an intention to disclose/i, label: "existing-disclosure-only disqualifier" },
 ];
 
+// Issue 2 — Tense-gate patterns. A Yes-gate must gate on in-effect-vs-aspiration,
+// NOT on grammatical tense. These patterns detect a Yes-condition that REQUIRES
+// present tense, or that EXCLUDES a completed/past-tense adoption — both wrongly
+// drop a legitimate DATED disclosure ("The Board approved our Strategy in March
+// 2024"). Topic-agnostic: the patterns match grammatical/temporal words only,
+// never subject matter. Kept separate from FORBIDDEN_EXCLUSION_PATTERNS because
+// this family is scanned over the *Yes-gate* (fallback_yes_criterion /
+// scoringGuidance), not the exclusion field.
+const TENSE_GATE_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /present[- ]tense/i, label: "present-tense requirement" },
+  { pattern: /\brequires? (a |an |the )?present\b/i, label: "present-tense requirement" },
+  { pattern: /\bmust (be|use|be written) (in )?(the )?present\b/i, label: "present-tense requirement" },
+  { pattern: /\b(past|completed|prior|historical|dated)[ -]?(tense )?(action|adoption|approval|disclosure|statement|commitment)s? (do(es)? not|are not|is not|cannot|must not|will not) (count|qualify|be accepted|be counted|suffice|apply)/i, label: "past/completed-action exclusion" },
+  { pattern: /\b(completed|past)\b[^.]{0,40}\b(do(es)? not (count|qualify)|not (count|qualify|accepted|eligible))\b/i, label: "completed-action exclusion" },
+];
+
+// Returns the first tense-gate label found in `text`, or undefined. Exported so
+// unit tests and callers outside validateC2 can reuse the same detection.
+export function containsTenseGate(text: string): string | undefined {
+  if (!text) return undefined;
+  for (const { pattern, label } of TENSE_GATE_PATTERNS) {
+    if (pattern.test(text)) return label;
+  }
+  return undefined;
+}
+
 const MIN_QUOTE_CONTEXT_CHARS = 120;
 
 const COVERAGE_KEYWORDS_IN_TITLE = [
   "enterprise-wide", "portfolio", "operations", "supply chain",
   "coverage", "applies to", "all", "%", "percent", "majority",
-  "group-wide", "company-wide", "globally",
+  "group-wide", "company-wide", "globally", "across the",
 ];
+
+// Issue 3 — deterministic, STRUCTURAL coverage detection. A measure is
+// coverage-type when its title or primary_assessment_target asserts SCOPE using
+// the quantifier/scope vocabulary above — independent of whether the drafter
+// remembered to self-flag it with r3_1_exception_coverage. This closes the
+// "forgot to flag it" escape (design Issue 3). Topic-agnostic: the vocabulary is
+// scope/quantifier words only, never subject matter.
+export function isCoverageMeasure(m: MeasureDraft): boolean {
+  const hay = `${m.title || ""} ${m.primary_assessment_target || ""}`.toLowerCase();
+  return COVERAGE_KEYWORDS_IN_TITLE.some((kw) => hay.includes(kw));
+}
+
+// An EXPLICIT, countable coverage threshold. Deliberately NARROWER than the
+// detection set above: a measure can be DETECTED as coverage by a vague scope
+// phrase ("across the organisation") yet still FAIL C7/C11 for stating no
+// countable threshold. A percentage, an "N of M" count, or a definite-proportion
+// quantifier (all/every/each/majority/enterprise-wide/...) counts; a bare scope
+// phrase does not. Topic-agnostic.
+const COVERAGE_THRESHOLD_WORDS = [
+  "all", "every", "each", "majority",
+  "enterprise-wide", "company-wide", "group-wide", "globally",
+];
+function hasExplicitCoverageThreshold(text: string): boolean {
+  const t = (text || "").toLowerCase();
+  if (/\d+\s*%/.test(t)) return true; // "70%"
+  if (/\b\d+\s*(?:percent|of|out of)\b/.test(t)) return true; // "70 percent", "8 of 10"
+  return COVERAGE_THRESHOLD_WORDS.some(
+    (w) => new RegExp(`\\b${w.replace(/-/g, "[- ]")}\\b`, "i").test(t),
+  );
+}
+
+// Coverage-EXTENT degree words. Kept SEPARATE from the global DEGREE_WORDS set so
+// that adding extent vocabulary here never widens the generic C11 degree check
+// (which would create false positives in non-coverage measures). These are the
+// words that make a coverage EXTENT unquantified ("broad coverage", "wide-
+// ranging application"). Topic-agnostic: pure extent adjectives/adverbs.
+const COVERAGE_EXTENT_WORDS = [
+  "broad", "broadly", "wide", "wide-ranging", "widespread",
+  "extensive", "extensively", "far-reaching", "sweeping",
+  "comprehensive", "comprehensively", "holistic",
+];
+function findCoverageExtentWords(text: string): string[] {
+  const t = (text || "").toLowerCase();
+  const found = new Set<string>();
+  for (const w of COVERAGE_EXTENT_WORDS) {
+    if (new RegExp(`\\b${w.replace(/-/g, "[- ]")}\\b`, "i").test(t)) found.add(w);
+  }
+  return [...found];
+}
 
 // Degree / holistic-judgment words. When a Yes-condition hinges on one of
 // these, two scoring models routinely read the SAME anchor sentence and split
@@ -348,6 +433,23 @@ export function validateC2(fw: FrameworkDraft): ValidationResult {
           suggestion: "Remove tense/aspiration-based exclusions. Reject only on substantive grounds: wrong subject, missing specificity, third-party attribution, adjacent-topic evidence.",
         });
       }
+    }
+    // Issue 2 — the Yes-gate ITSELF must not gate on grammatical tense. C2
+    // historically scanned only the exclusion field, so a tense-restrictive
+    // Yes-gate (e.g. "requires a present-tense deployment verb") was invisible
+    // and wrongly dropped a dated completed adoption. Scan the Yes-gate
+    // (fallback_yes_criterion + scoringGuidance) with the same in-effect-vs-
+    // aspiration principle. Topic-agnostic (grammatical/temporal words only).
+    const yesGateText = `${toText(m.fallback_yes_criterion)} ${toText(m.scoringGuidance)}`.trim();
+    const tenseGateLabel = containsTenseGate(yesGateText);
+    if (tenseGateLabel) {
+      violations.push({
+        measureId: m.measureId,
+        rule: "C2",
+        severity: "error",
+        message: `fallback_yes_criterion/scoringGuidance gates on tense (${tenseGateLabel}); gate on in-effect-vs-aspiration instead.`,
+        suggestion: "A Yes requires the artefact to be in effect or adopted (any tense): a dated completed adoption ('the Board approved X in March 2024') satisfies the gate. Reject only aspirational statements (intent without adoption), never past-tense completed action.",
+      });
     }
     // Must include some form of unspecific / aspirational / generic rejection.
     // The intent is that the framework rejects claims that lack specificity —
@@ -682,7 +784,11 @@ export function validateC6(fw: FrameworkDraft): ValidationResult {
 export function validateC7(fw: FrameworkDraft): ValidationResult {
   const violations: Violation[] = [];
   for (const m of fw.measures) {
-    if (!m.r3_1_exception_coverage) continue;
+    // Issue 3 — drive C7 off STRUCTURAL detection, not the self-declared flag
+    // alone. A measure whose title/target asserts scope is coverage-type even if
+    // the drafter forgot to set r3_1_exception_coverage, so the whitelist/
+    // threshold requirement can no longer be skipped by omission.
+    if (!isCoverageMeasure(m) && !m.r3_1_exception_coverage) continue;
     // Coverage measures must have coverage_whitelist with ≥3 entries
     const wl = m.coverage_whitelist || [];
     if (wl.length < 3) {
@@ -694,15 +800,19 @@ export function validateC7(fw: FrameworkDraft): ValidationResult {
         suggestion: `Add phrases like "across the group", "enterprise-wide", "all our operations", etc.`,
       });
     }
-    // Title must contain a threshold indicator
+    // Issue 3 — the title must carry an EXPLICIT, COUNTABLE threshold, not merely
+    // a vague scope phrase. Detection (isCoverageMeasure) is intentionally broader
+    // than threshold adequacy: a title like "across the organization" flags the
+    // measure as coverage-type but does NOT satisfy this check, so a vague-scope
+    // coverage measure fails loudly instead of shipping without a real threshold.
     const titleLower = (m.title || "").toLowerCase();
-    const hasThreshold = COVERAGE_KEYWORDS_IN_TITLE.some((kw) => titleLower.includes(kw)) || /\d+\s*%/.test(titleLower);
-    if (!hasThreshold) {
+    if (!hasExplicitCoverageThreshold(titleLower)) {
       violations.push({
         measureId: m.measureId,
         rule: "C7",
         severity: "error",
-        message: "Coverage measure title must state the threshold explicitly (e.g. 'enterprise-wide', '≥70% of portfolio')",
+        message: "Coverage measure title must state an EXPLICIT, countable threshold (e.g. 'enterprise-wide', 'all operations', '≥70% of portfolio') — a vague scope phrase such as 'across the organization' is not a threshold",
+        suggestion: "Add a countable threshold to the title: a percentage/date, an 'N of M' count, or a definite-proportion quantifier (all/every/each/majority/enterprise-wide).",
       });
     }
   }
@@ -785,6 +895,24 @@ export function validateC9(fw: FrameworkDraft): ValidationResult {
     }
     if (m.expected_yes_rate < 0.10) tooNarrow++;
     if (m.expected_yes_rate > 0.80) tooBroad++;
+
+    // Issue 4 — an EXTREME rate (<0.10 or >0.80) must record its base-rate
+    // reasoning, so it is reviewable and regression-checkable instead of reading
+    // as unjustified calibration. Mid-range rates need no justification.
+    // Topic-agnostic: this checks presence/length only, never subject content.
+    const isExtreme = m.expected_yes_rate < 0.10 || m.expected_yes_rate > 0.80;
+    if (isExtreme) {
+      const justification = (m.expected_yes_rate_justification || "").trim();
+      if (justification.length < 40) {
+        violations.push({
+          measureId: m.measureId,
+          rule: "C9",
+          severity: "error",
+          message: `expected_yes_rate ${m.expected_yes_rate} is extreme (<0.10 or >0.80) but expected_yes_rate_justification is ${justification.length === 0 ? "missing" : "too short (< 40 chars)"}. An extreme base rate must state WHY (the population reason), e.g. "few entities disclose an audited figure" or "nearly all large entities state a generic policy".`,
+          suggestion: "Add a one-sentence expected_yes_rate_justification giving the base-rate reasoning for this extreme rate. Mid-range rates (0.10–0.80) need no justification.",
+        });
+      }
+    }
   }
   const total = fw.measures.length;
   if (total > 0) {
@@ -891,7 +1019,37 @@ export function validateC11(fw: FrameworkDraft): ValidationResult {
             message: `Degree word(s) [${allWords.join(", ")}] appear in ${fieldList} but the measure carries no countable decision rule. A degree judgment is not decidable from a verbatim quote — two scoring models split on it run-to-run.`,
             suggestion: `Replace the degree judgment with a countable N-of-M test over NAMED, quote-verifiable artefacts, e.g. "Yes if at least 2 of the following are present in a verbatim quote: (a) …, (b) …, (c) …".`,
           });
+          measureErrored = true;
         }
+      }
+    }
+
+    // ── COVERAGE MEASURES: a coverage extent decided by a degree word needs an
+    // EXPLICIT countable coverage threshold (%, N-of, or a definite-proportion
+    // quantifier), not merely any number anywhere in the decision text. A
+    // coverage measure can pass the generic checks above by carrying an
+    // unrelated countable rule while still deciding its COVERAGE extent on a
+    // vague degree word ("broad", "comprehensive", "wide-ranging"). Topic-
+    // agnostic: keys off structural coverage detection + grammatical degree
+    // words only. Guarded by !measureErrored so a measure is never double-
+    // reported. ──
+    if (!measureErrored && isCoverageMeasure(m)) {
+      const coverageText = [
+        toText(m.title),
+        fallbackText,
+        toText(m.scoringGuidance),
+        toText(m.substantive_definition),
+      ].join("\n");
+      const dw = [...new Set([...findDegreeWords(coverageText), ...findCoverageExtentWords(coverageText)])];
+      if (dw.length > 0 && !hasExplicitCoverageThreshold(coverageText)) {
+        violations.push({
+          measureId: m.measureId,
+          rule: "C11",
+          severity: "error",
+          message: `This is a coverage measure whose coverage extent is decided by degree word(s) [${dw.join(", ")}] with no explicit countable coverage threshold (a percentage, an "N of" count, or a definite-proportion quantifier such as all/every/company-wide). "Broad"/"comprehensive"/"wide" coverage is not decidable from a verbatim quote — two scoring models split on it run-to-run.`,
+          suggestion: `State the coverage extent as an explicit threshold, e.g. "covers at least 80% of ..." or "applies to all/every ..." or "spans at least 3 of the following named ...", so the coverage decision is countable from a quote.`,
+        });
+        measureErrored = true;
       }
     }
   }
@@ -1018,8 +1176,8 @@ export function validateC12(fw: FrameworkDraft): ValidationResult {
       measureId: m.measureId,
       rule: "C12",
       severity: "info",
-      message: `${sourceField} uses ${gateDesc}. Where the measurable signal permits, a conjunctive HARD-TOKEN BUNDLE is more flip-resistant: require the co-occurrence, in a SINGLE verbatim quote, of ALL of a small set of hard, quote-verifiable tokens (e.g. a named artefact/function AND a hard qualifier — a quantified target, a present-tense deployment verb, a named production indicator, or a proprietary asset tied to an explicit advantage) rather than letting any one soft condition suffice. An M-of-N count near its boundary is itself a run-to-run flip source. Advisory only — dismiss if a bundle would be too strict for this measure.`,
-      suggestion: `Rewrite the gate as: "Return Yes ONLY if a single verbatim quote satisfies ALL of the following: (1) it names <the topic artefact/function + topic term>, AND (2) it contains at least one HARD qualifier bound to it — <a number/percentage/date, a present-tense deployment verb, a named production indicator, or a proprietary asset + explicit advantage>." If a conjunctive bundle is genuinely too strict, keep an N-of-M fallback but RAISE N and use NAMED hard tokens (avoid low-bar single-token conditions).`,
+      message: `${sourceField} uses ${gateDesc}. Where the measurable signal permits, a conjunctive HARD-TOKEN BUNDLE is more flip-resistant: require the co-occurrence, in a SINGLE verbatim quote, of ALL of a small set of hard, quote-verifiable tokens (e.g. a named artefact/function AND a hard qualifier — a quantified target, a verb indicating the artefact is in effect or was adopted/implemented (adopted, implemented, operates, approved, established, in force — ANY tense), a named production indicator, or a proprietary asset tied to an explicit advantage) rather than letting any one soft condition suffice. An M-of-N count near its boundary is itself a run-to-run flip source. Advisory only — dismiss if a bundle would be too strict for this measure.`,
+      suggestion: `Rewrite the gate as: "Return Yes ONLY if a single verbatim quote satisfies ALL of the following: (1) it names <the topic artefact/function + topic term>, AND (2) it contains at least one HARD qualifier bound to it — <a number/percentage/date, a verb showing the artefact is in effect or was adopted/implemented (adopted, implemented, operates, approved, established, in force — ANY tense; a dated completed adoption qualifies), a named production indicator, or a proprietary asset + explicit advantage>." If a conjunctive bundle is genuinely too strict, keep an N-of-M fallback but RAISE N and use NAMED hard tokens (avoid low-bar single-token conditions).`,
     });
   }
   // Advisory-only: never blocks. `passed` stays true (no error-severity items).
@@ -1072,6 +1230,36 @@ function normaliseQuote(s: string): string {
 }
 
 /**
+ * Issue 7 (advisory): a framework's persisted `displayOrder` values should be
+ * GLOBALLY unique, not restarting per category. The save path auto-fixes this
+ * with a single monotonic counter; this pure helper is the detector used to
+ * assert the invariant (and to flag legacy/imported frameworks that predate the
+ * fix). Topic-agnostic — operates on numbers only. Returns the sorted list of
+ * duplicated order values (empty ⇒ globally unique).
+ */
+export function findDuplicateDisplayOrders(orders: Array<number | null | undefined>): number[] {
+  const seen = new Set<number>();
+  const dupes = new Set<number>();
+  for (const o of orders) {
+    if (typeof o !== "number") continue;
+    if (seen.has(o)) dupes.add(o);
+    else seen.add(o);
+  }
+  return Array.from(dupes).sort((a, b) => a - b);
+}
+
+/**
+ * Renumber measures' displayOrder to a globally-unique, gap-free 1..N sequence
+ * in their given order. Pure; used by the save path's auto-fix and testable in
+ * isolation. Returns a new array of assigned orders (input order preserved).
+ */
+export function renumberDisplayOrdersGlobally(count: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < count; i++) out.push(i + 1);
+  return out;
+}
+
+/**
  * Deterministic, ADVISORY set-level diagnostics. Emits ONLY `severity: "info"`.
  *   - Overlap: measure pairs whose deciding evidence shares a named standard or
  *     a verbatim anchor quote (positive example) → effective double-counting.
@@ -1118,6 +1306,15 @@ export function validateSetLevel(fw: FrameworkDraft): ValidationResult {
         severity: "info",
         message: `Possible overlap: ${a.measureId} and ${b.measureId} both rely on ${parts.join(" and ")} as deciding evidence, so they may qualify on the same disclosure sentence (effective double-counting).`,
         suggestion: `Give each measure distinct qualifying evidence, or explicitly accept the correlation and note it in pillar-score interpretation. Advisory only — this does not block drafting.`,
+        // Structured payload so the save path can persist this pair into the
+        // framework's residualWarnings without re-parsing the message (Issue 7).
+        meta: {
+          measures: [a.measureId, b.measureId],
+          sharedEvidence: [
+            ...sharedStandards.map((s) => `standard:${s}`),
+            ...(sharedQuotes.length > 0 ? ["anchor-quote"] : []),
+          ],
+        },
       });
       if (violations.length >= MAX_OVERLAP_FLAGS) break outer;
     }
@@ -1191,8 +1388,16 @@ export function validateSetLevel(fw: FrameworkDraft): ValidationResult {
   }
 
   const hygiene = runLexiconHygiene({ surfaces: hygieneSurfaces, topicTokens: topicLexicon });
+  // Loop terminator: once an operator has adjudicated a flagged term (kept or removed),
+  // it is no longer surfaced here. Without this, non-anchored synonyms re-flag on EVERY
+  // pass ("I agree it's noise but it comes back") because the advisory is stateless.
+  // The adjudication record (persisted on the framework, carried onto FrameworkDraft) is
+  // the state that makes the notice dismissible-for-good. TOPIC-AGNOSTIC: keyed only on
+  // the normalized topicTerm + term, never on any specific framework or vocabulary.
+  const adjTopicKey = normalizeTopicKey(fw.topicTerm);
   for (const p of hygiene.provenance) {
     if (p.action !== "flagged-for-review") continue;
+    if (isAdjudicated(p.term, adjTopicKey, fw.synonymAdjudications)) continue;
     violations.push({
       rule: "lexicon-hygiene",
       severity: "info",
@@ -1265,9 +1470,46 @@ export function validateC13(fw: FrameworkDraft): ValidationResult {
   return { passed: true, violations };
 }
 
+// ─── Definition presence (Issue 1) — fail-loud non-empty guard ─────────────
+//
+// `definition` is consumed widely as the short/fallback definition (analyzer,
+// passage retrieval/rescore, completeness, pipeline snapshot). The drafting
+// schema only emits `substantive_definition`, so save derives `definition` from
+// it (framework-builder-v2.ts). This validator is the fail-loud backstop: if a
+// measure carries NEITHER a `definition` NOR a `substantive_definition`, the
+// derivation would persist an empty string silently. That is an error, not an
+// advisory — an empty definition degrades every downstream scoring path.
+//
+// Topic-agnostic: no framework/company/topic-specific logic; it only checks that
+// the field the persistence layer relies on is present after derivation.
+export function validateDefinitionPresent(fw: FrameworkDraft): ValidationResult {
+  const violations: Violation[] = [];
+  for (const m of fw.measures) {
+    const derived =
+      (typeof m.definition === "string" && m.definition.trim()) ||
+      (typeof m.substantive_definition === "string" && m.substantive_definition.trim()) ||
+      "";
+    if (!derived) {
+      violations.push({
+        measureId: m.measureId,
+        rule: "DEF",
+        severity: "error",
+        message:
+          "Measure has no definition: both `definition` and `substantive_definition` are empty. " +
+          "`definition` is derived from `substantive_definition` at save, so at least one must be non-empty.",
+        suggestion:
+          "Author a substantive_definition for this measure (it also backfills the short `definition` used by retrieval/scoring).",
+      });
+    }
+  }
+  return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };
+}
+
 export function validateAll(fw: FrameworkDraft): ValidationResult {
   const all: Violation[] = [];
   for (const [name, fn] of [
+    // DEF — Issue 1: fail-loud guard that every measure has a derivable definition.
+    ["DEF", validateDefinitionPresent],
     ["C1", validateC1],
     ["C2", validateC2],
     ["C3", validateC3],
@@ -1360,6 +1602,12 @@ const RULE_ISSUE_META: Record<
   string,
   { field: string; reason: string; implication: string }
 > = {
+  DEF: {
+    field: "definition / substantive_definition",
+    reason:
+      "The measure has no definition at all — the field every downstream scoring path falls back to is empty, so retrieval and scoring have nothing to anchor on.",
+    implication: "The measure scores on title alone, producing arbitrary and unstable verdicts across runs.",
+  },
   C1: {
     field: "title / c1_achievement_guidance",
     reason:

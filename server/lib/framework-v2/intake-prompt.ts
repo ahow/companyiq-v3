@@ -263,12 +263,14 @@ Every measure has a fallback_yes_criterion whose deciding gate is countable from
 
 PREFERRED DECISION RULE — a conjunctive hard-token bundle (use this WHENEVER the measurable signal permits):
 The most flip-resistant gate requires the CO-OCCURRENCE, within ONE BOUNDED DISCLOSURE PASSAGE (a contiguous window of a few sentences sharing the same disclosure context — not necessarily a single verbatim span), of ALL of a small set of hard, quote-verifiable tokens — an AND over hard tokens, NOT an OR over soft ones. Each token must still be individually evidenced by a verbatim quote from that passage (see the passage-level co-location and semantic-equivalence clause appended below). The canonical shape is:
-  A named artefact/function (the topic term bound to a concrete named thing) AND at least one HARD qualifier bound to it — a quantified/dated target (number, %, date, timeline, owner/team), a present-tense deployment verb, a named production/operational indicator, or a proprietary/in-house named asset explicitly tied to an advantage.
+  A named artefact/function (the topic term bound to a concrete named thing) AND at least one HARD qualifier bound to it — a quantified/dated target (number, %, date, timeline, owner/team), a verb showing the artefact is IN EFFECT or was adopted/implemented (adopted, implemented, operates, approved, established, in force — ANY tense; a dated completed adoption qualifies), a named production/operational indicator, or a proprietary/in-house named asset explicitly tied to an advantage.
 Template (preferred):
 Return Yes ONLY if a single bounded disclosure passage (a few contiguous sentences in the same disclosure context; each token verbatim-evidenced) satisfies ALL of the following:
 (1) it names [the topic artefact/function together with the topic term], AND
-(2) it contains at least one HARD qualifier bound to that artefact — [a number/percentage/date/target, OR a present-tense deployment verb, OR a named production indicator, OR a proprietary asset + an explicit advantage].
+(2) it contains at least one HARD qualifier bound to that artefact — [a number/percentage/date/target, OR a verb showing the artefact is in effect or was adopted/implemented (adopted, implemented, operates, approved, established, in force — ANY tense; a dated completed adoption qualifies), OR a named production indicator, OR a proprietary asset + an explicit advantage].
 A named artefact ALONE, without a hard qualifier in the same passage, is NOT sufficient.
+
+IN-EFFECT, NOT PRESENT-TENSE (topic-agnostic authoring rule): A Yes requires the artefact to be IN EFFECT or ADOPTED — in ANY grammatical tense. Do NOT require present tense and do NOT exclude completed/past-tense action: a dated completed adoption ("the Board approved our Strategy in March 2024", "the policy was implemented in 2023") SATISFIES the gate. Reject ONLY aspirational statements — an intention or plan without adoption ("we plan to", "we aim to", "we are committed to developing"). Gate on aspiration-vs-in-effect, never on tense.
 
 WHY prefer the bundle: an "at least N of the following" / "any of the following" OR-list lets a Yes rest on a single easily-satisfied soft condition, and when a disclosure sits near the count boundary, WHICH soft conditions count and whether the count clears the bar is a degree judgement made near a boundary — two scoring models split on it and the verdict flips run-to-run. Requiring ALL of a few HARD tokens removes both the count boundary and the soft-condition ambiguity.
 
@@ -303,6 +305,8 @@ Every substantive_definition must include: "Evidence may be disclosed in any veh
 
 ## C9 — expected_yes_rate
 For every measure, set expected_yes_rate — the fraction of large-cap listed companies you'd expect to score Yes if applied at random. Reflect current disclosure practice, not aspiration. Use scale: 0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95. Default 0.35 if uncertain.
+
+Also set expected_yes_rate_justification — ONE sentence stating the base-rate reasoning for this expected_yes_rate. If the rate is < 0.10 or > 0.80, this field is REQUIRED and must explain the POPULATION reason (e.g. "few entities disclose an audited figure", "nearly all large entities state a generic policy"). For mid-range rates (0.10–0.80) it is optional. State the population reason only — no subject-matter opinion.
 
 ## C10 — topicTerm and topicSynonyms
 Framework-level. topicTerm is the canonical short phrase. topicSynonyms is a list of ≥2 entries (no upper limit — include all domain acronyms and phrasings that apply) of substantively-equivalent alternative phrasings.
@@ -357,6 +361,7 @@ Return a single JSON object with:
           "negative_examples": ["...", "..."],
           "min_quote_context_chars": 120,
           "expected_yes_rate": 0.35,
+          "expected_yes_rate_justification": "...",  // REQUIRED if rate < 0.10 or > 0.80
           "coverage_whitelist": [...],        // if coverage measure
           "c1_achievement_guidance": {...},
           "r3_1_exception_metrics": false,
@@ -367,14 +372,28 @@ Return a single JSON object with:
     }
   ],
   "searchTemplates": [...],
+  "legacyQueryTemplates": [...],
+  "multiDocumentQueryTemplates": [...],
+  "dataPatterns": [...],
   "evidenceKeywords": [...]
 }
+
+# Retrieval targeting fields (framework-level)
+
+Populate these so a freshly built framework retrieves the right corpus without later manual tuning. Write them STRUCTURALLY — never hardcode a specific company. Use only these placeholders where a company or year belongs: \`{company}\`, \`{currentYear}\`, \`{lastYear}\`, \`{topicTerm}\`.
+- \`searchTemplates\`: broad discovery queries for the topic, e.g. "{company} {topicTerm} report {currentYear}", "{company} {topicTerm} policy".
+- \`legacyQueryTemplates\`: proven-breadth queries that pull the topic's primary disclosure vehicles, e.g. "{company} annual report {currentYear} {topicTerm}", "{company} sustainability report {lastYear}".
+- \`multiDocumentQueryTemplates\`: ancillary / policy / regulatory query classes that surface secondary documents, e.g. "{company} {topicTerm} regulatory filing", "{company} {topicTerm} board policy".
+- \`dataPatterns\`: 3–8 regex fragments (as plain strings) whose presence PROVES the topic is genuinely covered in a document's text — derive them from the topic's own vocabulary, not from any single company. Example shape only: "\\\\b{topicTerm}\\\\b", a domain metric token, a domain-specific noun phrase.
 
 # Sizing
 
 - 5–9 categories
 - 25–40 measures total
 - 10–14 search templates
+- 4–8 legacy query templates
+- 3–6 multi-document query templates
+- 3–8 data patterns
 - 30–45 framework-level evidence keywords
 - Per measure: 10–15 evidence keywords (existing platform requirement)
 
@@ -456,6 +475,7 @@ A single JSON object with this exact shape:
       "min_quote_context_chars": 120,
       "c1_achievement_guidance": {...},
       "expected_yes_rate": 0.35,
+      "expected_yes_rate_justification": "...",  // REQUIRED if rate < 0.10 or > 0.80
       "scoringGuidance": "...",
       "evidenceKeywords": [...],
       "r3_1_exception_metrics": false,
@@ -499,7 +519,7 @@ Same C1–C11 rules as the single-shot drafter. In particular:
 - C6: ≥2 positive_examples AND ≥2 negative_examples per measure.
 - C7: For coverage measures, coverage_whitelist has ≥3 phrases; title states the threshold explicitly (e.g. "enterprise-wide", "≥70% of portfolio").
 - C8: substantive_definition includes vehicle-agnostic evidence clause.
-- C9: expected_yes_rate ∈ {0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95}.
+- C9: expected_yes_rate ∈ {0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95}. If the rate is < 0.10 or > 0.80, expected_yes_rate_justification is REQUIRED (one sentence, population base-rate reason).
 - C11: Every Yes-condition in fallback_yes_criterion (and any decision text in scoringGuidance / substantive_definition) must be DECIDABLE from a verbatim quote. Do NOT use degree/holistic words (substantive, substantially, systematic, integrated, integration, sufficient, robust, meaningful, adequate, appropriate, comprehensive, holistic, effective, strong, well-developed) as the deciding test. Where a quality bar is unavoidable, phrase it as "Yes if at least N of the following NAMED artefacts are present in a verbatim quote: (a) …, (b) …, (c) …". A degree judgment is not decidable from a quote and causes run-to-run verdict flips.
 
 # Constraints

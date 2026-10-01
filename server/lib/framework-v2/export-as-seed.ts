@@ -18,6 +18,11 @@
 
 import type { Framework, FrameworkMeasure } from "../../../shared/schema.js";
 import { resolveConfig } from "./reliability/resolve-config.js";
+import {
+  applyAdjudications,
+  normalizeTopicKey,
+  type SynonymAdjudication,
+} from "./synonym-adjudication.js";
 
 export interface ExistingFrameworkForExport {
   framework: Framework & {
@@ -31,6 +36,7 @@ export interface ExistingFrameworkForExport {
     universe?: string;
     reportingPeriod?: string;
     sensitivityPreference?: "precision" | "recall" | "balanced";
+    synonymAdjudications?: SynonymAdjudication[];
   };
   measures: Array<
     FrameworkMeasure & {
@@ -50,6 +56,14 @@ export function exportFrameworkAsSeedTemplate(
   // the seed template can never disagree with the JSON/full exports or the runtime.
   const resolved = resolveConfig({ framework: fw as Record<string, any>, measures });
 
+  // Loop terminator across rebuilds: never re-suggest a synonym the operator already
+  // adjudicated as "removed". Normally these are already physically gone from the
+  // persisted topicSynonyms (dropped at finalisation), so this is defensive/idempotent —
+  // a no-op when the drop already happened. Topic-agnostic.
+  const seedSynonyms = Array.isArray(fw.synonymAdjudications) && fw.synonymAdjudications.length > 0
+    ? applyAdjudications(resolved.topicSynonyms, fw.synonymAdjudications, normalizeTopicKey(resolved.topicTerm)).kept
+    : resolved.topicSynonyms;
+
   // Aggregate examples (dedupe, take top 3 each)
   const posSet = new Set<string>();
   const negSet = new Set<string>();
@@ -63,7 +77,7 @@ export function exportFrameworkAsSeedTemplate(
   const topicSection = fw.topicDescription
     ? fw.topicDescription
     : resolved.topicTerm
-      ? `(Topic term: ${resolved.topicTerm}${resolved.topicSynonyms.length ? `; synonyms: ${resolved.topicSynonyms.join(", ")}` : ""})\n\nDescribe the topic in your own words in 2–5 sentences. What makes it distinct from adjacent topics?`
+      ? `(Topic term: ${resolved.topicTerm}${seedSynonyms.length ? `; synonyms: ${seedSynonyms.join(", ")}` : ""})\n\nDescribe the topic in your own words in 2–5 sentences. What makes it distinct from adjacent topics?`
       : "Describe the topic in 2–5 sentences.";
 
   const scopeLines: string[] = [];

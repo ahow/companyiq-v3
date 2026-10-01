@@ -13,6 +13,7 @@ import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/rob
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
 import { resolveTargetCount } from "../lib/framework-v2/target-count.js";
 import { sanitizeSearchTemplates } from "../lib/framework-v2/query-template-hygiene.js";
+import { deriveRequiredDocTypes, deriveWithdrawalPatterns, deriveNegativeDomains, validateTargetingCoverage } from "../lib/framework-v2/retrieval-targeting.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { buildFrameworkExport, buildFrameworkInserts, isFrameworkExportPayload } from "../lib/framework-v2/import-framework.js";
@@ -21,7 +22,7 @@ import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v
 import { proposeEditsForFlags, proposeMergeForNearDuplicate, FRAMEWORK_LEVEL_OPS, DIRECT_MEASURE_OPS, FRAMEWORK_SENTINEL } from "../lib/framework-v2/edit-proposer.js";
 import { computeQualityMetrics, coherenceGateMetrics, type MeasureSpecFields, type QualityMetricsReport } from "../lib/framework-v2/quality-metrics.js";
 import { diagnoseRootCauses, type CompanyCorpusStats, type RootCauseReport } from "../lib/framework-v2/root-cause-diagnostic.js";
-import { buildImprovementChatSystemPrompt, extractActionsFromReply, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
+import { buildImprovementChatSystemPrompt, extractActionsFromReply, detectCountParityDeficit, type ImprovementChatContext, type ImprovementChatMessage } from "../lib/framework-v2/improvement-chat.js";
 import { groupProposalsByPatch, BATCH_REGENERATORS, differentiateMeasureDefinition, regenerateMeasureField, CUSTOM_EDIT_FIELDS, type CustomEditField, type CustomEditMeasure, type FrameworkContext, type MeasureBefore } from "../lib/framework-v2/edit-applier.js";
 import { mergeStructuredIntoScoringGuidance } from "../lib/framework-v2/structured-guidance.js";
 import { mergeCorrectedMeasure } from "../lib/framework-v2/merge-corrected-measure.js";
@@ -205,6 +206,9 @@ function buildFrameworkDraft(draft: any, intake: IntakeArtefact): FrameworkDraft
     sensitivityPreference: draft.framework?.sensitivityPreference || intake.sensitivityPreference,
     negativeKeywords: (Array.isArray(draft.framework?.negativeKeywords) ? draft.framework.negativeKeywords : null) || intake.negativeKeywords,
     antiInferenceRules: (Array.isArray(draft.framework?.antiInferenceRules) ? draft.framework.antiInferenceRules : null) || intake.antiInferenceRules,
+    // Carry operator synonym adjudications so the lexicon-hygiene advisory terminates
+    // (does not re-flag terms already decided). Absent on a fresh intake draft.
+    synonymAdjudications: Array.isArray(draft.framework?.synonymAdjudications) ? draft.framework.synonymAdjudications : undefined,
     measures,
   };
 }
@@ -2023,6 +2027,8 @@ router.post("/v2/validate", async (req: Request, res: Response) => {
       adjacentTopics: draft.framework?.adjacentTopics,
       anchorFrameworks: draft.framework?.anchorFrameworks,
       sensitivityPreference: draft.framework?.sensitivityPreference,
+      // Carry operator synonym adjudications so re-validation terminates the advisory loop.
+      synonymAdjudications: Array.isArray(draft.framework?.synonymAdjudications) ? draft.framework.synonymAdjudications : undefined,
       measures,
     };
     const validation = appendEvidenceKeywordWarnings(validateAll(fwDraft), fwDraft);
@@ -2137,37 +2143,129 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       retrievalQueryTerms = [];
     }
 
-    // ─── B2: topic-agnostic boilerplate hygiene on topicSynonyms ──────────────
-    // Strip filing/report boilerplate + generic filler from the synonym list at
-    // BUILD time (generic across all topics), protecting the framework's own
-    // lexicon (topicTerm + surviving synonyms). Non-fatal: any failure leaves the
-    // synonyms unchanged so creation proceeds exactly as before.
+    // ─── B2: synonym + anchor hygiene choke-point (Issue 5) ───────────────────
+    // Route BOTH topicSynonyms and anchorFrameworks through the single shared
+    // hygiene choke-point at BUILD time (topic-agnostic). Deterministic hard drops
+    // (boilerplate / safe-harbour / cross-framework-leak / punctuation / high-DF)
+    // are followed by the operator adjudication gate. The framework's OWN topic
+    // term is protected; its OWN declared adjacent topics drive leak detection.
+    // Drops are recorded fail-loud into residualWarnings with per-class counts.
+    // Non-fatal: any failure leaves the values unchanged so creation proceeds.
+    const adjacentNames: string[] = Array.isArray(fwDraft.adjacentTopics)
+      ? (fwDraft.adjacentTopics as any[])
+          .map((a: any) => (typeof a === "string" ? a : a?.name))
+          .filter((n: any): n is string => typeof n === "string" && n.trim().length > 0)
+      : [];
     let sanitizedTopicSynonyms: string[] | null = fwDraft.topicSynonyms || null;
+    let sanitizedAnchorFrameworks: any = (fwDraft.anchorFrameworks as any) || null;
+    const hygieneResidualWarnings: Array<{ issue: string; severity: "low" | "medium" | "high"; note?: string }> = [];
     try {
-      const { sanitizeTopicTerms } = await import("../lib/framework-v2/boilerplate-hygiene.js");
+      const { applySynonymHygiene, applyAnchorHygiene, formatDropCounts } = await import(
+        "../lib/framework-v2/synonym-hygiene-chokepoint.js"
+      );
       const inputSyn = fwDraft.topicSynonyms || [];
       if (inputSyn.length > 0) {
-        // Protect the framework's CANONICAL lexicon only (topic term + adjacent-topic
-        // names) — NOT the candidate list itself, or boilerplate that slipped into
-        // the synonyms would protect itself and never be dropped.
-        const adjacentNames = Array.isArray(fwDraft.adjacentTopics)
-          ? fwDraft.adjacentTopics.map((a: any) => (typeof a === "string" ? a : a?.name)).filter(Boolean)
-          : [];
-        const protectTokens = [fwDraft.topicTerm, ...adjacentNames].filter(
-          (t): t is string => typeof t === "string" && t.trim().length > 0,
-        );
-        const { kept, dropped } = sanitizeTopicTerms(inputSyn, { topicTokens: protectTokens });
-        sanitizedTopicSynonyms = kept.length > 0 ? kept : null;
-        if (dropped.length > 0) {
-          console.log(
-            `[v2/save] topicSynonyms boilerplate hygiene dropped ${dropped.length} term(s): ` +
-              dropped.map((d) => `${d.term} (${d.reason})`).join(", "),
-          );
+        const synRes = applySynonymHygiene(inputSyn, {
+          topicTerm: fwDraft.topicTerm,
+          adjacentTopics: adjacentNames,
+          adjudications: (fwDraft as any).synonymAdjudications || [],
+        });
+        sanitizedTopicSynonyms = synRes.kept.length > 0 ? synRes.kept : null;
+        if (synRes.dropped.length > 0) {
+          const counts = formatDropCounts(synRes.dropCountsByClass);
+          console.log(`[v2/save] topicSynonyms hygiene dropped ${synRes.dropped.length} term(s): ${counts}`);
+          hygieneResidualWarnings.push({
+            issue: "synonym_hygiene_drops",
+            severity: "low",
+            note: `${synRes.dropped.length} synonym(s) dropped (${counts}).`,
+          });
+        }
+        if (synRes.unresolvedFlagged.length > 0) {
+          hygieneResidualWarnings.push({
+            issue: "synonym_adjudication_pending",
+            severity: "medium",
+            note: `${synRes.unresolvedFlagged.length} synonym(s) flagged for operator review.`,
+          });
+        }
+      }
+      const inputAnchors = (fwDraft.anchorFrameworks as any) || [];
+      if (Array.isArray(inputAnchors) && inputAnchors.length > 0) {
+        const anchRes = applyAnchorHygiene(inputAnchors, { adjacentTopics: adjacentNames });
+        sanitizedAnchorFrameworks = anchRes.kept.length > 0 ? anchRes.kept : null;
+        if (anchRes.dropped.length > 0) {
+          const counts = formatDropCounts(anchRes.dropCountsByClass);
+          console.log(`[v2/save] anchorFrameworks hygiene dropped ${anchRes.dropped.length} anchor(s): ${counts}`);
+          hygieneResidualWarnings.push({
+            issue: "anchor_hygiene_drops",
+            severity: "low",
+            note: `${anchRes.dropped.length} anchor(s) dropped (${counts}).`,
+          });
         }
       }
     } catch (e: any) {
-      console.warn(`[v2/save] topicSynonyms boilerplate hygiene failed (non-fatal): ${e?.message ?? e}`);
+      console.warn(`[v2/save] synonym/anchor hygiene failed (non-fatal): ${e?.message ?? e}`);
       sanitizedTopicSynonyms = fwDraft.topicSynonyms || null;
+      sanitizedAnchorFrameworks = (fwDraft.anchorFrameworks as any) || null;
+    }
+
+    // ─── Issue 6: retrieval-targeting derivation (topic-agnostic) ─────────────
+    // Fill the DETERMINISTICALLY-DERIVABLE targeting fields at build from the
+    // framework's OWN declared structure (no LLM, no subject hardcode), so a
+    // freshly built framework ships with non-empty targeting instead of relying
+    // on later import. Operator-knowledge fields (registries/URLs/etc.) are NOT
+    // fabricated — validateTargetingCoverage surfaces their empty state instead.
+    const derivedRequiredDocTypes = deriveRequiredDocTypes(fwDraft.measures || []);
+    const derivedWithdrawalPatterns = deriveWithdrawalPatterns(fwDraft.topicTerm);
+    const derivedNegativeDomains = deriveNegativeDomains(adjacentNames);
+    // LLM-authored query-template classes: run the SAME hygiene over all three
+    // template families, not just searchTemplates (Issue 6b).
+    const cleanedLegacyQueryTemplates = sanitizeSearchTemplates((draft.framework as any)?.legacyQueryTemplates || (draft as any).legacyQueryTemplates || []).cleaned;
+    const cleanedMultiDocQueryTemplates = sanitizeSearchTemplates((draft.framework as any)?.multiDocumentQueryTemplates || (draft as any).multiDocumentQueryTemplates || []).cleaned;
+    const cleanedDataPatterns = Array.isArray((draft.framework as any)?.dataPatterns) ? (draft.framework as any).dataPatterns.filter((p: any) => typeof p === "string" && p.trim()) : [];
+    // Fail-loud advisory: which operator-knowledge targeting fields are empty.
+    const targetingCoverage = validateTargetingCoverage({
+      authoritativeRegistries: (draft.framework as any)?.authoritativeRegistries,
+      knownDisclosureUrls: (draft.framework as any)?.knownDisclosureUrls,
+      trustedSourceIds: (draft.framework as any)?.trustedSourceIds,
+      documentPriorityUrlPatterns: (draft.framework as any)?.documentPriorityUrlPatterns,
+      dataPatterns: cleanedDataPatterns,
+    });
+    if (targetingCoverage.advisory) {
+      console.log(`[v2/save] ${targetingCoverage.advisory}`);
+      hygieneResidualWarnings.push({
+        issue: "targeting_coverage",
+        severity: "low",
+        note: targetingCoverage.advisory,
+      });
+    }
+
+    // ─── Issue 7: persist detected overlap pairs into residualWarnings ─────────
+    // The overlap validator (rules.ts validateSetLevel) already ran inside
+    // validateAll above and emitted `overlap` info-violations with structured
+    // meta.measures/meta.sharedEvidence. They were previously only offered as
+    // selectable near-duplicate edits, so a build the operator didn't act on
+    // shipped with no recorded overlap. Persist each pair here (topic-agnostic;
+    // purely structural shared-evidence detection) so it survives on the row.
+    try {
+      const overlapViolations = (validation?.violations || []).filter(
+        (v: any) => v?.rule === "overlap" && v?.meta && Array.isArray(v.meta.measures),
+      );
+      for (const v of overlapViolations) {
+        hygieneResidualWarnings.push({
+          issue: "overlap",
+          severity: "low",
+          note:
+            `Overlap: ${(v.meta.measures as any[]).join(" ↔ ")}` +
+            (Array.isArray(v.meta.sharedEvidence) && v.meta.sharedEvidence.length
+              ? ` (shared: ${(v.meta.sharedEvidence as any[]).join(", ")})`
+              : ""),
+        });
+      }
+      if (overlapViolations.length > 0) {
+        console.log(`[v2/save] persisted ${overlapViolations.length} overlap pair(s) into residualWarnings`);
+      }
+    } catch (e: any) {
+      console.warn(`[v2/save] overlap persistence failed (non-fatal): ${e?.message ?? e}`);
     }
 
     // Create framework row
@@ -2189,11 +2287,31 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       negativeKeywords: fwDraft.negativeKeywords || null,
       antiInferenceRules: fwDraft.antiInferenceRules || null,
       adjacentTopics: (fwDraft.adjacentTopics as any) || null,
-      anchorFrameworks: (fwDraft.anchorFrameworks as any) || null,
+      anchorFrameworks: sanitizedAnchorFrameworks,
+      // Issue 6: deterministically-derived retrieval-targeting fields (topic-agnostic).
+      // Persisted only when non-empty so we never overwrite operator-imported values
+      // with nulls. requiredDocTypes/negativeDomains/withdrawalPatterns are derived from
+      // the framework's OWN declared structure; the query-template classes and dataPatterns
+      // are the hygiene-cleaned versions of whatever the LLM authored.
+      requiredDocTypes: derivedRequiredDocTypes.length ? derivedRequiredDocTypes : null,
+      negativeDomains: derivedNegativeDomains.length ? derivedNegativeDomains : null,
+      withdrawalPatterns: derivedWithdrawalPatterns.queries.length ? derivedWithdrawalPatterns : null,
+      legacyQueryTemplates: cleanedLegacyQueryTemplates.length ? cleanedLegacyQueryTemplates : null,
+      multiDocumentQueryTemplates: cleanedMultiDocQueryTemplates.length ? cleanedMultiDocQueryTemplates : null,
+      dataPatterns: cleanedDataPatterns.length ? cleanedDataPatterns : null,
       sensitivityPreference: fwDraft.sensitivityPreference || "balanced",
       subAreaStructure: (intake.subAreaStructure as any) || null,
       pushbackRecord: (intake.pushbackRecord as any) || null,
-      residualWarnings: (intake.residualWarnings as any) || null,
+      // Merge intake residual warnings with the fail-loud synonym/anchor hygiene
+      // drop records (Issue 5d), so the operator sees exactly what build-time
+      // hygiene removed and what still awaits adjudication.
+      residualWarnings: (() => {
+        const base = Array.isArray((intake as any).residualWarnings)
+          ? ((intake as any).residualWarnings as any[])
+          : [];
+        const merged = [...base, ...hygieneResidualWarnings];
+        return merged.length > 0 ? merged : null;
+      })(),
       testDriveSummary: testDriveSummary || null,
       testDriveWarnings: testDriveWarnings || null,
       productionReady: Boolean(productionReady),
@@ -2205,15 +2323,27 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
     } as any);
 
     // Create measures
+    // Issue 7: displayOrder is auto-fixed to be GLOBALLY unique across the whole
+    // framework (not restarting per category) via a single monotonic counter, so
+    // ordering collisions can't occur. `categoryPosition` keeps the per-category
+    // 1-based index used only for the measureId fallback. Topic-agnostic.
     let categoryNumber = 1;
+    let displayOrder = 1; // global, monotonic across all categories
     for (const category of draft.categories) {
-      let displayOrder = 1;
+      let categoryPosition = 1;
       for (const measure of category.measures || []) {
         await storage.createFrameworkMeasure({
           frameworkId: created.id,
-          measureId: measure.measureId || `${categoryNumber}.${displayOrder}`,
+          measureId: measure.measureId || `${categoryNumber}.${categoryPosition}`,
           title: measure.title,
-          definition: measure.definition || "",
+          // Issue 1 (topic-agnostic): `definition` is consumed widely as the short/fallback
+          // definition, but the drafting schema only emits `substantive_definition`. Derive
+          // deterministically so `definition` is never silently empty. `validateDefinitionPresent`
+          // (rules.ts) fails the build loud if a measure still has no definition after derivation.
+          definition:
+            measure.definition ||
+            measure.substantive_definition ||
+            "",
           scoringGuidance:
             typeof measure.scoringGuidance === "string"
               ? measure.scoringGuidance
@@ -2244,11 +2374,13 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
           c1AchievementGuidance: measure.c1_achievement_guidance || null,
           minQuoteContextChars: measure.min_quote_context_chars || null,
           expectedYesRate: typeof measure.expected_yes_rate === "number" ? measure.expected_yes_rate : null,
+          expectedYesRateJustification: measure.expected_yes_rate_justification || null, // Issue 4
           disclosureVehicles: measure.disclosure_vehicles || null,
           r31ExceptionMetrics: Boolean(measure.r3_1_exception_metrics),
           r31ExceptionCoverage: Boolean(measure.r3_1_exception_coverage),
         } as any);
-        displayOrder++;
+        displayOrder++;      // global monotonic — guarantees uniqueness
+        categoryPosition++;  // per-category index for measureId fallback
       }
       categoryNumber++;
     }
@@ -3427,8 +3559,74 @@ router.post("/v2/improvement/chat", requireWorkspace, async (req: Request, res: 
       // reply instead of throwing and cascading through fallbacks until the client aborts.
       allowTruncated: true,
     });
-    const { displayText, actions } = extractActionsFromReply(reply);
-    return res.json({ reply: displayText, actions, proposalCount: editsBundle.proposals.length });
+    const {
+      displayText,
+      actions,
+      instructionLedger,
+      unimplementedInstructions,
+      unappliedEditWarning,
+    } = extractActionsFromReply(reply);
+    if (unappliedEditWarning) {
+      // Fail-loud: the assistant claimed an edit but emitted no action to carry it.
+      // Surface it explicitly instead of returning a silent success (Task A gap).
+      console.warn("[framework-builder v2 /improvement/chat] unapplied-edit claim:", unappliedEditWarning);
+    }
+
+    // Issue 8: instruction-reconciliation ledger. Primary completeness signal —
+    // independent of actionCount and of completion-verb phrasing.
+    let countParityWarning: string | undefined;
+    if (instructionLedger.manifestAbsent) {
+      // Manifest absent → fall back to the cheap count-parity backstop against
+      // the operator's latest message.
+      const lastUser = [...messages].reverse().find((mm) => mm.role === "user");
+      countParityWarning = detectCountParityDeficit(lastUser?.content || "", actions.length) ?? undefined;
+      if (countParityWarning) {
+        console.warn("[framework-builder v2 /improvement/chat] count-parity deficit:", countParityWarning);
+      }
+    }
+    if (unimplementedInstructions.length > 0) {
+      console.warn(
+        "[framework-builder v2 /improvement/chat] unimplemented instructions:",
+        unimplementedInstructions,
+      );
+      // Durably record each dropped instruction in the measure-edit audit trail,
+      // so a silently-dropped edit is visible beyond the transient HTTP response.
+      try {
+        for (const entry of instructionLedger.entries) {
+          if (entry.status !== "unimplemented") continue;
+          await recordMeasureEdit(db, {
+            workspaceId: ctx.workspaceId,
+            frameworkId,
+            listId,
+            measureId: entry.measure || "(unknown)",
+            field: entry.field || "(instruction)",
+            op: "chat_instruction",
+            source: "improvement_chat",
+            applied: false,
+            skipReason: "unreconciled-intent",
+          });
+        }
+      } catch (auditErr: any) {
+        console.warn("[framework-builder v2 /improvement/chat] audit of unimplemented intents failed (non-fatal):", auditErr?.message);
+      }
+    }
+    const unimplementedWarning =
+      unimplementedInstructions.length > 0
+        ? `These instructions were not implemented: ${unimplementedInstructions
+            .map((s) => `"${s}"`)
+            .join("; ")} — re-issue them or apply the change explicitly. This turn did NOT fully edit the framework.`
+        : undefined;
+
+    return res.json({
+      reply: displayText,
+      actions,
+      proposalCount: editsBundle.proposals.length,
+      instructionLedger,
+      unimplementedInstructions,
+      ...(unimplementedWarning ? { unimplementedWarning } : {}),
+      ...(countParityWarning ? { countParityWarning } : {}),
+      ...(unappliedEditWarning ? { unappliedEditWarning } : {}),
+    });
   } catch (err: any) {
     console.error("[framework-builder v2 /improvement/chat] error:", err);
     return res.status(500).json({ error: err?.message || "internal error" });
@@ -3573,6 +3771,56 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         });
         return;
       }
+      // ─── Issue 5a: route synonym / anchor writes through the hygiene choke-point ──
+      // Before this, a later proposal could re-introduce boilerplate / safe-harbour /
+      // cross-framework-leak terms that build-time hygiene had already stripped. Apply
+      // the SAME choke-point to the incoming values (topic-agnostic — uses the
+      // framework's own topicTerm + declared adjacent topics). add_adjacent_topics is
+      // NOT sanitised (those terms ARE the adjacency reference set).
+      let cleanValues = values;
+      if (op === "add_synonyms" || op === "add_anchor_frameworks") {
+        try {
+          const fctx = await loadFrameworkContext();
+          const adjacentNames = (fctx.adjacentTopics || [])
+            .map((a: any) => (typeof a === "string" ? a : a?.name))
+            .filter((n: any): n is string => typeof n === "string" && n.trim().length > 0);
+          if (op === "add_synonyms") {
+            const { applySynonymHygiene } = await import("../lib/framework-v2/synonym-hygiene-chokepoint.js");
+            const res = applySynonymHygiene(values, {
+              topicTerm: fctx.topicTerm,
+              adjacentTopics: adjacentNames,
+              adjudications: (fctx as any).synonymAdjudications || [],
+            });
+            cleanValues = res.kept;
+            if (res.dropped.length > 0) {
+              console.log(`[v2/proposal] add_synonyms hygiene dropped ${res.dropped.length}: ` +
+                res.dropped.map((d) => `${d.term} (${d.reason})`).join(", "));
+            }
+          } else {
+            const { applyAnchorHygiene } = await import("../lib/framework-v2/synonym-hygiene-chokepoint.js");
+            const res = applyAnchorHygiene(values, { adjacentTopics: adjacentNames });
+            // Anchors persist as text terms in the jsonb list; keep the clean names.
+            cleanValues = res.kept.map((a) => a.name);
+            if (res.dropped.length > 0) {
+              console.log(`[v2/proposal] add_anchor_frameworks hygiene dropped ${res.dropped.length}: ` +
+                res.dropped.map((d) => `${d.term} (${d.reason})`).join(", "));
+            }
+          }
+        } catch (e: any) {
+          console.warn(`[v2/proposal] framework-level hygiene failed (non-fatal): ${e?.message ?? e}`);
+          cleanValues = values;
+        }
+        if (cleanValues.length === 0) {
+          const reason = "all values dropped by hygiene";
+          skipped.push({ measureId: FRAMEWORK_SENTINEL, reason });
+          await recordMeasureEdit(db, {
+            workspaceId: ctx.workspaceId, frameworkId, listId, measureId: FRAMEWORK_SENTINEL,
+            field: target.field, op, beforeValue: null, afterValue: values,
+            source: `proposal:${prop.flagRule}`, applied: false, skipReason: reason,
+          });
+          return;
+        }
+      }
       // Read the before-value so the audit row carries the prior list state.
       let beforeVal: any = null;
       try {
@@ -3591,15 +3839,15 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
           FROM (
             SELECT jsonb_array_elements_text(COALESCE(${target.col}, '[]'::jsonb)) AS term
             UNION
-            SELECT jsonb_array_elements_text(${JSON.stringify(values)}::jsonb) AS term
+            SELECT jsonb_array_elements_text(${JSON.stringify(cleanValues)}::jsonb) AS term
           ) sub
         )
         WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
       `);
-      applied.push({ measureId: FRAMEWORK_SENTINEL, action: prop.action, patch: { op, path: target.field, value: values } });
+      applied.push({ measureId: FRAMEWORK_SENTINEL, action: prop.action, patch: { op, path: target.field, value: cleanValues } });
       await recordMeasureEdit(db, {
         workspaceId: ctx.workspaceId, frameworkId, listId, measureId: FRAMEWORK_SENTINEL,
-        field: target.field, op, beforeValue: beforeVal, afterValue: values,
+        field: target.field, op, beforeValue: beforeVal, afterValue: cleanValues,
         source: `proposal:${prop.flagRule}`, applied: true,
       });
     }
@@ -3942,7 +4190,33 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
         // Append mined terminology-gap terms to the framework's topic_synonyms,
         // de-duplicated against existing entries (case preserved as supplied).
         const newTerms = String(action.attrs.terms || "").split(",").map((t: string) => t.trim()).filter(Boolean);
+        // ─── Issue 5a: route this synonym write through the same hygiene choke-point ──
+        // so a chat-driven add_synonyms cannot re-introduce boilerplate / safe-harbour
+        // / cross-framework-leak terms that build-time hygiene stripped (topic-agnostic).
+        let cleanNewTerms = newTerms;
         if (newTerms.length > 0) {
+          try {
+            const fctx = await loadFrameworkContext();
+            const adjacentNames = (fctx.adjacentTopics || [])
+              .map((a: any) => (typeof a === "string" ? a : a?.name))
+              .filter((n: any): n is string => typeof n === "string" && n.trim().length > 0);
+            const { applySynonymHygiene } = await import("../lib/framework-v2/synonym-hygiene-chokepoint.js");
+            const res = applySynonymHygiene(newTerms, {
+              topicTerm: fctx.topicTerm,
+              adjacentTopics: adjacentNames,
+              adjudications: (fctx as any).synonymAdjudications || [],
+            });
+            cleanNewTerms = res.kept;
+            if (res.dropped.length > 0) {
+              console.log(`[v2/add_synonyms] hygiene dropped ${res.dropped.length}: ` +
+                res.dropped.map((d) => `${d.term} (${d.reason})`).join(", "));
+            }
+          } catch (e: any) {
+            console.warn(`[v2/add_synonyms] hygiene failed (non-fatal): ${e?.message ?? e}`);
+            cleanNewTerms = newTerms;
+          }
+        }
+        if (cleanNewTerms.length > 0) {
           // Framework-level edit (topic_synonyms lives on frameworks, not
           // framework_measures) — audited under a generic sentinel measure id.
           let beforeSyn: any = null;
@@ -3957,16 +4231,24 @@ router.post("/v2/improvement/apply", requireWorkspace, async (req: Request, res:
               FROM (
                 SELECT jsonb_array_elements_text(COALESCE(topic_synonyms, '[]'::jsonb)) AS term
                 UNION
-                SELECT jsonb_array_elements_text(${JSON.stringify(newTerms)}::jsonb) AS term
+                SELECT jsonb_array_elements_text(${JSON.stringify(cleanNewTerms)}::jsonb) AS term
               ) sub
             )
             WHERE id = ${frameworkId} AND workspace_id = ${ctx.workspaceId}
           `);
-          applied.push({ action: "add_synonyms", terms: newTerms });
+          applied.push({ action: "add_synonyms", terms: cleanNewTerms });
           await recordMeasureEdit(db, {
             workspaceId: ctx.workspaceId, frameworkId, listId, measureId: "(framework)",
-            field: "topic_synonyms", op: "add_synonyms", beforeValue: beforeSyn, afterValue: newTerms,
+            field: "topic_synonyms", op: "add_synonyms", beforeValue: beforeSyn, afterValue: cleanNewTerms,
             source: "add_synonyms", applied: true,
+          });
+        } else if (newTerms.length > 0) {
+          // Had candidate terms, but hygiene dropped all of them.
+          skipped.push({ action, reason: "all terms dropped by hygiene" });
+          await recordMeasureEdit(db, {
+            workspaceId: ctx.workspaceId, frameworkId, listId, measureId: "(framework)",
+            field: "topic_synonyms", op: "add_synonyms", beforeValue: null, afterValue: newTerms,
+            source: "add_synonyms", applied: false, skipReason: "all terms dropped by hygiene",
           });
         } else {
           skipped.push({ action, reason: "no terms supplied" });
@@ -4394,7 +4676,10 @@ export function draftMeasureToDiagnostic(m: any, fallbackId: string): Diagnostic
   return {
     measureId: (typeof m?.measureId === "string" && m.measureId) || fallbackId,
     title: m?.title ?? null,
-    definition: m?.definition ?? null,
+    // Issue 1: derive to mirror the save mapping so the static analyzer sees the same
+    // definition that will be persisted (and to backfill legacy drafts that only carry
+    // substantive_definition).
+    definition: m?.definition ?? m?.substantive_definition ?? m?.substantiveDefinition ?? null,
     primaryAssessmentTarget: m?.primary_assessment_target ?? m?.primaryAssessmentTarget ?? null,
     substantiveDefinition: m?.substantive_definition ?? m?.substantiveDefinition ?? null,
     whatConstitutesEvidence: asText(m?.whatConstitutesEvidence ?? m?.what_constitutes_evidence),
@@ -4455,7 +4740,9 @@ async function buildTestDriveDesignDiagnostic(
   const measures: DiagnosticMeasure[] = (((mq as any).rows || []) as any[]).map((m) => ({
     measureId: String(m.measure_id),
     title: m.title ?? null,
-    definition: m.definition ?? null,
+    // Issue 1: backfill legacy rows persisted before the derive-at-save fix, where
+    // `definition` may be empty while `substantive_definition` is populated.
+    definition: m.definition || m.substantive_definition || null,
     primaryAssessmentTarget: m.primary_assessment_target ?? null,
     substantiveDefinition: m.substantive_definition ?? null,
     whatConstitutesEvidence: asText(m.what_constitutes_evidence),

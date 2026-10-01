@@ -186,6 +186,16 @@ export const frameworks = pgTable("frameworks", {
   // present / deterministically derived / LLM-filled / justified-empty / MISSING,
   // so a framework can never again be finalised with silently-empty metadata.
   completenessReport: jsonb("completeness_report").$type<any>(),
+  // Synonym-adjudication gate (Option 3). Nullable/additive. Records the
+  // operator's per-term decisions (removed/kept) about suspect topicSynonyms so
+  // the lexicon-hygiene advisory terminates instead of recurring: an adjudicated
+  // term is never re-flagged, and a "removed" term is dropped from topicSynonyms.
+  // Backward-compatible: existing rows read NULL and behave unchanged.
+  synonymAdjudications: jsonb("synonym_adjudications").$type<any[]>(),
+  // Report from the last synonym-adjudication gate run (flagged/resolved/
+  // unresolved/removed). Nullable/additive; surfaced so the UI can show what
+  // still needs deciding. Fail-loud but dismissible (never blocks finalisation).
+  synonymGateReport: jsonb("synonym_gate_report").$type<any>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -227,6 +237,12 @@ export const frameworkMeasures = pgTable("framework_measures", {
   }>(),
   minQuoteContextChars: integer("min_quote_context_chars"),
   expectedYesRate: doublePrecision("expected_yes_rate"),
+  // Issue 4 (the single ADD COLUMN across all builder-hardening fixes): captures
+  // the base-rate reasoning behind an expected_yes_rate. Nullable & backward-
+  // compatible — existing rows read null. REQUIRED (validated in C9) only when the
+  // rate is extreme (<0.10 or >0.80), so an extreme calibration is reviewable and
+  // regression-checkable instead of reading as unjustified.
+  expectedYesRateJustification: text("expected_yes_rate_justification"),
   disclosureVehicles: jsonb("disclosure_vehicles").$type<string[]>(),
   r31ExceptionMetrics: boolean("r3_1_exception_metrics").notNull().default(false),
   r31ExceptionCoverage: boolean("r3_1_exception_coverage").notNull().default(false),
