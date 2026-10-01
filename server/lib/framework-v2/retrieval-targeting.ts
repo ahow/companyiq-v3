@@ -22,10 +22,14 @@
 // never subject vocabulary — so this works for any framework.
 const DOC_TYPE_CANONICAL: Array<{ canonical: string; match: RegExp }> = [
   { canonical: "Annual Report", match: /\bannual\s*report|10-?k|form\s*20-?f|integrated\s*report\b/i },
-  { canonical: "Sustainability/ESG Report", match: /\b(sustainab|esg|csr|responsib|climate|tcfd|non-?financial)\b/i },
+  // NB: tokens like "sustainab"/"responsib" are PREFIXES (sustainability, sustainable,
+  // responsibility, responsible) — a trailing \b would defeat them, so anchor only at the
+  // word start. The leading \b still prevents mid-word false matches (e.g. "besg").
+  { canonical: "Sustainability/ESG Report", match: /\b(sustainab|esg|csr|responsib|climate|tcfd|non-?financial)/i },
   { canonical: "Proxy Statement", match: /\bprox(y|ies)|def\s*14a|remuneration\s*report|say[- ]on[- ]pay\b/i },
   { canonical: "Policy Document", match: /\bpolic(y|ies)|code\s*of\s*(conduct|ethics)|charter|standard\b/i },
-  { canonical: "Regulatory Filing", match: /\b(regulat|filing|prospectus|8-?k|6-?k|sec\s*filing|disclosure\s*statement)\b/i },
+  // "regulat" is a PREFIX (regulatory, regulation) — anchor at word start only, same as above.
+  { canonical: "Regulatory Filing", match: /\b(regulat|filing|prospectus|8-?k|6-?k|sec\s*filing|disclosure\s*statement)/i },
   { canonical: "Financial Statements", match: /\b(financial\s*statement|balance\s*sheet|income\s*statement|10-?q|quarterly\s*report)\b/i },
   { canonical: "Press Release / News", match: /\bpress\s*release|news\s*release|media\s*statement|announcement\b/i },
   { canonical: "Website / Webpage", match: /\bweb\s*(site|page)|corporate\s*site|investor\s*relations\s*page\b/i },

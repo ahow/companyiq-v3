@@ -385,8 +385,12 @@ export function countImperativeInstructionClauses(message: string): number {
   const delimited = raw
     // line-leading list markers: "1)", "1.", "-", "*", "•"
     .replace(/(^|\n)\s*(?:\d+[.)]|[-*•])\s+/g, "\u0001")
-    // sentence terminators
-    .replace(/[.;\n]+/g, "\u0001")
+    // sentence terminators — semicolons and newlines always delimit...
+    .replace(/[;\n]+/g, "\u0001")
+    // ...but a period only terminates when it is NOT the decimal point of a
+    // number (e.g. a measure id like "1.2"), so "lower rate on 1.2" stays one
+    // clause. A period between two digits is preserved; any other is a delimiter.
+    .replace(/(?<!\d)\.|\.(?!\d)/g, "\u0001")
     // coordinating conjunctions joining clauses (", and " / " and then " / " also ")
     .replace(/\b(?:,?\s+and\s+then\s+|,?\s+and\s+also\s+|,?\s+then\s+|,?\s+and\s+|,?\s+also\s+)/gi, "\u0001");
   const segments = delimited
