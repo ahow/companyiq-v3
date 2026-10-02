@@ -3122,9 +3122,22 @@ export interface DiscoveryResult {
   issuerProfile?: IssuerProfile;
 }
 
-// P0 fix: Per-company discovery timeout (10 minutes). If discovery takes longer
-// than this, it fails the job with a clear reason rather than hanging the batch.
-const DISCOVERY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+// Per-company discovery timeout. If discovery takes longer than this it fails
+// the job with a clear reason rather than hanging the batch (fail-loud).
+//
+// Root cause of the observed per-issuer timeouts: this budget was a fixed 10-min
+// constant that did not account for issuer corpus SCALE. High-document-count
+// issuers (e.g. a corpus of 100+ filings totalling tens of MB) legitimately need
+// longer to resolve/rank, so every attempt re-hit the same wall and the job
+// failed on all retries. The fix is generic (no company/topic specifics):
+//   • the budget is now operator-tunable via DISCOVERY_TIMEOUT_MS (ms), and
+//   • the default is raised to 20 min to give large corpora headroom while
+//     still failing loudly on a genuinely stuck job.
+// Consistent with the many other DISCOVERY_* env knobs in this module.
+const DISCOVERY_TIMEOUT_MS = Math.max(
+  60_000,
+  parseInt(process.env.DISCOVERY_TIMEOUT_MS || String(20 * 60 * 1000), 10) || 20 * 60 * 1000,
+);
 
 /**
  * PR 1 · Change 1a: run a single targeted web-search query for a company
