@@ -1018,7 +1018,24 @@ async function repairMeasuresTargeted(
         `formats are numbered ONLY: "(1) ... (2) ... (3) ...", or "1. ... 2. ... 3. ...", or "1) ... 2) ... 3) ...". ` +
         `IMPORTANT: lettered sub-items "(a)(b)(c)" are treated as sub-items WITHIN a single condition and do ` +
         `NOT count toward the 3 — do NOT collapse the criterion into one "N of (a),(b),(c)" sentence. Provide ` +
-        `three or more genuinely separate numbered conditions.`,
+        `three or more genuinely separate numbered conditions. TOPIC ANCHOR: because the numbered conditions ` +
+        `are AND-joined, AT LEAST ONE of them MUST name this framework's topic term (or a registered synonym ` +
+        `for it) explicitly — do not leave every condition as a generic prerequisite, or generic evidence ` +
+        `unrelated to the topic could trigger a Yes. Anchor the topic once; the remaining conditions may stay general.`,
+      );
+    }
+    if (rules.has("C7")) {
+      clauses.push(
+        `C7 (coverage measure): a measure whose title or primary_assessment_target asserts SCOPE ` +
+        `(enterprise-wide, portfolio, all operations, across the group, a percentage, etc.) is a COVERAGE ` +
+        `measure and must satisfy BOTH of the following. (1) coverage_whitelist MUST list AT LEAST 3 ` +
+        `plain-language equivalents of the coverage extent — e.g. "across the group", "enterprise-wide", ` +
+        `"all our operations", "group-wide", "company-wide" — NOT topic keywords; these are scope/extent ` +
+        `paraphrases only. (2) The measure TITLE MUST state an EXPLICIT, COUNTABLE threshold: a percentage ` +
+        `(e.g. "≥70% of the portfolio"), an "N of M" count (e.g. "8 of 10 operations"), OR a definite-` +
+        `proportion quantifier (all / every / each / majority / enterprise-wide / company-wide / group-wide / ` +
+        `globally). A vague scope phrase such as "across the organisation" or "broad coverage" is NOT a ` +
+        `countable threshold and will still fail — replace or augment it with one of the countable forms above.`,
       );
     }
     if (rules.has("C11")) {
@@ -1598,7 +1615,26 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
         // chunked drafts, unlike the old full-draft single-shot re-send), up to
         // MAX_REPAIRS passes. Warnings are surfaced but do not, on their own,
         // block; error-severity violations drive the loop.
-        const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_MAX_REPAIRS || 2);
+        //
+        // The USER-INITIATED refine path gets its own, higher budget than the
+        // auto-repair (executeDraft) path. Stubborn countable-structure errors
+        // (C4 ≥3 numbered conditions; C7 coverage whitelist + explicit threshold)
+        // routinely need more than 2 LLM rewrite passes to satisfy the validator
+        // byte-for-byte, and a user who explicitly clicked "Re-draft with
+        // corrections" is asking us to try harder. Default 4, env-overridable,
+        // and bounded so a mis-set env can't spin the loop unbounded. The auto
+        // path (FRAMEWORK_V2_MAX_REPAIRS, ~L1331) is intentionally left unchanged.
+        const MAX_REPAIRS = Math.min(
+          8,
+          Math.max(
+            1,
+            Number(
+              process.env.FRAMEWORK_V2_REFINE_MAX_REPAIRS ||
+                process.env.FRAMEWORK_V2_MAX_REPAIRS ||
+                4,
+            ),
+          ),
+        );
         let currentDraft = draft;
         let currentFwDraft = buildFrameworkDraft(currentDraft, intake);
         const revalidate = (fw: FrameworkDraft) => {
@@ -1713,28 +1749,63 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
           maxRepairs: MAX_REPAIRS,
         };
         // Human-readable honest summary (client also renders a structured version).
+        //
+        // This message MUST report ERRORS as well as warnings. The previous
+        // version only ever reported warnings, so a draft with 0 warnings and
+        // N blocking errors rendered "Re-draft addressed 0 of 0 warnings. 0
+        // remain" — hiding both the errors that WERE resolved and the errors
+        // that still block, and wrongly calling blocking errors "advisory".
+        // Errors are blocking; only set-level warnings are advisory.
+        const plural = (n: number) => (n === 1 ? "" : "s");
         let refineMessage: string;
         if (finalWarnings.length === 0 && finalErrorCount === 0) {
-          refineMessage = `Re-draft resolved all ${initialWarningCount} warning${initialWarningCount === 1 ? "" : "s"}${initialErrorCount ? ` and ${initialErrorCount} error${initialErrorCount === 1 ? "" : "s"}` : ""}. The draft is now clean.`;
+          const resolvedBits: string[] = [];
+          if (initialErrorCount > 0) resolvedBits.push(`${initialErrorCount} error${plural(initialErrorCount)}`);
+          if (initialWarningCount > 0) resolvedBits.push(`${initialWarningCount} warning${plural(initialWarningCount)}`);
+          const what = resolvedBits.length ? resolvedBits.join(" and ") : "all issues";
+          refineMessage = `Re-draft resolved ${what}. The draft is now clean and can be saved as production-ready.`;
         } else {
-          const parts: string[] = [];
-          parts.push(
-            `Re-draft addressed ${warningsResolved} of ${initialWarningCount} warning${initialWarningCount === 1 ? "" : "s"}. ${finalWarnings.length} remain`,
-          );
-          const reasons: string[] = [];
-          if (setLevelWarnings.length > 0) {
-            reasons.push(
-              `${setLevelWarnings.length} set-level advisor${setLevelWarnings.length === 1 ? "y" : "ies"} (${setLevelRuleNames.join(", ")}) that cannot be auto-fixed per-measure`,
+          const sentences: string[] = [];
+          // 1) Errors first — these are what block saving as production-ready.
+          if (initialErrorCount > 0 || finalErrorCount > 0) {
+            if (finalErrorCount === 0) {
+              sentences.push(
+                `Re-draft resolved all ${initialErrorCount} error${plural(initialErrorCount)}`,
+              );
+            } else {
+              sentences.push(
+                `Re-draft resolved ${errorsResolved} of ${initialErrorCount} error${plural(initialErrorCount)}; ${finalErrorCount} still block${finalErrorCount === 1 ? "s" : ""} saving as production-ready (after ${repairAttempts} repair pass${plural(repairAttempts)}, max ${MAX_REPAIRS})`,
+              );
+            }
+          }
+          // 2) Warnings next — only mention them if any were in play.
+          if (initialWarningCount > 0 || finalWarnings.length > 0) {
+            const reasons: string[] = [];
+            if (setLevelWarnings.length > 0) {
+              reasons.push(
+                `${setLevelWarnings.length} set-level advisor${setLevelWarnings.length === 1 ? "y" : "ies"} (${setLevelRuleNames.join(", ")}) that cannot be auto-fixed per-measure`,
+              );
+            }
+            if (perMeasureRemaining.length > 0) {
+              reasons.push(
+                `${perMeasureRemaining.length} still unresolved after ${repairAttempts} repair pass${plural(repairAttempts)} (max ${MAX_REPAIRS})`,
+              );
+            }
+            let warnSentence = `Re-draft addressed ${warningsResolved} of ${initialWarningCount} warning${plural(initialWarningCount)}; ${finalWarnings.length} remain`;
+            if (reasons.length) warnSentence += ` (${reasons.join("; ")})`;
+            sentences.push(warnSentence);
+          }
+          // 3) Next-step guidance that matches what actually remains.
+          if (finalErrorCount > 0) {
+            sentences.push(
+              "Errors are blocking — re-draft again to spend more repair passes, or edit the flagged measures manually. Remaining warnings (if any) are advisory and can be left as-is on a saved draft",
+            );
+          } else {
+            sentences.push(
+              "These remaining warnings are advisory — you can save as production-ready as-is, edit manually, or re-draft again",
             );
           }
-          if (perMeasureRemaining.length > 0) {
-            reasons.push(
-              `${perMeasureRemaining.length} still unresolved after ${repairAttempts} repair pass${repairAttempts === 1 ? "" : "es"} (max ${MAX_REPAIRS})`,
-            );
-          }
-          if (reasons.length) parts.push(`: ${reasons.join("; ")}`);
-          parts.push(". These are advisory — you can save as a draft and edit manually, or re-draft again.");
-          refineMessage = parts.join("");
+          refineMessage = sentences.join(". ") + ".";
         }
 
         const result = {
