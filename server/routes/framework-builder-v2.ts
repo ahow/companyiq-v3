@@ -1018,7 +1018,25 @@ async function repairMeasuresTargeted(
         `formats are numbered ONLY: "(1) ... (2) ... (3) ...", or "1. ... 2. ... 3. ...", or "1) ... 2) ... 3) ...". ` +
         `IMPORTANT: lettered sub-items "(a)(b)(c)" are treated as sub-items WITHIN a single condition and do ` +
         `NOT count toward the 3 — do NOT collapse the criterion into one "N of (a),(b),(c)" sentence. Provide ` +
-        `three or more genuinely separate numbered conditions.`,
+        `three or more genuinely separate numbered conditions.\n` +
+        `ADDITIONALLY: at least ONE substantive condition (its own text ≥20 characters) MUST reference the topic ` +
+        `term or a registered synonym. Fallback conditions are AND-joined (every condition must hold for the ` +
+        `fallback to fire), so you only need to anchor the topic ONCE — do not force the topic into every ` +
+        `condition; the remaining conditions may be general prerequisites. If none of the substantive conditions ` +
+        `name the topic, generic evidence could trigger a Yes, so ensure one condition explicitly names it.`,
+      );
+    }
+    if (rules.has("C7")) {
+      clauses.push(
+        `C7 (coverage phrasing): a coverage measure must satisfy BOTH requirements. ` +
+        `(1) coverage_whitelist MUST contain AT LEAST 3 plain-language coverage-extent equivalents — ` +
+        `e.g. "across the group", "enterprise-wide", "all our operations", "company-wide". ` +
+        `(2) the measure TITLE MUST state an EXPLICIT, COUNTABLE threshold. A threshold is accepted ONLY if the ` +
+        `title contains one of: a percentage (e.g. "70%"); a number followed by "percent", "of" or "out of" ` +
+        `(e.g. "70 percent", "8 of 10", "8 out of 10"); OR a definite-proportion quantifier as a whole word — one ` +
+        `of all, every, each, majority, enterprise-wide, company-wide, group-wide, globally (the hyphen may be a ` +
+        `hyphen or a space). A vague scope phrase such as "across the organization" or "broad coverage" is NOT a ` +
+        `threshold and will still fail — put a countable threshold in the title itself.`,
       );
     }
     if (rules.has("C11")) {
@@ -1598,7 +1616,12 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
         // chunked drafts, unlike the old full-draft single-shot re-send), up to
         // MAX_REPAIRS passes. Warnings are surfaced but do not, on their own,
         // block; error-severity violations drive the loop.
-        const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_MAX_REPAIRS || 2);
+        // ISSUE 2b: the user-initiated refine path gets its OWN, higher repair
+        // budget (default 4) via a separate env var, so stubborn countable-
+        // structure errors (e.g. C4/C7) get more passes to clear. The auto/
+        // initial-draft path keeps its own FRAMEWORK_V2_MAX_REPAIRS default and
+        // is deliberately untouched.
+        const MAX_REPAIRS = Number(process.env.FRAMEWORK_V2_REFINE_MAX_REPAIRS || 4);
         let currentDraft = draft;
         let currentFwDraft = buildFrameworkDraft(currentDraft, intake);
         const revalidate = (fw: FrameworkDraft) => {
@@ -1717,24 +1740,54 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
         if (finalWarnings.length === 0 && finalErrorCount === 0) {
           refineMessage = `Re-draft resolved all ${initialWarningCount} warning${initialWarningCount === 1 ? "" : "s"}${initialErrorCount ? ` and ${initialErrorCount} error${initialErrorCount === 1 ? "" : "s"}` : ""}. The draft is now clean.`;
         } else {
-          const parts: string[] = [];
-          parts.push(
-            `Re-draft addressed ${warningsResolved} of ${initialWarningCount} warning${initialWarningCount === 1 ? "" : "s"}. ${finalWarnings.length} remain`,
-          );
-          const reasons: string[] = [];
-          if (setLevelWarnings.length > 0) {
-            reasons.push(
-              `${setLevelWarnings.length} set-level advisor${setLevelWarnings.length === 1 ? "y" : "ies"} (${setLevelRuleNames.join(", ")}) that cannot be auto-fixed per-measure`,
+          // ISSUE 1: report HONESTLY. When errors were involved, ALWAYS state how
+          // many errors were resolved and how many still BLOCK saving — and never
+          // call remaining blocking errors "advisory" (only set-level warnings are
+          // advisory). Covers all four combinations: errors-only, warnings-only,
+          // both, and (handled above) fully clean.
+          const sentences: string[] = [];
+          // 1) Errors first — these BLOCK and are never "advisory".
+          if (initialErrorCount > 0) {
+            if (finalErrorCount > 0) {
+              sentences.push(
+                `Re-draft resolved ${errorsResolved} of ${initialErrorCount} error${initialErrorCount === 1 ? "" : "s"}; ${finalErrorCount} still block${finalErrorCount === 1 ? "s" : ""} saving as production-ready.`,
+              );
+            } else {
+              sentences.push(
+                `Re-draft resolved all ${initialErrorCount} error${initialErrorCount === 1 ? "" : "s"}.`,
+              );
+            }
+          }
+          // 2) Warnings next — genuinely advisory.
+          if (initialWarningCount > 0 || finalWarnings.length > 0) {
+            let warnSentence =
+              `Re-draft addressed ${warningsResolved} of ${initialWarningCount} warning${initialWarningCount === 1 ? "" : "s"}; ${finalWarnings.length} remain`;
+            const reasons: string[] = [];
+            if (setLevelWarnings.length > 0) {
+              reasons.push(
+                `${setLevelWarnings.length} set-level advisor${setLevelWarnings.length === 1 ? "y" : "ies"} (${setLevelRuleNames.join(", ")}) that cannot be auto-fixed per-measure`,
+              );
+            }
+            if (perMeasureRemaining.length > 0) {
+              reasons.push(
+                `${perMeasureRemaining.length} still unresolved after ${repairAttempts} repair pass${repairAttempts === 1 ? "" : "es"} (max ${MAX_REPAIRS})`,
+              );
+            }
+            if (reasons.length) warnSentence += ` (${reasons.join("; ")})`;
+            warnSentence += finalWarnings.length > 0 ? ". Remaining warnings are advisory." : ".";
+            sentences.push(warnSentence);
+          }
+          // 3) Next-step guidance keyed off whether blocking errors remain.
+          if (finalErrorCount > 0) {
+            sentences.push(
+              `Errors must be resolved before this can be saved as production-ready — edit the flagged measures manually, or re-draft again.`,
+            );
+          } else {
+            sentences.push(
+              `You can save as a draft and edit manually, or re-draft again.`,
             );
           }
-          if (perMeasureRemaining.length > 0) {
-            reasons.push(
-              `${perMeasureRemaining.length} still unresolved after ${repairAttempts} repair pass${repairAttempts === 1 ? "" : "es"} (max ${MAX_REPAIRS})`,
-            );
-          }
-          if (reasons.length) parts.push(`: ${reasons.join("; ")}`);
-          parts.push(". These are advisory — you can save as a draft and edit manually, or re-draft again.");
-          refineMessage = parts.join("");
+          refineMessage = sentences.join(" ");
         }
 
         const result = {
