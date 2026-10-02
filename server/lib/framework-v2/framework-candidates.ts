@@ -63,9 +63,33 @@ export interface MinedFrameworkCandidates {
 // never send an unbounded corpus to the model. Caps mirror the existing chat
 // path's conventions.
 const CORPUS_TEXT_CAP_PER_COMPANY = 200_000; // matches chat path per-company cap
-const DOC_SAMPLE_CHARS = 50_000;             // matches chat path per-doc LEFT() cap
+const DOC_SAMPLE_CHARS = 150_000;            // per-doc region scanned for topic relevance (bounded LEFT())
 const LLM_SAMPLE_TOTAL_CHARS = 16_000;       // total chars sent to the LLM generators
 const LLM_SAMPLE_PER_COMPANY_CHARS = 2_500;  // per-company contribution to the sample
+
+// ── Topic-scoped passage extraction (precision fix) ─────────────────────────
+// The LLM candidate generators (anchor-frameworks, adjacent-topics) must see
+// text where the framework TOPIC is actually discussed — not document
+// front-matter. The head of an ESG / annual / integrated report is dominated by
+// generic reporting-standard boilerplate ("prepared in accordance with GRI /
+// SASB / TCFD …"), so a position-based (document-head) sample makes the anchor
+// miner propose those generic standards for ANY topic. Instead we extract text
+// WINDOWS around occurrences of the topic term / its synonyms (all read from
+// framework metadata — fully topic-agnostic), so only standards cited IN
+// CONNECTION WITH the actual topic reach the model. Falls back to the document
+// head when a corpus never names the topic, so mining never silently goes empty.
+const TOPIC_WINDOW_BEFORE = 240;             // chars kept before a topic match
+const TOPIC_WINDOW_AFTER = 560;              // chars kept after a topic match
+const TOPIC_MAX_MATCHES_PER_TERM = 40;       // bound the scan per query term per company
+// Generic connective words that must not be used as standalone topic tokens
+// (they would match almost any passage and defeat the scoping). The multi-word
+// topic PHRASES are always matched in full regardless of this list.
+const GENERIC_TOPIC_TOKENS = new Set([
+  "the", "and", "for", "with", "that", "this", "from", "their", "they",
+  "management", "disclosure", "disclosures", "report", "reports", "reporting",
+  "policy", "policies", "risk", "risks", "framework", "frameworks", "standard",
+  "standards", "company", "companies", "group", "related", "other", "data",
+]);
 
 const EMPTY: MinedFrameworkCandidates = { terminology: [], adjacentPhrases: [], anchorNames: [] };
 
@@ -151,8 +175,11 @@ export async function mineFrameworkCandidates(
     console.warn("[mineFrameworkCandidates] terminology mining failed (non-fatal):", e?.message);
   }
 
-  // 5. Build ONE bounded corpus sample string for the two LLM generators.
-  const sample = buildBoundedSample(corpusTexts);
+  // 5. Build ONE bounded corpus sample string for the two LLM generators,
+  //    scoped to passages that actually discuss the framework topic (so the
+  //    anchor/adjacent miners see topic-relevant text, not report front-matter).
+  const topicQuery = buildTopicQueryTokens(fwMeta);
+  const sample = buildBoundedSample(corpusTexts, topicQuery);
   const ctx: FrameworkContext = {
     topicTerm: fwMeta.topicTerm || "",
     topicSynonyms: fwMeta.topicSynonyms || [],
@@ -191,16 +218,131 @@ export async function mineFrameworkCandidates(
   return result;
 }
 
-/** Concatenate a bounded, per-company-capped sample string for the LLM. */
-function buildBoundedSample(corpusTexts: Map<string, string>): string {
+/** Topic query derived from framework metadata — fully topic-agnostic. */
+export interface TopicQuery {
+  /** Full topic phrases (topic term + synonyms), lowercased. Matched verbatim. */
+  phrases: string[];
+  /** Distinctive single tokens drawn from those phrases, for recall. */
+  tokens: string[];
+}
+
+/**
+ * Derive the set of phrases/tokens that mark a passage as "about this topic".
+ * Everything comes from the framework row (topic term + synonyms) — no company,
+ * topic or standard literals are hardcoded, so this is generic across frameworks.
+ */
+export function buildTopicQueryTokens(fwMeta: FrameworkMetaForMining): TopicQuery {
+  const rawPhrases = [fwMeta.topicTerm || "", ...(fwMeta.topicSynonyms || [])];
+  const phrases: string[] = [];
+  const seenPhrase = new Set<string>();
+  for (const p of rawPhrases) {
+    const s = String(p || "").toLowerCase().trim().replace(/\s+/g, " ");
+    if (s.length < 3 || seenPhrase.has(s)) continue;
+    seenPhrase.add(s);
+    phrases.push(s);
+  }
+  const tokens: string[] = [];
+  const seenTok = new Set<string>();
+  for (const p of phrases) {
+    for (const raw of p.split(/[^a-z0-9\u00c0-\uffff]+/)) {
+      const t = raw.trim();
+      if (t.length < 4 || GENERIC_TOPIC_TOKENS.has(t) || seenTok.has(t)) continue;
+      seenTok.add(t);
+      tokens.push(t);
+    }
+  }
+  return { phrases, tokens };
+}
+
+/** True if the char at the given boundary index is not part of a word. */
+function isBoundary(text: string, idx: number): boolean {
+  if (idx < 0 || idx >= text.length) return true;
+  return !/[a-z0-9\u00c0-\uffff]/.test(text[idx]);
+}
+
+/**
+ * Extract up to `maxChars` of text drawn from windows around occurrences of any
+ * topic phrase/token in `text` (which must already be lowercased). Overlapping
+ * windows are merged; returns "" when the topic is never named so the caller can
+ * fall back to the document head. Pure and bounded.
+ */
+export function extractTopicWindows(text: string, query: TopicQuery, maxChars: number): string {
+  if (!text || maxChars <= 0) return "";
+  const needles = [...query.phrases, ...query.tokens];
+  if (needles.length === 0) return "";
+
+  const ranges: Array<[number, number]> = [];
+  for (const needle of needles) {
+    if (!needle) continue;
+    const tokenLike = !needle.includes(" ");
+    let from = 0;
+    let hits = 0;
+    while (hits < TOPIC_MAX_MATCHES_PER_TERM) {
+      const pos = text.indexOf(needle, from);
+      if (pos === -1) break;
+      from = pos + needle.length;
+      // For single tokens, require word boundaries so "ai" doesn't match "said".
+      if (tokenLike && (!isBoundary(text, pos - 1) || !isBoundary(text, pos + needle.length))) {
+        continue;
+      }
+      hits++;
+      ranges.push([Math.max(0, pos - TOPIC_WINDOW_BEFORE), Math.min(text.length, pos + needle.length + TOPIC_WINDOW_AFTER)]);
+    }
+  }
+  if (ranges.length === 0) return "";
+
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] <= last[1]) {
+      last[1] = Math.max(last[1], r[1]);
+    } else {
+      merged.push([r[0], r[1]]);
+    }
+  }
+
+  const out: string[] = [];
+  let total = 0;
+  for (const [s, e] of merged) {
+    if (total >= maxChars) break;
+    const slice = text.slice(s, Math.min(e, s + (maxChars - total))).trim();
+    if (!slice) continue;
+    out.push(slice);
+    total += slice.length;
+  }
+  return out.join(" … ");
+}
+
+/**
+ * Concatenate a bounded, per-company-capped sample string for the LLM. Each
+ * company contributes TOPIC-RELEVANT passages where the framework topic is
+ * named; companies whose corpus never names the topic fall back to the document
+ * head so mining is never starved. Topic-scoped companies are preferred when the
+ * global budget is tight, so the model's limited context is spent on on-topic
+ * text — the precision fix for anchor-framework/adjacent-topic mining.
+ */
+function buildBoundedSample(corpusTexts: Map<string, string>, query: TopicQuery): string {
+  const scoped: Array<{ name: string; chunk: string }> = [];
+  const fallback: Array<{ name: string; chunk: string }> = [];
+  for (const [name, text] of corpusTexts) {
+    const windows = extractTopicWindows(text, query, LLM_SAMPLE_PER_COMPANY_CHARS);
+    if (windows) {
+      scoped.push({ name, chunk: windows });
+    } else {
+      const head = text.slice(0, LLM_SAMPLE_PER_COMPANY_CHARS).trim();
+      if (head) fallback.push({ name, chunk: head });
+    }
+  }
+
   let total = 0;
   const parts: string[] = [];
-  for (const [name, text] of corpusTexts) {
+  for (const { name, chunk } of [...scoped, ...fallback]) {
     if (total >= LLM_SAMPLE_TOTAL_CHARS) break;
     const remaining = LLM_SAMPLE_TOTAL_CHARS - total;
-    const chunk = text.slice(0, Math.min(LLM_SAMPLE_PER_COMPANY_CHARS, remaining)).trim();
-    if (!chunk) continue;
-    const block = `--- ${name} ---\n${chunk}`;
+    const trimmed = chunk.slice(0, remaining).trim();
+    if (!trimmed) continue;
+    const block = `--- ${name} ---\n${trimmed}`;
     parts.push(block);
     total += block.length;
   }
