@@ -509,6 +509,19 @@ export function isPollutedSynonymPhrase(
 }
 
 /**
+ * True if the char at `idx` is not part of a word (letter/digit), or `idx` is
+ * outside the string. Used to require that a known-term match stands as a whole
+ * word/phrase rather than being embedded inside a larger token. Mirrors the
+ * boundary discipline used by the anchor-mining sampler in framework-candidates;
+ * duplicated locally (3 lines) rather than imported to avoid a circular import
+ * (framework-candidates already imports detectTerminologyGaps from this module).
+ */
+export function isWordBoundary(text: string, idx: number): boolean {
+  if (idx < 0 || idx >= text.length) return true;
+  return !/[a-z0-9\u00c0-\uffff]/.test(text[idx]);
+}
+
+/**
  * Mine the test-drive corpus for terms that companies actually use for the topic
  * but that are NOT already in topicSynonyms. Returns candidate additions ranked
  * by frequency across companies.
@@ -573,6 +586,19 @@ export function detectTerminologyGaps(
         const idx = text.indexOf(knownTerm, pos);
         if (idx === -1) break;
         pos = idx + knownTerm.length; // advance past the full match (no overlap)
+        // ── Word-boundary guard (topic-agnostic) ──────────────────────────
+        // Only treat this as a real occurrence of the known term when it stands
+        // as a whole word/phrase, not embedded inside a larger token. Without
+        // this, short known terms ("ai", "ml", "llm", "agi") match INSIDE
+        // ordinary words — chAIrman, mAIntain, avAILable, reguLArly — and the
+        // boilerplate around those false hits ("annual meeting", "executive
+        // officer", "table contents", "forward-looking") gets harvested into the
+        // synonym list. Embedded matches are skipped and do NOT consume the
+        // per-term occurrence budget, so genuine standalone occurrences still get
+        // their full window allowance.
+        if (!isWordBoundary(text, idx - 1) || !isWordBoundary(text, idx + knownTerm.length)) {
+          continue;
+        }
         occurrences++;
         // Look at a bounded window around this occurrence
         const windowStart = Math.max(0, idx - WINDOW_RADIUS);

@@ -870,6 +870,37 @@ export function validateC8(fw: FrameworkDraft): ValidationResult {
 
 // ─── C9 — Expected Yes-rate calibration ───────────────────────────────────
 
+/**
+ * Extract explicit yes-rate claims stated in an expected_yes_rate_justification,
+ * normalised to a fraction in (0,1). Picks up percentages ("20%", "20 percent")
+ * and bare decimal rates ("0.2", ".65"). Topic-agnostic, pure, and unit-tested.
+ *
+ * Only values that plausibly denote a yes-rate are returned: percentages in
+ * [1,99] and decimals in (0,1). This lets C9 catch justifications whose stated
+ * rate contradicts the stored expected_yes_rate (e.g. stored 0.653 while the
+ * justification says "a 20% rate"), without hard-coding any subject matter.
+ */
+export function extractStatedRatesFromJustification(text: string): number[] {
+  const out: number[] = [];
+  const s = String(text || "");
+  // Percentages: "20%", "20 %", "20 percent", "20 per cent".
+  const pctPattern = /(\d{1,3}(?:\.\d+)?)\s*(?:%|percent\b|per cent\b)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = pctPattern.exec(s)) !== null) {
+    const v = parseFloat(m[1]);
+    if (Number.isFinite(v) && v >= 1 && v <= 99) out.push(v / 100);
+  }
+  // Bare decimal rates: "0.2", ".65" — but NOT a percentage already captured and
+  // NOT part of a measure id like "2.3" (leading digit ≥1 is excluded by the
+  // (0,1) range). Require the integer part to be 0 or absent.
+  const decPattern = /(?<![\d.])(0?\.\d+)(?![\d%])/g;
+  while ((m = decPattern.exec(s)) !== null) {
+    const v = parseFloat(m[1]);
+    if (Number.isFinite(v) && v > 0 && v < 1) out.push(v);
+  }
+  return out;
+}
+
 export function validateC9(fw: FrameworkDraft): ValidationResult {
   const violations: Violation[] = [];
   let tooNarrow = 0;
@@ -911,6 +942,35 @@ export function validateC9(fw: FrameworkDraft): ValidationResult {
           message: `expected_yes_rate ${m.expected_yes_rate} is extreme (<0.10 or >0.80) but expected_yes_rate_justification is ${justification.length === 0 ? "missing" : "too short (< 40 chars)"}. An extreme base rate must state WHY (the population reason), e.g. "few entities disclose an audited figure" or "nearly all large entities state a generic policy".`,
           suggestion: "Add a one-sentence expected_yes_rate_justification giving the base-rate reasoning for this extreme rate. Mid-range rates (0.10–0.80) need no justification.",
         });
+      }
+    }
+
+    // Issue 4b — numeric self-consistency. If the justification itself states a
+    // rate (a percentage or a bare decimal), it must not contradict the stored
+    // expected_yes_rate. This catches internal contradictions such as a stored
+    // rate of 0.653 while the justification reads "a 20% rate", which is a
+    // copy/paste or calibration error rather than a defensible base rate.
+    // Topic-agnostic: compares only numbers, never subject matter. We flag only
+    // when the nearest stated rate is far (> 0.25) from the stored one, so that
+    // incidental numbers and rounding never produce false positives.
+    const justText = (m.expected_yes_rate_justification || "").trim();
+    if (justText.length > 0) {
+      const stated = extractStatedRatesFromJustification(justText);
+      if (stated.length > 0) {
+        let nearest = Infinity;
+        for (const r of stated) {
+          const d = Math.abs(r - m.expected_yes_rate);
+          if (d < nearest) nearest = d;
+        }
+        if (nearest > 0.25) {
+          violations.push({
+            measureId: m.measureId,
+            rule: "C9",
+            severity: "error",
+            message: `expected_yes_rate ${m.expected_yes_rate} contradicts the rate stated in its own justification (nearest stated rate differs by ${nearest.toFixed(2)}). The justification should explain the stored rate, not a different one.`,
+            suggestion: "Reconcile expected_yes_rate with the figure quoted in expected_yes_rate_justification — either correct the stored rate or rewrite the justification so the numbers agree.",
+          });
+        }
       }
     }
   }
