@@ -7,7 +7,7 @@
 
 import { Router, Request, Response } from "express";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
-import { validateAll, summariseViolations, toStructuredIssues, renderStructuredIssues, evaluateAcceptanceGate, hasExplicitCoverageThreshold, ensureCountableCoverageTitle, type FrameworkDraft, type StructuredIssue } from "../lib/framework-v2/rules.js";
+import { validateAll, summariseViolations, toStructuredIssues, renderStructuredIssues, evaluateAcceptanceGate, hasExplicitCoverageThreshold, ensureCountableCoverageTitle, neutralizeTenseGate, containsTenseGate, type FrameworkDraft, type StructuredIssue } from "../lib/framework-v2/rules.js";
 import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evidence-keyword-distinctiveness.js";
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
@@ -1223,6 +1223,24 @@ async function repairMeasuresTargeted(
     }
   }
 
+  // C2b — measureIds that carried the SPECIFIC C2 "gates on tense" violation in
+  // THIS repair pass (validateC2's tense-gate error). Mirrors the C7b pattern:
+  // the LLM has been given check-aligned C2 guidance (see guidanceForRules), but
+  // if its rewritten Yes-gate STILL trips containsTenseGate — OR it omits the
+  // field so mergeCorrectedMeasure preserves the ORIGINAL tense-gated text — the
+  // repair must converge rather than loop forever on the same [ERROR][C2]. We
+  // apply a deterministic, idempotent last-resort neutralisation below for
+  // exactly these measures.
+  const c2TenseGateMeasureIds = new Set<string>();
+  for (const [measureId, vs] of byMeasure) {
+    for (const v of vs) {
+      if (v?.rule === "C2" && typeof v?.message === "string" && /gates on tense/i.test(v.message)) {
+        c2TenseGateMeasureIds.add(measureId);
+        break;
+      }
+    }
+  }
+
   // Splice corrected measures back into the full draft by measureId, in place.
   // FIX: PRUNE-MERGE the model's (often partial) correction onto the ORIGINAL
   // measure via mergeCorrectedMeasure — a correction can only add/improve fields,
@@ -1232,6 +1250,7 @@ async function repairMeasuresTargeted(
   let fieldsPreservedByMerge = 0;
   let regressionsPrevented = 0;
   let c7TitlesAugmented = 0;
+  let c2TenseGatesNeutralized = 0;
   const patched = {
     ...draft,
     categories: cats.map((c: any) => ({
@@ -1245,24 +1264,44 @@ async function repairMeasuresTargeted(
           );
           fieldsPreservedByMerge += fieldsPreserved;
           if (regressionPrevented) regressionsPrevented++;
+          // `out` accumulates the deterministic last-resort fixes so a measure
+          // flagged for BOTH C7 and C2 receives BOTH (the fixes compose).
+          let out = merged;
           // C7b deterministic last-resort: prefer the LLM's own re-title, but if
           // this measure was flagged for the countable-threshold C7 error and the
           // merged title STILL fails the exact validator check, force convergence
           // with the idempotent augmentation. Fail-loud so the override is visible.
-          if (c7TitleThresholdMeasureIds.has(merged.measureId)) {
-            const curTitle = String(merged.title || "");
+          if (c7TitleThresholdMeasureIds.has(out.measureId)) {
+            const curTitle = String(out.title || "");
             if (!hasExplicitCoverageThreshold(curTitle.toLowerCase())) {
               const fixedTitle = ensureCountableCoverageTitle(curTitle);
               if (fixedTitle !== curTitle) {
                 console.warn(
-                  `[framework-builder v2] C7 deterministic title-threshold augmentation applied to ${merged.measureId}: ${curTitle} -> ${fixedTitle}`,
+                  `[framework-builder v2] C7 deterministic title-threshold augmentation applied to ${out.measureId}: ${curTitle} -> ${fixedTitle}`,
                 );
                 c7TitlesAugmented++;
-                return { ...merged, title: fixedTitle };
+                out = { ...out, title: fixedTitle };
               }
             }
           }
-          return merged;
+          // C2b deterministic last-resort: prefer the LLM's own rewrite, but if
+          // this measure was flagged for the tense-gate C2 error and the merged
+          // Yes-gate (fallback_yes_criterion + scoringGuidance) STILL trips the
+          // exact validator check, neutralise EACH field INDIVIDUALLY so the
+          // concatenation validateC2 checks also passes. Fail-loud + telemetry.
+          if (c2TenseGateMeasureIds.has(out.measureId)) {
+            const yesGateText = `${String(out.fallback_yes_criterion || "")} ${String(out.scoringGuidance || "")}`.trim();
+            if (containsTenseGate(yesGateText)) {
+              const fixedCriterion = neutralizeTenseGate(String(out.fallback_yes_criterion || ""));
+              const fixedGuidance = neutralizeTenseGate(String(out.scoringGuidance || ""));
+              console.warn(
+                `[framework-builder v2] C2 deterministic tense-gate neutralization applied to ${out.measureId}`,
+              );
+              c2TenseGatesNeutralized++;
+              out = { ...out, fallback_yes_criterion: fixedCriterion, scoringGuidance: fixedGuidance };
+            }
+          }
+          return out;
         }
         return m;
       }),
@@ -1272,6 +1311,7 @@ async function repairMeasuresTargeted(
   telem.fieldsPreservedByMerge = fieldsPreservedByMerge;
   telem.regressionsPrevented = regressionsPrevented;
   telem.c7TitlesAugmented = c7TitlesAugmented;
+  telem.c2TenseGatesNeutralized = c2TenseGatesNeutralized;
   if (replaced === 0) {
     telem.outcome = "no-matches";
     console.warn(`[framework-builder v2] Targeted repair produced no measureId matches; keeping prior draft.`);

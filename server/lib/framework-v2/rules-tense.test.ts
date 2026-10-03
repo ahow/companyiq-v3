@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { containsTenseGate, validateC2, type FrameworkDraft } from "./rules.js";
+import {
+  containsTenseGate,
+  neutralizeTenseGate,
+  validateC2,
+  type FrameworkDraft,
+} from "./rules.js";
 
 // Issue 2 — Gate on in-effect-vs-aspiration, NEVER on grammatical tense.
 //
@@ -96,4 +101,64 @@ test("validateC2: the exclusion field still catches forward-looking disqualifier
     r.violations.some((v) => v.rule === "C2" && v.severity === "error"),
     "exclusion-field tense/aspiration guard must remain active",
   );
+});
+
+// ---------------------------------------------------------------------------
+// neutralizeTenseGate — the deterministic, idempotent, topic-agnostic
+// LAST-RESORT applied by the auto-repair loop (C2b) when the LLM fails to strip
+// tense-gating phrasing. Mirrors the C7b ensureCountableCoverageTitle pattern.
+// HARD GUARANTEE: containsTenseGate(neutralizeTenseGate(x)) === undefined, and
+// a second application is a no-op (idempotent).
+// ---------------------------------------------------------------------------
+
+test("neutralizeTenseGate: strips an explicit present-tense requirement and converges", () => {
+  const input =
+    "Yes only if the quote uses a present-tense description of the policy.";
+  assert.ok(containsTenseGate(input), "fixture must actually trip the gate");
+  const out = neutralizeTenseGate(input);
+  assert.equal(
+    containsTenseGate(out),
+    undefined,
+    "neutralized text must no longer trip the tense gate",
+  );
+  assert.match(out, /in force or adopted and still in effect/i,
+    "canonical in-effect clause must be present");
+});
+
+test("neutralizeTenseGate: strips a completed/past-action exclusion and converges", () => {
+  const input =
+    "Yes if the policy is in effect. Past adoption does not count; only a current statement qualifies.";
+  assert.ok(containsTenseGate(input), "fixture must actually trip the gate");
+  const out = neutralizeTenseGate(input);
+  assert.equal(
+    containsTenseGate(out),
+    undefined,
+    "neutralized text must no longer trip the tense gate",
+  );
+  // The clean leading sentence survives; the offending clause is dropped.
+  assert.match(out, /Yes if the policy is in effect/i);
+});
+
+test("neutralizeTenseGate: is a no-op on tense-neutral wording", () => {
+  const clean =
+    "Yes if the entity has adopted or approved the policy in any tense; " +
+    "'the Board approved X in March 2024' satisfies the gate.";
+  assert.equal(containsTenseGate(clean), undefined, "fixture must be clean");
+  assert.equal(
+    neutralizeTenseGate(clean),
+    clean,
+    "a clean field must be returned byte-for-byte unchanged",
+  );
+});
+
+test("neutralizeTenseGate: is a no-op on empty/falsey input", () => {
+  assert.equal(neutralizeTenseGate(""), "");
+});
+
+test("neutralizeTenseGate: is idempotent (double application === single)", () => {
+  const input = "Must be written in the present tense to count.";
+  const once = neutralizeTenseGate(input);
+  const twice = neutralizeTenseGate(once);
+  assert.equal(twice, once, "re-applying the neutraliser must change nothing");
+  assert.equal(containsTenseGate(twice), undefined);
 });
