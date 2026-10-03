@@ -140,6 +140,55 @@ export function containsTenseGate(text: string): string | undefined {
   return undefined;
 }
 
+// Canonical in-effect clause appended when tense-gating content is removed, so
+// the Yes-gate still expresses its in-effect-vs-aspiration requirement. WORDED
+// DELIBERATELY so it matches NO TENSE_GATE_PATTERN (no "present"; "must be
+// currently" is NOT "must be ... present"). Verified by unit test.
+const IN_EFFECT_CLAUSE =
+  "A Yes requires the artefact to be currently in force or adopted and still in effect " +
+  "(regardless of grammatical tense); only merely planned or aspirational statements fail.";
+
+// Deterministic, idempotent, topic-agnostic LAST-RESORT neutraliser for a
+// tense-gated Yes-gate (C2). When the repair LLM fails to strip tense-gating
+// phrasing from fallback_yes_criterion / scoringGuidance — or omits the field so
+// mergeCorrectedMeasure preserves the ORIGINAL tense-gated text — the repair loop
+// calls this to guarantee convergence rather than re-emitting the same
+// [ERROR][C2]. This mirrors the C7b `ensureCountableCoverageTitle` pattern.
+//
+// Contract:
+//   - If `!text` OR `containsTenseGate(text)` is undefined → return the text
+//     UNCHANGED (idempotent no-op; a clean field is never touched).
+//   - Otherwise remove the offending content at sentence/clause granularity:
+//     split on sentence/clause boundaries (keeping terminators), DROP any segment
+//     that itself trips `containsTenseGate`, rejoin the survivors cleanly, and —
+//     if anything was dropped — append the canonical in-effect clause so the gate
+//     still states its requirement.
+//   - HARD GUARANTEE: `containsTenseGate(neutralizeTenseGate(x))` is undefined
+//     for all x, and `neutralizeTenseGate(neutralizeTenseGate(x)) ===
+//     neutralizeTenseGate(x)`.
+//   - Topic-agnostic: only grammatical/temporal manipulation, never subject
+//     matter. Pure: the fail-loud log lives at the call site.
+export function neutralizeTenseGate(text: string): string {
+  if (!text) return text;
+  if (!containsTenseGate(text)) return text; // idempotent no-op on a clean field
+  // Split into segments, preserving the terminator on each preceding segment.
+  const segments = text.split(/(?<=[.!?;])\s+/);
+  const survivors = segments.filter((seg) => !containsTenseGate(seg));
+  // Rejoin survivors, tidy whitespace and any leftover dangling punctuation /
+  // separators created by dropping a middle segment.
+  let rebuilt = survivors
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([.,;:!?])/g, "$1")
+    .replace(/([(\[]）?)\s*([.,;:!?])/g, "$2")
+    .replace(/^[\s.,;:!?)\]]+/, "")
+    .trim();
+  // Append the canonical in-effect clause (content was dropped by construction:
+  // we only reach here when the original tripped containsTenseGate).
+  rebuilt = rebuilt ? `${rebuilt} ${IN_EFFECT_CLAUSE}` : IN_EFFECT_CLAUSE;
+  return rebuilt;
+}
+
 const MIN_QUOTE_CONTEXT_CHARS = 120;
 
 const COVERAGE_KEYWORDS_IN_TITLE = [
