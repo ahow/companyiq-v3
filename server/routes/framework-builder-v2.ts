@@ -7,7 +7,7 @@
 
 import { Router, Request, Response } from "express";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
-import { validateAll, summariseViolations, toStructuredIssues, renderStructuredIssues, evaluateAcceptanceGate, type FrameworkDraft, type StructuredIssue } from "../lib/framework-v2/rules.js";
+import { validateAll, summariseViolations, toStructuredIssues, renderStructuredIssues, evaluateAcceptanceGate, hasExplicitCoverageThreshold, ensureCountableCoverageTitle, type FrameworkDraft, type StructuredIssue } from "../lib/framework-v2/rules.js";
 import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evidence-keyword-distinctiveness.js";
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
@@ -1011,6 +1011,20 @@ async function repairMeasuresTargeted(
         `existing keywords; just add enough distinctive ones to clear 5.`,
       );
     }
+    if (rules.has("C2")) {
+      clauses.push(
+        `C2 (in-effect, not tense): the check flags a Yes-gate (fallback_yes_criterion / scoringGuidance) ` +
+        `that gates on GRAMMATICAL TENSE — i.e. it requires the present tense, or excludes completed / past / ` +
+        `dated adoptions. Rewrite the Yes-gate to gate on IN-EFFECT vs ASPIRATIONAL instead: a Yes requires ` +
+        `that the artefact is CURRENTLY IN FORCE / adopted and still in effect / operational / currently applies ` +
+        `(regardless of grammatical tense); a No is only for merely planned / intended / aspirational statements ` +
+        `("will", "plans to", "intends to", "aims to", not yet adopted). A DATED or past-tense adoption that ` +
+        `REMAINS IN EFFECT MUST still qualify as Yes — e.g. "The Board approved the strategy in March 2024" is a ` +
+        `valid Yes if it is still in force. DELETE phrasings such as "present tense", "must be written in the ` +
+        `present", "present-tense requirement", and "past / completed actions do not count / qualify" from both ` +
+        `the Yes-gate and scoringGuidance; replace them with the in-effect-vs-aspiration test above.`,
+      );
+    }
     if (rules.has("C4")) {
       clauses.push(
         `C4 (fallback structure): fallback_yes_criterion MUST contain AT LEAST 3 TOP-LEVEL numbered ` +
@@ -1192,6 +1206,23 @@ async function repairMeasuresTargeted(
     return { patched: null, telem };
   }
 
+  // C7b — measureIds that carried the SPECIFIC C7 "title must state an EXPLICIT,
+  // countable threshold" violation in THIS repair pass. The LLM has been given
+  // check-aligned C7 guidance (see guidanceForRules), but if its rewritten title
+  // STILL fails the deterministic threshold check, the repair must converge
+  // rather than loop forever on the same [ERROR][C7]. We apply a deterministic,
+  // idempotent last-resort title augmentation below for exactly these measures.
+  // (byMeasure holds this pass's targeted violations grouped by measureId.)
+  const c7TitleThresholdMeasureIds = new Set<string>();
+  for (const [measureId, vs] of byMeasure) {
+    for (const v of vs) {
+      if (v?.rule === "C7" && typeof v?.message === "string" && /countable threshold/i.test(v.message)) {
+        c7TitleThresholdMeasureIds.add(measureId);
+        break;
+      }
+    }
+  }
+
   // Splice corrected measures back into the full draft by measureId, in place.
   // FIX: PRUNE-MERGE the model's (often partial) correction onto the ORIGINAL
   // measure via mergeCorrectedMeasure — a correction can only add/improve fields,
@@ -1200,6 +1231,7 @@ async function repairMeasuresTargeted(
   let replaced = 0;
   let fieldsPreservedByMerge = 0;
   let regressionsPrevented = 0;
+  let c7TitlesAugmented = 0;
   const patched = {
     ...draft,
     categories: cats.map((c: any) => ({
@@ -1213,6 +1245,23 @@ async function repairMeasuresTargeted(
           );
           fieldsPreservedByMerge += fieldsPreserved;
           if (regressionPrevented) regressionsPrevented++;
+          // C7b deterministic last-resort: prefer the LLM's own re-title, but if
+          // this measure was flagged for the countable-threshold C7 error and the
+          // merged title STILL fails the exact validator check, force convergence
+          // with the idempotent augmentation. Fail-loud so the override is visible.
+          if (c7TitleThresholdMeasureIds.has(merged.measureId)) {
+            const curTitle = String(merged.title || "");
+            if (!hasExplicitCoverageThreshold(curTitle.toLowerCase())) {
+              const fixedTitle = ensureCountableCoverageTitle(curTitle);
+              if (fixedTitle !== curTitle) {
+                console.warn(
+                  `[framework-builder v2] C7 deterministic title-threshold augmentation applied to ${merged.measureId}: ${curTitle} -> ${fixedTitle}`,
+                );
+                c7TitlesAugmented++;
+                return { ...merged, title: fixedTitle };
+              }
+            }
+          }
           return merged;
         }
         return m;
@@ -1222,6 +1271,7 @@ async function repairMeasuresTargeted(
   telem.measuresReplaced = replaced;
   telem.fieldsPreservedByMerge = fieldsPreservedByMerge;
   telem.regressionsPrevented = regressionsPrevented;
+  telem.c7TitlesAugmented = c7TitlesAugmented;
   if (replaced === 0) {
     telem.outcome = "no-matches";
     console.warn(`[framework-builder v2] Targeted repair produced no measureId matches; keeping prior draft.`);
