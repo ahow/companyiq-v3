@@ -1814,7 +1814,7 @@ const RULE_ISSUE_META: Record<
   C4: {
     field: "fallback_yes_criterion",
     reason:
-      "Fallback conditions are not a numbered OR-list of ≥3 countable, topic-anchored conditions, so what triggers a Yes is under-specified.",
+      "Fallback conditions are not a numbered list of ≥3 countable, AND-joined conditions (every condition must hold, with at least one anchoring the topic term), so what triggers a Yes is under-specified.",
     implication: "Borderline companies flip Yes/No between runs because the trigger set is not decidable from the quote.",
   },
   C5: {

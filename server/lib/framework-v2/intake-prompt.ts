@@ -311,6 +311,9 @@ Also set expected_yes_rate_justification — ONE sentence stating the base-rate 
 ## C10 — topicTerm and topicSynonyms
 Framework-level. topicTerm is the canonical short phrase. topicSynonyms is a list of ≥2 entries (no upper limit — include all domain acronyms and phrasings that apply) of substantively-equivalent alternative phrasings.
 
+## Set-level — distinct deciding evidence (non-overlap)
+A named standard or external framework (e.g. ISO/IEC, NIST, GRI, TCFD, SASB) must NEVER be the SOLE deciding evidence that triggers a measure's Yes. Citing alignment to a named standard may appear as supporting context, but each measure's deciding gate (fallback_yes_criterion) must rest on distinct, measure-specific qualifying evidence — a named artefact, process, metric, or disclosure particular to THAT measure's purpose. Two different measures must not both qualify on the same disclosure sentence merely because both cite the same named standard; that is effective double-counting and makes scores correlate across measures. Each measure's Yes must be independently decidable from evidence specific to that measure.
+
 ## evidenceKeywords — short, high-precision retrieval tokens (MANDATORY)
 Each measure MUST have an evidenceKeywords array of 8–15 entries. These tokens are fed directly into BM25 retrieval — shorter and more specific terms retrieve evidence better. Rules:
 - AT LEAST 60% single-token entries: use individual keywords like "biodiversity", "deforestation", "sbtn", "wetland", not phrases like "nature-related financial risks" or "biodiversity-related disclosures".
@@ -521,6 +524,7 @@ Same C1–C11 rules as the single-shot drafter. In particular:
 - C8: substantive_definition includes vehicle-agnostic evidence clause.
 - C9: expected_yes_rate ∈ {0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95}. If the rate is < 0.10 or > 0.80, expected_yes_rate_justification is REQUIRED (one sentence, population base-rate reason).
 - C11: Every Yes-condition in fallback_yes_criterion (and any decision text in scoringGuidance / substantive_definition) must be DECIDABLE from a verbatim quote. Do NOT use degree/holistic words (substantive, substantially, systematic, integrated, integration, sufficient, robust, meaningful, adequate, appropriate, comprehensive, holistic, effective, strong, well-developed) as the deciding test. Where a quality bar is unavoidable, phrase it as "Yes if at least N of the following NAMED artefacts are present in a verbatim quote: (a) …, (b) …, (c) …". A degree judgment is not decidable from a quote and causes run-to-run verdict flips.
+- Distinct deciding evidence (non-overlap): A named standard or external framework (e.g. ISO/IEC, NIST, GRI, TCFD, SASB) must NEVER be the SOLE deciding evidence that triggers a measure's Yes. Citing alignment to a named standard may appear as supporting context, but the deciding gate (fallback_yes_criterion) must rest on distinct, measure-specific qualifying evidence — a named artefact, process, metric, or disclosure particular to THIS measure's purpose. Two different measures must not both qualify on the same disclosure sentence merely because both cite the same named standard; that is effective double-counting and makes scores correlate across measures. Each measure's Yes must be independently decidable from evidence specific to that measure.
 
 # Constraints
 

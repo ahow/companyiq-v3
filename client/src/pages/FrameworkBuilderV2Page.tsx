@@ -1893,25 +1893,82 @@ function DraftReview({
           <div className={`px-3 py-1 rounded ${warningCount === 0 ? "bg-gray-100" : "bg-yellow-100 text-yellow-800"}`}>
             {warningCount} warnings
           </div>
+          <div className="px-3 py-1 rounded bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+            {validation?.violations.filter((v) => v.severity !== "error" && v.severity !== "warning").length || 0} advisories
+          </div>
         </div>
       </div>
 
-      {validation && validation.violations.length > 0 && (
-        <div className="mb-4 max-h-40 overflow-y-auto border rounded p-3 text-sm dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-          <h4 className="font-semibold mb-2">Validation issues</h4>
-          {validation.violations.slice(0, 10).map((v, i) => (
-            <div key={i} className="mb-1">
-              <span className={v.severity === "error" ? "text-red-600" : "text-yellow-600"}>
-                [{v.severity.toUpperCase()}][{v.rule}]
-              </span>{" "}
-              {v.measureId ? <code>{v.measureId}</code> : ""} {v.message}
-            </div>
-          ))}
-          {validation.violations.length > 10 && (
-            <div className="text-gray-500">…and {validation.violations.length - 10} more</div>
-          )}
-        </div>
-      )}
+      {validation && validation.violations.length > 0 && (() => {
+        // Severity-partitioned view. Errors and warnings are blocking/actionable and
+        // shown prominently; advisories (info) are informational-only and collapsed so
+        // a valid framework (0 errors) does not read as a wall of "error messages".
+        // Fully severity-based — no topic/measure-specific logic.
+        const CAP = 10;
+        const errors = validation.violations.filter((v) => v.severity === "error");
+        const warnings = validation.violations.filter((v) => v.severity === "warning");
+        const advisories = validation.violations.filter(
+          (v) => v.severity !== "error" && v.severity !== "warning",
+        );
+        const renderGroup = (items: typeof validation.violations, colorClass: string) => (
+          <>
+            {items.slice(0, CAP).map((v, i) => (
+              <div key={`${v.severity}-${v.rule}-${i}`} className="mb-1">
+                <span className={colorClass}>
+                  [{v.severity.toUpperCase()}][{v.rule}]
+                </span>{" "}
+                {v.measureId ? <code>{v.measureId}</code> : ""} {v.message}
+              </div>
+            ))}
+            {items.length > CAP && (
+              <div className="text-gray-500">…and {items.length - CAP} more</div>
+            )}
+          </>
+        );
+        return (
+          <div className="mb-4 border rounded p-3 text-sm dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+            <h4 className="font-semibold mb-2">
+              Validation issues{" "}
+              <span className="font-normal text-gray-500">
+                ({errors.length} error{errors.length === 1 ? "" : "s"} · {warnings.length} warning
+                {warnings.length === 1 ? "" : "s"} · {advisories.length} advisor
+                {advisories.length === 1 ? "y" : "ies"})
+              </span>
+            </h4>
+
+            {errors.length === 0 && warnings.length === 0 && (
+              <p className="text-green-700 dark:text-green-400 mb-2">
+                No blocking errors or warnings. The items below are advisories
+                (informational only) and do not block finalisation.
+              </p>
+            )}
+
+            {errors.length > 0 && (
+              <div className="mb-2 max-h-40 overflow-y-auto">
+                {renderGroup(errors, "text-red-600 dark:text-red-400")}
+              </div>
+            )}
+
+            {warnings.length > 0 && (
+              <div className="mb-2 max-h-40 overflow-y-auto">
+                {renderGroup(warnings, "text-yellow-600 dark:text-yellow-400")}
+              </div>
+            )}
+
+            {advisories.length > 0 && (
+              <details className="mt-1">
+                <summary className="cursor-pointer text-gray-500 select-none">
+                  {advisories.length} advisor{advisories.length === 1 ? "y" : "ies"}{" "}
+                  (informational — non-blocking)
+                </summary>
+                <div className="mt-2 max-h-40 overflow-y-auto">
+                  {renderGroup(advisories, "text-gray-500 dark:text-gray-400")}
+                </div>
+              </details>
+            )}
+          </div>
+        );
+      })()}
 
       {/* PRE-DRAFT design diagnostic — surfaced for REVIEW before the draft is
           proposed as ready. Static, LLM-free, advisory only. */}
