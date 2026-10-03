@@ -4,6 +4,8 @@ import {
   isCoverageMeasure,
   validateC7,
   validateC11,
+  hasExplicitCoverageThreshold,
+  ensureCountableCoverageTitle,
   type FrameworkDraft,
 } from "./rules.js";
 
@@ -105,4 +107,44 @@ test("validateC11: an explicit coverage threshold rescues an extent word", () =>
     (v) => v.rule === "C11" && /coverage measure whose coverage extent/i.test(v.message),
   );
   assert.equal(covErr, undefined, "an explicit % threshold must clear the coverage C11 gate");
+});
+
+// ── C7b: ensureCountableCoverageTitle (deterministic last-resort for the repair
+// loop). The helper must make a vague coverage title clear hasExplicitCoverage-
+// Threshold, and be an idempotent no-op when a countable threshold already
+// exists (never double-prefix). Topic-agnostic. ────────────────────────────
+
+test("ensureCountableCoverageTitle: a vague coverage title becomes one hasExplicitCoverageThreshold accepts", () => {
+  const vague = "Does the policy apply across the organization?";
+  // Precondition: the vague title does NOT already satisfy the check.
+  assert.equal(hasExplicitCoverageThreshold(vague.toLowerCase()), false);
+  const fixed = ensureCountableCoverageTitle(vague);
+  assert.notEqual(fixed, vague, "a failing title must be augmented");
+  assert.equal(
+    hasExplicitCoverageThreshold(fixed.toLowerCase()),
+    true,
+    "the augmented title must clear the exact validator check",
+  );
+});
+
+test("ensureCountableCoverageTitle: idempotent no-op when a % threshold is already present", () => {
+  const already = "Policy applies to at least 70% of operations";
+  assert.equal(hasExplicitCoverageThreshold(already.toLowerCase()), true);
+  assert.equal(
+    ensureCountableCoverageTitle(already),
+    already,
+    "a title that already passes must be returned unchanged (no prefix)",
+  );
+});
+
+test("ensureCountableCoverageTitle: idempotent no-op when a definite-proportion quantifier is already present, and never double-prefixes", () => {
+  const already = "Enterprise-wide coverage of all operations";
+  assert.equal(hasExplicitCoverageThreshold(already.toLowerCase()), true);
+  // No-op on an already-countable title.
+  assert.equal(ensureCountableCoverageTitle(already), already);
+  // Running the helper twice on any input must equal running it once (idempotent).
+  const once = ensureCountableCoverageTitle("Applies across the group");
+  const twice = ensureCountableCoverageTitle(once);
+  assert.equal(twice, once, "re-applying the augmentation must not double-prefix");
+  assert.equal(hasExplicitCoverageThreshold(once.toLowerCase()), true);
 });
