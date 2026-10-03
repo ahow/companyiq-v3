@@ -1154,6 +1154,70 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     setSavedFrameworkId(null);
   }
 
+  // "Clear chat / start fresh": a destructive, confirmation-gated reset that
+  // returns the builder to a pristine Intake state. Unlike reset() (which only
+  // clears the core in-memory state), this additionally clears EVERY piece of
+  // builder session state — in-memory AND persisted — so a reload cannot bring
+  // the old conversation, robustness gate, topic/synonym/anchor intake, draft,
+  // or test-drive wiring back. The chat conversation is persisted only in
+  // localStorage (the server-side v2_state is keyed per-saved-framework and is
+  // disconnected the moment savedFrameworkId is cleared), so clearing the
+  // fw-builder-v2-* keys here is sufficient to make the clear survive a reload.
+  function clearChatAndReset() {
+    const ok = window.confirm(
+      "Clear this chat and start a brand-new framework?\n\n" +
+        "This permanently discards the current conversation, intake answers, " +
+        "robustness gate, any drafted framework in progress, and test-drive " +
+        "selections. This cannot be undone."
+    );
+    if (!ok) return;
+
+    // 1) Core state (shared with Restart).
+    reset();
+
+    // 2) Remaining in-memory session state not covered by reset().
+    setLoading(false);
+    setLastFailedUserMessage(null);
+    setWarningsAcknowledged(false);
+    setAttachments([]);
+    setAttachError(null);
+    setDraftJobId(null);
+    setDraftJobStartTime(null);
+    setRepairAttempts(0);
+    setRefineMessage(null);
+    setTruncationRecovered(false);
+    setTargetMeasureCount(null);
+    setFailedCategories(0);
+    setFailedCategoryNames([]);
+    setTestDriveListId(null);
+    setTestDriveListName(null);
+    setSaveGate(null);
+    setAcceptedIssueIds([]);
+    setScoringRunsTarget(1);
+    setScoringProgress(null);
+    setTestDrivePendingReview(null);
+    setTestDriveAlreadyRunning(null);
+
+    // 3) Persisted state: remove every builder key so a reload starts clean.
+    // (The persistence effects also clear these as the state above settles, but
+    // we remove them explicitly here to fail loud and avoid any ordering races.)
+    try {
+      [
+        "fw-builder-v2-messages",
+        "fw-builder-v2-intake",
+        "fw-builder-v2-robustnessGate",
+        "fw-builder-v2-savedFrameworkId",
+        "fw-builder-v2-warningsAcknowledged",
+        "fw-builder-v2-testDriveListId",
+        "fw-builder-v2-testDriveListName",
+        "fw-builder-v2-scoringRuns",
+      ].forEach((k) => localStorage.removeItem(k));
+      clearActiveJob(); // removes ACTIVE_JOB_KEY (fw-builder-v2-activeDraftJob)
+    } catch {
+      /* localStorage unavailable — in-memory reset above already applied */
+    }
+  }
+
   const errorCount = validation?.violations.filter((v) => v.severity === "error").length || 0;
   const warningCount = validation?.violations.filter((v) => v.severity === "warning").length || 0;
   const measureCount = draft ? (draft.categories || []).reduce((sum: number, c: any) => sum + (c.measures?.length || 0), 0) : 0;
@@ -1172,11 +1236,13 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
         </div>
         <div className="flex items-center gap-2">
           <StageBadge current={stage} />
-          {stage !== "intake" && (
-            <button onClick={reset} className="px-3 py-2 text-sm bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg flex items-center gap-1">
-              <RotateCcw className="w-4 h-4" /> Restart
-            </button>
-          )}
+          <button
+            onClick={clearChatAndReset}
+            title="Clear the current chat and start a brand-new framework from a clean slate"
+            className="px-3 py-2 text-sm bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg flex items-center gap-1"
+          >
+            <RotateCcw className="w-4 h-4" /> Clear chat
+          </button>
         </div>
       </div>
 
