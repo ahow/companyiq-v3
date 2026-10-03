@@ -7,7 +7,7 @@
 
 import { Router, Request, Response } from "express";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
-import { validateAll, summariseViolations, toStructuredIssues, renderStructuredIssues, evaluateAcceptanceGate, hasExplicitCoverageThreshold, ensureCountableCoverageTitle, neutralizeTenseGate, containsTenseGate, type FrameworkDraft, type StructuredIssue } from "../lib/framework-v2/rules.js";
+import { validateAll, summariseViolations, toStructuredIssues, renderStructuredIssues, evaluateAcceptanceGate, hasExplicitCoverageThreshold, ensureCountableCoverageTitle, ensureCoverageWhitelist, neutralizeTenseGate, containsTenseGate, type FrameworkDraft, type StructuredIssue } from "../lib/framework-v2/rules.js";
 import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evidence-keyword-distinctiveness.js";
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
@@ -1200,45 +1200,40 @@ async function repairMeasuresTargeted(
       if (m && typeof m.measureId === "string") correctedById.set(m.measureId, m);
     }
   }
-  if (correctedById.size === 0) {
-    telem.outcome = "no-measures-returned";
-    console.warn(`[framework-builder v2] Targeted repair returned no measures across ${batches.length} batch(es).`);
-    return { patched: null, telem };
-  }
-
-  // C7b — measureIds that carried the SPECIFIC C7 "title must state an EXPLICIT,
-  // countable threshold" violation in THIS repair pass. The LLM has been given
-  // check-aligned C7 guidance (see guidanceForRules), but if its rewritten title
-  // STILL fails the deterministic threshold check, the repair must converge
-  // rather than loop forever on the same [ERROR][C7]. We apply a deterministic,
-  // idempotent last-resort title augmentation below for exactly these measures.
-  // (byMeasure holds this pass's targeted violations grouped by measureId.)
+  // Deterministic last-resort target sets — built from THIS pass's violations
+  // (byMeasure) BEFORE the empty-correction bail-out below, because the
+  // deterministic fixes must be able to run even when the repair LLM returned NO
+  // correction for a flagged measure (see the splice loop).
+  //   C7b — "title must state an EXPLICIT, countable threshold" violations.
+  //   C7c — "coverage_whitelist with ≥3 plain-language equivalents" violations.
+  //   C2b — "gates on tense" violations.
   const c7TitleThresholdMeasureIds = new Set<string>();
-  for (const [measureId, vs] of byMeasure) {
-    for (const v of vs) {
-      if (v?.rule === "C7" && typeof v?.message === "string" && /countable threshold/i.test(v.message)) {
-        c7TitleThresholdMeasureIds.add(measureId);
-        break;
-      }
-    }
-  }
-
-  // C2b — measureIds that carried the SPECIFIC C2 "gates on tense" violation in
-  // THIS repair pass (validateC2's tense-gate error). Mirrors the C7b pattern:
-  // the LLM has been given check-aligned C2 guidance (see guidanceForRules), but
-  // if its rewritten Yes-gate STILL trips containsTenseGate — OR it omits the
-  // field so mergeCorrectedMeasure preserves the ORIGINAL tense-gated text — the
-  // repair must converge rather than loop forever on the same [ERROR][C2]. We
-  // apply a deterministic, idempotent last-resort neutralisation below for
-  // exactly these measures.
+  const c7WhitelistMeasureIds = new Set<string>();
   const c2TenseGateMeasureIds = new Set<string>();
   for (const [measureId, vs] of byMeasure) {
     for (const v of vs) {
+      if (v?.rule === "C7" && typeof v?.message === "string") {
+        if (/countable threshold/i.test(v.message)) c7TitleThresholdMeasureIds.add(measureId);
+        if (/plain-language equivalents/i.test(v.message) || /coverage_whitelist/i.test(v.message)) {
+          c7WhitelistMeasureIds.add(measureId);
+        }
+      }
       if (v?.rule === "C2" && typeof v?.message === "string" && /gates on tense/i.test(v.message)) {
         c2TenseGateMeasureIds.add(measureId);
-        break;
       }
     }
+  }
+  const deterministicTargetCount =
+    c7TitleThresholdMeasureIds.size + c7WhitelistMeasureIds.size + c2TenseGateMeasureIds.size;
+
+  // Bail only when the LLM returned nothing AND there is no deterministic
+  // last-resort to apply. Previously an empty correction set bailed
+  // unconditionally, which meant a measure the LLM failed to return kept ALL its
+  // errors forever — the deterministic fixes never got a chance to converge it.
+  if (correctedById.size === 0 && deterministicTargetCount === 0) {
+    telem.outcome = "no-measures-returned";
+    console.warn(`[framework-builder v2] Targeted repair returned no measures across ${batches.length} batch(es).`);
+    return { patched: null, telem };
   }
 
   // Splice corrected measures back into the full draft by measureId, in place.
@@ -1250,13 +1245,27 @@ async function repairMeasuresTargeted(
   let fieldsPreservedByMerge = 0;
   let regressionsPrevented = 0;
   let c7TitlesAugmented = 0;
+  let c7WhitelistsPopulated = 0;
   let c2TenseGatesNeutralized = 0;
+  // Measures converged purely by a deterministic last-resort because the repair
+  // LLM returned NO correction for them. Counted separately so telemetry shows
+  // when the LLM is non-responding yet the loop still converges.
+  let deterministicOnlyFixes = 0;
   const patched = {
     ...draft,
     categories: cats.map((c: any) => ({
       ...c,
       measures: (Array.isArray(c?.measures) ? c.measures : []).map((m: any) => {
-        if (m && correctedById.has(m.measureId)) {
+        if (!m || typeof m.measureId !== "string") return m;
+        const hasCorrection = correctedById.has(m.measureId);
+        const needsDeterministic =
+          c7TitleThresholdMeasureIds.has(m.measureId) ||
+          c7WhitelistMeasureIds.has(m.measureId) ||
+          c2TenseGateMeasureIds.has(m.measureId);
+        if (!hasCorrection && !needsDeterministic) return m;
+
+        let out: any;
+        if (hasCorrection) {
           replaced++;
           const { merged, fieldsPreserved, regressionPrevented } = mergeCorrectedMeasure(
             m,
@@ -1264,46 +1273,82 @@ async function repairMeasuresTargeted(
           );
           fieldsPreservedByMerge += fieldsPreserved;
           if (regressionPrevented) regressionsPrevented++;
-          // `out` accumulates the deterministic last-resort fixes so a measure
-          // flagged for BOTH C7 and C2 receives BOTH (the fixes compose).
-          let out = merged;
-          // C7b deterministic last-resort: prefer the LLM's own re-title, but if
-          // this measure was flagged for the countable-threshold C7 error and the
-          // merged title STILL fails the exact validator check, force convergence
-          // with the idempotent augmentation. Fail-loud so the override is visible.
-          if (c7TitleThresholdMeasureIds.has(out.measureId)) {
-            const curTitle = String(out.title || "");
-            if (!hasExplicitCoverageThreshold(curTitle.toLowerCase())) {
-              const fixedTitle = ensureCountableCoverageTitle(curTitle);
-              if (fixedTitle !== curTitle) {
-                console.warn(
-                  `[framework-builder v2] C7 deterministic title-threshold augmentation applied to ${out.measureId}: ${curTitle} -> ${fixedTitle}`,
-                );
-                c7TitlesAugmented++;
-                out = { ...out, title: fixedTitle };
-              }
-            }
-          }
-          // C2b deterministic last-resort: prefer the LLM's own rewrite, but if
-          // this measure was flagged for the tense-gate C2 error and the merged
-          // Yes-gate (fallback_yes_criterion + scoringGuidance) STILL trips the
-          // exact validator check, neutralise EACH field INDIVIDUALLY so the
-          // concatenation validateC2 checks also passes. Fail-loud + telemetry.
-          if (c2TenseGateMeasureIds.has(out.measureId)) {
-            const yesGateText = `${String(out.fallback_yes_criterion || "")} ${String(out.scoringGuidance || "")}`.trim();
-            if (containsTenseGate(yesGateText)) {
-              const fixedCriterion = neutralizeTenseGate(String(out.fallback_yes_criterion || ""));
-              const fixedGuidance = neutralizeTenseGate(String(out.scoringGuidance || ""));
-              console.warn(
-                `[framework-builder v2] C2 deterministic tense-gate neutralization applied to ${out.measureId}`,
-              );
-              c2TenseGatesNeutralized++;
-              out = { ...out, fallback_yes_criterion: fixedCriterion, scoringGuidance: fixedGuidance };
-            }
-          }
-          return out;
+          out = merged;
+        } else {
+          // GENERALISED CONVERGENCE FIX: the repair LLM returned NO correction for
+          // this flagged measure (batch failure / omission / truncation). The
+          // deterministic last-resorts below previously ran ONLY when a correction
+          // existed, so a non-responding LLM left the measure with ALL its errors
+          // and the loop could never converge. Apply the last-resorts to the
+          // ORIGINAL measure instead.
+          out = m;
         }
-        return m;
+
+        let deterministicChanged = false;
+
+        // C7b deterministic title-threshold last-resort.
+        if (c7TitleThresholdMeasureIds.has(out.measureId)) {
+          const curTitle = String(out.title || "");
+          if (!hasExplicitCoverageThreshold(curTitle.toLowerCase())) {
+            const fixedTitle = ensureCountableCoverageTitle(curTitle);
+            if (fixedTitle !== curTitle) {
+              console.warn(
+                `[framework-builder v2] C7 deterministic title-threshold augmentation applied to ${out.measureId}: ${curTitle} -> ${fixedTitle}`,
+              );
+              c7TitlesAugmented++;
+              deterministicChanged = true;
+              out = { ...out, title: fixedTitle };
+            }
+          }
+        }
+
+        // C7c deterministic coverage_whitelist last-resort. Mirrors the title
+        // last-resort: if this measure was flagged for the "≥3 plain-language
+        // equivalents" C7 error and the merged whitelist STILL has <3 valid
+        // entries, deterministically top it up so the repair converges rather
+        // than looping forever on the same [ERROR][C7]. Fail-loud + telemetry.
+        if (c7WhitelistMeasureIds.has(out.measureId)) {
+          const curWl = Array.isArray(out.coverage_whitelist) ? out.coverage_whitelist : [];
+          const validCount = curWl.filter((e: any) => typeof e === "string" && e.trim() !== "").length;
+          if (validCount < 3) {
+            const fixedWl = ensureCoverageWhitelist(curWl);
+            console.warn(
+              `[framework-builder v2] C7 deterministic coverage_whitelist population applied to ${out.measureId}: ${validCount} -> ${fixedWl.length} entries`,
+            );
+            c7WhitelistsPopulated++;
+            deterministicChanged = true;
+            out = { ...out, coverage_whitelist: fixedWl };
+          }
+        }
+
+        // C2b deterministic tense-gate last-resort.
+        if (c2TenseGateMeasureIds.has(out.measureId)) {
+          const yesGateText = `${String(out.fallback_yes_criterion || "")} ${String(out.scoringGuidance || "")}`.trim();
+          if (containsTenseGate(yesGateText)) {
+            const fixedCriterion = neutralizeTenseGate(String(out.fallback_yes_criterion || ""));
+            const fixedGuidance = neutralizeTenseGate(String(out.scoringGuidance || ""));
+            console.warn(
+              `[framework-builder v2] C2 deterministic tense-gate neutralization applied to ${out.measureId}`,
+            );
+            c2TenseGatesNeutralized++;
+            deterministicChanged = true;
+            out = { ...out, fallback_yes_criterion: fixedCriterion, scoringGuidance: fixedGuidance };
+          }
+        }
+
+        if (!hasCorrection) {
+          if (deterministicChanged) {
+            deterministicOnlyFixes++;
+            console.warn(
+              `[framework-builder v2] No LLM correction returned for flagged measure ${out.measureId}; converged via deterministic last-resort(s) on the original.`,
+            );
+          } else {
+            // Flagged but no LLM correction and nothing changed deterministically
+            // (already passing) — return the original untouched.
+            return m;
+          }
+        }
+        return out;
       }),
     })),
   };
@@ -1311,8 +1356,10 @@ async function repairMeasuresTargeted(
   telem.fieldsPreservedByMerge = fieldsPreservedByMerge;
   telem.regressionsPrevented = regressionsPrevented;
   telem.c7TitlesAugmented = c7TitlesAugmented;
+  telem.c7WhitelistsPopulated = c7WhitelistsPopulated;
   telem.c2TenseGatesNeutralized = c2TenseGatesNeutralized;
-  if (replaced === 0) {
+  telem.deterministicOnlyFixes = deterministicOnlyFixes;
+  if (replaced === 0 && deterministicOnlyFixes === 0) {
     telem.outcome = "no-matches";
     console.warn(`[framework-builder v2] Targeted repair produced no measureId matches; keeping prior draft.`);
     return { patched: null, telem };

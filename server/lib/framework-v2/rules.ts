@@ -259,6 +259,50 @@ export function ensureCountableCoverageTitle(title: string): string {
   return `Enterprise-wide ${body}`;
 }
 
+// Deterministic, idempotent LAST-RESORT coverage_whitelist population for C7.
+// validateC7 requires a coverage measure to carry a coverage_whitelist with ≥3
+// plain-language equivalents of the coverage extent. The repair LLM is unreliable
+// at populating this field, and the prune-merge preserves the ORIGINAL (often
+// empty) array when the model omits it — so the [ERROR][C7] "found 0" re-fires
+// every pass with no way to converge. This supplies the missing entries from a
+// fixed SCOPE/EXTENT vocabulary so the repair loop can guarantee convergence,
+// mirroring the C7b title and C2b tense-gate last-resorts.
+//
+// Contract:
+//   - Preserves the caller's own entries FIRST (deduped, case-insensitive) — the
+//     model's paraphrases win; the fallback only tops up to the ≥3 floor.
+//   - Idempotent: a whitelist that already has ≥3 valid entries is returned with
+//     its entries intact (deduped) and no fallbacks appended.
+//   - Topic-agnostic: the fallback phrases are pure scope/extent language, never
+//     subject matter.
+//   - Pure: no side effects; the fail-loud log lives at the call site.
+export const COVERAGE_WHITELIST_FALLBACK = [
+  "across the group",
+  "enterprise-wide",
+  "all operations",
+  "group-wide",
+  "company-wide",
+];
+export function ensureCoverageWhitelist(existing?: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const e of existing || []) {
+    const s = typeof e === "string" ? e.trim() : "";
+    if (s && !seen.has(s.toLowerCase())) {
+      seen.add(s.toLowerCase());
+      out.push(s);
+    }
+  }
+  for (const f of COVERAGE_WHITELIST_FALLBACK) {
+    if (out.length >= 3) break;
+    if (!seen.has(f.toLowerCase())) {
+      seen.add(f.toLowerCase());
+      out.push(f);
+    }
+  }
+  return out;
+}
+
 // Coverage-EXTENT degree words. Kept SEPARATE from the global DEGREE_WORDS set so
 // that adding extent vocabulary here never widens the generic C11 degree check
 // (which would create false positives in non-coverage measures). These are the
