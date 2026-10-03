@@ -14,6 +14,8 @@ import {
   analyseTestDrive,
   computeFlipStats,
   buildSparseCorpusFlag,
+  detectTerminologyGaps,
+  isWordBoundary,
   type TestDriveCompanyResult,
   type MultiRunIteration,
 } from "./test-drive.js";
@@ -166,4 +168,54 @@ test("buildSparseCorpusFlag surfaces sparse companies as an actionable warning",
   assert.equal(flag!.severity, "warning");
   assert.match(flag!.message, /Acme/);
   assert.match(flag!.suggestedFix, /corpus/i);
+});
+
+// ─── detectTerminologyGaps: word-boundary discipline (synonym-miner fix) ────
+// Root cause fixed: a boundary-unsafe `indexOf` matched short known terms
+// ("ai", "ml", "llm", "agi") INSIDE ordinary words (chAIrman, mAIntain,
+// avAILable), harvesting proxy-statement boilerplate into the synonym list.
+// These tests pin the generalised (topic-agnostic) behaviour.
+
+test("isWordBoundary treats letters/digits as word chars and edges as boundaries", () => {
+  // "xaiy": index 0..3. 'ai' sits at idx 1. Char before (x) and after (y) are word chars.
+  const s = "xaiy";
+  assert.equal(isWordBoundary(s, -1), true); // before start
+  assert.equal(isWordBoundary(s, s.length), true); // past end
+  assert.equal(isWordBoundary(s, 0), false); // 'x'
+  assert.equal(isWordBoundary(s, 3), false); // 'y'
+  assert.equal(isWordBoundary(" ai ", 0), true); // space
+});
+
+test("detectTerminologyGaps does NOT harvest boilerplate around embedded false hits", () => {
+  // "ai" is embedded in chairman / maintain / available — never a standalone word.
+  // The surrounding proxy-statement boilerplate must NOT become synonym candidates.
+  const boiler =
+    "the chairman will maintain available records for the annual meeting of the executive officer and the table of contents herein";
+  const corpus = new Map<string, string>([
+    ["Acme", boiler],
+    ["Beta", boiler],
+  ]);
+  const result = detectTerminologyGaps(corpus, [], "ai");
+  const terms = result.missingTerms.map((m) => m.term);
+  // None of the classic boilerplate artefacts should appear.
+  for (const junk of ["annual meeting", "executive officer", "table contents", "maintain available"]) {
+    assert.ok(!terms.includes(junk), `boilerplate "${junk}" should not be harvested, got: ${terms.join(", ")}`);
+  }
+});
+
+test("detectTerminologyGaps still harvests genuine phrases next to a standalone known term", () => {
+  // Here "ai" appears as a real standalone word, with a genuine topic phrase next to it.
+  const text =
+    "our ai governance board oversees ai governance board decisions across the firm";
+  const corpus = new Map<string, string>([
+    ["Acme", text],
+    ["Beta", text],
+  ]);
+  const result = detectTerminologyGaps(corpus, [], "ai");
+  const terms = result.missingTerms.map((m) => m.term);
+  // A real multi-word phrase adjacent to the standalone "ai" should surface.
+  assert.ok(
+    terms.some((t) => t.includes("governance")),
+    `expected a genuine 'governance' phrase, got: ${terms.join(", ")}`,
+  );
 });

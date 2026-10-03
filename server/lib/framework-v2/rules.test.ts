@@ -22,6 +22,7 @@ import {
   validateC7,
   validateC8,
   validateC9,
+  extractStatedRatesFromJustification,
   validateC10,
   validateC11,
   validateC12,
@@ -295,6 +296,52 @@ test("C9 fails when expected_yes_rate is missing", () => {
   });
   const r = validateC9(fw);
   assert.equal(r.passed, false);
+});
+
+test("extractStatedRatesFromJustification extracts percentages and bare decimals", () => {
+  assert.deepEqual(extractStatedRatesFromJustification("about a 20% rate"), [0.2]);
+  assert.deepEqual(extractStatedRatesFromJustification("roughly 20 percent"), [0.2]);
+  assert.deepEqual(extractStatedRatesFromJustification("around 20 per cent of firms"), [0.2]);
+  assert.deepEqual(extractStatedRatesFromJustification("a base rate of 0.65"), [0.65]);
+  assert.deepEqual(extractStatedRatesFromJustification("estimated at .4"), [0.4]);
+  // measure ids like "2.3" and out-of-range integers must NOT be treated as rates
+  assert.deepEqual(extractStatedRatesFromJustification("see measure 2.3 and 150%"), []);
+  assert.deepEqual(extractStatedRatesFromJustification("no numbers here"), []);
+});
+
+test("C9 fails when justification states a rate that contradicts expected_yes_rate", () => {
+  const fw = goodFramework({
+    measures: [goodMeasure({
+      expected_yes_rate: 0.65,
+      expected_yes_rate_justification: "Only about a 20% rate of entities disclose this in practice.",
+    })],
+  });
+  const r = validateC9(fw);
+  assert.equal(r.passed, false);
+  assert.ok(r.violations.some((v) => v.rule === "C9" && v.severity === "error" && /contradict/i.test(v.message)));
+});
+
+test("C9 passes when justification's stated rate agrees with expected_yes_rate", () => {
+  const fw = goodFramework({
+    measures: [goodMeasure({
+      expected_yes_rate: 0.22,
+      expected_yes_rate_justification: "Roughly a 20% rate of entities disclose an audited figure in practice.",
+    })],
+  });
+  const r = validateC9(fw);
+  assert.equal(r.passed, true);
+  assert.equal(r.violations.filter((v) => /contradict/i.test(v.message)).length, 0);
+});
+
+test("C9 does not flag a contradiction when the justification states no rate", () => {
+  const fw = goodFramework({
+    measures: [goodMeasure({
+      expected_yes_rate: 0.65,
+      expected_yes_rate_justification: "Most large entities disclose a generic governance statement, so the yes rate is high.",
+    })],
+  });
+  const r = validateC9(fw);
+  assert.equal(r.violations.filter((v) => /contradict/i.test(v.message)).length, 0);
 });
 
 // ─── C10 ─────────────────────────────────────────────────────────────────

@@ -139,11 +139,51 @@ function normalise(term: unknown): string {
  */
 export function stripEdgePunctuation(term: unknown): string {
   const s = typeof term === "string" ? term : "";
-  return s
-    .replace(/^[\s"'“”‘’.,;:!?()\[\]{}\-–—]+/, "")
-    .replace(/[\s"'“”‘’.,;:!?()\[\]{}\-–—]+$/, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  let t = s.replace(/\s+/g, " ").trim();
+  // Non-bracket edge punctuation (quotes, commas, dashes, etc.). Brackets are
+  // handled separately below so a proper name with balanced internal brackets
+  // (e.g. "EU AI Act (Regulation (EU) 2024/1689)") is NOT truncated to an
+  // unbalanced form by blindly stripping its trailing ")". Topic-agnostic:
+  // this reasons only about bracket balance, never about subject matter.
+  const EDGE = `\\s"'“”‘’.,;:!?\\-–—`;
+  const stripEdges = (x: string) =>
+    x.replace(new RegExp(`^[${EDGE}]+`), "").replace(new RegExp(`[${EDGE}]+$`), "").trim();
+  const CLOSE_TO_OPEN: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+  const OPEN_TO_CLOSE: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+  const count = (x: string, ch: string) => x.split(ch).length - 1;
+
+  let prev = "";
+  while (t !== prev) {
+    prev = t;
+    t = stripEdges(t);
+    if (!t) break;
+    const first = t[0];
+    const last = t[t.length - 1];
+    // Unwrap a bracket pair enclosing the ENTIRE string: "(governance)" → "governance".
+    if (OPEN_TO_CLOSE[first] && last === OPEN_TO_CLOSE[first]) {
+      let depth = 0;
+      let wrapsWholeString = false;
+      for (let i = 0; i < t.length; i++) {
+        if (t[i] === first) depth++;
+        else if (t[i] === last) {
+          depth--;
+          if (depth === 0) { wrapsWholeString = i === t.length - 1; break; }
+        }
+      }
+      if (wrapsWholeString) { t = t.slice(1, -1); continue; }
+    }
+    // Drop a stray UNMATCHED trailing closer: "framework)" → "framework".
+    if (CLOSE_TO_OPEN[last] && count(t, last) > count(t, CLOSE_TO_OPEN[last])) {
+      t = t.slice(0, -1);
+      continue;
+    }
+    // Drop a stray UNMATCHED leading opener: "(framework" → "framework".
+    if (OPEN_TO_CLOSE[first] && count(t, first) > count(t, OPEN_TO_CLOSE[first])) {
+      t = t.slice(1);
+      continue;
+    }
+  }
+  return t.trim();
 }
 
 /**

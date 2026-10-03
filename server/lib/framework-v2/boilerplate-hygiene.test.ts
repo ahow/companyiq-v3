@@ -121,6 +121,24 @@ test("stripEdgePunctuation: strips leading/trailing punctuation, collapses white
   assert.equal(stripEdgePunctuation("data   protection"), "data protection");
 });
 
+test("stripEdgePunctuation: preserves balanced internal brackets in proper names", () => {
+  // Regression: a trailing ")" that closes an internal "(" must NOT be stripped,
+  // which previously truncated anchor names to an unbalanced, malformed form.
+  assert.equal(
+    stripEdgePunctuation("EU AI Act (Regulation (EU) 2024/1689)"),
+    "EU AI Act (Regulation (EU) 2024/1689)",
+  );
+  assert.equal(
+    stripEdgePunctuation("ISO/IEC 42001 (AI Management System standard)"),
+    "ISO/IEC 42001 (AI Management System standard)",
+  );
+  // Trailing non-bracket punctuation is still stripped around a balanced name.
+  assert.equal(stripEdgePunctuation("IEEE 7000 series (Ethical AI standards)."), "IEEE 7000 series (Ethical AI standards)");
+  // Stray unmatched brackets are still removed.
+  assert.equal(stripEdgePunctuation("framework)"), "framework");
+  assert.equal(stripEdgePunctuation("(framework"), "framework");
+});
+
 test("isSafeHarbourTerm: flags forward-looking / safe-harbour statement fragments", () => {
   assert.equal(isSafeHarbourTerm("forward-looking statements"), true);
   assert.equal(isSafeHarbourTerm("actual results may differ materially"), true);
