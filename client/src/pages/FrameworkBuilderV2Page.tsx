@@ -72,6 +72,32 @@ interface SaveGate {
   productionReady: boolean;
 }
 
+// ── "Send to Claude" builder-review (server: POST /v2/builder-review) ─────────
+// The builder review returns TWO selectable-change lists in the SAME issue-list
+// envelope the save gate uses, so they render with the identical four-part card.
+// These are GATED proposals: selecting + confirming collates a proposed edit SET
+// only — it never auto-applies to the builder or any framework.
+interface IssueListPayload {
+  issues: StructuredIssue[];
+  issuesReadable: string;
+  errorCount: number;
+  warningCount: number;
+}
+interface BuilderReviewResult {
+  builderChanges: IssueListPayload; // (a) D1 drift + D2 ledger promotions
+  generalisationFindings: IssueListPayload; // (b) D3 generalisation audit
+  promotions: Array<{ id: string; defectClass: string; distinctSites: number }>;
+  semantic?: {
+    accepted: Array<{ id: string; targetRule: string; proposedBuilderEdit: string; rationale: string }>;
+    rejected: Array<{ reason: string }>;
+    provider: string | null;
+    model: string;
+    note: string;
+  };
+  source: { origin: string; detail: string };
+  note: string;
+}
+
 interface TestDriveCandidate {
   name: string;
   ticker?: string;
@@ -448,6 +474,12 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
   // Design-issue acceptance gate (populated when POST /v2/save returns blocked:true).
   const [saveGate, setSaveGate] = useState<SaveGate | null>(null);
   const [acceptedIssueIds, setAcceptedIssueIds] = useState<string[]>([]);
+  // "Send to Claude" builder review (gated, never auto-applies). Two selectable
+  // lists; the operator ticks proposals and confirms into a proposed edit SET.
+  const [builderReview, setBuilderReview] = useState<BuilderReviewResult | null>(null);
+  const [builderReviewLoading, setBuilderReviewLoading] = useState(false);
+  const [builderSelectedIds, setBuilderSelectedIds] = useState<string[]>([]);
+  const [builderReviewConfirmed, setBuilderReviewConfirmed] = useState(false);
   // Multi-run test-drive: how many scoring batches the flip detector expects.
   const [scoringRunsTarget, setScoringRunsTarget] = useState<number>(() => {
     try {
@@ -973,6 +1005,37 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     );
   }
 
+  function toggleBuilderSelected(id: string) {
+    setBuilderReviewConfirmed(false);
+    setBuilderSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
+
+  // "Send to Claude" — run the builder-level review (D1 drift + D2 ledger
+  // promotions + D3 generalisation audit, optional STEP-2 semantic pass). This
+  // reviews the BUILDER prompt, not this single framework, and returns GATED
+  // proposals only. It NEVER edits the builder or any framework; confirming a
+  // selection collates a proposed edit SET the operator takes forward manually.
+  async function sendToClaudeBuilderReview() {
+    setError(null);
+    setBuilderReviewLoading(true);
+    setBuilderReviewConfirmed(false);
+    try {
+      const res = await api.request(
+        "/framework-builder/v2/builder-review",
+        { method: "POST", body: JSON.stringify({ semantic: false }) },
+        120000,
+      );
+      setBuilderReview(res as BuilderReviewResult);
+      setBuilderSelectedIds([]);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    } finally {
+      setBuilderReviewLoading(false);
+    }
+  }
+
   async function saveFramework(
     productionReady: boolean,
     gateOpts?: { acceptedIssueIds?: string[]; proceedWithWarnings?: boolean },
@@ -1457,6 +1520,8 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                 onRetryDraft={draftFramework}
                 hasTestDriveResults={!!(savedFrameworkId && testDriveListId)}
                 onViewResults={() => setStage("saved")}
+                onBuilderReview={sendToClaudeBuilderReview}
+                builderReviewLoading={builderReviewLoading}
               />
               {saveGate && (
                 <SaveGatePanel
@@ -1468,6 +1533,20 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                   onRedraft={() => { setSaveGate(null); void redraftWithCorrections(); }}
                   onDismiss={() => { setSaveGate(null); setAcceptedIssueIds([]); }}
                   loading={loading}
+                />
+              )}
+              {builderReview && (
+                <BuilderReviewPanel
+                  review={builderReview}
+                  selectedIds={builderSelectedIds}
+                  confirmed={builderReviewConfirmed}
+                  onToggleSelect={toggleBuilderSelected}
+                  onConfirm={() => setBuilderReviewConfirmed(true)}
+                  onDismiss={() => {
+                    setBuilderReview(null);
+                    setBuilderSelectedIds([]);
+                    setBuilderReviewConfirmed(false);
+                  }}
                 />
               )}
             </>
@@ -1839,6 +1918,8 @@ function DraftReview({
   onRedraft,
   onRetryDraft,
   onViewResults,
+  onBuilderReview,
+  builderReviewLoading,
   hasTestDriveResults,
   loading,
   measureCount,
@@ -1859,6 +1940,8 @@ function DraftReview({
   onRedraft?: () => void;
   onRetryDraft?: () => void;
   onViewResults?: () => void;
+  onBuilderReview?: () => void;
+  builderReviewLoading?: boolean;
   hasTestDriveResults?: boolean;
   loading: boolean;
   measureCount: number;
@@ -2119,6 +2202,17 @@ function DraftReview({
             <ClipboardList className="w-4 h-4" /> View test-drive results
           </button>
         )}
+        {onBuilderReview && (
+          <button
+            onClick={onBuilderReview}
+            disabled={loading || builderReviewLoading}
+            className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+            title="Review the framework BUILDER itself (not just this framework): builder↔validator drift, recurring-defect promotions, and generalisation leaks. Returns gated proposals only — nothing is auto-applied."
+          >
+            {builderReviewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            Send to Claude — builder review
+          </button>
+        )}
         <button
           onClick={() => onSave(false)}
           disabled={loading}
@@ -2335,6 +2429,173 @@ function SaveGatePanel({
           <RotateCcw className="w-4 h-4" /> Re-draft to fix all
         </button>
       </div>
+    </div>
+  );
+}
+
+// "Send to Claude" builder-review panel. Renders the TWO selectable-change
+// lists returned by POST /v2/builder-review using the SAME four-part card as the
+// save gate. Each proposal has a checkbox; confirming collates the GATED selected
+// set. This panel NEVER applies anything — the server does not mutate the builder
+// or any framework, and confirming here only produces a proposed edit SET the
+// operator carries forward manually. The copy states implemented != verified-fixed.
+function BuilderReviewPanel({
+  review,
+  selectedIds,
+  confirmed,
+  onToggleSelect,
+  onConfirm,
+  onDismiss,
+}: {
+  review: BuilderReviewResult;
+  selectedIds: string[];
+  confirmed: boolean;
+  onToggleSelect: (id: string) => void;
+  onConfirm: () => void;
+  onDismiss: () => void;
+}) {
+  const selectedSet = new Set(selectedIds);
+  const changeIssues = review.builderChanges.issues;
+  const genIssues = review.generalisationFindings.issues;
+  const allIssues = [...changeIssues, ...genIssues];
+  const selectedProposals = allIssues.filter((i) => selectedSet.has(i.id));
+
+  const renderCard = (issue: StructuredIssue) => {
+    const selected = selectedSet.has(issue.id);
+    return (
+      <div
+        key={issue.id}
+        className={`rounded-lg border p-4 ${
+          selected
+            ? "border-violet-400 dark:border-violet-700 bg-violet-50/60 dark:bg-violet-900/10"
+            : "border-gray-200 dark:border-gray-700 bg-gray-50/40 dark:bg-gray-900/10"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="text-xs font-mono text-gray-500">
+            <span
+              className={`inline-block px-1.5 py-0.5 rounded mr-1 ${
+                issue.severity === "error"
+                  ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                  : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
+              }`}
+            >
+              {issue.severity}
+            </span>
+            {issue.ruleCode}
+            {issue.measureId && <span className="ml-1">· {issue.measureId}</span>}
+            {issue.field && <span className="ml-1">· {issue.field}</span>}
+          </div>
+          <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none flex-shrink-0">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={() => onToggleSelect(issue.id)}
+              className="w-4 h-4"
+            />
+            <span className={selected ? "text-violet-700 dark:text-violet-400 font-medium" : "text-gray-700 dark:text-gray-300"}>
+              {selected ? "Selected" : "Select"}
+            </span>
+          </label>
+        </div>
+        <dl className="mt-2 text-sm space-y-1.5">
+          <div><dt className="inline font-semibold">Issue: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.issue}</dd></div>
+          <div><dt className="inline font-semibold">Reason: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.reason}</dd></div>
+          <div><dt className="inline font-semibold">Proposed builder edit: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.solution}</dd></div>
+          <div><dt className="inline font-semibold">Implication: </dt><dd className="inline text-gray-700 dark:text-gray-300">{issue.implication}</dd></div>
+        </dl>
+      </div>
+    );
+  };
+
+  return (
+    <div className="mt-4 bg-white dark:bg-gray-800 rounded-lg border border-violet-300 dark:border-violet-800 shadow-sm p-6">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-center gap-2">
+          <Send className="w-6 h-6 text-violet-600 flex-shrink-0" />
+          <h2 className="text-xl font-semibold">Builder review — gated proposals</h2>
+        </div>
+        <button
+          onClick={onDismiss}
+          className="text-sm text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+          title="Dismiss the builder review"
+        >
+          Dismiss
+        </button>
+      </div>
+
+      <div className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-800 rounded p-3 mb-4">
+        <strong>Nothing is applied automatically.</strong> These proposals review the framework
+        <em className="mx-1">builder</em> itself (shared by every framework it generates), not just this
+        framework. Selecting proposals and confirming collates a <strong>proposed edit set</strong> only.
+        A builder change is <strong>implemented ≠ verified-fixed</strong>: it is verified only after an
+        operator re-runs generation and the defect is gone on a live validator run.
+        <div className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+          Source: {review.source.origin} ({review.source.detail})
+        </div>
+      </div>
+
+      <div className="space-y-3 mb-5">
+        <h3 className="text-sm font-semibold text-violet-700 dark:text-violet-400">
+          (a) Builder changes — drift + recurring-defect promotions ({changeIssues.length})
+        </h3>
+        {changeIssues.length === 0 ? (
+          <p className="text-sm text-gray-500">No builder↔validator drift or promoted recurring defects.</p>
+        ) : (
+          changeIssues.map(renderCard)
+        )}
+      </div>
+
+      <div className="space-y-3 mb-5">
+        <h3 className="text-sm font-semibold text-violet-700 dark:text-violet-400">
+          (b) Generalisation-audit findings ({genIssues.length})
+        </h3>
+        {genIssues.length === 0 ? (
+          <p className="text-sm text-gray-500">No topic-specific leaks detected in the builder.</p>
+        ) : (
+          genIssues.map(renderCard)
+        )}
+      </div>
+
+      {review.semantic && (
+        <div className="text-xs text-gray-500 dark:text-gray-400 mb-4 border-t dark:border-gray-700 pt-3">
+          Semantic pass ({review.semantic.model} via {review.semantic.provider || "n/a"}):
+          {" "}{review.semantic.accepted.length} accepted, {review.semantic.rejected.length} rejected by the Goodhart guard.
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3 pt-3 border-t dark:border-gray-700">
+        <button
+          onClick={onConfirm}
+          disabled={selectedProposals.length === 0}
+          className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+          title="Collate the selected proposals into a gated proposed edit set (nothing is applied)"
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          Confirm {selectedProposals.length} selected proposal(s)
+        </button>
+        <span className="text-sm text-gray-500">{selectedProposals.length} of {allIssues.length} selected</span>
+      </div>
+
+      {confirmed && selectedProposals.length > 0 && (
+        <div className="mt-4 p-4 bg-violet-50 dark:bg-violet-900/20 border border-violet-300 dark:border-violet-800 rounded-lg">
+          <div className="font-semibold text-sm mb-2 flex items-center gap-1">
+            <CheckCircle2 className="w-4 h-4 text-violet-600" />
+            Proposed builder edit set ({selectedProposals.length}) — GATED, not applied
+          </div>
+          <ol className="list-decimal list-inside text-sm space-y-1.5 text-gray-700 dark:text-gray-300">
+            {selectedProposals.map((p) => (
+              <li key={p.id}>
+                <span className="font-mono text-xs">{p.ruleCode}</span> — {p.solution}
+              </li>
+            ))}
+          </ol>
+          <p className="mt-3 text-xs text-gray-600 dark:text-gray-400">
+            This set is a proposal for the operator to apply to the builder prompt and then verify by a
+            regeneration run. It has <strong>not</strong> been written to the builder or to any framework.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

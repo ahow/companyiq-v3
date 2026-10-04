@@ -12,3 +12,6 @@ prov_diff*.json
 *.env.*
 # ...but the committed template is tracked.
 !.env.example
+
+# Recurring-defect ledger (runtime, append-only)
+server/data/*.jsonl

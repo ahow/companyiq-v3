@@ -1,0 +1,51 @@
+{
+  "findings": [
+    {
+      "line": 167,
+      "token": "TCFD",
+      "position": "construction-rule",
+      "excerpt": "* **C8**: Accept evidence from any disclosure vehicle: annual report, standalone sustainability/ESG report, integrated report, TCFD report, regulatory filing, p",
+      "proposedFix": "Rephrase the rule to reference the topic abstractly (the topic term / an adjacent topic) rather than naming a specific domain."
+    },
+    {
+      "line": 224,
+      "token": "TNFD",
+      "position": "output-schema-default",
+      "excerpt": "{\"name\": \"TNFD\", \"source\": \"taskforce-on-nature-related-financial-disclosures.org\"}",
+      "proposedFix": "Replace the topic-specific default with a neutral placeholder (e.g. <TOPIC_SYNONYM>, <ANCHOR_FRAMEWORK>, <DATA_PATTERN>) so it is not copied verbatim into non-matching frameworks."
+    },
+    {
+      "line": 224,
+      "token": "nature",
+      "position": "output-schema-default",
+      "excerpt": "{\"name\": \"TNFD\", \"source\": \"taskforce-on-nature-related-financial-disclosures.org\"}",
+      "proposedFix": "Replace the topic-specific default with a neutral placeholder (e.g. <TOPIC_SYNONYM>, <ANCHOR_FRAMEWORK>, <DATA_PATTERN>) so it is not copied verbatim into non-matching frameworks."
+    },
+    {
+      "line": 235,
+      "token": "TCFD",
+      "position": "output-schema-default",
+      "excerpt": "\"requiredDocTypes\": [\"Sustainability Report\", \"TCFD Report\"],",
+      "proposedFix": "Replace the topic-specific default with a neutral placeholder (e.g. <TOPIC_SYNONYM>, <ANCHOR_FRAMEWORK>, <DATA_PATTERN>) so it is not copied verbatim into non-matching frameworks."
+    },
+    {
+      "line": 237,
+      "token": "biodivers",
+      "position": "output-schema-default",
+      "excerpt": "\"documentPriorityUrlPatterns\": [\"biodiversity\", \"nature\", \"tnfd\"],",
+      "proposedFix": "Replace the topic-specific default with a neutral placeholder (e.g. <TOPIC_SYNONYM>, <ANCHOR_FRAMEWORK>, <DATA_PATTERN>) so it is not copied verbatim into non-matching frameworks."
+    },
+    {
+      "line": 237,
+      "token": "nature",
+      "position": "output-schema-default",
+      "excerpt": "\"documentPriorityUrlPatterns\": [\"biodiversity\", \"nature\", \"tnfd\"],",
+      "proposedFix": "Replace the topic-specific default with a neutral placeholder (e.g. <TOPIC_SYNONYM>, <ANCHOR_FRAMEWORK>, <DATA_PATTERN>) so it is not copied verbatim into non-matching frameworks."
+    }
+  ],
+  "counts": {
+    "construction-rule": 1,
+    "output-schema-default": 5
+  },
+  "totalLines": 305
+}

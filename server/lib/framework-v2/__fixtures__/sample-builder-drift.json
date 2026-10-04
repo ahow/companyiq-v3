@@ -1,0 +1,86 @@
+{
+  "detector": "builder-validator-drift",
+  "builderRulesFound": [
+    "C1",
+    "C10",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8",
+    "C9"
+  ],
+  "proposalCount": 6,
+  "blockingProposals": 3,
+  "proposals": [
+    {
+      "id": "bd-C4",
+      "rule": "C4",
+      "type": "contradiction",
+      "blocking": true,
+      "builderSays": "Fallback conditions (when primary evidence is absent) are numbered OR-lists of \u22653 substantive conditions, each explicitly referencing the topic term.",
+      "validatorEnforces": "fallback_yes_criterion = >=3 numbered AND-joined conditions; >=1 condition anchors the topic term/synonym. Conditions are conjunctive (ALL must hold).",
+      "ref": "validateC4 L656-742",
+      "rationale": "Builder instructs the LLM to author fallback conditions as an OR-list (any one suffices), but validateC4 treats conditions as AND-joined (all must hold) and anchors only one to the topic. Authors and the engine disagree on the semantics of every fallback block produced.",
+      "proposedBuilderEdit": "Rewrite builder C4 to: 'Fallback conditions are a numbered list of >=3 substantive conditions that are AND-joined (ALL must hold for the fallback to fire); at least one condition must explicitly reference the topic term or a registered synonym.'"
+    },
+    {
+      "id": "bd-C11",
+      "rule": "C11",
+      "type": "missing",
+      "blocking": true,
+      "builderSays": null,
+      "validatorEnforces": "decidable thresholds: any degree word in a condition needs an in-condition countable/named test (judged per-condition for fallback)",
+      "ref": "validateC11 L1159+",
+      "rationale": "The live engine runs C11 but the builder never instructs the LLM about it, so the generator cannot pre-satisfy it. Blocking.",
+      "proposedBuilderEdit": "Add a construction rule C11 to Part 3 describing: decidable thresholds: any degree word in a condition needs an in-condition countable/named test (judged per-condition for fallback)"
+    },
+    {
+      "id": "bd-C12",
+      "rule": "C12",
+      "type": "missing",
+      "blocking": false,
+      "builderSays": null,
+      "validatorEnforces": "advisory(info): prefer a conjunctive hard-token bundle over an M-of-N/OR-list soft gate",
+      "ref": "validateC12 L1330+",
+      "rationale": "The live engine runs C12 but the builder never instructs the LLM about it, so the generator cannot pre-satisfy it. Advisory.",
+      "proposedBuilderEdit": "Add a construction rule C12 to Part 3 describing: advisory(info): prefer a conjunctive hard-token bundle over an M-of-N/OR-list soft gate"
+    },
+    {
+      "id": "bd-C13",
+      "rule": "C13",
+      "type": "missing",
+      "blocking": false,
+      "builderSays": null,
+      "validatorEnforces": "advisory(warning/info): examples must not contradict the one authoritative rule",
+      "ref": "validateC13",
+      "rationale": "The live engine runs C13 but the builder never instructs the LLM about it, so the generator cannot pre-satisfy it. Advisory.",
+      "proposedBuilderEdit": "Add a construction rule C13 to Part 3 describing: advisory(warning/info): examples must not contradict the one authoritative rule"
+    },
+    {
+      "id": "bd-DEF",
+      "rule": "DEF",
+      "type": "missing",
+      "blocking": true,
+      "builderSays": null,
+      "validatorEnforces": "every measure must have a derivable definition (fail-loud)",
+      "ref": "validateDefinitionPresent",
+      "rationale": "Validator fails loud if any measure lacks a derivable definition; builder should state the definition field is mandatory and non-empty.",
+      "proposedBuilderEdit": "Add to Part 3: every measure MUST carry a non-empty `definition` that states what constitutes a Yes verdict."
+    },
+    {
+      "id": "bd-C3",
+      "rule": "C3",
+      "type": "mismatch",
+      "blocking": false,
+      "builderSays": "Every measure requires \u2265120 characters of supporting quote context from the disclosure.",
+      "validatorEnforces": "quote-context length is driven by per-measure min_quote_context_chars, not a fixed 120",
+      "ref": "validateC3 L614-645",
+      "rationale": "Builder hardcodes a 120-char constant; the engine reads a per-measure min_quote_context_chars field. Hardcoding prevents per-measure tuning.",
+      "proposedBuilderEdit": "Rephrase C3 to set a per-measure min_quote_context_chars (default 120) rather than a global constant."
+    }
+  ],
+  "note": "GATED proposals only. A builder change affects ALL future frameworks and must be human-approved, then VERIFIED by an operator-triggered regeneration \u2014 implemented != verified-fixed."
+}
