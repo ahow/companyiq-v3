@@ -32,6 +32,7 @@ import { resolveProposalByIdentity } from "../lib/framework-v2/proposal-identity
 import { pickEffectiveBatch } from "../lib/framework-v2/effective-batch.js";
 import { deriveProposalBundle } from "../lib/framework-v2/derive-proposal-bundle.js";
 import { buildDiagnosticReport, type DiagnosticMeasure, type StoredCell, type DiagnosticReport } from "../lib/measure-design-diagnostic.js";
+import { composeBuilderReview, type BuilderReviewResult } from "../lib/framework-v2/builder-review.js";
 import * as storage from "../storage.js";
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
@@ -2246,6 +2247,40 @@ router.post("/v2/validate", async (req: Request, res: Response) => {
       ...buildIssuePayload(validation),
     });
   } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "internal error" });
+  }
+});
+
+// ─── POST /v2/builder-review — "Send to Claude" builder-level review ──────
+// Runs the three deterministic detectors over the BUILDER prompt (not a single
+// framework) and returns TWO selectable-change lists in the SAME issue-gate
+// envelope the client already renders:
+//   (a) builderChanges        = D1 builder<->validator drift + D2 ledger promotions
+//   (b) generalisationFindings = D3 generalisation audit
+// Optional `semantic: true` layers the STEP-2 LLM pass (Goodhart-guarded) on top.
+// Optional `defects` are appended to the recurring-defect ledger before promotion.
+//
+// GATED: this endpoint NEVER edits the builder or any framework. The client lets
+// the operator select proposals and confirm them into a proposed edit SET only.
+// implemented != verified-fixed — a builder change is verified only after an
+// operator-triggered regeneration shows the defect gone on a live validator run.
+router.post("/v2/builder-review", async (req: Request, res: Response) => {
+  try {
+    const { builderText, defects, semantic } = req.body as {
+      builderText?: string;
+      defects?: Array<Record<string, any>>;
+      semantic?: boolean;
+    };
+    const result: BuilderReviewResult = await composeBuilderReview({
+      builderText: typeof builderText === "string" ? builderText : undefined,
+      defects: Array.isArray(defects) ? defects : undefined,
+      semantic: semantic === true,
+    });
+    return res.json(result);
+  } catch (err: any) {
+    // Fail-loud: a ledger write error or an unreadable configured source must
+    // surface, not be swallowed (the review would otherwise be silently partial).
+    console.error("[framework-builder v2 /v2/builder-review] error:", err?.message || err);
     return res.status(500).json({ error: err?.message || "internal error" });
   }
 });
