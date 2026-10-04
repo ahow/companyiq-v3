@@ -1644,7 +1644,32 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                 <button onClick={reset} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg">
                   Build another
                 </button>
+                <button
+                  onClick={sendToClaudeBuilderReview}
+                  disabled={loading || builderReviewLoading}
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+                  title="Review the framework BUILDER itself (not just this framework): builder↔validator drift, recurring-defect promotions, and generalisation leaks. Returns gated proposals only — nothing is auto-applied."
+                >
+                  {builderReviewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  Send to Claude — builder review
+                </button>
               </div>
+            </div>
+          )}
+          {stage === "saved" && savedFrameworkId && builderReview && (
+            <div className="mt-4">
+              <BuilderReviewPanel
+                review={builderReview}
+                selectedIds={builderSelectedIds}
+                confirmed={builderReviewConfirmed}
+                onToggleSelect={toggleBuilderSelected}
+                onConfirm={() => setBuilderReviewConfirmed(true)}
+                onDismiss={() => {
+                  setBuilderReview(null);
+                  setBuilderSelectedIds([]);
+                  setBuilderReviewConfirmed(false);
+                }}
+              />
             </div>
           )}
         </div>
