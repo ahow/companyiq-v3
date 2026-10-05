@@ -478,8 +478,16 @@ export function countTopicHits(text: string, topicTerms: string[]): number {
 
 // ─── Document-Aware Text Chunking (Layer C) ──────────────────────────────────
 
-const CHUNK_SIZE = 1500;
-const CHUNK_OVERLAP = 200;
+// STABILITY FIX #3 (run-to-run flip variance): a long section subdivided at the
+// 1500-char mark fragments a decisive passage across chunk boundaries, splitting
+// its BM25 mass between two chunks. Small corpus deltas then re-rank those
+// fragments differently run-to-run, flipping which one survives the budget cut.
+// Larger chunks keep a decisive passage + its local context co-located in ONE
+// chunk, preserving its BM25 mass. The chunker still cuts on sentence boundaries
+// and starts fresh at SEC section headings, so larger chunks do not merge across
+// sections. Env-overridable for tuning without a redeploy.
+const CHUNK_SIZE = parseInt(process.env.RETRIEVAL_CHUNK_SIZE || "2200", 10);
+const CHUNK_OVERLAP = parseInt(process.env.RETRIEVAL_CHUNK_OVERLAP || "300", 10);
 
 // The analyzer joins documents with headers of the form:
 //   "\n\n--- DOCUMENT: <title> [<url>] ---\n\n<text>"
@@ -1159,7 +1167,22 @@ const TOPIC_RELEVANCE_WEIGHT = parseFloat(process.env.RETRIEVAL_TOPIC_WEIGHT || 
 // bonus so on-section evidence is preferred without overwhelming BM25 relevance.
 const SEC_SECTION_BOOST = parseFloat(process.env.RETRIEVAL_SECTION_BOOST || "2.5");
 const MAX_CHUNKS_PER_DOC = parseInt(process.env.RETRIEVAL_MAX_CHUNKS_PER_DOC || "5", 10);
-const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_CHUNKS || "4", 10);
+// STABILITY FIX #2 (run-to-run flip variance): the primary filing (10-K / 20-F /
+// annual report) is where decisive on-topic evidence most often lives, yet it was
+// capped at the same 5-chunk per-doc budget as every peripheral doc. When a
+// decisive on-topic chunk ranked 6th within that filing, it was cut — and small
+// run-to-run BM25 shifts moved chunks across that 5-slot boundary, flipping the
+// answer. Raising the cap for the PRIMARY filing only (peripheral docs keep 5)
+// lets more of the authoritative filing's on-topic evidence survive. Applied via
+// isRegulatoryAnnualFilingDoc(), so it is topic-agnostic. Env-overridable.
+const PRIMARY_MAX_CHUNKS_PER_DOC = parseInt(process.env.RETRIEVAL_PRIMARY_MAX_CHUNKS_PER_DOC || "10", 10);
+// STABILITY FIX #1 (run-to-run flip variance): raised 4 -> 8 so the decisive
+// on-topic chunk survives the budget cut instead of sitting just below the floor
+// where small corpus deltas flip it in and out run-to-run. Goodhart guard: the
+// topic floor only admits chunks with topicHits > 0 (see Step 1 below), so a
+// higher floor cannot manufacture on-topic evidence where none exists — it only
+// stops genuinely on-topic evidence from being starved by generic boilerplate.
+const GUARANTEED_TOPIC_CHUNKS = parseInt(process.env.RETRIEVAL_GUARANTEED_TOPIC_CHUNKS || "8", 10);
 
 // Per-measure evidence budget. Previously hardcoded at topK=12 / maxChars=8000
 // (~2K tokens), which capped how much of the fetched corpus each question could
@@ -1413,12 +1436,30 @@ export function buildEvidencePackForMeasure(opts: {
   const selected: typeof scored = [];
   let evidenceLen = 0;
 
+  // STABILITY FIX #2 (run-to-run flip variance): identify the PRIMARY filing(s)
+  // (10-K / 20-F / annual report) in this corpus so they can carry a higher
+  // per-doc chunk cap than peripheral documents. This is where decisive on-topic
+  // evidence most often lives; a 6th-ranked decisive chunk previously fell outside
+  // the shared 5-slot cap and flipped run-to-run as small BM25 shifts reordered
+  // chunks across that boundary. Topic-agnostic: membership is decided purely by
+  // isRegulatoryAnnualFilingDoc() (URL/title shape), never by measure topic.
+  const primaryDocIndexes = new Set<number>();
+  for (const c of chunks) {
+    if (isRegulatoryAnnualFilingDoc(c.docUrl, c.docTitle)) primaryDocIndexes.add(c.docIndex);
+  }
+  // Effective per-doc cap: raised for the primary filing only; peripheral docs keep
+  // maxChunksPerDoc. max() guards against a caller passing a larger maxChunksPerDoc.
+  const capForDoc = (docIndex: number): number =>
+    primaryDocIndexes.has(docIndex)
+      ? Math.max(maxChunksPerDoc, PRIMARY_MAX_CHUNKS_PER_DOC)
+      : maxChunksPerDoc;
+
   const tryAdd = (item: (typeof scored)[number]): boolean => {
     if (selected.includes(item)) return false;
     if (selected.length >= topK) return false;
     if (evidenceLen + item.text.length > totalBudget) return false;
     const used = perDocCount.get(item.docIndex) || 0;
-    if (used >= maxChunksPerDoc) return false;
+    if (used >= capForDoc(item.docIndex)) return false;
     selected.push(item);
     perDocCount.set(item.docIndex, used + 1);
     evidenceLen += item.text.length + 2;
@@ -1924,7 +1965,7 @@ export function buildEvidencePackForMeasure(opts: {
       if (bm25ReserveLen + item.text.length > BM25_RESERVE_EXTRA_CHARS) continue;
       if (evidenceLen + item.text.length > totalBudget) continue;
       const used = perDocCount.get(item.docIndex) || 0;
-      if (used >= maxChunksPerDoc) continue;
+      if (used >= capForDoc(item.docIndex)) continue; // STABILITY FIX #2: primary-aware cap
       selected.push(item);
       perDocCount.set(item.docIndex, used + 1);
       evidenceLen += item.text.length + 2;
@@ -2024,7 +2065,7 @@ export function buildEvidencePackForMeasure(opts: {
       if (!existing) continue;
       if (selected.includes(existing)) continue;
       const used = perDocCount.get(r.docIndex) || 0;
-      if (used >= maxChunksPerDoc + 1) continue;
+      if (used >= capForDoc(r.docIndex) + 1) continue; // STABILITY FIX #2: primary-aware cap (+1 reserve relaxation)
       selected.push(existing);
       perDocCount.set(r.docIndex, used + 1);
       evidenceLen += r.text.length + 2;
@@ -2048,9 +2089,10 @@ export function buildEvidencePackForMeasure(opts: {
   for (const item of topicChunks) {
     if (topicAdded >= GUARANTEED_TOPIC_CHUNKS) break;
     // Relax the per-doc cap slightly for the guaranteed topic floor so a single
-    // AI-rich filing can still seed the pack, but never beyond maxChunksPerDoc+1.
+    // AI-rich filing can still seed the pack, but never beyond the doc's cap + 1.
+    // STABILITY FIX #2: primary-aware cap so the authoritative filing can seed more.
     const used = perDocCount.get(item.docIndex) || 0;
-    if (used >= maxChunksPerDoc + 1) continue;
+    if (used >= capForDoc(item.docIndex) + 1) continue;
     if (selected.length >= topK) break;
     if (evidenceLen + item.text.length > totalBudget) continue;
     selected.push(item);
