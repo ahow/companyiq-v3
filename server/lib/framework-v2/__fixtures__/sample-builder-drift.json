@@ -46,7 +46,7 @@
       "validatorEnforces": "advisory(info): prefer a conjunctive hard-token bundle over an M-of-N/OR-list soft gate",
       "ref": "validateC12 L1330+",
       "rationale": "The live engine runs C12 but the builder never instructs the LLM about it, so the generator cannot pre-satisfy it. Advisory.",
-      "proposedBuilderEdit": "Add a construction rule C12 to Part 3 describing: advisory(info): prefer a conjunctive hard-token bundle over an M-of-N/OR-list soft gate"
+      "proposedBuilderEdit": "Add an ADVISORY construction note C12 to Part 3: WHERE the measurable signal permits, a conjunctive hard-token bundle (co-occurrence in a single verbatim quote of a named artefact/function AND a hard qualifier) is more flip-resistant than an M-of-N / OR-list soft gate \u2014 but KEEP a soft or N-of-M gate where a conjunctive bundle would be too strict for the measure. This is advisory, never a blanket requirement; do not homogenise measures toward one gate shape."
     },
     {
       "id": "bd-C13",
@@ -57,7 +57,7 @@
       "validatorEnforces": "advisory(warning/info): examples must not contradict the one authoritative rule",
       "ref": "validateC13",
       "rationale": "The live engine runs C13 but the builder never instructs the LLM about it, so the generator cannot pre-satisfy it. Advisory.",
-      "proposedBuilderEdit": "Add a construction rule C13 to Part 3 describing: advisory(warning/info): examples must not contradict the one authoritative rule"
+      "proposedBuilderEdit": "Add a construction rule C13 to Part 3: when a measure ships positive/negative examples, it MUST also carry a `substantive_definition` that states the single authoritative Yes-bar, and every example must be consistent with THAT rule (do not let a strict fallback silently become the authoritative bar)."
     },
     {
       "id": "bd-DEF",
@@ -67,8 +67,8 @@
       "builderSays": null,
       "validatorEnforces": "every measure must have a derivable definition (fail-loud)",
       "ref": "validateDefinitionPresent",
-      "rationale": "Validator fails loud if any measure lacks a derivable definition; builder should state the definition field is mandatory and non-empty.",
-      "proposedBuilderEdit": "Add to Part 3: every measure MUST carry a non-empty `definition` that states what constitutes a Yes verdict."
+      "rationale": "Validator fails loud if any measure lacks a derivable definition; builder should state that substantive_definition (from which the short definition is derived at save) is mandatory and non-empty.",
+      "proposedBuilderEdit": "Add to Part 3: every measure MUST carry a non-empty `substantive_definition` that states what constitutes a Yes verdict (the short `definition` field is derived from it at save)."
     },
     {
       "id": "bd-C3",
