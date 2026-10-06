@@ -236,7 +236,7 @@ async function runFetchPhase(opts: {
   const platformHosts = await storage.getActivePlatformHosts();
   const settings = await storage.getSettings(workspaceId);
   const searchDepth = parseInt(settings.search_depth || "10");
-  const queryVariants = parseInt(settings.discovery_query_variants || "3");
+  const queryVariants = parseInt(settings.discovery_query_variants || "4");
   console.log(`[${companyName}] Using search depth: ${searchDepth}, query variants: ${queryVariants}`);
 
   // Fix C: Derive peer company names from the workspace for anti-contamination filtering

@@ -192,6 +192,33 @@ const PROTECTED_LANES: readonly string[] = [
   "r6c-esef-api", "r6c-hkex-api",
   "a-share-cninfo-api",  // parallel to r6c-*: China regulator API
 ];
+// C2: results-per-query for the two highest-recall lanes only (Lane 2 domain,
+// Lane 6 variant). Other lanes keep searchDepth / min(searchDepth,10).
+const DISCOVERY_DEEP_NUM = parseInt(process.env.DISCOVERY_DEEP_NUM || "30", 10);
+
+// E: URL-level known-document seeding. Persists ONLY issuer/related-domain URLs
+// that made the final corpus; next run re-issues them as a NON-protected lane so
+// they are fetched + graded live and still pass the relevance gate and caps.
+// No content and no answers are ever stored.
+const KNOWN_DOC_SEED_ENABLED = (process.env.KNOWN_DOC_SEED_ENABLED || "true").toLowerCase() !== "false";
+const KNOWN_DOC_URLS_MAX = parseInt(process.env.KNOWN_DOC_URLS_MAX || "40", 10);
+const KNOWN_DOC_SEED_LANE = "known-doc-seed";
+
+/** True if `url`'s host belongs to the resolved issuer domain family. */
+function isInDomainFamily(url: string, family: string[]): boolean {
+  if (family.length === 0) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    const root = normaliseToRegistrableDomain(host);
+    return family.some(d => {
+      const dd = d.toLowerCase().replace(/^www\./, "");
+      return root === dd || host === dd || host.endsWith("." + dd);
+    });
+  } catch {
+    return false;
+  }
+}
+
 // Cap only applies to filings OUTSIDE the recency window: we keep the newest
 // OUT_OF_WINDOW_SOFT_CAP historical instances per type as context (previously the cap
 // applied to all filings including in-window ones, which was silently dropping analyst-cited docs).
@@ -1390,6 +1417,9 @@ function buildDomainQueries(companyName: string, domain: string, framework: Fram
     `site:${domain} policy`,
     `site:${domain} investor relations`,
   ];
+  // D: explicit analyst/presentation vehicle, placed near the FRONT so it falls
+  // inside the per-domain budget slice. Topic-agnostic (no name/topic terms).
+  baseQueries.splice(1, 0, `site:${domain} (analyst report OR presentation OR factbook OR "fact book") filetype:pdf`);
 
   // Add requiredDocTypes as domain queries (both plain and filetype:pdf)
   const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
@@ -3375,7 +3405,7 @@ async function searchCompanyDocumentsInner(opts: {
     } catch { return url; }
   }
 
-  function addCandidate(result: SearchResult, lane: string) {
+  function addCandidate(result: SearchResult, lane: string, priorityOpts?: { priorityDomain?: string | null }) {
     const normUrl = normaliseUrl(result.link);
     if (seenUrls.has(normUrl)) {
       traceInfo(companyName, "addCandidate.duplicate", normUrl, `already added; ignoring lane=${lane}`);
@@ -3390,7 +3420,7 @@ async function searchCompanyDocumentsInner(opts: {
     seenUrls.add(normUrl);
     result.link = normUrl;
     traceKeep(companyName, "addCandidate.enter", normUrl, `lane=${lane}, title="${(result.title || "").slice(0, 60)}"`);
-    const priority = calculatePriority(result.link, result.title, companyDomain || null, framework, topicPhrases);
+    const priority = calculatePriority(result.link, result.title, priorityOpts?.priorityDomain || companyDomain || null, framework, topicPhrases);
     allCandidates.push({
       url: result.link,
       title: result.title,
@@ -3893,7 +3923,7 @@ async function searchCompanyDocumentsInner(opts: {
       const budgetSlice = Math.min(domainQueries.length, domainBudget);
 
       for (let qi = 0; qi < budgetSlice && lane2QueryCount < MAX_LANE2_QUERIES; qi++) {
-        const results = await webSearch(domainQueries[qi], { num: searchDepth });
+        const results = await webSearch(domainQueries[qi], { num: DISCOVERY_DEEP_NUM });
         for (const r of results) addCandidate(r, "domain");
         lane2QueryCount++;
       }
@@ -4062,7 +4092,7 @@ async function searchCompanyDocumentsInner(opts: {
     if (variantQueries.length > 0) {
       console.log(`[${companyName}] Running ${variantQueries.length} variant queries`);
       for (const query of variantQueries) {
-        const results = await webSearch(query, { num: searchDepth });
+        const results = await webSearch(query, { num: DISCOVERY_DEEP_NUM });
         for (const r of results) addCandidate(r, "variant");
       }
     }
@@ -4543,6 +4573,30 @@ async function searchCompanyDocumentsInner(opts: {
     }
   } catch (e: any) {
     console.warn(`[${companyName}] R6a tenant extraction failed: ${e?.message}`);
+  }
+
+  // E: Known-doc seed lane — STRICTLY ADDITIVE. Runs only AFTER every fresh
+  // search lane has completed, so domain resolution, Lane 2 budget weighting and
+  // all searches behave exactly as if nothing had been saved. Stored URLs (from a
+  // prior run, possibly for a different topic) are merely extra candidates: any URL
+  // the fresh search already found keeps its own lane/title/snippet via the
+  // seenUrls dedupe. NON-protected: seeds still pass the relevance gate for the
+  // CURRENT topic, the pre-gate cap and the ranker, and are fetched + graded live.
+  // Only URLs whose host is in the CURRENT resolved domain family are seeded.
+  const seedFamily = effectiveDomain ? [effectiveDomain, ...relatedDomains] : [];
+  if (KNOWN_DOC_SEED_ENABLED && seedFamily.length > 0) {
+    const storedRaw = (companyRow.knownDocUrls ?? companyRow.known_doc_urls) as unknown;
+    const stored = Array.isArray(storedRaw) ? (storedRaw as unknown[]).filter((u): u is string => typeof u === "string") : [];
+    let seeded = 0;
+    for (const url of stored.slice(0, KNOWN_DOC_URLS_MAX)) {
+      if (!isInDomainFamily(url, seedFamily)) continue;
+      let host = "";
+      try { host = normaliseToRegistrableDomain(new URL(url).hostname); } catch { continue; }
+      const before = allCandidates.length;
+      addCandidate({ link: url, title: "Known issuer document", snippet: "" } as SearchResult, KNOWN_DOC_SEED_LANE, { priorityDomain: host });
+      if (allCandidates.length > before) seeded++;
+    }
+    if (stored.length > 0) console.log(`[${companyName}] known-doc-seed: ${seeded}/${stored.length} stored issuer URLs re-issued as live candidates`);
   }
 
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);
@@ -5053,6 +5107,23 @@ async function searchCompanyDocumentsInner(opts: {
   // Best-effort; failure logged but never blocks discovery return.
   if (TRACE_ENABLED) {
     await flushTraceBuffer(`${companyName}::${framework.name || framework.id}::${new Date().toISOString().slice(0, 19)}`);
+  }
+
+  // E: persist issuer/related-domain URLs from the final corpus (URL only — never
+  // content or answers). Current-run URLs first (ranked order), then previously
+  // stored ones, deduped and capped, so the list is bounded and recency-ordered.
+  if (KNOWN_DOC_SEED_ENABLED && companyRow.id && effectiveDomain) {
+    try {
+      const family = [effectiveDomain, ...relatedDomains];
+      const current = finalDocs.map(d => d.url).filter(u => isInDomainFamily(u, family));
+      const prevRaw = (companyRow.knownDocUrls ?? companyRow.known_doc_urls) as unknown;
+      const prev = Array.isArray(prevRaw) ? (prevRaw as unknown[]).filter((u): u is string => typeof u === "string" && isInDomainFamily(u, family)) : [];
+      const merged = [...new Set([...current, ...prev])].slice(0, KNOWN_DOC_URLS_MAX);
+      await db.execute(sql`UPDATE companies SET known_doc_urls = ${JSON.stringify(merged)}::jsonb WHERE id = ${companyRow.id}`);
+      console.log(`[${companyName}] known-doc-seed: persisted ${merged.length} issuer URLs (${current.length} from this run)`);
+    } catch (e: any) {
+      console.warn(`[${companyName}] known-doc-seed: failed to persist known_doc_urls: ${e.message}`);
+    }
   }
 
   return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected, issuerProfile };

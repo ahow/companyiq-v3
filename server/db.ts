@@ -857,6 +857,9 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains_manual JSONB`);
     // 42-A: Pipeline version for related domains cache
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains_pipeline_version TEXT`);
+    // Known issuer-domain document URLs (URL-level seeding only; content/answers are
+    // never persisted — seeded URLs are re-fetched and re-graded live every run).
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS known_doc_urls JSONB DEFAULT '[]'::jsonb`);
 
     // I55: FMP-based authoritative issuer profile (website + rich metadata).
     // Nullable — present only when FMP has a match for the company's ISIN.
@@ -1076,7 +1079,7 @@ async function seedDefaultSettings(): Promise<void> {
     terminology_discovery_enabled: "true",
     scoring_mode: "binary",
     search_depth: "20",
-    discovery_query_variants: "3",
+    discovery_query_variants: "4",
     auto_pin_sources: "true",
   };
 
@@ -1119,6 +1122,23 @@ async function seedDefaultSettings(): Promise<void> {
         INSERT INTO workspace_settings (workspace_id, key, value)
         VALUES (${workspaceId}, ${key}, ${value})
         ON CONFLICT (workspace_id, key) DO NOTHING
+      `);
+    }
+
+    // One-shot upgrade: existing workspaces were seeded with
+    // discovery_query_variants="3" (ON CONFLICT DO NOTHING never updates them).
+    // Bump an untouched "3" to the new default "4" exactly once, guarded by a
+    // marker key so a later deliberate operator change back to 3 is respected.
+    const marker = await db.execute(sql`
+      INSERT INTO workspace_settings (workspace_id, key, value)
+      VALUES (${workspaceId}, 'discovery_query_variants_default_v4_applied', 'true')
+      ON CONFLICT (workspace_id, key) DO NOTHING
+      RETURNING key
+    `);
+    if (marker.rows.length > 0) {
+      await db.execute(sql`
+        UPDATE workspace_settings SET value = '4'
+        WHERE workspace_id = ${workspaceId} AND key = 'discovery_query_variants' AND value = '3'
       `);
     }
 
