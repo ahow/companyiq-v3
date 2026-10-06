@@ -204,6 +204,51 @@ const KNOWN_DOC_SEED_ENABLED = (process.env.KNOWN_DOC_SEED_ENABLED || "true").to
 const KNOWN_DOC_URLS_MAX = parseInt(process.env.KNOWN_DOC_URLS_MAX || "40", 10);
 const KNOWN_DOC_SEED_LANE = "known-doc-seed";
 
+// Proposal A (part 1): issuer-domain PDF sweep. Topic-agnostic recall lane:
+// `site:${domain} filetype:pdf` per domain in the resolved family. Results enter
+// as the NON-protected "domain-sweep" lane (relevance gate, pre-gate cap, ranker,
+// post-fetch aboutness scorer all still apply). Sitemap PDF enumeration is
+// implemented but defaults OFF (sitemaps of large issuers can be multi-MB /
+// index-of-indexes; kept off to protect the fetch-phase budget).
+const ISSUER_SWEEP_ENABLED = (process.env.ISSUER_SWEEP_ENABLED || "true").toLowerCase() !== "false";
+const ISSUER_SWEEP_MAX = Math.max(0, parseInt(process.env.ISSUER_SWEEP_MAX || "25", 10) || 0); // per domain
+const ISSUER_SWEEP_SITEMAP = (process.env.ISSUER_SWEEP_SITEMAP || "false").toLowerCase() === "true";
+const ISSUER_SWEEP_LANE = "domain-sweep";
+
+/** Exported for tests. Most-recent-year-in-path first; stable on ties. */
+export function rankSweepPdfs(results: SearchResult[], max: number): SearchResult[] {
+  const yearOf = (u: string) => Math.max(0, ...[...u.matchAll(/(?:^|\D)(20\d\d)(?:\D|$)/g)].map(m => +m[1]));
+  return results
+    .map((r, i) => ({ r, i, y: yearOf(r.link) }))
+    .sort((a, b) => b.y - a.y || a.i - b.i)
+    .slice(0, max)
+    .map(x => x.r);
+}
+
+async function issuerPdfSweepForDomain(domain: string): Promise<SearchResult[]> {
+  const out = new Map<string, SearchResult>();
+  const hits = await webSearch(`site:${domain} filetype:pdf`, { num: DISCOVERY_DEEP_NUM });
+  for (const h of hits) {
+    if (/\.pdf(\?|#|$)/i.test(h.link) && isInDomainFamily(h.link, [domain])) out.set(h.link, h);
+  }
+  if (ISSUER_SWEEP_SITEMAP) {
+    for (const sm of [`https://${domain}/sitemap.xml`, `https://${domain}/sitemap_index.xml`]) {
+      const controller = new AbortController();
+      const to = setTimeout(() => controller.abort(), 5000);
+      try {
+        const resp = await fetch(sm, { signal: controller.signal, headers: { Accept: "application/xml,*/*", "User-Agent": "CompanyIQ-Discovery/1.0" } });
+        if (!resp.ok) continue;
+        const xml = (await resp.text()).slice(0, 2_000_000);
+        for (const m of xml.matchAll(/<loc>\s*([^<\s]+\.pdf)\s*<\/loc>/gi)) {
+          if (!out.has(m[1]) && isInDomainFamily(m[1], [domain])) out.set(m[1], { link: m[1], title: "[sitemap pdf]", snippet: "" });
+        }
+        break;
+      } catch { /* try next sitemap */ } finally { clearTimeout(to); }
+    }
+  }
+  return rankSweepPdfs([...out.values()], ISSUER_SWEEP_MAX);
+}
+
 /** True if `url`'s host belongs to the resolved issuer domain family. */
 function isInDomainFamily(url: string, family: string[]): boolean {
   if (family.length === 0) return false;
@@ -4023,6 +4068,21 @@ async function searchCompanyDocumentsInner(opts: {
     }
   }
   console.log(`[${companyName}] Lane 2 final query count (all sub-lanes): ${lane2QueryCount}/${MAX_LANE2_QUERIES}`);
+
+  // Proposal A (part 1): issuer-domain PDF sweep (+1 search per domain, outside
+  // the Lane 2 budget). Non-protected; issuer-domain priority bonus via priorityDomain.
+  if (ISSUER_SWEEP_ENABLED && ISSUER_SWEEP_MAX > 0 && allDomains.length > 0) {
+    for (const domain of allDomains) {
+      try {
+        const swept = await issuerPdfSweepForDomain(domain);
+        const before = allCandidates.length;
+        for (const r of swept) addCandidate(r, ISSUER_SWEEP_LANE, { priorityDomain: domain });
+        console.log(`[${companyName}] domain-sweep ${domain}: ${swept.length} PDFs found, ${allCandidates.length - before} new candidates`);
+      } catch (e: any) {
+        console.warn(`[${companyName}] domain-sweep ${domain} failed: ${e?.message}`);
+      }
+    }
+  }
 
   // Lane 3: Trusted source search (framework-specific sources take priority)
   const frameworkSourceIds = framework.trustedSourceIds as number[] | null;
