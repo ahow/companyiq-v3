@@ -1306,8 +1306,49 @@ async function reconcileBatchSave(batchId: number, resultsData: any[], measureCo
 // ─── Worker Initialization ──────────────────────────────────────────────────
 
 let worker: Worker | null = null;
+// Module-scoped so teardownWorker()/stopWorker() can reliably clear them no matter
+// which startWorker() invocation created them. Keeping them in closures (the old
+// design) meant a restart whose graceful close hung could never clear the previous
+// interval, so intervals — and the Worker objects they spawned — accumulated.
+let healthCheckInterval: NodeJS.Timeout | null = null;
+let adaptiveInterval: NodeJS.Timeout | null = null;
+// Re-entrancy guard: startWorker() is async and may be re-invoked (by the health
+// check, by a caller) before a previous call completes. Without this, multiple
+// Worker objects could be created on the shared `worker` var in one process.
+let workerStarting = false;
+// Tracks in-flight jobs so the health check can distinguish "all slots busy with
+// legitimately long jobs" (healthy) from "idle while work is waiting" (wedged).
+let activeJobCount = 0;
 
-export function startWorker(workerId?: string): Worker {
+// Fully tear down the current worker and its timers. Idempotent and time-boxed:
+// uses force-close (worker.close(true)) wrapped in Promise.race so a graceful
+// close that hangs on stuck in-flight jobs can never block startup/teardown.
+async function teardownWorker(): Promise<void> {
+  if (healthCheckInterval) { clearInterval(healthCheckInterval); healthCheckInterval = null; }
+  if (adaptiveInterval) { clearInterval(adaptiveInterval); adaptiveInterval = null; }
+  const w = worker;
+  worker = null;
+  activeJobCount = 0;
+  if (w) {
+    try {
+      await Promise.race([
+        w.close(true), // force=true: do NOT wait for in-flight jobs to finish
+        new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+      ]);
+    } catch { /* ignore close errors */ }
+  }
+}
+
+export async function startWorker(workerId?: string): Promise<Worker> {
+  // If a start is already in progress, don't create a second Worker; return the
+  // current one. This makes concurrent/overlapping startWorker() calls safe.
+  if (workerStarting) { return worker as Worker; }
+  workerStarting = true;
+  try {
+    // Always tear down any previous worker + timers FIRST so we can never stack
+    // Workers or intervals on the shared module vars.
+    await teardownWorker();
+
   const connection = getRedisConnection();
 
   worker = new Worker<QueueJobData>(
@@ -1348,30 +1389,39 @@ export function startWorker(workerId?: string): Worker {
   const HEALTH_CHECK_INTERVAL = 60_000; // Check every 60 seconds
   const MAX_IDLE_TIME = 180_000; // 3 minutes without activity = likely disconnected
 
-  worker.on("active", () => { lastActivityTimestamp = Date.now(); });
-  worker.on("completed", () => { lastActivityTimestamp = Date.now(); });
-  worker.on("failed", () => { lastActivityTimestamp = Date.now(); });
+  worker.on("active", () => { lastActivityTimestamp = Date.now(); activeJobCount++; });
+  worker.on("completed", () => { lastActivityTimestamp = Date.now(); activeJobCount = Math.max(0, activeJobCount - 1); });
+  worker.on("failed", () => { lastActivityTimestamp = Date.now(); activeJobCount = Math.max(0, activeJobCount - 1); });
 
-  const healthCheckInterval = setInterval(async () => {
-    if (!worker) { clearInterval(healthCheckInterval); return; }
+  healthCheckInterval = setInterval(async () => {
+    if (!worker) { if (healthCheckInterval) { clearInterval(healthCheckInterval); healthCheckInterval = null; } return; }
     try {
       const queue = (await import("./queue.js")).getQueue();
       const waitingCount = await queue.getWaitingCount();
       const timeSinceActivity = Date.now() - lastActivityTimestamp;
 
-      if (waitingCount > 0 && timeSinceActivity > MAX_IDLE_TIME) {
-        console.error("[Worker] HEALTH CHECK FAILED: " + waitingCount + " jobs waiting but no activity for " + Math.round(timeSinceActivity / 1000) + "s - restarting worker");
-        try {
-          await worker.close();
-        } catch (e) { /* ignore close errors */ }
-        worker = null;
+      // All concurrency slots occupied by legitimately long-running jobs is NOT a
+      // failure: no NEW job can start (so no `active` event fires and the idle
+      // timer climbs), yet the worker is perfectly healthy. Only treat the worker
+      // as wedged when it has FREE slots AND work is waiting AND nothing has
+      // happened for MAX_IDLE_TIME. `effectiveConcurrency` tracks the live
+      // (possibly adaptive-adjusted) concurrency, not just the configured max.
+      const effectiveConcurrency = Number((worker as any).concurrency) || MAX_CONCURRENT;
+      const hasFreeSlots = activeJobCount < effectiveConcurrency;
+
+      if (waitingCount > 0 && hasFreeSlots && timeSinceActivity > MAX_IDLE_TIME) {
+        console.error("[Worker] HEALTH CHECK FAILED: " + waitingCount + " jobs waiting, " + activeJobCount + "/" + effectiveConcurrency + " slots busy, no activity for " + Math.round(timeSinceActivity / 1000) + "s - restarting worker");
+        // Clear THIS interval immediately and synchronously so it can never fire
+        // again while the (async, possibly slow) restart is in flight. The restart
+        // itself runs startWorker(), which calls teardownWorker() first — so there
+        // is exactly one teardown→recreate path and Workers can never stack.
+        if (healthCheckInterval) { clearInterval(healthCheckInterval); healthCheckInterval = null; }
         setTimeout(() => {
           console.log("[Worker] Restarting after health check failure...");
-          startWorker(workerId);
+          void startWorker(workerId);
         }, 2000);
-        clearInterval(healthCheckInterval);
       } else if (waitingCount > 0) {
-        console.log("[Worker] Health OK: " + waitingCount + " jobs waiting, last active " + Math.round(timeSinceActivity / 1000) + "s ago");
+        console.log("[Worker] Health OK: " + waitingCount + " jobs waiting, " + activeJobCount + "/" + effectiveConcurrency + " slots busy, last active " + Math.round(timeSinceActivity / 1000) + "s ago");
       }
     } catch (err: any) {
       console.warn("[Worker] Health check error (non-fatal): " + err.message);
@@ -1384,11 +1434,10 @@ export function startWorker(workerId?: string): Worker {
   // and WORKER_CONCURRENCY. When disabled, the worker keeps the fixed configured
   // concurrency (MAX_CONCURRENT) and this controller is never consulted.
   const adaptiveConfig = loadAdaptiveConfig();
-  let adaptiveInterval: NodeJS.Timeout | null = null;
   if (adaptiveConfig.enabled) {
     let currentConcurrency = MAX_CONCURRENT;
     adaptiveInterval = setInterval(() => {
-      if (!worker) { if (adaptiveInterval) clearInterval(adaptiveInterval); return; }
+      if (!worker) { if (adaptiveInterval) { clearInterval(adaptiveInterval); adaptiveInterval = null; } return; }
       try {
         const snapshot = getSignalSnapshot(adaptiveConfig.windowMs);
         const decision = decideConcurrency(currentConcurrency, snapshot, adaptiveConfig);
@@ -1405,17 +1454,17 @@ export function startWorker(workerId?: string): Worker {
     console.log("[Worker] Adaptive concurrency ENABLED (min=" + adaptiveConfig.min + ", max=" + adaptiveConfig.max + ", window=" + adaptiveConfig.windowMs + "ms, tick=" + adaptiveConfig.tickMs + "ms)");
   }
 
-  // Ensure the adaptive ticker is torn down whenever the health check restarts
-  // the worker (it nulls `worker`, which the ticker detects and self-clears; this
-  // is a belt-and-braces clear on the explicit close path).
-  const originalClose = worker.close.bind(worker);
-  (worker as any).close = async (...args: any[]) => {
-    if (adaptiveInterval) { clearInterval(adaptiveInterval); adaptiveInterval = null; }
-    return originalClose(...args);
-  };
+  // NOTE: interval teardown is owned centrally by teardownWorker() (which clears
+  // both module-scoped intervals and force-closes the worker). The old close()
+  // monkey-patch has been removed — it only cleared the adaptive interval and
+  // relied on a graceful close that could hang, which is exactly what allowed
+  // Workers and intervals to accumulate.
 
   console.log("[Worker] Started with concurrency=" + MAX_CONCURRENT + ", timeout=" + JOB_TIMEOUT + "ms, maxRetries=" + MAX_RETRY_ATTEMPTS + ", lockDuration=" + WORKER_LOCK_DURATION_MS + "ms, stalledInterval=" + WORKER_STALLED_INTERVAL_MS + "ms, maxStalledCount=" + WORKER_MAX_STALLED_COUNT);
   return worker;
+  } finally {
+    workerStarting = false;
+  }
 }
 
 export function cancelBatch(batchId: number): void {
@@ -1433,8 +1482,9 @@ export function cancelBatch(batchId: number): void {
 
 export async function stopWorker(): Promise<void> {
   if (worker) {
-    await worker.close();
-    worker = null;
+    // teardownWorker() clears both module-scoped intervals AND force-closes the
+    // worker (time-boxed), so a stuck in-flight job can never block shutdown.
+    await teardownWorker();
     console.log("[Worker] Stopped");
   }
   try {
