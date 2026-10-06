@@ -1,4 +1,5 @@
 import type { FrameworkMeasure } from "../../shared/schema.js";
+import { getAboutnessDocWeight } from "./aboutness.js";
 import { createHash } from "crypto";
 import type { TerminologyMap } from "./terminology-discovery.js";
 import { flattenTerms } from "./terminology-discovery.js";
@@ -1393,7 +1394,8 @@ export function buildEvidencePackForMeasure(opts: {
       docIndex: chunk.docIndex,
       bm25,
       topicHits: hits,
-      score: bm25 + topicBonus + sectionBonus,
+      // Proposal A: aboutness down-weight for "deprioritize" docs (1 = no change).
+      score: (bm25 + topicBonus + sectionBonus) * getAboutnessDocWeight(companyId, chunk.docUrl),
       text: chunk.text,
     };
   });
