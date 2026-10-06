@@ -50,7 +50,9 @@ import {
 
 const MAX_DOCS_RETURNED = 90;
 const PRE_GATE_CAP = 180;
-const SEARCH_TIMEOUT = 15000;
+// Per-query search timeout. Env-tunable (SEARCH_TIMEOUT_MS); default 8s so a slow
+// or junk `site:` query fails fast instead of burning 15s against the discovery cap.
+const SEARCH_TIMEOUT = Number(process.env.SEARCH_TIMEOUT_MS) || 8000;
 
 // ─── FIX 1: FMP domain corroboration (DOMAIN_CORROBORATION_PERSIST) ──────────
 // Closed deny-list of shared/aggregator/exchange/registry hosts that must NEVER
@@ -2686,7 +2688,37 @@ const EXCLUDED_DOMAINS_FOR_RELATED = new Set([
   "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
   "google.com", "amazon.com", "reddit.com", "medium.com", "sec.gov",
   "companieshouse.gov.uk", "indeed.com", "glassdoor.com",
+  // AI / search aggregators
+  "perplexity.ai", "bing.com", "duckduckgo.com", "yahoo.com", "finance.yahoo.com",
+  // Financial-data portals
+  "spglobal.com", "globaldata.com", "marketscreener.com", "investing.com",
+  "stockanalysis.com", "morningstar.com", "tipranks.com", "simplywall.st",
+  "wsj.com", "nasdaq.com", "markets.ft.com", "macrotrends.net", "wisesheets.io",
+  "finbox.com",
+  // Document / file-share hosts
+  "scribd.com", "slideshare.net", "docplayer.net", "studylib.net", "coursehero.com",
+  // Exchange / regulator news portals
+  "hkexnews.hk", "sedar.com", "sedarplus.ca", "londonstockexchange.com",
+  // CDN / shared object storage — must never be `site:`-searched. Registrable
+  // roots (amazonaws.com, windows.net, jsdelivr.net) are listed too because
+  // candidates are normalised via normaliseToRegistrableDomain before lookup.
+  "s3.amazonaws.com", "amazonaws.com", "cloudfront.net", "googleusercontent.com",
+  "blob.core.windows.net", "windows.net", "ctfassets.net", "cdn.jsdelivr.net",
+  "jsdelivr.net",
 ]);
+
+/**
+ * 41-F identity gate: a cross-brand sibling candidate is admitted only if its
+ * first domain label contains at least one distinctive issuer-name token
+ * (e.g. "chase" for JPMorgan Chase → chase.com). Rejects generic aggregators
+ * (yahoo.com, perplexity.ai, spglobal.com …) that share no issuer identity.
+ * Company/topic-agnostic: tokens come from deriveAliases(issuerName).
+ */
+export function shareIssuerIdentityToken(domain: string, nameTokens: string[]): boolean {
+  const label = domain.split(".")[0].toLowerCase();
+  if (!label) return false;
+  return nameTokens.some(t => t.length >= 4 && label.includes(t.toLowerCase()));
+}
 
 /**
  * 41-G: Test whether a candidate domain is a "family TLD variant" of the primary,
@@ -2810,6 +2842,9 @@ async function discoverCrossBrandSiblings(
   const alreadyKnown = new Set([primaryDomain, ...existingFamily]);
   const siblings: string[] = [];
 
+  // Distinctive issuer-name tokens, shared by Method 1's identity gate and Method 2.
+  const nameTokens = deriveAliases(issuerName, null).filter(a => a.length >= 4);
+
   // Method 1: Serper query for subsidiary/brand pages
   try {
     const query = `"${issuerName}" official website subsidiary OR brand OR "operates as"`;
@@ -2819,6 +2854,12 @@ async function discoverCrossBrandSiblings(
         const root = normaliseToRegistrableDomain(new URL(r.link).hostname);
         if (alreadyKnown.has(root)) continue;
         if (EXCLUDED_DOMAINS_FOR_RELATED.has(root)) continue;
+        // Identity gate: the domain must carry an issuer-name token. Without this,
+        // aggregator/portal/CDN hosts were admitted and then `site:`-swept.
+        if (!shareIssuerIdentityToken(root, nameTokens)) {
+          console.log(`[${issuerName}] 41-F: rejected sibling ${root} (no issuer-identity token overlap)`);
+          continue;
+        }
         // Evidence gate: must appear at least 2x in the Lane 1 pool
         if ((laneOneFrequency.get(root) || 0) < 2) continue;
         siblings.push(root);
@@ -2837,7 +2878,6 @@ async function discoverCrossBrandSiblings(
   // Fix: detect composite stems (2+ distinctive tokens in the stem) and treat
   // each individual token as a sibling candidate. For single-brand stems,
   // only tokens NOT in the stem qualify (original logic).
-  const nameTokens = deriveAliases(issuerName, null).filter(a => a.length >= 4);
   const primaryStem = primaryDomain.split(".")[0].toLowerCase();
   const primaryTokenCount = nameTokens.filter(t => primaryStem.includes(t)).length;
   const isCompositeStem = primaryTokenCount >= 2;
@@ -2853,7 +2893,7 @@ async function discoverCrossBrandSiblings(
     if (count < 2) continue;
     const dl = domain.split(".")[0].toLowerCase();
     if (dl === primaryStem) continue; // don't re-add the primary
-    if (siblingTokens.some(t => dl.includes(t))) {
+    if (shareIssuerIdentityToken(domain, siblingTokens)) {
       siblings.push(domain);
       alreadyKnown.add(domain);
     }
