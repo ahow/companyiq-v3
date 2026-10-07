@@ -924,52 +924,107 @@ async function webSearchSerpApi(
   }));
 }
 
-// ─── Global Search Rate Limiter (Token Bucket) ─────────────────────────────
-// Shared across all workers in this process. Prevents concurrent batch runs
-// from collectively overwhelming the search provider with 300+ simultaneous calls.
-const SEARCH_RATE_LIMIT = {
-  tokens: 8,           // Max concurrent in-flight searches
-  maxTokens: 8,
-  refillRate: 4,       // Tokens restored per second
-  lastRefill: Date.now(),
-  waitQueue: [] as Array<() => void>,
+// ─── Per-provider Search Rate Limiters (Token Buckets) ──────────────────────
+// KEEP #1: one independent bucket per provider so a slow failover provider
+// (SerpAPI) cannot starve the primary (Serper). Tokens are acquired/released
+// around EACH provider call inside webSearchInner — never held across the
+// Serper→SerpAPI fallback. Shared across all workers in this process.
+const envNum = (name: string, def: number): number => {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? v : def;
 };
 
-async function acquireSearchToken(): Promise<void> {
-  // Refill tokens based on elapsed time
-  const now = Date.now();
-  const elapsed = (now - SEARCH_RATE_LIMIT.lastRefill) / 1000;
-  SEARCH_RATE_LIMIT.tokens = Math.min(
-    SEARCH_RATE_LIMIT.maxTokens,
-    SEARCH_RATE_LIMIT.tokens + elapsed * SEARCH_RATE_LIMIT.refillRate
-  );
-  SEARCH_RATE_LIMIT.lastRefill = now;
-
-  if (SEARCH_RATE_LIMIT.tokens >= 1) {
-    SEARCH_RATE_LIMIT.tokens -= 1;
-    return;
-  }
-
-  // Wait for a token to become available
-  return new Promise<void>((resolve) => {
-    SEARCH_RATE_LIMIT.waitQueue.push(resolve);
-    // Safety timeout: never wait more than 30s
-    setTimeout(() => {
-      const idx = SEARCH_RATE_LIMIT.waitQueue.indexOf(resolve);
-      if (idx >= 0) { SEARCH_RATE_LIMIT.waitQueue.splice(idx, 1); resolve(); }
-    }, 30000);
-  });
+export interface TokenBucket {
+  acquire(): Promise<void>;
+  release(): void;
+  readonly state: { tokens: number; maxTokens: number; refillRate: number; waiting: number };
 }
 
-function releaseSearchToken(): void {
-  SEARCH_RATE_LIMIT.tokens = Math.min(SEARCH_RATE_LIMIT.maxTokens, SEARCH_RATE_LIMIT.tokens + 1);
-  SEARCH_RATE_LIMIT.lastRefill = Date.now();
-  if (SEARCH_RATE_LIMIT.waitQueue.length > 0) {
-    const next = SEARCH_RATE_LIMIT.waitQueue.shift()!;
-    SEARCH_RATE_LIMIT.tokens -= 1;
-    next();
-  }
+export function createTokenBucket(maxTokens: number, refillRate: number, maxWaitMs = 30000): TokenBucket {
+  let tokens = maxTokens;
+  let lastRefill = Date.now();
+  const waitQueue: Array<() => void> = [];
+  return {
+    async acquire() {
+      const now = Date.now();
+      tokens = Math.min(maxTokens, tokens + ((now - lastRefill) / 1000) * refillRate);
+      lastRefill = now;
+      if (tokens >= 1) { tokens -= 1; return; }
+      return new Promise<void>((resolve) => {
+        waitQueue.push(resolve);
+        // Safety timeout: never wait more than maxWaitMs
+        setTimeout(() => {
+          const idx = waitQueue.indexOf(resolve);
+          if (idx >= 0) { waitQueue.splice(idx, 1); resolve(); }
+        }, maxWaitMs);
+      });
+    },
+    release() {
+      tokens = Math.min(maxTokens, tokens + 1);
+      lastRefill = Date.now();
+      if (waitQueue.length > 0) {
+        const next = waitQueue.shift()!;
+        tokens -= 1;
+        next();
+      }
+    },
+    get state() { return { tokens, maxTokens, refillRate, waiting: waitQueue.length }; },
+  };
 }
+
+const serperBucket = createTokenBucket(envNum("SERPER_BUCKET_TOKENS", 8), envNum("SERPER_BUCKET_REFILL", 4));
+const serpApiBucket = createTokenBucket(envNum("SERPAPI_BUCKET_TOKENS", 4), envNum("SERPAPI_BUCKET_REFILL", 2));
+
+async function withBucket<T>(bucket: TokenBucket, fn: () => Promise<T>): Promise<T> {
+  await bucket.acquire();
+  try { return await fn(); } finally { bucket.release(); }
+}
+
+// ─── SerpAPI Circuit-Breaker ────────────────────────────────────────────────
+// After N consecutive non-429 SerpAPI failures, skip the SerpAPI failover for a
+// cooldown window so a repeatedly-slow SerpAPI stops adding ~SEARCH_TIMEOUT of
+// synchronous latency per query. After cooldown: half-open, one trial call;
+// success closes the breaker, failure re-opens it. 429s do not count.
+export function createCircuitBreaker(name: string, threshold: number, cooldownMs: number, now: () => number = Date.now) {
+  let consecutiveFailures = 0;
+  let openUntil = 0;          // 0 = closed
+  let trialInFlight = false;
+  return {
+    /** Returns true if a call may be attempted now. */
+    allow(): boolean {
+      if (openUntil === 0) return true;
+      if (now() < openUntil) return false;
+      if (trialInFlight) return false;   // half-open: only one trial at a time
+      trialInFlight = true;
+      return true;
+    },
+    success(): void {
+      const wasOpen = openUntil !== 0;
+      consecutiveFailures = 0;
+      openUntil = 0;
+      trialInFlight = false;
+      if (wasOpen) console.warn(`[Discovery] ${name} circuit-breaker CLOSED (trial call succeeded)`);
+    },
+    failure(): void {
+      consecutiveFailures++;
+      const wasTrial = trialInFlight;
+      trialInFlight = false;
+      if (wasTrial || consecutiveFailures >= threshold) {
+        openUntil = now() + cooldownMs;
+        console.warn(`[Discovery] ${name} circuit-breaker OPEN for ${Math.round(cooldownMs / 1000)}s after ${consecutiveFailures} consecutive failures`);
+      }
+    },
+    /** Clears a half-open trial slot without recording an outcome (e.g. 429). */
+    neutral(): void { trialInFlight = false; },
+    get state() { return { consecutiveFailures, open: openUntil !== 0 && now() < openUntil, openUntil }; },
+  };
+}
+
+const serpApiBreaker = createCircuitBreaker(
+  "SerpAPI",
+  envNum("SERPAPI_BREAKER_THRESHOLD", 3),
+  envNum("SERPAPI_BREAKER_COOLDOWN_MS", 60000),
+);
 
 async function webSearch(
   query: string,
@@ -983,24 +1038,19 @@ async function webSearch(
     return cached.results;
   }
 
-  // Global rate limiter: acquire a token before making any search API call
-  await acquireSearchToken();
-  try {
-    const results = await webSearchInner(query, opts);
-    if (TRACE_ENABLED) traceOnHits(results, query, "[live]");
-    // Store in cache
-    searchCache.set(cKey, { results, ts: Date.now() });
-    // Evict stale entries periodically (keep cache bounded)
-    if (searchCache.size > 5000) {
-      const now = Date.now();
-      for (const [k, v] of searchCache) {
-        if (now - v.ts > SEARCH_CACHE_TTL_MS) searchCache.delete(k);
-      }
+  // Rate limiting is per-provider, inside webSearchInner (KEEP #1).
+  const results = await webSearchInner(query, opts);
+  if (TRACE_ENABLED) traceOnHits(results, query, "[live]");
+  // Store in cache
+  searchCache.set(cKey, { results, ts: Date.now() });
+  // Evict stale entries periodically (keep cache bounded)
+  if (searchCache.size > 5000) {
+    const now = Date.now();
+    for (const [k, v] of searchCache) {
+      if (now - v.ts > SEARCH_CACHE_TTL_MS) searchCache.delete(k);
     }
-    return results;
-  } finally {
-    releaseSearchToken();
   }
+  return results;
 }
 
 // TRACE helper: called for every search result set; logs any traced URLs
@@ -1024,15 +1074,17 @@ async function webSearchInner(
   const serperKey = getSerperApiKey();
   const serpApiKey = getSerpApiKey();
 
+  // Each provider call acquires/releases its OWN bucket; no token is held
+  // during 429 backoff sleeps or across the Serper→SerpAPI fallback.
   if (serperKey) {
     try {
-      return await webSearchSerper(query, serperKey, opts);
+      return await withBucket(serperBucket, () => webSearchSerper(query, serperKey, opts));
     } catch (error: any) {
       // On 429 (rate limit), wait and retry once
       if (error?.response?.status === 429) {
         console.warn(`[Discovery] Serper 429 rate-limited, backing off 5s for "${query.slice(0, 60)}"`);
         await new Promise(r => setTimeout(r, 5000 + Math.random() * 2000));
-        try { return await webSearchSerper(query, serperKey, opts); } catch { /* fall through */ }
+        try { return await withBucket(serperBucket, () => webSearchSerper(query, serperKey, opts)); } catch { /* fall through */ }
       }
       console.warn(`[Discovery] Serper.dev failed for "${query}": ${error.message}`);
       // Fall through to SerpAPI
@@ -1040,13 +1092,31 @@ async function webSearchInner(
   }
 
   if (serpApiKey) {
+    // Breaker only gates SerpAPI as a FAILOVER; if it is the sole provider it is always tried.
+    const gated = !!serperKey;
+    if (gated && !serpApiBreaker.allow()) {
+      return [];
+    }
+    const onSerpApiError = (err: any) => {
+      if (!gated) return;
+      if (err?.response?.status === 429) serpApiBreaker.neutral();
+      else serpApiBreaker.failure();
+    };
     try {
-      return await webSearchSerpApi(query, serpApiKey, opts);
+      const res = await withBucket(serpApiBucket, () => webSearchSerpApi(query, serpApiKey, opts));
+      if (gated) serpApiBreaker.success();
+      return res;
     } catch (error: any) {
       if (error?.response?.status === 429) {
         console.warn(`[Discovery] SerpAPI 429 rate-limited, backing off 5s for "${query.slice(0, 60)}"`);
         await new Promise(r => setTimeout(r, 5000 + Math.random() * 2000));
-        try { return await webSearchSerpApi(query, serpApiKey, opts); } catch { /* give up */ }
+        try {
+          const res = await withBucket(serpApiBucket, () => webSearchSerpApi(query, serpApiKey, opts));
+          if (gated) serpApiBreaker.success();
+          return res;
+        } catch (retryErr: any) { onSerpApiError(retryErr); /* give up */ }
+      } else {
+        onSerpApiError(error);
       }
       console.warn(`[Discovery] SerpAPI failed for "${query}": ${error.message}`);
       return [];
