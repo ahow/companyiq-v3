@@ -215,6 +215,12 @@ const KNOWN_DOC_SEED_LANE = "known-doc-seed";
 const ISSUER_SWEEP_ENABLED = (process.env.ISSUER_SWEEP_ENABLED || "true").toLowerCase() !== "false";
 const ISSUER_SWEEP_MAX = Math.max(0, parseInt(process.env.ISSUER_SWEEP_MAX || "25", 10) || 0); // per domain
 const ISSUER_SWEEP_SITEMAP = (process.env.ISSUER_SWEEP_SITEMAP || "false").toLowerCase() === "true";
+// C2-decouple: results-per-query for the issuer-domain PDF sweep ONLY. The sweep
+// is 1 query/domain (cheap), so its depth must NOT be tied to DISCOVERY_DEEP_NUM,
+// which drives the high-fan-out Lane 2 (<=60 queries) and Lane 6 (4 variants).
+// Lowering DISCOVERY_DEEP_NUM to bound Lane 2/6 cost would otherwise needlessly
+// shallow the cheap sweep and drop deep issuer PDFs (e.g. MAPFRE media/YYYY/MM).
+const ISSUER_SWEEP_NUM = Math.max(1, parseInt(process.env.ISSUER_SWEEP_NUM || "30", 10) || 30);
 const ISSUER_SWEEP_LANE = "domain-sweep";
 
 /** Exported for tests. Most-recent-year-in-path first; stable on ties. */
@@ -229,7 +235,7 @@ export function rankSweepPdfs(results: SearchResult[], max: number): SearchResul
 
 async function issuerPdfSweepForDomain(domain: string): Promise<SearchResult[]> {
   const out = new Map<string, SearchResult>();
-  const hits = await webSearch(`site:${domain} filetype:pdf`, { num: DISCOVERY_DEEP_NUM });
+  const hits = await webSearch(`site:${domain} filetype:pdf`, { num: ISSUER_SWEEP_NUM });
   for (const h of hits) {
     if (/\.pdf(\?|#|$)/i.test(h.link) && isInDomainFamily(h.link, [domain])) out.set(h.link, h);
   }
