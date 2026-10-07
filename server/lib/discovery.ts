@@ -50,9 +50,7 @@ import {
 
 const MAX_DOCS_RETURNED = 90;
 const PRE_GATE_CAP = 180;
-// Per-query search timeout. Env-tunable (SEARCH_TIMEOUT_MS); default 8s so a slow
-// or junk `site:` query fails fast instead of burning 15s against the discovery cap.
-const SEARCH_TIMEOUT = Number(process.env.SEARCH_TIMEOUT_MS) || 8000;
+const SEARCH_TIMEOUT = 15000;
 
 // ─── FIX 1: FMP domain corroboration (DOMAIN_CORROBORATION_PERSIST) ──────────
 // Closed deny-list of shared/aggregator/exchange/registry hosts that must NEVER
@@ -194,84 +192,6 @@ const PROTECTED_LANES: readonly string[] = [
   "r6c-esef-api", "r6c-hkex-api",
   "a-share-cninfo-api",  // parallel to r6c-*: China regulator API
 ];
-// C2: results-per-query for the two highest-recall lanes only (Lane 2 domain,
-// Lane 6 variant). Other lanes keep searchDepth / min(searchDepth,10).
-const DISCOVERY_DEEP_NUM = parseInt(process.env.DISCOVERY_DEEP_NUM || "30", 10);
-
-// E: URL-level known-document seeding. Persists ONLY issuer/related-domain URLs
-// that made the final corpus; next run re-issues them as a NON-protected lane so
-// they are fetched + graded live and still pass the relevance gate and caps.
-// No content and no answers are ever stored.
-const KNOWN_DOC_SEED_ENABLED = (process.env.KNOWN_DOC_SEED_ENABLED || "true").toLowerCase() !== "false";
-const KNOWN_DOC_URLS_MAX = parseInt(process.env.KNOWN_DOC_URLS_MAX || "40", 10);
-const KNOWN_DOC_SEED_LANE = "known-doc-seed";
-
-// Proposal A (part 1): issuer-domain PDF sweep. Topic-agnostic recall lane:
-// `site:${domain} filetype:pdf` per domain in the resolved family. Results enter
-// as the NON-protected "domain-sweep" lane (relevance gate, pre-gate cap, ranker,
-// post-fetch aboutness scorer all still apply). Sitemap PDF enumeration is
-// implemented but defaults OFF (sitemaps of large issuers can be multi-MB /
-// index-of-indexes; kept off to protect the fetch-phase budget).
-const ISSUER_SWEEP_ENABLED = (process.env.ISSUER_SWEEP_ENABLED || "true").toLowerCase() !== "false";
-const ISSUER_SWEEP_MAX = Math.max(0, parseInt(process.env.ISSUER_SWEEP_MAX || "25", 10) || 0); // per domain
-const ISSUER_SWEEP_SITEMAP = (process.env.ISSUER_SWEEP_SITEMAP || "false").toLowerCase() === "true";
-// C2-decouple: results-per-query for the issuer-domain PDF sweep ONLY. The sweep
-// is 1 query/domain (cheap), so its depth must NOT be tied to DISCOVERY_DEEP_NUM,
-// which drives the high-fan-out Lane 2 (<=60 queries) and Lane 6 (4 variants).
-// Lowering DISCOVERY_DEEP_NUM to bound Lane 2/6 cost would otherwise needlessly
-// shallow the cheap sweep and drop deep issuer PDFs (e.g. MAPFRE media/YYYY/MM).
-const ISSUER_SWEEP_NUM = Math.max(1, parseInt(process.env.ISSUER_SWEEP_NUM || "30", 10) || 30);
-const ISSUER_SWEEP_LANE = "domain-sweep";
-
-/** Exported for tests. Most-recent-year-in-path first; stable on ties. */
-export function rankSweepPdfs(results: SearchResult[], max: number): SearchResult[] {
-  const yearOf = (u: string) => Math.max(0, ...[...u.matchAll(/(?:^|\D)(20\d\d)(?:\D|$)/g)].map(m => +m[1]));
-  return results
-    .map((r, i) => ({ r, i, y: yearOf(r.link) }))
-    .sort((a, b) => b.y - a.y || a.i - b.i)
-    .slice(0, max)
-    .map(x => x.r);
-}
-
-async function issuerPdfSweepForDomain(domain: string): Promise<SearchResult[]> {
-  const out = new Map<string, SearchResult>();
-  const hits = await webSearch(`site:${domain} filetype:pdf`, { num: ISSUER_SWEEP_NUM });
-  for (const h of hits) {
-    if (/\.pdf(\?|#|$)/i.test(h.link) && isInDomainFamily(h.link, [domain])) out.set(h.link, h);
-  }
-  if (ISSUER_SWEEP_SITEMAP) {
-    for (const sm of [`https://${domain}/sitemap.xml`, `https://${domain}/sitemap_index.xml`]) {
-      const controller = new AbortController();
-      const to = setTimeout(() => controller.abort(), 5000);
-      try {
-        const resp = await fetch(sm, { signal: controller.signal, headers: { Accept: "application/xml,*/*", "User-Agent": "CompanyIQ-Discovery/1.0" } });
-        if (!resp.ok) continue;
-        const xml = (await resp.text()).slice(0, 2_000_000);
-        for (const m of xml.matchAll(/<loc>\s*([^<\s]+\.pdf)\s*<\/loc>/gi)) {
-          if (!out.has(m[1]) && isInDomainFamily(m[1], [domain])) out.set(m[1], { link: m[1], title: "[sitemap pdf]", snippet: "" });
-        }
-        break;
-      } catch { /* try next sitemap */ } finally { clearTimeout(to); }
-    }
-  }
-  return rankSweepPdfs([...out.values()], ISSUER_SWEEP_MAX);
-}
-
-/** True if `url`'s host belongs to the resolved issuer domain family. */
-function isInDomainFamily(url: string, family: string[]): boolean {
-  if (family.length === 0) return false;
-  try {
-    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-    const root = normaliseToRegistrableDomain(host);
-    return family.some(d => {
-      const dd = d.toLowerCase().replace(/^www\./, "");
-      return root === dd || host === dd || host.endsWith("." + dd);
-    });
-  } catch {
-    return false;
-  }
-}
-
 // Cap only applies to filings OUTSIDE the recency window: we keep the newest
 // OUT_OF_WINDOW_SOFT_CAP historical instances per type as context (previously the cap
 // applied to all filings including in-window ones, which was silently dropping analyst-cited docs).
@@ -1470,9 +1390,6 @@ function buildDomainQueries(companyName: string, domain: string, framework: Fram
     `site:${domain} policy`,
     `site:${domain} investor relations`,
   ];
-  // D: explicit analyst/presentation vehicle, placed near the FRONT so it falls
-  // inside the per-domain budget slice. Topic-agnostic (no name/topic terms).
-  baseQueries.splice(1, 0, `site:${domain} (analyst report OR presentation OR factbook OR "fact book") filetype:pdf`);
 
   // Add requiredDocTypes as domain queries (both plain and filetype:pdf)
   const requiredDocTypes = (framework as any).requiredDocTypes as string[] | null;
@@ -2694,37 +2611,7 @@ const EXCLUDED_DOMAINS_FOR_RELATED = new Set([
   "wikipedia.org", "reuters.com", "bloomberg.com", "ft.com", "cnbc.com",
   "google.com", "amazon.com", "reddit.com", "medium.com", "sec.gov",
   "companieshouse.gov.uk", "indeed.com", "glassdoor.com",
-  // AI / search aggregators
-  "perplexity.ai", "bing.com", "duckduckgo.com", "yahoo.com", "finance.yahoo.com",
-  // Financial-data portals
-  "spglobal.com", "globaldata.com", "marketscreener.com", "investing.com",
-  "stockanalysis.com", "morningstar.com", "tipranks.com", "simplywall.st",
-  "wsj.com", "nasdaq.com", "markets.ft.com", "macrotrends.net", "wisesheets.io",
-  "finbox.com",
-  // Document / file-share hosts
-  "scribd.com", "slideshare.net", "docplayer.net", "studylib.net", "coursehero.com",
-  // Exchange / regulator news portals
-  "hkexnews.hk", "sedar.com", "sedarplus.ca", "londonstockexchange.com",
-  // CDN / shared object storage — must never be `site:`-searched. Registrable
-  // roots (amazonaws.com, windows.net, jsdelivr.net) are listed too because
-  // candidates are normalised via normaliseToRegistrableDomain before lookup.
-  "s3.amazonaws.com", "amazonaws.com", "cloudfront.net", "googleusercontent.com",
-  "blob.core.windows.net", "windows.net", "ctfassets.net", "cdn.jsdelivr.net",
-  "jsdelivr.net",
 ]);
-
-/**
- * 41-F identity gate: a cross-brand sibling candidate is admitted only if its
- * first domain label contains at least one distinctive issuer-name token
- * (e.g. "chase" for JPMorgan Chase → chase.com). Rejects generic aggregators
- * (yahoo.com, perplexity.ai, spglobal.com …) that share no issuer identity.
- * Company/topic-agnostic: tokens come from deriveAliases(issuerName).
- */
-export function shareIssuerIdentityToken(domain: string, nameTokens: string[]): boolean {
-  const label = domain.split(".")[0].toLowerCase();
-  if (!label) return false;
-  return nameTokens.some(t => t.length >= 4 && label.includes(t.toLowerCase()));
-}
 
 /**
  * 41-G: Test whether a candidate domain is a "family TLD variant" of the primary,
@@ -2848,9 +2735,6 @@ async function discoverCrossBrandSiblings(
   const alreadyKnown = new Set([primaryDomain, ...existingFamily]);
   const siblings: string[] = [];
 
-  // Distinctive issuer-name tokens, shared by Method 1's identity gate and Method 2.
-  const nameTokens = deriveAliases(issuerName, null).filter(a => a.length >= 4);
-
   // Method 1: Serper query for subsidiary/brand pages
   try {
     const query = `"${issuerName}" official website subsidiary OR brand OR "operates as"`;
@@ -2860,12 +2744,6 @@ async function discoverCrossBrandSiblings(
         const root = normaliseToRegistrableDomain(new URL(r.link).hostname);
         if (alreadyKnown.has(root)) continue;
         if (EXCLUDED_DOMAINS_FOR_RELATED.has(root)) continue;
-        // Identity gate: the domain must carry an issuer-name token. Without this,
-        // aggregator/portal/CDN hosts were admitted and then `site:`-swept.
-        if (!shareIssuerIdentityToken(root, nameTokens)) {
-          console.log(`[${issuerName}] 41-F: rejected sibling ${root} (no issuer-identity token overlap)`);
-          continue;
-        }
         // Evidence gate: must appear at least 2x in the Lane 1 pool
         if ((laneOneFrequency.get(root) || 0) < 2) continue;
         siblings.push(root);
@@ -2884,6 +2762,7 @@ async function discoverCrossBrandSiblings(
   // Fix: detect composite stems (2+ distinctive tokens in the stem) and treat
   // each individual token as a sibling candidate. For single-brand stems,
   // only tokens NOT in the stem qualify (original logic).
+  const nameTokens = deriveAliases(issuerName, null).filter(a => a.length >= 4);
   const primaryStem = primaryDomain.split(".")[0].toLowerCase();
   const primaryTokenCount = nameTokens.filter(t => primaryStem.includes(t)).length;
   const isCompositeStem = primaryTokenCount >= 2;
@@ -2899,7 +2778,7 @@ async function discoverCrossBrandSiblings(
     if (count < 2) continue;
     const dl = domain.split(".")[0].toLowerCase();
     if (dl === primaryStem) continue; // don't re-add the primary
-    if (shareIssuerIdentityToken(domain, siblingTokens)) {
+    if (siblingTokens.some(t => dl.includes(t))) {
       siblings.push(domain);
       alreadyKnown.add(domain);
     }
@@ -3496,7 +3375,7 @@ async function searchCompanyDocumentsInner(opts: {
     } catch { return url; }
   }
 
-  function addCandidate(result: SearchResult, lane: string, priorityOpts?: { priorityDomain?: string | null }) {
+  function addCandidate(result: SearchResult, lane: string) {
     const normUrl = normaliseUrl(result.link);
     if (seenUrls.has(normUrl)) {
       traceInfo(companyName, "addCandidate.duplicate", normUrl, `already added; ignoring lane=${lane}`);
@@ -3511,7 +3390,7 @@ async function searchCompanyDocumentsInner(opts: {
     seenUrls.add(normUrl);
     result.link = normUrl;
     traceKeep(companyName, "addCandidate.enter", normUrl, `lane=${lane}, title="${(result.title || "").slice(0, 60)}"`);
-    const priority = calculatePriority(result.link, result.title, priorityOpts?.priorityDomain || companyDomain || null, framework, topicPhrases);
+    const priority = calculatePriority(result.link, result.title, companyDomain || null, framework, topicPhrases);
     allCandidates.push({
       url: result.link,
       title: result.title,
@@ -4014,7 +3893,7 @@ async function searchCompanyDocumentsInner(opts: {
       const budgetSlice = Math.min(domainQueries.length, domainBudget);
 
       for (let qi = 0; qi < budgetSlice && lane2QueryCount < MAX_LANE2_QUERIES; qi++) {
-        const results = await webSearch(domainQueries[qi], { num: DISCOVERY_DEEP_NUM });
+        const results = await webSearch(domainQueries[qi], { num: searchDepth });
         for (const r of results) addCandidate(r, "domain");
         lane2QueryCount++;
       }
@@ -4115,21 +3994,6 @@ async function searchCompanyDocumentsInner(opts: {
   }
   console.log(`[${companyName}] Lane 2 final query count (all sub-lanes): ${lane2QueryCount}/${MAX_LANE2_QUERIES}`);
 
-  // Proposal A (part 1): issuer-domain PDF sweep (+1 search per domain, outside
-  // the Lane 2 budget). Non-protected; issuer-domain priority bonus via priorityDomain.
-  if (ISSUER_SWEEP_ENABLED && ISSUER_SWEEP_MAX > 0 && allDomains.length > 0) {
-    for (const domain of allDomains) {
-      try {
-        const swept = await issuerPdfSweepForDomain(domain);
-        const before = allCandidates.length;
-        for (const r of swept) addCandidate(r, ISSUER_SWEEP_LANE, { priorityDomain: domain });
-        console.log(`[${companyName}] domain-sweep ${domain}: ${swept.length} PDFs found, ${allCandidates.length - before} new candidates`);
-      } catch (e: any) {
-        console.warn(`[${companyName}] domain-sweep ${domain} failed: ${e?.message}`);
-      }
-    }
-  }
-
   // Lane 3: Trusted source search (framework-specific sources take priority)
   const frameworkSourceIds = framework.trustedSourceIds as number[] | null;
   let effectiveSources = trustedSources;
@@ -4198,7 +4062,7 @@ async function searchCompanyDocumentsInner(opts: {
     if (variantQueries.length > 0) {
       console.log(`[${companyName}] Running ${variantQueries.length} variant queries`);
       for (const query of variantQueries) {
-        const results = await webSearch(query, { num: DISCOVERY_DEEP_NUM });
+        const results = await webSearch(query, { num: searchDepth });
         for (const r of results) addCandidate(r, "variant");
       }
     }
@@ -4679,30 +4543,6 @@ async function searchCompanyDocumentsInner(opts: {
     }
   } catch (e: any) {
     console.warn(`[${companyName}] R6a tenant extraction failed: ${e?.message}`);
-  }
-
-  // E: Known-doc seed lane — STRICTLY ADDITIVE. Runs only AFTER every fresh
-  // search lane has completed, so domain resolution, Lane 2 budget weighting and
-  // all searches behave exactly as if nothing had been saved. Stored URLs (from a
-  // prior run, possibly for a different topic) are merely extra candidates: any URL
-  // the fresh search already found keeps its own lane/title/snippet via the
-  // seenUrls dedupe. NON-protected: seeds still pass the relevance gate for the
-  // CURRENT topic, the pre-gate cap and the ranker, and are fetched + graded live.
-  // Only URLs whose host is in the CURRENT resolved domain family are seeded.
-  const seedFamily = effectiveDomain ? [effectiveDomain, ...relatedDomains] : [];
-  if (KNOWN_DOC_SEED_ENABLED && seedFamily.length > 0) {
-    const storedRaw = (companyRow.knownDocUrls ?? companyRow.known_doc_urls) as unknown;
-    const stored = Array.isArray(storedRaw) ? (storedRaw as unknown[]).filter((u): u is string => typeof u === "string") : [];
-    let seeded = 0;
-    for (const url of stored.slice(0, KNOWN_DOC_URLS_MAX)) {
-      if (!isInDomainFamily(url, seedFamily)) continue;
-      let host = "";
-      try { host = normaliseToRegistrableDomain(new URL(url).hostname); } catch { continue; }
-      const before = allCandidates.length;
-      addCandidate({ link: url, title: "Known issuer document", snippet: "" } as SearchResult, KNOWN_DOC_SEED_LANE, { priorityDomain: host });
-      if (allCandidates.length > before) seeded++;
-    }
-    if (stored.length > 0) console.log(`[${companyName}] known-doc-seed: ${seeded}/${stored.length} stored issuer URLs re-issued as live candidates`);
   }
 
   console.log(`[${companyName}] Discovery found ${allCandidates.length} total candidates`);
@@ -5213,23 +5053,6 @@ async function searchCompanyDocumentsInner(opts: {
   // Best-effort; failure logged but never blocks discovery return.
   if (TRACE_ENABLED) {
     await flushTraceBuffer(`${companyName}::${framework.name || framework.id}::${new Date().toISOString().slice(0, 19)}`);
-  }
-
-  // E: persist issuer/related-domain URLs from the final corpus (URL only — never
-  // content or answers). Current-run URLs first (ranked order), then previously
-  // stored ones, deduped and capped, so the list is bounded and recency-ordered.
-  if (KNOWN_DOC_SEED_ENABLED && companyRow.id && effectiveDomain) {
-    try {
-      const family = [effectiveDomain, ...relatedDomains];
-      const current = finalDocs.map(d => d.url).filter(u => isInDomainFamily(u, family));
-      const prevRaw = (companyRow.knownDocUrls ?? companyRow.known_doc_urls) as unknown;
-      const prev = Array.isArray(prevRaw) ? (prevRaw as unknown[]).filter((u): u is string => typeof u === "string" && isInDomainFamily(u, family)) : [];
-      const merged = [...new Set([...current, ...prev])].slice(0, KNOWN_DOC_URLS_MAX);
-      await db.execute(sql`UPDATE companies SET known_doc_urls = ${JSON.stringify(merged)}::jsonb WHERE id = ${companyRow.id}`);
-      console.log(`[${companyName}] known-doc-seed: persisted ${merged.length} issuer URLs (${current.length} from this run)`);
-    } catch (e: any) {
-      console.warn(`[${companyName}] known-doc-seed: failed to persist known_doc_urls: ${e.message}`);
-    }
   }
 
   return { documents: finalDocs, diagnostics, effectiveDomain, domainAutoDetected, issuerProfile };

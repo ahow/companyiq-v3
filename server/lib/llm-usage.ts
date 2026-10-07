@@ -246,130 +246,45 @@ export function recordLlmUsage(args: RecordUsageArgs): void {
     const cost = computeCost(usage, args.model);
     const ctx: LlmUsageContext = { ...(getLlmContext() || {}), ...(args.context || {}) };
     const callType = args.callType ?? ctx.callType ?? null;
-    enqueueUsageEvent([
-      ctx.workspaceId ?? null,
-      ctx.batchId ?? null,
-      ctx.companyId ?? null,
-      ctx.frameworkId ?? null,
-      args.model || null,
-      args.provider || null,
-      callType ?? null,
-      usage.promptTokens ?? 0,
-      usage.completionTokens ?? 0,
-      usage.totalTokens ?? 0,
-      cost.inputCostUsd,
-      cost.outputCostUsd,
-      cost.totalCostUsd,
-    ]);
+    void insertUsageEvent({ usage, cost, model: args.model, provider: args.provider, callType, ctx }).catch(
+      (e: any) => console.warn(`[llm-usage] insert failed (swallowed): ${e?.message || e}`)
+    );
   } catch (e: any) {
     console.warn(`[llm-usage] recordLlmUsage failed (swallowed): ${e?.message || e}`);
   }
 }
 
-// ─── Batched, pool-isolated persistence ──────────────────────────────────────
-// REGRESSION FIX (root cause of scoring-phase pool exhaustion): scoring makes
-// ~100 LLM calls per company (36 measures × primary/fallback/arbiter). The old
-// path did one fire-and-forget `pool.query` INSERT per call on the SHARED job
-// pool (server/db.ts). Under concurrent scoring that flooded the pool and starved
-// the ESSENTIAL connections — heartbeat, lock-renewal, status writes, the stale-
-// claim reaper — so they timed out together ("Connection terminated due to
-// connection timeout"). The pool (db.ts) was explicitly sized for ~1 connection
-// per concurrent job; usage logging was never in that budget.
-//
-// This keeps full usage logging but removes the contention two ways:
-//   (1) a DEDICATED small pool (max PG_USAGE_POOL_MAX, default 2), fully isolated
-//       from the job pool, so usage inserts can never consume job-pool slots; and
-//   (2) in-memory BUFFERING flushed as ONE multi-row INSERT on a timer / size
-//       threshold, so N LLM calls cost O(1) round-trips instead of O(N)
-//       concurrent checkouts.
-// Telemetry stays best-effort: overflow drops oldest, flush failures are swallowed
-// (never requeued → no hot-loop), and nothing here can throw into scoring.
-
-type UsageRow = [
-  number | null, number | null, number | null, number | null, // workspace, batch, company, framework
-  string | null, string | null, string | null,                // model, provider, callType
-  number, number, number,                                      // prompt, completion, total tokens
-  number | null, number | null, number | null,                // input, output, total cost usd
-];
-
-const USAGE_COLS = 13;
-const FLUSH_INTERVAL_MS = parseInt(process.env.LLM_USAGE_FLUSH_MS || "5000", 10);
-const FLUSH_MAX_ROWS = parseInt(process.env.LLM_USAGE_FLUSH_ROWS || "200", 10);
-const BUFFER_MAX_ROWS = parseInt(process.env.LLM_USAGE_BUFFER_MAX || "5000", 10);
-const USAGE_POOL_MAX = parseInt(process.env.PG_USAGE_POOL_MAX || "2", 10);
-
-const usageBuffer: UsageRow[] = [];
-let flushTimer: NodeJS.Timeout | null = null;
-let flushing = false;
-let usagePool: import("pg").Pool | null = null;
-let shutdownHooked = false;
-
-async function getUsagePool(): Promise<import("pg").Pool> {
-  if (usagePool) return usagePool;
+async function insertUsageEvent(p: {
+  usage: ParsedUsage;
+  cost: ComputedCost;
+  model: string;
+  provider: string;
+  callType: string | null;
+  ctx: LlmUsageContext;
+}): Promise<void> {
   // Lazy import so the pure functions above stay importable (e.g. in unit tests)
   // without requiring DATABASE_URL / a live pool.
-  const pg = (await import("pg")).default;
-  usagePool = new pg.Pool({
-    connectionString: process.env.DATABASE_URL,
-    max: USAGE_POOL_MAX,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "10000", 10),
-  });
-  return usagePool;
-}
-
-function ensureFlusher(): void {
-  if (!flushTimer) {
-    flushTimer = setInterval(() => { void flushUsage(); }, FLUSH_INTERVAL_MS);
-    // Telemetry must never keep the process alive on its own.
-    if (typeof flushTimer.unref === "function") flushTimer.unref();
-  }
-  if (!shutdownHooked) {
-    shutdownHooked = true;
-    const onExit = () => { void flushUsage(); };
-    process.once("SIGTERM", onExit);
-    process.once("SIGINT", onExit);
-    process.once("beforeExit", onExit);
-  }
-}
-
-function enqueueUsageEvent(row: UsageRow): void {
-  usageBuffer.push(row);
-  if (usageBuffer.length > BUFFER_MAX_ROWS) {
-    const dropped = usageBuffer.length - BUFFER_MAX_ROWS;
-    usageBuffer.splice(0, dropped); // drop oldest; telemetry is best-effort
-    console.warn(`[llm-usage] buffer overflow; dropped ${dropped} oldest usage event(s)`);
-  }
-  ensureFlusher();
-  if (usageBuffer.length >= FLUSH_MAX_ROWS) void flushUsage();
-}
-
-async function flushUsage(): Promise<void> {
-  if (flushing || usageBuffer.length === 0) return;
-  flushing = true;
-  const batch = usageBuffer.splice(0, FLUSH_MAX_ROWS); // bound one INSERT's size
-  try {
-    const values: any[] = [];
-    const tuples: string[] = [];
-    batch.forEach((r, i) => {
-      const base = i * USAGE_COLS;
-      tuples.push(`(${Array.from({ length: USAGE_COLS }, (_, k) => `$${base + k + 1}`).join(",")})`);
-      values.push(...r);
-    });
-    const p = await getUsagePool();
-    await p.query(
-      `INSERT INTO llm_usage_events
-         (workspace_id, batch_id, company_id, framework_id, model, provider, call_type,
-          prompt_tokens, completion_tokens, total_tokens,
-          input_cost_usd, output_cost_usd, total_cost_usd)
-       VALUES ${tuples.join(",")}`,
-      values
-    );
-  } catch (e: any) {
-    // Swallow; do NOT requeue (avoids unbounded growth / hot-looping when the DB
-    // is unhappy). Usage logging can never break or slow scoring.
-    console.warn(`[llm-usage] flush failed (swallowed): ${e?.message || e}`);
-  } finally {
-    flushing = false;
-  }
+  const { pool } = await import("../db.js");
+  await pool.query(
+    `INSERT INTO llm_usage_events
+       (workspace_id, batch_id, company_id, framework_id, model, provider, call_type,
+        prompt_tokens, completion_tokens, total_tokens,
+        input_cost_usd, output_cost_usd, total_cost_usd)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    [
+      p.ctx.workspaceId ?? null,
+      p.ctx.batchId ?? null,
+      p.ctx.companyId ?? null,
+      p.ctx.frameworkId ?? null,
+      p.model || null,
+      p.provider || null,
+      p.callType ?? null,
+      p.usage.promptTokens ?? 0,
+      p.usage.completionTokens ?? 0,
+      p.usage.totalTokens ?? 0,
+      p.cost.inputCostUsd,
+      p.cost.outputCostUsd,
+      p.cost.totalCostUsd,
+    ]
+  );
 }

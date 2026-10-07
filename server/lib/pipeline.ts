@@ -42,7 +42,6 @@ import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verificat
 import { classifyProvenance, provenanceToSourceType, isProvenanceRobustnessEnabled, type IrTenantBinding } from "./provenance.js";
 import { traceKeep, traceDrop, traceInfo, traceMatches, TRACE_ENABLED } from "./discovery-tracer.js";
 import { deriveAliases } from "./issuer-resolver.js";
-import { ABOUTNESS_ENABLED, ABOUTNESS_DEPRIORITIZE_WEIGHT, scoreAboutness, setAboutnessDocWeights, type AboutnessResult } from "./aboutness.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 /**
@@ -237,7 +236,7 @@ async function runFetchPhase(opts: {
   const platformHosts = await storage.getActivePlatformHosts();
   const settings = await storage.getSettings(workspaceId);
   const searchDepth = parseInt(settings.search_depth || "10");
-  const queryVariants = parseInt(settings.discovery_query_variants || "4");
+  const queryVariants = parseInt(settings.discovery_query_variants || "3");
   console.log(`[${companyName}] Using search depth: ${searchDepth}, query variants: ${queryVariants}`);
 
   // Fix C: Derive peer company names from the workspace for anti-contamination filtering
@@ -581,15 +580,6 @@ async function runFetchPhase(opts: {
         await storage.recordFetchFailure(companyId, d.url, "empty_cached_content");
         continue;
       }
-      // Proposal A: post-fetch aboutness (lenient hard-reject floor only).
-      const reuseAbout: AboutnessResult | null = ABOUTNESS_ENABLED
-        ? scoreAboutness(content, companyName, companyAliases, peerCompanyNames) : null;
-      if (reuseAbout?.decision === "reject") {
-        console.warn(`[${companyName}] REUSE ABOUTNESS reject (top=${reuseAbout.topOther}×${reuseAbout.topOtherHits}, target×${reuseAbout.targetHits}): ${d.url.slice(0, 80)}`);
-        await storage.recordVerificationReject(companyId, d.url, `aboutness_reject — about ${reuseAbout.topOther}`, batchId);
-        reuseRejected++;
-        continue;
-      }
       if (!shouldVerifyDocument({ url: d.url, verifiedDomain: company.domain, platformHosts })) {
         await storage.markLinkedDocumentVerified(companyId, d.url);
         reuseKept++;
@@ -617,13 +607,8 @@ async function runFetchPhase(opts: {
           const nameWords = companyNameLower
             .split(/[\s,\.\-&]+/)
             .filter(w => w.length >= 4 && !['inc', 'ltd', 'plc', 'corp', 'group', 'the', 'and', 'company', 'limited', 'corporation', 'holdings', 'international'].includes(w));
-          // Proposal A: generalised fallback — aboutness (when enabled) subsumes
-          // the raw name-mention test: keep iff the target is mentioned and the
-          // doc is not clearly about another entity.
-          const fallbackMentions = reuseAbout
-            ? reuseAbout.targetHits > 0
-            : ((companyNameLower.length >= 4 && contentLower.includes(companyNameLower))
-              || nameWords.some(w => contentLower.includes(w)));
+          const fallbackMentions = (companyNameLower.length >= 4 && contentLower.includes(companyNameLower))
+            || nameWords.some(w => contentLower.includes(w));
           if (fallbackMentions) {
             console.warn(`[${companyName}] REUSE VERIFY ERROR (${vr.reason}); kept via name-mention fallback: ${d.url.slice(0, 80)}`);
             await storage.markLinkedDocumentVerified(companyId, d.url);
@@ -1146,16 +1131,7 @@ async function runFetchPhase(opts: {
           //    retained, while other companies' documents are rejected.
           const needsVerify = shouldVerifyDocument({ url: doc.url, verifiedDomain: company.domain, platformHosts });
 
-          // Proposal A: post-fetch, pre-grade aboutness scorer. Hard-rejects ONLY
-          // documents clearly about another entity (no cover anchoring, ≤1 target
-          // mention, another entity ≥ ABOUTNESS_DOMINANCE_REJECT× more frequent).
-          // Applies to own-domain docs too (issuer-hosted research on others).
-          const about: AboutnessResult | null = ABOUTNESS_ENABLED
-            ? scoreAboutness(content, companyName, companyAliases, peerCompanyNames) : null;
-          if (about?.decision === "reject") {
-            console.warn(`[${companyName}] ABOUTNESS reject (top=${about.topOther}×${about.topOtherHits}, target×${about.targetHits}, dom=${about.dominanceRatio.toFixed(2)}): ${doc.url.slice(0, 80)}`);
-            await storage.recordFetchFailure(companyId, doc.url, "aboutness_reject");
-          } else if (!needsVerify) {
+          if (!needsVerify) {
             // On the company's own verified domain — accept without LLM cost.
             await storage.recordFetchSuccess(companyId, doc.url, content);
             newFetchCount++;
@@ -1184,11 +1160,8 @@ async function runFetchPhase(opts: {
               const nameWords = companyNameLower
                 .split(/[\s,\.\-&]+/)
                 .filter(w => w.length >= 4 && !['inc', 'ltd', 'plc', 'corp', 'group', 'the', 'and', 'company', 'limited', 'corporation', 'holdings', 'international'].includes(w));
-              // Proposal A: generalised by the aboutness scorer when enabled.
-              const fallbackMentions = about
-                ? about.targetHits > 0
-                : (companyNameLower.length >= 4 && contentLower.includes(companyNameLower)
-                  || nameWords.some(w => contentLower.includes(w)));
+              const fallbackMentions = companyNameLower.length >= 4 && contentLower.includes(companyNameLower)
+                || nameWords.some(w => contentLower.includes(w));
               if (fallbackMentions) {
                 console.warn(`[${companyName}] VERIFY ERROR (${vr.reason}); kept via name-mention fallback: ${doc.url.slice(0, 80)}`);
                 await storage.recordFetchSuccess(companyId, doc.url, content);
@@ -2245,33 +2218,8 @@ async function runAnalyzePhase(opts: {
   // is stronger than title-tier and rarely leaves winnable third_party
   // URLs unbound after the whole fetched-corpus is walked.
   const irTenantCacheContent = new Map<string, IrTenantBinding>();
-  // Proposal A: aboutness at corpus assembly (pre-grade) covers documents fetched
-  // in earlier runs too. "reject" (lenient floor) excludes; "deprioritize" registers
-  // a ranking multiplier consumed by passage retrieval. Disabled in corpus replay
-  // so replayed packs stay identical to their source batch.
-  const aboutnessActive = ABOUTNESS_ENABLED && !replayBatchId;
-  const aboutnessWeights = new Map<string, number>();
-  let aboutnessRejected = 0;
-  let aboutnessPeerNames: string[] = [];
-  if (aboutnessActive) {
-    try {
-      aboutnessPeerNames = (await storage.getCompanies(workspaceId))
-        .filter((c: any) => c.id !== companyId)
-        .map((c: any) => (c.name || "").toLowerCase())
-        .filter((n: string) => n && n.length >= 4);
-    } catch { /* peers optional */ }
-  }
   for (const doc of fetchedDocs) {
     if (!doc.content) continue;
-    if (aboutnessActive && doc.content.length > 50) {
-      const ab = scoreAboutness(doc.content, (company as any)?.name || companyName, companyAliasesForCorpus, aboutnessPeerNames);
-      if (ab.decision === "reject") {
-        aboutnessRejected++;
-        console.log(`[${companyName}] ABOUTNESS excluded doc ${doc.id}: ${doc.url} (about ${ab.topOther}×${ab.topOtherHits}, target×${ab.targetHits})`);
-        continue;
-      }
-      if (ab.decision === "deprioritize") aboutnessWeights.set(doc.url, ABOUTNESS_DEPRIORITIZE_WEIGHT);
-    }
     // Re-classify with full content; a document tagged third_party at
     // discovery time (title-only) may reveal an identity match once fetched.
     const prov = classifyProvenance({
@@ -2329,12 +2277,6 @@ async function runAnalyzePhase(opts: {
     documentUrls.push(doc.url);
     documentTitles.push(doc.title || doc.url);
     documentIds.push(doc.id);
-  }
-  if (aboutnessActive) {
-    setAboutnessDocWeights(companyId, aboutnessWeights);
-    console.log(`[${companyName}] ABOUTNESS corpus: rejected=${aboutnessRejected}, deprioritized=${aboutnessWeights.size} (weight ${ABOUTNESS_DEPRIORITIZE_WEIGHT})`);
-  } else {
-    setAboutnessDocWeights(companyId, new Map());
   }
   if (excludedThirdPartyCount > 0 || upgradedToIssuerCount > 0 || failOpenKeptCount > 0) {
     console.log(

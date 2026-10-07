@@ -49,7 +49,6 @@ export const companies = pgTable("companies", {
   relatedDomains: jsonb("related_domains").$type<string[]>(),
   relatedDomainsManual: jsonb("related_domains_manual").$type<string[]>(),
   relatedDomainsPipelineVersion: text("related_domains_pipeline_version"), // 42-A
-  knownDocUrls: jsonb("known_doc_urls").$type<string[]>().default([]),     // URL-level known-doc seeding
   // I55: FMP authoritative issuer cache (website + rich metadata)
   fmpSymbol: text("fmp_symbol"),
   fmpCompanyName: text("fmp_company_name"),
