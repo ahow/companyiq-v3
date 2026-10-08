@@ -4,6 +4,7 @@ import { db } from "../db";
 import { sql } from "drizzle-orm";
 import * as storage from "../storage.js";
 import { completeWithFallback } from "./ai-providers.js";
+import { noteRateLimited } from "./adaptive-concurrency.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { traceKeep, traceDrop, traceInfo, traceSessionHeader, traceMatches, TRACE_ENABLED, flushTraceBuffer } from "./discovery-tracer.js";
 import {
@@ -1169,6 +1170,7 @@ async function webSearchInner(
         await new Promise(r => setTimeout(r, 5000 + Math.random() * 2000));
         try { return await withBucket(serperBucket, () => webSearchSerper(query, serperKey, opts)); } catch { /* fall through */ }
       }
+      noteRateLimited(); // genuine Serper failure (429-retry-success returns earlier) = back-pressure signal for adaptive concurrency
       console.warn(`[Discovery] Serper.dev failed for "${query}": ${error.message}`);
       // Fall through to SerpAPI
     }
@@ -1181,8 +1183,10 @@ async function webSearchInner(
       return [];
     }
     const onSerpApiError = (err: any) => {
+      const is429 = err?.response?.status === 429;
+      if (!is429) noteRateLimited(); // non-429 SerpAPI failure = back-pressure signal for adaptive concurrency
       if (!gated) return;
-      if (err?.response?.status === 429) serpApiBreaker.neutral();
+      if (is429) serpApiBreaker.neutral();
       else serpApiBreaker.failure();
     };
     try {

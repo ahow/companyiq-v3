@@ -22,6 +22,7 @@ import {
   EVOMI_PROXY_PROVIDER,
   PROXY_CREDIT_ALERT_KIND,
 } from "./credit-breaker.js";
+import { noteRateLimited } from "./adaptive-concurrency.js";
 
 // User-facing message shown on the dashboard banner when the residential proxy
 // runs out of credit. Kept as a constant so the raise + any future references
@@ -825,6 +826,7 @@ function isBrowserCircuitOpen(): boolean {
 
 function tripBrowserCircuit(reason: string): void {
   browserLaunchBlockedUntil = Date.now() + BROWSER_LAUNCH_COOLDOWN_MS;
+  noteRateLimited(); // Chromium EAGAIN/fork-pressure = container saturation; feed adaptive concurrency so it scales down
   console.warn(
     `[Processor] Chromium launch circuit OPEN for ${Math.round(BROWSER_LAUNCH_COOLDOWN_MS / 1000)}s (reason: ${reason}). ` +
     `Skipping browser fallback until cooldown expires.`
