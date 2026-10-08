@@ -804,6 +804,40 @@ function releaseBrowserSlot(): void {
   activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
 }
 
+// ─── Per-container GLOBAL document-fetch semaphore ───────────────────────────
+//
+// MAX_CONCURRENT_BROWSER only bounds the Chromium page fan-out. The thread
+// explosion that produced `pthread_create: Resource temporarily unavailable`
+// (EAGAIN) under batch load comes from the *HTTP* fetch fan-out:
+// WORKER_CONCURRENCY pipelines × INCOMPANY_FETCH_CONCURRENCY in-company fetches
+// each open socket threads simultaneously, which can exceed the container's
+// PID/thread ceiling. This semaphore bounds the TOTAL number of concurrent
+// processDocument() calls across ALL pipelines in this container so company
+// concurrency can stay high while the thread-heavy fetch phase is capped.
+const MAX_CONCURRENT_FETCH = parseInt(process.env.MAX_CONCURRENT_FETCH || "16", 10);
+let activeFetches = 0;
+const fetchWaiters: Array<() => void> = [];
+
+async function acquireFetchSlot(): Promise<void> {
+  if (activeFetches < MAX_CONCURRENT_FETCH) {
+    activeFetches++;
+    return;
+  }
+  // At capacity — wait until releaseFetchSlot() hands a slot directly to us.
+  await new Promise<void>((resolve) => fetchWaiters.push(resolve));
+  // Slot count was retained on our behalf by the releaser; do not increment.
+}
+
+function releaseFetchSlot(): void {
+  const next = fetchWaiters.shift();
+  if (next) {
+    // Hand our slot straight to the next waiter without touching the count.
+    next();
+    return;
+  }
+  activeFetches = Math.max(0, activeFetches - 1);
+}
+
 // A single shared Chromium instance is reused across fetches (one new *page* per
 // fetch) instead of launching a fresh browser per document. This drastically
 // reduces process spawns under batch load.
@@ -1879,7 +1913,27 @@ export async function fetchIssuerPdfsWithPrimedSession(
 
 // ─── Main Process Document Function ──────────────────────────────────────────
 
+/**
+ * Public per-document fetch entry point. Bounds the TOTAL concurrent fetches in
+ * this container via the global fetch semaphore before delegating to the real
+ * implementation, so the HTTP/browser thread fan-out can never exceed the
+ * container's PID/thread ceiling regardless of how many pipelines are running.
+ * The cache-hit path inside acquires a slot too, but that resolves instantly.
+ */
 export async function processDocument(
+  url: string,
+  type: "pdf" | "html",
+  opts?: { forceHeadless?: boolean }
+): Promise<string> {
+  await acquireFetchSlot();
+  try {
+    return await processDocumentInner(url, type, opts);
+  } finally {
+    releaseFetchSlot();
+  }
+}
+
+async function processDocumentInner(
   url: string,
   type: "pdf" | "html",
   opts?: { forceHeadless?: boolean }

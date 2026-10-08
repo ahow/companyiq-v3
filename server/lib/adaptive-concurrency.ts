@@ -37,6 +37,32 @@ export interface AdaptiveConcurrencyConfig {
   step: number;
   /** How often (ms) the worker polls the controller. */
   tickMs: number;
+  /**
+   * Minimum dwell (ms) before the controller PROBES one step above the learned
+   * soft ceiling to discover freed-up headroom. Larger = more cautious probing.
+   */
+  probeIntervalMs: number;
+}
+
+// ─── Learned-ceiling controller state (congestion avoidance) ────────────────
+//
+// The decision function is still PURE: callers thread this state object through
+// successive calls (the worker keeps one instance). It is what lets the
+// controller PARK just below the concurrency level that last triggered
+// back-pressure instead of blindly re-ramping to max every cycle (the sawtooth).
+
+export interface ControllerState {
+  /**
+   * Learned soft ceiling: the concurrency level at which back-pressure was last
+   * observed. `Infinity` until the first backoff (no ceiling learned yet).
+   */
+  ceiling: number;
+  /** Timestamp (ms) of the last upward probe at/above the park level. */
+  lastProbeAt: number;
+}
+
+export function initialControllerState(): ControllerState {
+  return { ceiling: Infinity, lastProbeAt: 0 };
 }
 
 export interface SignalSnapshot {
@@ -49,6 +75,8 @@ export interface ConcurrencyDecision {
   concurrency: number;
   changed: boolean;
   reason: string;
+  /** Updated controller state to thread into the next call. */
+  state: ControllerState;
 }
 
 // ─── Config loader ──────────────────────────────────────────────────────────
@@ -91,6 +119,7 @@ export function loadAdaptiveConfig(): AdaptiveConcurrencyConfig {
     decreaseFactor: envFloat("ADAPTIVE_CONCURRENCY_DECREASE_FACTOR", 0.5, 0.05, 0.99),
     step: envInt("ADAPTIVE_CONCURRENCY_STEP", 1, 1),
     tickMs: envInt("ADAPTIVE_CONCURRENCY_TICK_MS", 15000, 1000),
+    probeIntervalMs: envInt("ADAPTIVE_CONCURRENCY_PROBE_INTERVAL_MS", 180000, 1000),
   };
 }
 
@@ -100,44 +129,89 @@ export function loadAdaptiveConfig(): AdaptiveConcurrencyConfig {
  * Decide the next worker concurrency given current state and recent signals.
  * PURE: no side effects, deterministic given inputs.
  *
- * Rules (in priority order):
- *   - Sustained back-pressure (rateLimited >= backoffThreshold): scale DOWN to
- *     max(min, floor(current * decreaseFactor)).
- *   - No back-pressure at all (rateLimited === 0) AND we saw traffic: ramp UP by
- *     step toward max.
- *   - Otherwise: hold (some rate limiting but below threshold, or no traffic).
+ * Congestion-avoidance model (TCP AIMD with a learned ceiling / ssthresh):
+ *   - Sustained back-pressure (rateLimited >= backoffThreshold): multiplicative
+ *     DECREASE to max(min, floor(current * decreaseFactor)) AND record the level
+ *     that broke as the learned soft ceiling. This is what stops the sawtooth:
+ *     we remember where it hurt.
+ *   - No back-pressure AND we saw traffic: converge toward a PARK level just
+ *     below the learned ceiling. Below park → fast additive ramp (step). At/above
+ *     park → only PROBE one step up, and only once per `probeIntervalMs`, to
+ *     discover freed-up headroom slowly instead of immediately re-saturating.
+ *   - Otherwise: hold.
+ *
+ * `state` is threaded by the caller across ticks (the worker holds one instance).
+ * Passing only three args yields a fresh state (ceiling = Infinity), which makes
+ * the function behave exactly like the memoryless AIMD controller — so callers
+ * that don't thread state (and the existing unit tests) see unchanged behaviour.
  */
 export function decideConcurrency(
   current: number,
   snapshot: SignalSnapshot,
   config: AdaptiveConcurrencyConfig,
+  state: ControllerState = initialControllerState(),
+  now: number = Date.now(),
 ): ConcurrencyDecision {
   // Clamp current into bounds first (defensive — config may have changed).
   const clampedCurrent = Math.max(config.min, Math.min(config.max, current));
 
   if (snapshot.rateLimited >= config.backoffThreshold) {
+    // Learn the ceiling: the lowest level at which we have observed back-pressure.
+    const learned = Math.min(state.ceiling, clampedCurrent);
+    const nextState: ControllerState = { ceiling: learned, lastProbeAt: now };
     const next = Math.max(config.min, Math.floor(clampedCurrent * config.decreaseFactor));
     if (next < clampedCurrent) {
       return {
         concurrency: next,
         changed: next !== current,
-        reason: `back-pressure: ${snapshot.rateLimited} rate-limited events >= threshold ${config.backoffThreshold}, scaling down ${clampedCurrent}→${next}`,
+        reason: `back-pressure: ${snapshot.rateLimited} rate-limited events >= threshold ${config.backoffThreshold}, scaling down ${clampedCurrent}→${next} (learned ceiling ${learned})`,
+        state: nextState,
       };
     }
     // Already at floor.
     return {
       concurrency: clampedCurrent,
       changed: clampedCurrent !== current,
-      reason: `back-pressure but already at min concurrency ${config.min}`,
+      reason: `back-pressure but already at min concurrency ${config.min} (learned ceiling ${learned})`,
+      state: nextState,
     };
   }
 
   if (snapshot.rateLimited === 0 && snapshot.total > 0 && clampedCurrent < config.max) {
-    const next = Math.min(config.max, clampedCurrent + config.step);
+    // Park just below the learned ceiling; with no ceiling yet, park at max.
+    const park =
+      state.ceiling === Infinity
+        ? config.max
+        : Math.max(config.min, Math.min(config.max, state.ceiling - 1));
+
+    if (clampedCurrent < park) {
+      // Below the park level — ramp up fast (additive increase).
+      const next = Math.min(park, clampedCurrent + config.step);
+      return {
+        concurrency: next,
+        changed: next !== current,
+        reason: `no back-pressure over ${snapshot.total} events, ramping up ${clampedCurrent}→${next} (park ${park})`,
+        state,
+      };
+    }
+
+    // At/above the park level — probe upward only occasionally to find headroom.
+    if (clampedCurrent < config.max && now - state.lastProbeAt >= config.probeIntervalMs) {
+      const next = Math.min(config.max, clampedCurrent + 1);
+      return {
+        concurrency: next,
+        changed: next !== current,
+        reason: `probing above learned ceiling ${state.ceiling}: ${clampedCurrent}→${next}`,
+        state: { ceiling: state.ceiling, lastProbeAt: now },
+      };
+    }
+
+    // Hold at park, waiting out the probe interval.
     return {
-      concurrency: next,
-      changed: next !== current,
-      reason: `no back-pressure over ${snapshot.total} events, ramping up ${clampedCurrent}→${next}`,
+      concurrency: clampedCurrent,
+      changed: clampedCurrent !== current,
+      reason: `no back-pressure but holding at park ${park} (learned ceiling ${state.ceiling})`,
+      state,
     };
   }
 
@@ -148,6 +222,7 @@ export function decideConcurrency(
       snapshot.total === 0
         ? "no traffic in window, holding"
         : `${snapshot.rateLimited} rate-limited events below threshold ${config.backoffThreshold}, holding`,
+    state,
   };
 }
 
