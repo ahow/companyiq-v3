@@ -29,7 +29,7 @@ import {
   type ProviderPauseState,
 } from "./lib/provider-resilience.js";
 import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
-import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot, initialControllerState } from "./lib/adaptive-concurrency.js";
+import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
 import { runWithLlmContext } from "./lib/llm-usage.js";
 
 const QUEUE_NAME = "analysis";
@@ -1436,23 +1436,17 @@ export async function startWorker(workerId?: string): Promise<Worker> {
   const adaptiveConfig = loadAdaptiveConfig();
   if (adaptiveConfig.enabled) {
     let currentConcurrency = MAX_CONCURRENT;
-    // Persistent controller state (learned ceiling + probe timer) threaded across
-    // ticks so the controller PARKS below the level that last saturated instead of
-    // sawtoothing back to max every cycle.
-    let controllerState = initialControllerState();
     adaptiveInterval = setInterval(() => {
       if (!worker) { if (adaptiveInterval) { clearInterval(adaptiveInterval); adaptiveInterval = null; } return; }
       try {
         const snapshot = getSignalSnapshot(adaptiveConfig.windowMs);
-        const decision = decideConcurrency(currentConcurrency, snapshot, adaptiveConfig, controllerState);
+        const decision = decideConcurrency(currentConcurrency, snapshot, adaptiveConfig);
         if (decision.changed) {
           // BullMQ supports adjusting concurrency on a live worker.
           (worker as any).concurrency = decision.concurrency;
           currentConcurrency = decision.concurrency;
           console.log("[Worker] Adaptive concurrency → " + decision.concurrency + " (" + decision.reason + ")");
         }
-        // Always update: ceiling and probe timer evolve even when concurrency is unchanged.
-        controllerState = decision.state;
       } catch (err: any) {
         console.warn("[Worker] Adaptive concurrency tick error (non-fatal): " + err.message);
       }

@@ -20,7 +20,6 @@ function cfg(over: Partial<AdaptiveConcurrencyConfig> = {}): AdaptiveConcurrency
     decreaseFactor: 0.5,
     step: 1,
     tickMs: 15000,
-    probeIntervalMs: 180000,
     ...over,
   };
 }
@@ -139,44 +138,4 @@ test("M: min never exceeds max even if misconfigured", () => {
   else process.env.ADAPTIVE_CONCURRENCY_MIN = prevMin;
   if (prevMax === undefined) delete process.env.WORKER_CONCURRENCY;
   else process.env.WORKER_CONCURRENCY = prevMax;
-});
-
-// ─── Learned-ceiling (congestion avoidance) ──────────────────────────────────
-
-test("N: backoff records the learned ceiling in state", () => {
-  const d = decideConcurrency(10, { rateLimited: 5, success: 20, total: 25 }, cfg());
-  assert.equal(d.concurrency, 5);
-  assert.equal(d.state.ceiling, 10, "ceiling learned at the level that broke");
-  assert.match(d.reason, /learned ceiling 10/);
-});
-
-test("O: after a learned ceiling, ramp parks one below it instead of re-climbing to max", () => {
-  const broken = decideConcurrency(8, { rateLimited: 5, success: 20, total: 25 }, cfg());
-  // ceiling=8, parked. Now ramp up with no back-pressure from current 4.
-  let cur = 4;
-  let st = broken.state;
-  // Fast ramp below park (park = ceiling-1 = 7).
-  for (let i = 0; i < 10; i++) {
-    const d = decideConcurrency(cur, { rateLimited: 0, success: 30, total: 30 }, cfg(), st, 1000);
-    cur = d.concurrency;
-    st = d.state;
-  }
-  assert.equal(cur, 7, "converges to park = ceiling-1, does not re-climb to max 10");
-});
-
-test("P: at park, probes up only after probeIntervalMs has elapsed", () => {
-  const broken = decideConcurrency(8, { rateLimited: 5, success: 20, total: 25 }, cfg(), undefined, 0);
-  // Sitting at park (7). lastProbeAt was set at backoff time (0).
-  const tooSoon = decideConcurrency(7, { rateLimited: 0, success: 30, total: 30 }, cfg(), broken.state, 1000);
-  assert.equal(tooSoon.concurrency, 7, "holds at park before probe interval elapses");
-  assert.match(tooSoon.reason, /holding at park/);
-  const afterInterval = decideConcurrency(7, { rateLimited: 0, success: 30, total: 30 }, cfg(), broken.state, 200000);
-  assert.equal(afterInterval.concurrency, 8, "probes one step up after probeIntervalMs");
-  assert.match(afterInterval.reason, /probing above learned ceiling/);
-});
-
-test("Q: three-arg calls stay memoryless (fresh state) — backwards compatible", () => {
-  const d = decideConcurrency(4, { rateLimited: 0, success: 30, total: 30 }, cfg());
-  assert.equal(d.concurrency, 5, "fresh state parks at max → ramps up like old AIMD");
-  assert.match(d.reason, /ramping up/);
 });
