@@ -213,6 +213,18 @@ const ISSUER_SWEEP_SITEMAP = (process.env.ISSUER_SWEEP_SITEMAP || "false").toLow
 // shallow the cheap sweep and drop deep issuer PDFs (e.g. MAPFRE media/YYYY/MM).
 const ISSUER_SWEEP_NUM = Math.max(1, parseInt(process.env.ISSUER_SWEEP_NUM || "30", 10) || 30);
 const ISSUER_SWEEP_LANE = "domain-sweep";
+// Change #5 hardening: bound the sweep's added search-volume so it cannot saturate
+// the search providers — the original regression, reproduced in batch 1242 where the
+// sweep fired +1 search for EVERY family domain (2-4/company) outside the Lane 2
+// budget, tripping the 8s per-query timeout + SerpAPI breaker and spinning
+// fail-on-timeout retries. Two structural levers (both env-tunable):
+//   ISSUER_SWEEP_MAX_DOMAINS — sweep at most the top-N family domains (default 1 =
+//     primary) instead of every domain, capping worst-case extra searches at N.
+//   ISSUER_SWEEP_SUFFICIENCY — demand-gate: skip the sweep entirely when the normal
+//     lanes already surfaced >= this many issuer-domain PDFs, so only under-covered
+//     companies (the ones Proposal A targets) pay any sweep cost.
+const ISSUER_SWEEP_MAX_DOMAINS = Math.max(1, parseInt(process.env.ISSUER_SWEEP_MAX_DOMAINS || "1", 10) || 1);
+const ISSUER_SWEEP_SUFFICIENCY = Math.max(0, parseInt(process.env.ISSUER_SWEEP_SUFFICIENCY || "6", 10));
 
 /** Exported for tests. Most-recent-year-in-path first; stable on ties. */
 export function rankSweepPdfs(results: SearchResult[], max: number): SearchResult[] {
@@ -4173,17 +4185,33 @@ async function searchCompanyDocumentsInner(opts: {
   }
   console.log(`[${companyName}] Lane 2 final query count (all sub-lanes): ${lane2QueryCount}/${MAX_LANE2_QUERIES}`);
 
-  // Proposal A (part 1): issuer-domain PDF sweep (+1 search per domain, outside
-  // the Lane 2 budget). Non-protected; issuer-domain priority bonus via priorityDomain.
+  // Proposal A (part 1), change-#5 hardened: issuer-domain PDF sweep. Guarded so it
+  // cannot saturate the search providers (see ISSUER_SWEEP_MAX_DOMAINS / _SUFFICIENCY
+  // above). (1) Demand-gate: skip the whole sweep when the normal lanes already
+  // surfaced enough issuer-domain PDFs. (2) Domain-bound: sweep at most the top-N
+  // family domains instead of every domain. Non-protected lane.
+  // NB: Proposal A's original call passed a 3rd `{ priorityDomain }` arg that
+  // addCandidate never accepted — it was a silent no-op (never wired), so swept PDFs
+  // rank via the normal calculatePriority path. Arg dropped here to keep runtime
+  // behaviour identical to the tested baseline while compiling cleanly.
   if (ISSUER_SWEEP_ENABLED && ISSUER_SWEEP_MAX > 0 && allDomains.length > 0) {
-    for (const domain of allDomains) {
-      try {
-        const swept = await issuerPdfSweepForDomain(domain);
-        const before = allCandidates.length;
-        for (const r of swept) addCandidate(r, ISSUER_SWEEP_LANE, { priorityDomain: domain });
-        console.log(`[${companyName}] domain-sweep ${domain}: ${swept.length} PDFs found, ${allCandidates.length - before} new candidates`);
-      } catch (e: any) {
-        console.warn(`[${companyName}] domain-sweep ${domain} failed: ${e?.message}`);
+    const familyPdfCount = allCandidates.filter(
+      (c) => /\.pdf(\?|#|$)/i.test(c.url) && isInDomainFamily(c.url, allDomains),
+    ).length;
+    if (familyPdfCount >= ISSUER_SWEEP_SUFFICIENCY) {
+      console.log(`[${companyName}] domain-sweep skipped: ${familyPdfCount} issuer-domain PDFs already found (>= ${ISSUER_SWEEP_SUFFICIENCY})`);
+    } else {
+      const sweepDomains = allDomains.slice(0, ISSUER_SWEEP_MAX_DOMAINS);
+      console.log(`[${companyName}] domain-sweep: ${sweepDomains.length}/${allDomains.length} domain(s), ${familyPdfCount} family PDF(s) so far`);
+      for (const domain of sweepDomains) {
+        try {
+          const swept = await issuerPdfSweepForDomain(domain);
+          const before = allCandidates.length;
+          for (const r of swept) addCandidate(r, ISSUER_SWEEP_LANE);
+          console.log(`[${companyName}] domain-sweep ${domain}: ${swept.length} PDFs found, ${allCandidates.length - before} new candidates`);
+        } catch (e: any) {
+          console.warn(`[${companyName}] domain-sweep ${domain} failed: ${e?.message}`);
+        }
       }
     }
   }
