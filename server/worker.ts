@@ -68,6 +68,7 @@ export interface AnalysisJobData {
   batchId: number;
   workspaceId: number;
   skipFetch?: boolean;
+  skipDiscovery?: boolean; // Resume-not-restart retry: reuse persisted corpus, skip discovery search
   sourceBatchId?: number; // Corpus replay: read corpus from this source batch
 }
 
@@ -207,7 +208,19 @@ async function reEnqueueForRetry(jobData: AnalysisJobData, attemptNumber: number
     const delay = RETRY_DELAY_MS * attemptNumber;
     const jobName = "analysis-" + jobData.batchId + "-" + jobData.companyId + "-retry" + attemptNumber;
     const jobIdStr = "batch-" + jobData.batchId + "-company-" + jobData.companyId + "-attempt" + (attemptNumber + 1);
-    await q.add(jobName, jobData, { delay, priority: 1, jobId: jobIdStr });
+    // Resume-not-restart: if the first attempt already persisted a corpus, skip
+    // the discovery fan-out on retry (fetch phase still runs for pending docs).
+    let resumeData = jobData;
+    try {
+      const existing = await storage.getAcceptedDocuments(jobData.companyId);
+      if (existing && existing.length > 0) {
+        resumeData = { ...jobData, skipDiscovery: true };
+        console.log("[Worker] Retry will RESUME (skip discovery) for job " + jobData.jobId + " — " + existing.length + " accepted documents already persisted");
+      }
+    } catch (e: any) {
+      console.warn("[Worker] resume-check failed, retry will restart from discovery: " + e.message);
+    }
+    await q.add(jobName, resumeData, { delay, priority: 1, jobId: jobIdStr });
     console.log("[Worker] Re-enqueued job " + jobData.jobId + " for retry (attempt " + (attemptNumber + 1) + "/" + MAX_RETRY_ATTEMPTS + ", delay " + delay + "ms)");
   } catch (err: any) {
     console.error("[Worker] Failed to re-enqueue job " + jobData.jobId + ": " + err.message);
@@ -220,7 +233,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   if (job.data.kind === "reliability_finalizer") {
     return finalizeReliabilityCycle(job.data);
   }
-  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, sourceBatchId } = job.data;
+  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, skipDiscovery, sourceBatchId } = job.data;
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
 
@@ -381,6 +394,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
             batchId,
             cancelCheck,
             skipFetch,
+            skipDiscovery,
             sourceBatchId,
             // 42-F: Share circuit-breaker state across all companies in the batch
             batchFetchState: (() => {

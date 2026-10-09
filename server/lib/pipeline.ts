@@ -147,6 +147,7 @@ export interface PipelineOptions {
   batchId?: number; // For corpus snapshot (batch_corpus table)
   cancelCheck?: () => boolean;
   skipFetch?: boolean; // If true, skip fetch phase (reuse existing documents)
+  skipDiscovery?: boolean; // Resume-not-restart retry: skip discovery search, still run fetch on persisted corpus
   sourceBatchId?: number; // Corpus replay: read corpus from this source batch instead of current
   batchFetchState?: BatchFetchState; // 42-F: batch-scoped circuit-breaker
 }
@@ -205,8 +206,9 @@ async function runFetchPhase(opts: {
   batchId?: number;
   cancelCheck?: () => boolean;
   batchFetchState?: BatchFetchState; // 42-F
+  skipDiscovery?: boolean; // Resume-not-restart retry: reuse persisted accepted docs, no fresh search
 }): Promise<{ fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } }> {
-  const { company, framework, workspaceId, batchId, cancelCheck } = opts;
+  const { company, framework, workspaceId, batchId, cancelCheck, skipDiscovery } = opts;
   const companyId = company.id;
   const companyName = company.name;
   const fetchPhaseStart = Date.now();
@@ -218,8 +220,12 @@ async function runFetchPhase(opts: {
 
   // Step 1: Clear only PENDING (never-fetched) documents from previous runs.
   // Previously fetched documents (fetchStatus: "ok") are KEPT for reuse.
-  await storage.clearDiscoveredDocuments(companyId);
-  console.log(`[${companyName}] Cleared stale pending documents (cached docs preserved)`);
+  // Resume-not-restart: on a retry with a persisted corpus, KEEP pending docs so
+  // the fetch loop below finishes them instead of re-discovering from scratch.
+  if (!skipDiscovery) {
+    await storage.clearDiscoveredDocuments(companyId);
+    console.log(`[${companyName}] Cleared stale pending documents (cached docs preserved)`);
+  }
 
   // Count cached documents that already have content
   const cachedDocs = await storage.getFetchedDocuments(companyId);
@@ -272,7 +278,14 @@ async function runFetchPhase(opts: {
     console.warn(`[${companyName}] Failed to aggregate evidenceKeywords/qualifyingInstances: ${ekErr?.message}`);
   }
 
-  const discoveryResult: DiscoveryResult = await searchCompanyDocuments({
+  let discoveryResult: DiscoveryResult;
+  if (skipDiscovery) {
+    // Resume-not-restart: no fresh network search. Operate on the accepted docs
+    // persisted by the previous attempt; the fetch loop reads them from the DB.
+    const accepted = await storage.getAcceptedDocuments(companyId);
+    console.log(`[${companyName}] Skipping discovery (RESUME): operating on ${accepted.length} persisted accepted documents`);
+    discoveryResult = { documents: accepted, diagnostics: {}, issuerProfile: undefined } as any;
+  } else discoveryResult = await searchCompanyDocuments({
     companyName,
     companyId,
     companyDomain: company.domain,
@@ -303,7 +316,7 @@ async function runFetchPhase(opts: {
   // disclosure for this issuer's jurisdiction; for anything missing we fire
   // ONE targeted follow-up search and merge the results back into the corpus
   // so the downstream ranker/gate can score them alongside the original set.
-  if (settings.retrieval_v2 === "true") {
+  if (!skipDiscovery && settings.retrieval_v2 === "true") {
     const currentYear = new Date().getUTCFullYear();
     // company.exchange is not a stored column today; pass null. Country
     // handles the audit-driven cases (Unilever GB, Kering FR) directly.
@@ -429,7 +442,7 @@ async function runFetchPhase(opts: {
   //       provenance classifier can't tag such URLs as issuer content until the
   //       subdomain is promoted, so we promote it here for the run and propose it.
   // Neither case hardcodes any company/topic names.
-  {
+  if (!skipDiscovery) {
     const allDocs = discoveryResult.documents;
     if (allDocs.length >= 5) {
       const hostBuckets = new Map<string, number>();
@@ -493,7 +506,8 @@ async function runFetchPhase(opts: {
     firstProv: ReturnType<typeof classifyProvenance>;
   };
   const firstPass: FirstPassEntry[] = [];
-  for (const doc of discoveryResult.documents) {
+  // Resume: docs are already persisted — do not re-upsert them.
+  for (const doc of (skipDiscovery ? [] : discoveryResult.documents)) {
     const firstProv = classifyProvenance({
       url: doc.url,
       title: doc.title,
@@ -657,7 +671,8 @@ async function runFetchPhase(opts: {
   // blindly overwrote discoveryDiagnostics here we would wipe autoReexam.count
   // back to 0 every pass — defeating the bound and risking an infinite retry
   // loop. Read-merge so the counter survives across re-fetches.
-  {
+  // Resume: no fresh discovery diagnostics — keep the persisted ones untouched.
+  if (!skipDiscovery) {
     const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
     const merged: any = { ...discoveryResult.diagnostics };
     if (priorDiag.autoReexam) merged.autoReexam = priorDiag.autoReexam;
@@ -3262,7 +3277,7 @@ async function maybeZeroCorpusRerun(opts: {
 // ─── Combined Pipeline (both phases in sequence) ────────────────────────────
 
 export async function runAnalysisPipeline(opts: PipelineOptions): Promise<PipelineResult> {
-  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch, sourceBatchId } = opts;
+  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch, skipDiscovery, sourceBatchId } = opts;
   const companyName = company.name;
   const companyId = company.id;
   const pipelineStart = Date.now();
@@ -3295,7 +3310,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // by runFetchPhase; used to thread the profile into the analyze phase.
       let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } } = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
-        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck, batchFetchState: opts.batchFetchState });
+        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck, batchFetchState: opts.batchFetchState, skipDiscovery });
         
         if (cancelCheck?.()) {
           return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0, failureType: "cancelled" as const };
