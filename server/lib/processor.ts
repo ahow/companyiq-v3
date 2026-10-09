@@ -542,23 +542,75 @@ function extractTextFromHtml(html: string): string {
 // glyphs via pdf-parse but no real text).
 const PDF_TEXT_MIN_CHARS = 100;
 
+// ── Subprocess concurrency ceiling ─────────────────────────────────────────
+// Bounds concurrent external forks (pdftotext / pdftoppm / tesseract) so a batch
+// cannot exhaust the container's RLIMIT_NPROC / pids cgroup cap. This is a CEILING,
+// not a throughput cut: it only bites when more than N extractions are in flight,
+// and it is the direct cause-removal for the Chromium-launch fork storm (see
+// getSharedBrowser catch + tripBrowserCircuit). Same direct hand-off design as the
+// browser semaphore (acquireBrowserSlot/releaseBrowserSlot) to avoid the
+// over-subscription race: releasing hands the slot straight to the next waiter
+// without touching the count.
+const MAX_CONCURRENT_SUBPROC = parseInt(process.env.MAX_CONCURRENT_SUBPROC || "6", 10);
+let activeSubprocs = 0;
+const subprocWaiters: Array<() => void> = [];
+
+async function acquireProcSlot(): Promise<void> {
+  if (activeSubprocs < MAX_CONCURRENT_SUBPROC) {
+    activeSubprocs++;
+    return;
+  }
+  // At capacity — wait until releaseProcSlot() hands a slot directly to us.
+  await new Promise<void>((resolve) => subprocWaiters.push(resolve));
+  // Slot count was retained on our behalf by the releaser; do not increment.
+}
+
+function releaseProcSlot(): void {
+  const next = subprocWaiters.shift();
+  if (next) {
+    // Hand our slot straight to the next waiter without touching the count.
+    next();
+    return;
+  }
+  activeSubprocs = Math.max(0, activeSubprocs - 1);
+}
+
 /**
  * Spawn a child process, write `input` (if any) to its stdin, and collect
  * stdout as a Buffer with a hard timeout and output cap. Never rejects on a
  * non-zero exit — resolves with whatever stdout was captured (empty on error)
  * so the caller can decide whether to escalate. stderr is captured only for
  * diagnostics.
+ *
+ * Fork ceiling: every invocation first acquires a subprocess slot
+ * (MAX_CONCURRENT_SUBPROC) and releases it exactly once on any settle path
+ * (success, non-zero exit, timeout-SIGKILL, spawn throw, maxBuffer kill, error
+ * event). This is the sole spawn site for PDF-extraction binaries, so one wrap
+ * bounds the whole fetch phase's fork pressure.
  */
 function runProcessCollect(
   cmd: string,
   args: string[],
   opts: { input?: Buffer; timeoutMs: number; maxBuffer: number },
 ): Promise<{ stdout: Buffer; code: number | null; timedOut: boolean; error?: string }> {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
+    await acquireProcSlot();
+    let slotReleased = false;
+    const releaseSlot = () => {
+      if (slotReleased) return;
+      slotReleased = true;
+      releaseProcSlot();
+    };
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
     } catch (e: any) {
+      // EAGAIN / "Cannot fork" even at the bounded ceiling = genuine container
+      // saturation; feed adaptive concurrency so WORKER_CONCURRENCY scales down too.
+      if (/EAGAIN|Cannot fork|Resource temporarily unavailable/i.test(String(e?.message || e))) {
+        noteRateLimited();
+      }
+      releaseSlot();
       resolve({ stdout: Buffer.alloc(0), code: null, timedOut: false, error: e?.message });
       return;
     }
@@ -572,6 +624,7 @@ function runProcessCollect(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      releaseSlot();
       resolve({
         stdout: Buffer.concat(chunks),
         code,
