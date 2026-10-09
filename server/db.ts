@@ -26,6 +26,58 @@ export const pool = new Pool({
   connectionTimeoutMillis: PG_CONNECTION_TIMEOUT_MS,
 });
 
+// ─── Transient connection-acquisition retry ──────────────────────────────────
+// ROOT CAUSE (batches 1244/1245 — the dominant per-company failure was
+// "Connection terminated due to connection timeout", 5 of 7 failures in 1245):
+// during peak scoring a single company fans out ~100 discrete drizzle queries
+// (36 measures × primary/fallback/arbiter, plus document reads). With
+// WORKER_CONCURRENCY jobs doing this simultaneously the burst of concurrent
+// connection checkouts exceeds the pool (max = PG_POOL_MAX) and the overflow
+// waiters exhaust connectionTimeoutMillis (PG_CONNECTION_TIMEOUT_MS = 30s)
+// before a slot frees. The pool then rejects with an acquisition timeout and the
+// WHOLE job fails — discarding 20+ min of already-completed discovery/scoring.
+//
+// These specific errors are raised BEFORE any SQL is sent (no connection was ever
+// handed to the caller), so retrying is provably side-effect-free: the statement
+// definitively did not execute, so no INSERT/UPDATE can be double-applied. We
+// retry ONLY this acquisition-timeout class (never a mid-query "terminated
+// unexpectedly" drop) with a short jittered backoff, giving the query burst a
+// moment to drain. Throughput is unchanged — pool size and job concurrency are
+// untouched; this is pure resilience that lets a run survive transient pool
+// pressure instead of throwing away finished work. All regular drizzle queries
+// route through pool.query (drizzle-orm/node-postgres NodePgSession), so wrapping
+// it here covers the entire storage layer centrally. (db.transaction() would use
+// a dedicated pool.connect() client, but the worker hot path uses none.)
+const PG_QUERY_RETRIES = Math.max(1, parseInt(process.env.PG_QUERY_RETRIES || "4", 10));
+const ACQUIRE_TIMEOUT_RE =
+  /Connection terminated due to connection timeout|timeout exceeded when trying to connect/i;
+const _rawPoolQuery = pool.query.bind(pool);
+(pool as any).query = async function patchedQuery(...args: any[]): Promise<any> {
+  // Callback / submittable style (last arg is a function) passes straight through
+  // — those callers manage their own lifecycle and must not be auto-retried.
+  if (typeof args[args.length - 1] === "function") {
+    return (_rawPoolQuery as any)(...args);
+  }
+  let lastErr: any = null;
+  for (let attempt = 1; attempt <= PG_QUERY_RETRIES; attempt++) {
+    try {
+      return await (_rawPoolQuery as any)(...args);
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt < PG_QUERY_RETRIES && ACQUIRE_TIMEOUT_RE.test(String(err?.message || err))) {
+        const backoff = 400 * attempt + Math.floor(Math.random() * 400);
+        console.warn(
+          `[DB] connection-acquisition timeout (attempt ${attempt}/${PG_QUERY_RETRIES}) — retrying in ${backoff}ms`,
+        );
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+};
+
 export const db = drizzle(pool, { schema });
 
 /**
