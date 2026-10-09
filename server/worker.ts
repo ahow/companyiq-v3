@@ -363,7 +363,13 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   // Run the pipeline. cancelCheck stays synchronous (the pipeline calls it at
   // many hot checkpoints) but is backed by a Redis-refreshed cache, so an
   // in-flight pipeline aborts within ~2s of a cancel on any replica.
-  const cancelCheck = () => cancelledBatches.has(batchId) || isBatchCancelledCached(batchId);
+  // Fix 1 (abort-on-timeout): a per-job flag the watchdog sets so the losing
+  // pipeline promise actually STOPS at its next cooperative-cancel checkpoint
+  // instead of orphaning and holding a worker slot + PG connections for the
+  // full fetch/discovery/analyze tail (observed 42–79 min past re-enqueue,
+  // batch 1248). Composed into cancelCheck below.
+  let jobWatchdogFired = false;
+  const cancelCheck = () => cancelledBatches.has(batchId) || isBatchCancelledCached(batchId) || jobWatchdogFired;
 
   const heartbeatIntervalMs = parseInt(process.env.JOB_HEARTBEAT_MS || "30000", 10);
   const heartbeatTimer = setInterval(() => {
@@ -404,7 +410,12 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
           }),
           new Promise<PipelineResult>((_, reject) =>
             setTimeout(
-              () => reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms")),
+              () => {
+                // Fix 1: signal the orphaned pipeline to abort at its next
+                // cooperative-cancel checkpoint before we reject the race.
+                jobWatchdogFired = true;
+                reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms"));
+              },
               JOB_TIMEOUT
             )
           ),

@@ -3282,6 +3282,18 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   const companyId = company.id;
   const pipelineStart = Date.now();
 
+  // Fix 1 (abort-on-timeout): when the hard PIPELINE_TIMEOUT_MS below fires,
+  // withTimeout rejects the outer promise but the underlying pipelinePromise
+  // keeps running — orphaning for the full fetch/discovery/analyze tail and
+  // holding the shared worker slot + PG pool away from fast resume retries.
+  // Flip this flag in that path and compose it into the cancel check threaded
+  // to every phase, so the orphan stops at its next cooperative-cancel
+  // checkpoint (fetch pool L1023/L1291, fetch pass L912, analyze L2187) within
+  // seconds (in-flight HTTP drains in ≤ its own socket timeout; no NEW work
+  // starts). Composes with the worker watchdog, which drives cancelCheck.
+  let pipelineTimedOut = false;
+  const effectiveCancel = () => (cancelCheck?.() ?? false) || pipelineTimedOut;
+
   // PR 1 · Change 4: instantiate the per-batch dedupe registry ONCE per pipeline
   // run. Threaded into runAnalyzePhase → analyzeCompanyMeasures so re-retrieval
   // can fire at most 1x per (company, measure) per batch. Cost gate.
@@ -3310,9 +3322,9 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // by runFetchPhase; used to thread the profile into the analyze phase.
       let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } } = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
-        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck, batchFetchState: opts.batchFetchState, skipDiscovery });
+        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck: effectiveCancel, batchFetchState: opts.batchFetchState, skipDiscovery });
         
-        if (cancelCheck?.()) {
+        if (effectiveCancel()) {
           return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0, failureType: "cancelled" as const };
         }
 
@@ -3389,7 +3401,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       const analysis = await runAnalyzePhase({
         company, framework, measures, workspaceId, batchId,
         sourceBatchId: opts.sourceBatchId,
-        cancelCheck,
+        cancelCheck: effectiveCancel,
         issuerProfile: fetchResult.issuerProfile,
         reviewQueue,
         skipFetch,
@@ -3492,8 +3504,12 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
     return await withTimeout(pipelinePromise, PIPELINE_TIMEOUT_MS, `[${companyName}] pipeline`);
   } catch (timeoutError: any) {
     if (timeoutError instanceof TimeoutError) {
+      // Fix 1: flip the abort flag so the still-running pipelinePromise (the
+      // orphan) stops launching/awaiting new work at its next checkpoint,
+      // rather than running the full tail and starving fast resume retries.
+      pipelineTimedOut = true;
       const elapsed = Math.round((Date.now() - pipelineStart) / 1000);
-      console.error(`[${companyName}] PIPELINE TIMEOUT after ${elapsed}s — marking as failed`);
+      console.error(`[${companyName}] PIPELINE TIMEOUT after ${elapsed}s — marking as failed; signalling orphan abort`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
       // I45: Persist explicit timeout status with structured provenance so Gate
       // Report diagnostics can distinguish timeout zeros from no-evidence zeros.
