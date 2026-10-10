@@ -24,6 +24,21 @@ export interface DiagContext {
   stage?: string;
   /** Open (and recently closed) stage timers for this attempt. */
   timers?: Set<StageTimer>;
+  /**
+   * Lifecycle fencing state for a worker attempt (see lifecycle-fence.ts).
+   * Shared by reference with child contexts so a revoke is seen everywhere.
+   */
+  lifecycle?: AttemptLifecycleState;
+}
+
+export interface AttemptLifecycleState {
+  jobId: number;
+  batchId: number;
+  attemptNumber: number;
+  deadlineAt: Date | null;
+  revoked: boolean;
+  revokedReason: string | null;
+  abort: AbortController;
 }
 
 const diagStore = new AsyncLocalStorage<DiagContext>();

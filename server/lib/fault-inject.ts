@@ -1,15 +1,21 @@
 // ─── TEST-ONLY fault-injection harness ───────────────────────────────────────
-// Strictly gated: fully inert unless DIAG_FAULT_INJECT is set to a non-empty
-// JSON object mapping companyId -> { mode, ms? }. It never adds new stop /
-// fencing logic — it only (a) shortens the EXISTING discovery/pipeline timeout
-// for a flagged company, or (b) calls the REAL markBatchCancelled() once at a
-// chosen moment, so the existing cooperative cancellation path can be observed.
+// Strictly gated: fully inert unless DIAG_FAULT_INJECT is set. It never adds
+// new stop / fencing logic — it only (a) shortens the EXISTING discovery /
+// pipeline timeout for the targeted attempt, or (b) calls the REAL
+// markBatchCancelled() + cancelBatchRun() once at a chosen moment, so the
+// production cancellation / lifecycle-fence path can be observed.
 //
-// Example:
-//   DIAG_FAULT_INJECT={"147":{"mode":"discovery_timeout","ms":8000},
-//                      "257":{"mode":"pipeline_timeout","ms":8000},
-//                      "2682":{"mode":"cancel_waiting_db"},
-//                      "2004":{"mode":"cancel_external_inflight"}}
+// Targeting (re-keyed): the PRIMARY key is the batch and/or job, never the
+// company. A fault can only fire for an attempt whose diag context matches
+//   DIAG_FAULT_BATCH=<batch_runs.id>   and/or   DIAG_FAULT_JOB=<analysis_jobs.id>
+// (at least one must be set; when both are set both must match). companyId in
+// the spec is an OPTIONAL extra check. This prevents a stale company-keyed
+// config from firing inside an unrelated later batch.
+//
+// DIAG_FAULT_INJECT is a JSON spec or array of specs:
+//   DIAG_FAULT_BATCH=1301
+//   DIAG_FAULT_INJECT=[{"mode":"discovery_timeout","ms":8000,"companyId":147},
+//                      {"mode":"cancel_external_inflight"}]
 //
 // Every entry point is try/catch-wrapped: a harness error is logged and
 // swallowed, never propagated into a job.
@@ -26,6 +32,19 @@ export type FaultMode =
 export interface FaultSpec {
   mode: FaultMode;
   ms: number;
+  /** Optional extra check; never the primary key. */
+  companyId: number | null;
+}
+
+export interface FaultTarget {
+  batchId: number | null;
+  jobId: number | null;
+}
+
+export interface FaultIds {
+  batchId?: number | null;
+  jobId?: number | null;
+  companyId?: number | null;
 }
 
 const VALID_MODES = new Set<FaultMode>([
@@ -36,58 +55,87 @@ const VALID_MODES = new Set<FaultMode>([
 ]);
 const DEFAULT_MS = 8000;
 
-function parseConfig(): Map<string, FaultSpec> {
-  const out = new Map<string, FaultSpec>();
-  const raw = process.env.DIAG_FAULT_INJECT;
+function parseIntEnv(v: string | undefined): number | null {
+  if (!v || !/^\d+$/.test(v.trim())) return null;
+  return Number(v.trim());
+}
+
+interface FaultConfig { target: FaultTarget; specs: FaultSpec[] }
+const INERT: FaultConfig = { target: { batchId: null, jobId: null }, specs: [] };
+
+/** Parse the harness config from an env object (exported for tests). */
+export function parseFaultConfig(env: Record<string, string | undefined> = process.env): FaultConfig {
+  const raw = env.DIAG_FAULT_INJECT;
   if (!raw || !raw.trim()) {
     console.log("[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)");
-    return out;
+    return INERT;
   }
+  const target: FaultTarget = { batchId: parseIntEnv(env.DIAG_FAULT_BATCH), jobId: parseIntEnv(env.DIAG_FAULT_JOB) };
+  if (target.batchId == null && target.jobId == null) {
+    console.warn("[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT set but neither DIAG_FAULT_BATCH nor DIAG_FAULT_JOB is a valid id)");
+    return INERT;
+  }
+  const specs: FaultSpec[] = [];
   try {
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      console.warn("[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT is not a JSON object)");
-      return out;
-    }
-    for (const [cid, v] of Object.entries(parsed as Record<string, any>)) {
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    for (const v of list) {
       const mode = v?.mode as FaultMode;
-      if (!/^\d+$/.test(cid) || !VALID_MODES.has(mode)) {
-        console.warn(`[FAULT-INJECT] ignoring invalid entry company=${cid} spec=${JSON.stringify(v)}`);
+      if (!v || typeof v !== "object" || !VALID_MODES.has(mode)) {
+        console.warn(`[FAULT-INJECT] ignoring invalid spec ${JSON.stringify(v)}`);
         continue;
       }
-      const msNum = Number(v?.ms);
+      const msNum = Number(v.ms);
       const ms = Number.isInteger(msNum) && msNum > 0 ? msNum : DEFAULT_MS;
-      out.set(cid, { mode, ms });
+      const cidNum = Number(v.companyId);
+      const companyId = v.companyId != null && Number.isInteger(cidNum) ? cidNum : null;
+      specs.push({ mode, ms, companyId });
     }
   } catch (e: any) {
     console.warn(`[FAULT-INJECT] harness INACTIVE (invalid JSON: ${e?.message || e})`);
-    return new Map();
+    return INERT;
   }
-  if (out.size === 0) {
-    console.log("[FAULT-INJECT] harness INACTIVE (no valid entries)");
-  } else {
-    const desc = Array.from(out.entries()).map(([c, s]) => `${c}:${s.mode}${s.mode.endsWith("_timeout") ? `@${s.ms}ms` : ""}`).join(", ");
-    console.warn(`[FAULT-INJECT] harness ACTIVE (TEST-ONLY) for companies: ${desc}`);
+  if (specs.length === 0) {
+    console.log("[FAULT-INJECT] harness INACTIVE (no valid specs)");
+    return INERT;
   }
-  return out;
+  const desc = specs.map((s) => `${s.mode}${s.mode.endsWith("_timeout") ? `@${s.ms}ms` : ""}${s.companyId != null ? `[company=${s.companyId}]` : ""}`).join(", ");
+  console.warn(`[FAULT-INJECT] harness ACTIVE (TEST-ONLY) batch=${target.batchId ?? "*"} job=${target.jobId ?? "*"}: ${desc}`);
+  return { target, specs };
 }
 
-let CONFIG: Map<string, FaultSpec>;
+let CONFIG: FaultConfig;
 try {
-  CONFIG = parseConfig();
+  CONFIG = parseFaultConfig();
 } catch {
-  CONFIG = new Map();
+  CONFIG = INERT;
+}
+
+/** Test hook: re-read config from an env object. */
+export function __reloadFaultConfigForTests(env: Record<string, string | undefined>): void {
+  CONFIG = parseFaultConfig(env);
+  firedCancels.clear();
 }
 
 export function isFaultInjectActive(): boolean {
-  return CONFIG.size > 0;
+  return CONFIG.specs.length > 0;
 }
 
-/** Returns the fault spec for a company, or null (always null when inert). */
-export function getFaultSpec(companyId: number | string | null | undefined): FaultSpec | null {
+/**
+ * Returns the matching spec for `mode`, or null (always null when inert).
+ * ids default to the current diag context (batch/job/company of the attempt).
+ */
+export function getFaultSpec(mode: FaultMode, ids: FaultIds = {}): FaultSpec | null {
   try {
-    if (CONFIG.size === 0 || companyId == null) return null;
-    return CONFIG.get(String(companyId)) ?? null;
+    if (CONFIG.specs.length === 0) return null;
+    const ctx = getDiagContext();
+    const batchId = ids.batchId ?? ctx?.batchId ?? null;
+    const jobId = ids.jobId ?? ctx?.jobId ?? null;
+    const companyId = ids.companyId ?? ctx?.companyId ?? null;
+    const { target } = CONFIG;
+    if (target.batchId != null && Number(batchId) !== target.batchId) return null;
+    if (target.jobId != null && Number(jobId) !== target.jobId) return null;
+    return CONFIG.specs.find((s) => s.mode === mode && (s.companyId == null || Number(companyId) === s.companyId)) ?? null;
   } catch {
     return null;
   }
@@ -101,19 +149,20 @@ export function faultLog(msg: string): void {
 }
 
 /**
- * Returns the deadline to use for a timeout. For a company flagged with the
- * matching timeout mode, returns spec.ms; otherwise returns `normalMs` unchanged.
+ * Returns the deadline to use for a timeout. For the targeted batch/job (and
+ * optional company) with the matching timeout mode, returns spec.ms;
+ * otherwise returns `normalMs` unchanged.
  */
 export function faultTimeoutMs(
-  companyId: number | null | undefined,
   mode: "discovery_timeout" | "pipeline_timeout",
   normalMs: number,
+  ids: FaultIds = {},
 ): number {
   try {
-    const spec = getFaultSpec(companyId);
-    if (!spec || spec.mode !== mode) return normalMs;
+    const spec = getFaultSpec(mode, ids);
+    if (!spec) return normalMs;
     const attempt = getDiagContext()?.attemptId ?? "-";
-    faultLog(`${mode} armed at ${spec.ms}ms (normal ${normalMs}ms) for company ${companyId} attempt ${attempt}`);
+    faultLog(`${mode} armed at ${spec.ms}ms (normal ${normalMs}ms) attempt ${attempt}`);
     return spec.ms;
   } catch (e: any) {
     try { console.error(`[FAULT-INJECT] faultTimeoutMs error (ignored): ${e?.message || e}`); } catch { /* */ }
@@ -121,44 +170,48 @@ export function faultTimeoutMs(
   }
 }
 
+// Fires-once dedupe keyed by mode:batch:job. In-memory only — it RESETS ON
+// REDEPLOY / process restart, so after a redeploy with the harness still
+// configured the cancel can fire once more for the same target. Unset
+// DIAG_FAULT_INJECT after a test run.
 const firedCancels = new Set<string>();
 
 /**
- * If `companyId` is flagged with `mode`, calls the REAL markBatchCancelled(batchId)
- * at most once per (batchId, companyId). Returns a promise that ALWAYS resolves
+ * If the current attempt is the targeted batch/job (optional company) for
+ * `mode`, calls the REAL markBatchCancelled(batchId) + cancelBatchRun(batchId)
+ * at most once per (mode, batch, job). Returns a promise that ALWAYS resolves
  * (callers may await it for determinism, or ignore it to keep an in-flight
  * request running). Never throws. Adds no stop logic of its own.
  */
 export function maybeFireCancel(
   mode: "cancel_waiting_db" | "cancel_external_inflight",
-  batchId: number | null | undefined,
-  companyId: number | null | undefined,
   where: string,
+  ids: FaultIds = {},
 ): Promise<void> {
   try {
-    const spec = getFaultSpec(companyId);
-    if (!spec || spec.mode !== mode) return Promise.resolve();
+    const spec = getFaultSpec(mode, ids);
+    if (!spec) return Promise.resolve();
+    const ctx = getDiagContext();
+    const batchId = ids.batchId ?? ctx?.batchId ?? null;
+    const jobId = ids.jobId ?? ctx?.jobId ?? null;
     if (batchId == null) {
-      faultLog(`${mode} SKIPPED at ${where}: no batchId for company ${companyId}`);
+      faultLog(`${mode} SKIPPED at ${where}: no batchId`);
       return Promise.resolve();
     }
-    const key = `${batchId}:${companyId}`;
+    const key = `${mode}:${batchId}:${jobId ?? "-"}`;
     if (firedCancels.has(key)) return Promise.resolve();
     firedCancels.add(key);
-    const attempt = getDiagContext()?.attemptId ?? "-";
-    const stage = getDiagContext()?.stage ?? "-";
-    faultLog(`${mode} FIRING real-cancel(${batchId}) at ${where} company ${companyId} attempt ${attempt} stage ${stage}`);
-    // Faithfully simulate a real admin cancellation: set BOTH the durable Redis
-    // cooperative-cancel flag (what actually fences in-flight work) AND the PG
-    // terminal lifecycle (status=cancelled/terminal/rejected), exactly like the
-    // production POST /api/batch/cancel path (cancelBatch + cancelBatchRun).
-    // This is a TEST-INJECTION faithfulness change only; it does NOT alter any
-    // production fencing/cancellation behaviour.
+    const attempt = ctx?.attemptId ?? "-";
+    const stage = ctx?.stage ?? "-";
+    faultLog(`${mode} FIRING real-cancel(${batchId}) at ${where} job ${jobId ?? "-"} attempt ${attempt} stage ${stage}`);
+    // Faithfully simulate a real admin cancellation: the non-authoritative
+    // Redis notification AND the authoritative PG terminal state, exactly like
+    // POST /api/batch/cancel (cancelBatch + cancelBatchRun).
     return Promise.allSettled([
       import("../cancellation.js").then(({ markBatchCancelled }) => markBatchCancelled(batchId)),
       import("../storage.js").then((s) => s.cancelBatchRun(batchId, "fault-injection controlled cancel test")),
     ]).then(
-      () => faultLog(`${mode} real-cancel(${batchId}) resolved (company ${companyId} attempt ${attempt})`),
+      () => faultLog(`${mode} real-cancel(${batchId}) resolved (job ${jobId ?? "-"} attempt ${attempt})`),
       (e: any) => faultLog(`${mode} real-cancel(${batchId}) error (ignored): ${e?.message || e}`),
     );
   } catch (e: any) {

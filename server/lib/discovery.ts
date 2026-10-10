@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import * as storage from "../storage.js";
 import { startStageTimer, runWithChildTimer, setDiagStage, timeStage, beginStage, getDiagContext } from "./diag-context.js";
 import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
+import { assertDispatchAllowed, requestAbortSignal, isLifecycleCancelledError } from "./lifecycle-fence.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
@@ -245,6 +246,7 @@ function issuerPdfSweepForDomain(domain: string): Promise<SearchResult[]> {
 }
 
 async function issuerPdfSweepForDomainInner(domain: string): Promise<SearchResult[]> {
+  assertDispatchAllowed("discovery.issuerDomainSweep:entry");
   const out = new Map<string, SearchResult>();
   const hits = await webSearch(`site:${domain} filetype:pdf`, { num: ISSUER_SWEEP_NUM });
   for (const h of hits) {
@@ -252,6 +254,7 @@ async function issuerPdfSweepForDomainInner(domain: string): Promise<SearchResul
   }
   if (ISSUER_SWEEP_SITEMAP) {
     for (const sm of [`https://${domain}/sitemap.xml`, `https://${domain}/sitemap_index.xml`]) {
+      assertDispatchAllowed("discovery.issuerDomainSweep:sitemap");
       const controller = new AbortController();
       const to = setTimeout(() => controller.abort(), 5000);
       try {
@@ -956,8 +959,10 @@ interface SearchResult {
 async function webSearchSerper(
   query: string,
   apiKey: string,
-  opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {}
+  opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {},
+  signal?: AbortSignal,
 ): Promise<SearchResult[]> {
+  assertDispatchAllowed("discovery.webSearchSerper:entry");
   const body: any = {
     q: query,
     num: opts.num || 10,
@@ -974,7 +979,8 @@ async function webSearchSerper(
       "Content-Type": "application/json",
     },
     timeout: SEARCH_TIMEOUT,
-  });
+    signal,
+  }).catch((e: any) => { throw abortReasonOr(signal, e); });
 
   const organic = response.data.organic || [];
   return organic.map((r: any, idx: number) => ({
@@ -988,8 +994,10 @@ async function webSearchSerper(
 async function webSearchSerpApi(
   query: string,
   apiKey: string,
-  opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {}
+  opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {},
+  signal?: AbortSignal,
 ): Promise<SearchResult[]> {
+  assertDispatchAllowed("discovery.webSearchSerpApi:entry");
   const params: any = {
     q: query,
     api_key: apiKey,
@@ -1004,7 +1012,8 @@ async function webSearchSerpApi(
   const response = await axios.get("https://serpapi.com/search.json", {
     params,
     timeout: SEARCH_TIMEOUT,
-  });
+    signal,
+  }).catch((e: any) => { throw abortReasonOr(signal, e); });
 
   const organic = response.data.organic_results || [];
   return organic.map((r: any, idx: number) => ({
@@ -1013,6 +1022,12 @@ async function webSearchSerpApi(
     snippet: r.snippet || "",
     position: r.position || idx + 1,
   }));
+}
+
+/** If the request was aborted by the lifecycle signal, surface its LifecycleCancelledError. */
+function abortReasonOr(signal: AbortSignal | undefined, e: any): any {
+  if (signal?.aborted && isLifecycleCancelledError(signal.reason)) return signal.reason;
+  return e;
 }
 
 // ─── Per-provider Search Rate Limiters (Token Buckets) ──────────────────────
@@ -1066,24 +1081,30 @@ export function createTokenBucket(maxTokens: number, refillRate: number, maxWait
 const serperBucket = createTokenBucket(envNum("SERPER_BUCKET_TOKENS", 8), envNum("SERPER_BUCKET_REFILL", 4));
 const serpApiBucket = createTokenBucket(envNum("SERPAPI_BUCKET_TOKENS", 4), envNum("SERPAPI_BUCKET_REFILL", 2));
 
-async function withBucket<T>(bucket: TokenBucket, fn: () => Promise<T>): Promise<T> {
+export async function withBucket<T>(bucket: TokenBucket, fn: (signal?: AbortSignal) => Promise<T>): Promise<T> {
+  // Lifecycle dispatch gate: a cancelled / superseded / timed-out attempt must
+  // not start a new provider call (checked before AND after the bucket wait).
+  assertDispatchAllowed("discovery.withBucket:pre-acquire");
   // DIAGNOSTIC-ONLY stage timing around the unchanged acquire / call / release.
   const endWait = beginStage("search_rate_wait", "bucket.acquire");
   try { await bucket.acquire(); } catch (e) { endWait(false); throw e; }
   endWait(true);
+  try { assertDispatchAllowed("discovery.withBucket:post-acquire"); } catch (e) { bucket.release(); throw e; }
   const endCall = beginStage("search_provider", "web_search");
+  // Aborts the in-flight axios request on cancel / revoke (non-authoritative).
+  const abort = requestAbortSignal();
   try {
-    const p = fn();
-    // TEST-ONLY (inert unless DIAG_FAULT_INJECT flags this company): simulate an
-    // operator cancel arriving while this external search request is in flight.
-    { const dc = getDiagContext(); maybeFireCancel("cancel_external_inflight", dc?.batchId, dc?.companyId, "discovery.withBucket:web_search_in_flight"); }
+    const p = fn(abort.signal);
+    // TEST-ONLY (inert unless DIAG_FAULT_INJECT + DIAG_FAULT_BATCH/JOB target this
+    // attempt): simulate an operator cancel while this search is in flight.
+    void maybeFireCancel("cancel_external_inflight", "discovery.withBucket:web_search_in_flight");
     const r = await p;
     endCall(true);
     return r;
   } catch (e) {
     endCall(false);
     throw e;
-  } finally { bucket.release(); }
+  } finally { abort.dispose(); bucket.release(); }
 }
 
 // ─── SerpAPI Circuit-Breaker ────────────────────────────────────────────────
@@ -1184,13 +1205,16 @@ async function webSearchInner(
   // during 429 backoff sleeps or across the Serper→SerpAPI fallback.
   if (serperKey) {
     try {
-      return await withBucket(serperBucket, () => webSearchSerper(query, serperKey, opts));
+      return await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal));
     } catch (error: any) {
+      if (isLifecycleCancelledError(error)) throw error; // stop: never fall through / retry
       // On 429 (rate limit), wait and retry once
       if (error?.response?.status === 429) {
         console.warn(`[Discovery] Serper 429 rate-limited, backing off 5s for "${query.slice(0, 60)}"`);
+        assertDispatchAllowed("discovery.webSearchInner:serper-429-pre-backoff");
         await timeStage("retry_backoff", "search_429_backoff", () => new Promise(r => setTimeout(r, 5000 + Math.random() * 2000)));
-        try { return await withBucket(serperBucket, () => webSearchSerper(query, serperKey, opts)); } catch { /* fall through */ }
+        assertDispatchAllowed("discovery.webSearchInner:serper-429-retry");
+        try { return await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal)); } catch (retryErr) { if (isLifecycleCancelledError(retryErr)) throw retryErr; /* fall through */ }
       }
       noteRateLimited(); // genuine Serper failure (429-retry-success returns earlier) = back-pressure signal for adaptive concurrency
       console.warn(`[Discovery] Serper.dev failed for "${query}": ${error.message}`);
@@ -1201,6 +1225,7 @@ async function webSearchInner(
   if (serpApiKey) {
     // Breaker only gates SerpAPI as a FAILOVER; if it is the sole provider it is always tried.
     const gated = !!serperKey;
+    assertDispatchAllowed("discovery.webSearchInner:serpapi-failover");
     if (gated && !serpApiBreaker.allow()) {
       return [];
     }
@@ -1212,18 +1237,21 @@ async function webSearchInner(
       else serpApiBreaker.failure();
     };
     try {
-      const res = await withBucket(serpApiBucket, () => webSearchSerpApi(query, serpApiKey, opts));
+      const res = await withBucket(serpApiBucket, (signal) => webSearchSerpApi(query, serpApiKey, opts, signal));
       if (gated) serpApiBreaker.success();
       return res;
     } catch (error: any) {
+      if (isLifecycleCancelledError(error)) { if (gated) serpApiBreaker.neutral(); throw error; }
       if (error?.response?.status === 429) {
         console.warn(`[Discovery] SerpAPI 429 rate-limited, backing off 5s for "${query.slice(0, 60)}"`);
+        assertDispatchAllowed("discovery.webSearchInner:serpapi-429-pre-backoff");
         await timeStage("retry_backoff", "search_429_backoff", () => new Promise(r => setTimeout(r, 5000 + Math.random() * 2000)));
+        assertDispatchAllowed("discovery.webSearchInner:serpapi-429-retry");
         try {
-          const res = await withBucket(serpApiBucket, () => webSearchSerpApi(query, serpApiKey, opts));
+          const res = await withBucket(serpApiBucket, (signal) => webSearchSerpApi(query, serpApiKey, opts, signal));
           if (gated) serpApiBreaker.success();
           return res;
-        } catch (retryErr: any) { onSerpApiError(retryErr); /* give up */ }
+        } catch (retryErr: any) { if (isLifecycleCancelledError(retryErr)) { if (gated) serpApiBreaker.neutral(); throw retryErr; } onSerpApiError(retryErr); /* give up */ }
       } else {
         onSerpApiError(error);
       }
@@ -3458,8 +3486,9 @@ export async function searchCompanyDocuments(opts: {
 }): Promise<DiscoveryResult> {
   // Wrap the entire discovery in a hard timeout
   // TEST-ONLY: per-job deadline override; equals DISCOVERY_TIMEOUT_MS unless
-  // DIAG_FAULT_INJECT flags this company with mode discovery_timeout.
-  const discoveryDeadlineMs = faultTimeoutMs(opts.companyId, "discovery_timeout", DISCOVERY_TIMEOUT_MS);
+  // DIAG_FAULT_INJECT targets this batch/job (DIAG_FAULT_BATCH/JOB) with mode
+  // discovery_timeout (companyId is only an optional extra check).
+  const discoveryDeadlineMs = faultTimeoutMs("discovery_timeout", DISCOVERY_TIMEOUT_MS, { companyId: opts.companyId });
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new Error(`Discovery timeout: ${opts.companyName} exceeded ${discoveryDeadlineMs / 1000}s`)), discoveryDeadlineMs);
   });
@@ -4254,11 +4283,13 @@ async function searchCompanyDocumentsInner(opts: {
       console.log(`[${companyName}] domain-sweep: ${sweepDomains.length}/${allDomains.length} domain(s), ${familyPdfCount} family PDF(s) so far`);
       for (const domain of sweepDomains) {
         try {
+          assertDispatchAllowed("discovery.issuerDomainSweep:loop");
           const swept = await issuerPdfSweepForDomain(domain);
           const before = allCandidates.length;
           for (const r of swept) addCandidate(r, ISSUER_SWEEP_LANE);
           console.log(`[${companyName}] domain-sweep ${domain}: ${swept.length} PDFs found, ${allCandidates.length - before} new candidates`);
         } catch (e: any) {
+          if (isLifecycleCancelledError(e)) throw e; // stop the sweep; never swallow a cancel
           console.warn(`[${companyName}] domain-sweep ${domain} failed: ${e?.message}`);
         }
       }

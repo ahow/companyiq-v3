@@ -29,6 +29,7 @@
 import * as storage from "../storage.js";
 import { getDiagContext, setDiagStage, diagTags, startStageTimer, runWithChildTimer } from "./diag-context.js";
 import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
+import { LifecycleCancelledError, isLifecycleCancelledError, ownershipFromContext, revokeAttempt } from "./lifecycle-fence.js";
 import { searchCompanyDocuments, runTargetedDisclosureQuery, resolveCikForCompany, type DiscoveryResult } from "./discovery.js";
 import {
   getRequirementsForJurisdiction,
@@ -2181,7 +2182,12 @@ async function runAnalyzePhase(opts: {
     });
     // Framework-scoped clearing: only remove scores for this framework,
     // preserving scores from other frameworks.
-    await storage.clearMeasureScoresForFramework(companyId, framework.id);
+    // Lifecycle fence: inside a worker attempt the delete runs under the same
+    // ownership/batch-running guard as the score insert (empty replace), so a
+    // stale/cancelled attempt cannot wipe a newer attempt's scores.
+    const noDocsOwnership = ownershipFromContext();
+    if (noDocsOwnership) await storage.replaceMeasureScoresFenced(noDocsOwnership, companyId, framework.id, []);
+    else await storage.clearMeasureScoresForFramework(companyId, framework.id);
     return null;
   }
 
@@ -2707,7 +2713,12 @@ async function runAnalyzePhase(opts: {
   // ─── Persist Results ──────────────────────────────────────────────────────
   // Framework-scoped clearing: only remove scores for this framework,
   // preserving scores from other frameworks.
-  await storage.clearMeasureScoresForFramework(companyId, framework.id);
+  // Lifecycle fence: inside a worker attempt the clear is deferred into the same
+  // fenced transaction as the insert below (replaceMeasureScoresFenced), so a
+  // stale/cancelled attempt can never delete a newer attempt's scores. Outside a
+  // worker attempt (scripts / direct calls) behaviour is unchanged.
+  const scoreOwnership = ownershipFromContext();
+  if (!scoreOwnership) await storage.clearMeasureScoresForFramework(companyId, framework.id);
 
   // v3j (Obs 3.2): the deterministic force-include path is otherwise invisible to
   // downstream validators. We surface it WITHOUT a schema migration by tagging the
@@ -2839,7 +2850,16 @@ async function runAnalyzePhase(opts: {
 
   setDiagStage("score-write");
   console.log(`[DIAG][score-write] company=${companyId} rows=${scoreRows.length} ${diagTags()}`);
-  await storage.createMeasureScores(scoreRows);
+  if (scoreOwnership) {
+    const persisted = await storage.replaceMeasureScoresFenced(scoreOwnership, companyId, framework.id, scoreRows);
+    if (!persisted) {
+      // Permission to persist was revoked (cancel / supersession / timeout /
+      // ownership loss). Nothing was written; stop before any company update.
+      throw new LifecycleCancelledError("score_write_fenced", "pipeline.score-write");
+    }
+  } else {
+    await storage.createMeasureScores(scoreRows);
+  }
 
   // Update company with results.
   // Populate measuresMetCount/measuresTotalCount (previously left null, which
@@ -3416,9 +3436,10 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // can gate auto re-retrieval on the same dedupe registry used for the
       // whole pipeline run.
       setDiagStage("analyze");
-      // TEST-ONLY (inert unless DIAG_FAULT_INJECT flags this company): simulate an
-      // operator cancel arriving as the attempt enters DB-bound analysis/scoring.
-      await maybeFireCancel("cancel_waiting_db", batchId, companyId, "pipeline.analyze:pre-runAnalyzePhase");
+      // TEST-ONLY (inert unless DIAG_FAULT_INJECT + DIAG_FAULT_BATCH/JOB target this
+      // attempt): simulate an operator cancel arriving as the attempt enters
+      // DB-bound analysis/scoring.
+      await maybeFireCancel("cancel_waiting_db", "pipeline.analyze:pre-runAnalyzePhase", { batchId, companyId });
       const analysis = await runAnalyzePhase({
         company, framework, measures, workspaceId, batchId,
         sourceBatchId: opts.sourceBatchId,
@@ -3495,6 +3516,14 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         documentsCached: skipFetch ? fetchResult.fetchedCount : 0,
       };
     } catch (error: any) {
+      // Lifecycle: a dispatch gate / fenced write threw because this attempt lost
+      // permission (cancel, supersession, timeout, ownership loss). Report it as
+      // the cancellation the worker already recognises, and write NOTHING — a
+      // stale attempt must not overwrite the owning attempt's company status.
+      if (isLifecycleCancelledError(error)) {
+        console.warn(`[${companyName}] Pipeline stopped by lifecycle fence: ${error.message} ${diagTags()}`);
+        return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0, failureType: "cancelled" as const };
+      }
       console.error(`[${companyName}] Pipeline error: ${error.message}`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
       // I45: Persist structured pipeline failure with type classification
@@ -3521,8 +3550,8 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   })());
 
   // Apply the hard pipeline timeout
-  // TEST-ONLY: equals PIPELINE_TIMEOUT_MS unless DIAG_FAULT_INJECT flags this company.
-  const pipelineDeadlineMs = faultTimeoutMs(companyId, "pipeline_timeout", PIPELINE_TIMEOUT_MS);
+  // TEST-ONLY: equals PIPELINE_TIMEOUT_MS unless DIAG_FAULT_INJECT targets this batch/job.
+  const pipelineDeadlineMs = faultTimeoutMs("pipeline_timeout", PIPELINE_TIMEOUT_MS, { batchId, companyId });
   try {
     const diagResult = await withTimeout(pipelinePromise, pipelineDeadlineMs, `[${companyName}] pipeline`);
     diagPipelineTimer?.finish(diagResult?.success ? "ok" : `failed:${diagResult?.failureType ?? "result"}`, diagResult?.error);
@@ -3534,6 +3563,10 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // orphan) stops launching/awaiting new work at its next checkpoint,
       // rather than running the full tail and starving fast resume retries.
       pipelineTimedOut = true;
+      // Lifecycle: the timeout revokes this attempt's permission to dispatch or
+      // persist (in-process notification; the SQL deadline/ownership guards are
+      // the authority). Aborts in-flight search requests.
+      revokeAttempt(getDiagContext()?.lifecycle, "pipeline_timeout");
       const elapsed = Math.round((Date.now() - pipelineStart) / 1000);
       console.error(`[${companyName}] PIPELINE TIMEOUT after ${elapsed}s — marking as failed; signalling orphan abort`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });

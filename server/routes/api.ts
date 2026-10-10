@@ -1348,7 +1348,9 @@ apiRouter.post("/batch/:batchId/recover-results", async (req: Request, res: Resp
     if (!Number.isFinite(batchId)) return res.status(400).json({ error: "Invalid batchId." });
     const batch = await storage.getBatchRunById(batchId, workspaceId);
     if (!batch) return res.status(404).json({ error: "Batch not found in this workspace." });
-    await finalizeBatchAndSave(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
+    // Explicit admin recovery: may rebuild the snapshot of a terminal (e.g.
+    // cancelled) batch, but never flips a cancelled batch to completed.
+    await finalizeBatchAndSave(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined, { adminRecoverTerminal: true });
     // Look up the snapshot by batchId (the durable upsert ensures batchId is current)
     const saved = await storage.getAnalysisResults(workspaceId);
     const row = saved.find((r: any) => r.batchId === batchId);

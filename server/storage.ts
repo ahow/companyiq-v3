@@ -6,6 +6,7 @@ import crypto from "crypto";
 import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironment, isHeartbeatStalled, type DeploymentFingerprint, type RunKeyInput, type RunLifecycleState } from "./lib/reliability.js";
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 import { diagTags, getDiagContext } from "./lib/diag-context.js";
+import { type AttemptOwnership, permissionPredicate, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason } from "./lib/lifecycle-fence.js";
 
 // ─── URL Hashing for Content Deduplication ─────────────────────────────────
 
@@ -973,6 +974,35 @@ export async function createMeasureScores(scores: any[]) {
   await db.insert(schema.measureScores).values(scores);
 }
 
+/**
+ * Lifecycle-fenced score persistence for a worker attempt: the framework-scoped
+ * clear AND the bulk insert run in ONE short DB-only transaction, after
+ * locking the job row (FOR UPDATE) and share-locking the batch row (FOR SHARE)
+ * under the permission predicate (owner attempt, claimed, batch running,
+ * deadline not elapsed). A stale / cancelled / timed-out attempt therefore can
+ * neither delete a newer attempt's scores nor insert its own. Returns false
+ * when fenced (fence line logged). Checks the in-process revoke first so a
+ * revoked attempt does not even wait for a pool connection.
+ */
+export async function replaceMeasureScoresFenced(
+  ownership: AttemptOwnership,
+  companyId: number,
+  frameworkId: number,
+  scores: any[],
+): Promise<boolean> {
+  const early = dispatchRevokedReason();
+  if (early) {
+    fenceLogScore(ownership, `reason=${early} (pre-acquire)`);
+    return false;
+  }
+  return runFencedWrite(db, ownership, async (tx) => {
+    await tx.delete(schema.measureScores).where(
+      and(eq(schema.measureScores.companyId, companyId), eq(schema.measureScores.frameworkId, frameworkId))
+    );
+    if (scores.length > 0) await tx.insert(schema.measureScores).values(scores);
+  });
+}
+
 export async function clearMeasureScores(companyId: number) {
   await db.delete(schema.measureScores).where(eq(schema.measureScores.companyId, companyId));
 }
@@ -1294,13 +1324,47 @@ export async function classifyBatchStall(batchId: number, thresholdMs: number) {
 
 // ─── Batch Run Operations (Workspace-Scoped) ────────────────────────────────
 
+/**
+ * Non-authoritative stop notifications for batches superseded in PG: set the
+ * Redis cancel flag and purge their queued/delayed BullMQ jobs. Failures are
+ * logged and non-fatal — the PG `cancelled` status already fences all writes.
+ * Dependencies are injectable for tests; defaults are lazily imported so
+ * storage.ts does not open Redis/BullMQ at module load.
+ */
+export async function notifySupersededBatches(
+  ids: number[],
+  deps?: { markBatchCancelled?: (id: number) => Promise<void>; removeBatchJobs?: (id: number) => Promise<unknown> },
+): Promise<void> {
+  for (const id of ids) {
+    console.warn(`[LIFECYCLE] batch ${id} superseded -> cancelled (PG); notifying workers + purging queue`);
+    try {
+      const mark = deps?.markBatchCancelled ?? (await import("./cancellation.js")).markBatchCancelled;
+      await mark(id);
+    } catch (e: any) {
+      console.error(`[LIFECYCLE] superseded batch ${id}: markBatchCancelled failed (non-fatal; PG guard still fences): ${e?.message || e}`);
+    }
+    try {
+      const remove = deps?.removeBatchJobs ?? (await import("./queue.js")).removeBatchJobs;
+      await remove(id);
+    } catch (e: any) {
+      console.error(`[LIFECYCLE] superseded batch ${id}: removeBatchJobs failed (non-fatal; PG guard still fences): ${e?.message || e}`);
+    }
+  }
+}
+
 export async function createBatchRun(workspaceId: number, frameworkId: number, totalJobs: number, listId?: number, offPeakOnly: boolean = false, scoreOnly: boolean = false, reliability?: { runId: number; runKey: string; testCycleId: string; batteryLabel: string; deploymentFingerprint: DeploymentFingerprint }, corpusReplay?: { sourceBatchId: number; sourceRunKey: string; sourceCorpusFingerprint: string }) {
   // Legacy interactive runs retain the existing single-active behaviour. Reliability
   // runs are protected by their immutable run_key and never cancel a concurrent run.
   if (!reliability) {
-    await db.update(schema.batchRuns)
+    // Supersession == cancellation. The PG write is the authoritative terminal
+    // state (it alone fences every stale write via the ownership predicate);
+    // the Redis flag + queue purge below are best-effort early-stop
+    // notifications, exactly like the admin cancel path.
+    const superseded = await db.update(schema.batchRuns)
       .set({ status: "cancelled", completedAt: new Date(), terminalAt: new Date(), acceptanceState: "rejected", rejectionReason: "superseded by a newer interactive batch" })
-      .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "running")));
+      .where(and(eq(schema.batchRuns.workspaceId, workspaceId), eq(schema.batchRuns.status, "running")))
+      .returning({ id: schema.batchRuns.id });
+    await notifySupersededBatches(superseded.map((r) => r.id));
   }
 
   // Always stamp a deployment fingerprint at batch start. Reliability runs carry
@@ -1494,18 +1558,43 @@ export async function incrementBatchFailed(batchId: number) {
   return batch;
 }
 
-export async function completeBatchRun(batchId: number) {
+/**
+ * Conditional terminal transition to `completed`. Allowed only from `running`
+ * (auto-finalise) or `pending_review` (operator "discard & finalise" review
+ * path). A `cancelled` (admin-cancel OR supersession), `failed` or already
+ * `completed` batch is refused atomically in the same statement — a cancelled
+ * batch can never become completed. Returns true when the row transitioned.
+ */
+export async function completeBatchRun(batchId: number): Promise<boolean> {
   const now = new Date();
-  await db.update(schema.batchRuns).set({ status: "completed", completedAt: now, terminalAt: now, lastHeartbeatAt: now, lastProgressAt: now }).where(eq(schema.batchRuns.id, batchId));
+  const updated = await db.update(schema.batchRuns)
+    .set({ status: "completed", completedAt: now, terminalAt: now, lastHeartbeatAt: now, lastProgressAt: now })
+    .where(and(eq(schema.batchRuns.id, batchId), sql`${schema.batchRuns.status} NOT IN ('cancelled', 'failed', 'completed')`))
+    .returning({ id: schema.batchRuns.id });
+  const rowCount = updated.length;
+  console.log(`[LIFECYCLE] completeBatchRun batch=${batchId} rowCount=${rowCount}${rowCount === 0 ? " (REFUSED: batch is cancelled/failed/completed or missing)" : ""}`);
+  if (rowCount === 0) return false;
   const run = await getReliabilityRunForBatch(batchId);
   if (run) await updateReliabilityRunLifecycle(run.id, "terminal_success", { lastHeartbeatAt: now, lastProgressAt: now, terminalAt: now });
+  return true;
 }
 
-/** Set an arbitrary batch status (e.g. "pending_review", "running"). */
-export async function setBatchRunStatus(batchId: number, status: string, reason?: string) {
+/**
+ * Set an arbitrary batch status (e.g. "pending_review", "running").
+ * Lifecycle fence: a `cancelled` batch (admin cancel or supersession) is
+ * terminal — no non-cancel status may overwrite it. Enforced atomically in the
+ * UPDATE's WHERE clause; returns false (and logs) when refused.
+ */
+export async function setBatchRunStatus(batchId: number, status: string, reason?: string): Promise<boolean> {
   const previous = await db.select({ status: schema.batchRuns.status, workspaceId: schema.batchRuns.workspaceId, reliabilityRunId: schema.batchRuns.reliabilityRunId })
     .from(schema.batchRuns).where(eq(schema.batchRuns.id, batchId)).limit(1);
-  await db.execute(sql`UPDATE batch_runs SET status = ${status}, last_heartbeat_at = NOW() WHERE id = ${batchId}`);
+  const upd = status === "cancelled"
+    ? await db.execute(sql`UPDATE batch_runs SET status = ${status}, last_heartbeat_at = NOW() WHERE id = ${batchId} RETURNING id`)
+    : await db.execute(sql`UPDATE batch_runs SET status = ${status}, last_heartbeat_at = NOW() WHERE id = ${batchId} AND status <> 'cancelled' RETURNING id`);
+  if (upd.rows.length === 0) {
+    console.warn(`[LIFECYCLE] setBatchRunStatus batch=${batchId} -> ${status} REFUSED rowCount=0 (batch is cancelled or missing)`);
+    return false;
+  }
   const prior = previous[0];
   if (prior?.reliabilityRunId) {
     if (status === "running") {
@@ -1526,6 +1615,7 @@ export async function setBatchRunStatus(batchId: number, status: string, reason?
       reason: reason ?? `batch transitioned from ${prior.status} to ${status}`,
     });
   }
+  return true;
 }
 
 /** Mark a batch's snapshot as successfully saved. */
@@ -1801,6 +1891,10 @@ export async function claimJob(jobId: number) {
       last_progress_at = ${now},
       attempts = attempts + 1
     WHERE id = ${jobId} AND (status = 'pending' OR (status = 'claimed' AND attempts < 3))
+      -- Lifecycle fence: never claim (or retry) a job whose batch is cancelled,
+      -- superseded or otherwise terminal. Durable PG check — holds even when the
+      -- Redis cancel flag or the BullMQ purge was lost.
+      AND EXISTS (SELECT 1 FROM batch_runs b WHERE b.id = analysis_jobs.batch_id AND b.status = 'running')
     RETURNING *
   `);
   const row = result.rows[0] as any;
@@ -1808,23 +1902,41 @@ export async function claimJob(jobId: number) {
   return row || null;
 }
 
-export async function completeJob(jobId: number): Promise<{ transitioned: boolean; batchId: number | null }> {
+export async function completeJob(jobId: number, ownership?: AttemptOwnership | null): Promise<{ transitioned: boolean; batchId: number | null }> {
   const now = new Date();
   // Atomic terminal transition: the `AND status <> 'completed'` guard means a duplicate
   // success execution of an already-completed job (BullMQ at-least-once redelivery, worker
   // lock-expiry/redeploy mid-job, reconciler resurrection) matches 0 rows -> transitioned=false,
   // so the caller can skip the completed_jobs increment and avoid a double-count.
-  const result = await db.execute(sql`UPDATE analysis_jobs SET status = 'completed', completed_at = ${now}, last_progress_at = ${now} WHERE id = ${jobId} AND status <> 'completed' RETURNING batch_id`);
+  // Lifecycle fence (when `ownership` is given): the same statement also requires that this
+  // attempt still owns the claimed job, the batch is still running and the attempt deadline
+  // has not elapsed (permissionPredicate). A stale/cancelled attempt matches 0 rows.
+  const result = ownership
+    ? await db.execute(sql`UPDATE analysis_jobs AS j SET status = 'completed', completed_at = ${now}, last_progress_at = ${now}
+        FROM batch_runs AS b
+        WHERE b.id = j.batch_id AND j.status <> 'completed' AND ${permissionPredicate({ ...ownership, jobId })}
+        RETURNING j.batch_id`)
+    : await db.execute(sql`UPDATE analysis_jobs SET status = 'completed', completed_at = ${now}, last_progress_at = ${now} WHERE id = ${jobId} AND status <> 'completed' RETURNING batch_id`);
   const row = result.rows[0] as any;
   const batchId = row?.batch_id != null ? Number(row.batch_id) : null;
   const transitioned = !!row;
   console.log(`[DIAG][job-transition] job=${jobId} -> completed transitioned=${transitioned} ${diagTags()}`);
+  if (!transitioned && ownership) fenceLogTerminal(jobId, ownership.attemptNumber, "completeJob");
   if (batchId != null) await touchBatchHeartbeat(batchId, { lastProgressAt: now, detail: { jobId, status: "completed" } });
   return { transitioned, batchId };
 }
 
-export async function failJob(jobId: number, error: string) {
+/**
+ * Release/fail a job. With `ownership`, the statement only matches while THIS
+ * attempt still owns the claimed job (`attempts = N AND status = 'claimed'`);
+ * deliberately NOT gated on the deadline or batch status, so the owning
+ * attempt can still release its own claim after a timeout/cancel. A stale
+ * attempt (superseded by a newer claim, or already released) matches 0 rows:
+ * logged, and the caller must not count it as a batch failure.
+ */
+export async function failJob(jobId: number, error: string, ownership?: AttemptOwnership | null): Promise<{ transitioned: boolean; finalFailed: boolean }> {
   const now = new Date();
+  const ownerClause = ownership ? sql` AND attempts = ${ownership.attemptNumber} AND status = 'claimed'` : sql``;
   const result = await db.execute(sql`
     UPDATE analysis_jobs SET
       status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END,
@@ -1833,12 +1945,16 @@ export async function failJob(jobId: number, error: string) {
       claimed_at = NULL,
       last_progress_at = ${now},
       progress_detail = ${JSON.stringify(withDiagAttempt({ error: String(error).slice(0, 500) }))}::jsonb
-    WHERE id = ${jobId}
-    RETURNING batch_id
+    WHERE id = ${jobId}${ownerClause}
+    RETURNING batch_id, status
   `);
-  console.warn(`[DIAG][job-transition] job=${jobId} -> failJob error=${JSON.stringify(String(error).slice(0, 200))} ${diagTags()}`);
-  const batchId = (result.rows[0] as any)?.batch_id;
+  const row = result.rows[0] as any;
+  const transitioned = !!row;
+  console.warn(`[DIAG][job-transition] job=${jobId} -> failJob transitioned=${transitioned} error=${JSON.stringify(String(error).slice(0, 200))} ${diagTags()}`);
+  if (!transitioned && ownership) fenceLogTerminal(jobId, ownership.attemptNumber, "failJob");
+  const batchId = row?.batch_id;
   if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail: { jobId, status: "failed", error } });
+  return { transitioned, finalFailed: row?.status === "failed" };
 }
 
 // DIAGNOSTIC-ONLY (batch-1255 §6.2): additively stamp the current attempt_id

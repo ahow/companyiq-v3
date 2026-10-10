@@ -552,7 +552,9 @@ async function reconcilePass(): Promise<ReconcileStats> {
       await finalizeBatchAndSave(batchId, Number(row.framework_id), Number(row.workspace_id), row.list_id != null ? Number(row.list_id) : undefined);
     } catch (e: any) {
       // Fallback: at least mark it completed so it doesn't spin forever.
-      await db.execute(sql`UPDATE batch_runs SET status='completed', completed_at=NOW() WHERE id=${batchId}`);
+      // Lifecycle fence: only a still-running batch may be flipped; never a
+      // cancelled/superseded/terminal one.
+      await db.execute(sql`UPDATE batch_runs SET status='completed', completed_at=NOW() WHERE id=${batchId} AND status='running'`);
       console.warn(`[Reconciler] finalizeBatchAndSave failed for batch ${batchId} (${e?.message}); marked completed without save`);
     }
     stats.batchesClosed++;

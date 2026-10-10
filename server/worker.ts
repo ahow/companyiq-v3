@@ -32,6 +32,7 @@ import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqua
 import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
 import { runWithLlmContext } from "./lib/llm-usage.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
+import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason } from "./lib/lifecycle-fence.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -337,6 +338,10 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   }
 
   const currentAttempt = (claimed as any).attempts || 1;
+  // Lifecycle fence: the attempt deadline is anchored at claim time so every
+  // SQL-guarded write of this attempt is refused once JOB_TIMEOUT has elapsed,
+  // even if the watchdog timer callback has not run yet.
+  const claimTimeMs = Date.now();
   console.log("[Worker] Job " + jobId + " claimed (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + ")");
 
   // DIAGNOSTIC-ONLY (batch-1255 §6.2): a fresh attempt_id per claim (each retry
@@ -346,7 +351,10 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   // original code (left at its original indentation to keep the diff minimal);
   // control flow, awaits and return values are identical.
   const attemptId = crypto.randomUUID();
-  const diagCtx = { batchId, jobId: jobId as number, attemptId, attemptNumber: currentAttempt, companyId, frameworkId, stage: "claimed" };
+  const lifecycle = createAttemptLifecycle({ jobId: jobId as number, batchId, attemptNumber: currentAttempt, deadlineAt: new Date(claimTimeMs + JOB_TIMEOUT) });
+  const diagCtx = { batchId, jobId: jobId as number, attemptId, attemptNumber: currentAttempt, companyId, frameworkId, stage: "claimed", lifecycle };
+  // Durable ownership token for every terminal/score write of THIS attempt.
+  const ownership = ownershipFromContext(diagCtx)!;
   console.log(`[DIAG][job-transition] job=${jobId} -> claimed ${diagTags(diagCtx)}`);
   // Same object as job.data; a const keeps the reliability_finalizer narrowing
   // inside the closure below (type-only; no runtime difference).
@@ -356,22 +364,22 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   // Load company, framework, and measures
   const company = await storage.getCompanyById(companyId, workspaceId);
   if (!company) {
-    await storage.failJob(jobId, "Company not found");
-    await storage.incrementBatchFailed(batchId);
+    const _f = await storage.failJob(jobId, "Company not found", ownership);
+    if (_f.transitioned) await storage.incrementBatchFailed(batchId);
     return { success: false, error: "Company not found", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
   const framework = await storage.getFrameworkById(frameworkId, workspaceId);
   if (!framework) {
-    await storage.failJob(jobId, "Framework not found");
-    await storage.incrementBatchFailed(batchId);
+    const _f = await storage.failJob(jobId, "Framework not found", ownership);
+    if (_f.transitioned) await storage.incrementBatchFailed(batchId);
     return { success: false, error: "Framework not found", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
   const measures = await storage.getFrameworkMeasures(frameworkId);
   if (measures.length === 0) {
-    await storage.failJob(jobId, "No measures in framework");
-    await storage.incrementBatchFailed(batchId);
+    const _f = await storage.failJob(jobId, "No measures in framework", ownership);
+    if (_f.transitioned) await storage.incrementBatchFailed(batchId);
     return { success: false, error: "No measures in framework", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
@@ -384,7 +392,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   // full fetch/discovery/analyze tail (observed 42–79 min past re-enqueue,
   // batch 1248). Composed into cancelCheck below.
   let jobWatchdogFired = false;
-  const cancelCheck = () => cancelledBatches.has(batchId) || isBatchCancelledCached(batchId) || jobWatchdogFired;
+  const cancelCheck = () => cancelledBatches.has(batchId) || isBatchCancelledCached(batchId) || jobWatchdogFired || lifecycle.revoked;
 
   const heartbeatIntervalMs = parseInt(process.env.JOB_HEARTBEAT_MS || "30000", 10);
   const heartbeatTimer = setInterval(() => {
@@ -431,6 +439,9 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
                 // Fix 1: signal the orphaned pipeline to abort at its next
                 // cooperative-cancel checkpoint before we reject the race.
                 jobWatchdogFired = true;
+                // Lifecycle fence: revoke this attempt's permission to dispatch
+                // or persist (aborts in-flight HTTP via the attempt AbortSignal).
+                revokeAttempt(lifecycle, "job_watchdog_timeout");
                 console.warn(`[DIAG][job-transition] job=${jobId} watchdog-fired after ${JOB_TIMEOUT}ms ${diagTags()}`);
                 reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms"));
               },
@@ -445,9 +456,17 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
 
     setDiagStage("finalize");
     console.log(`[DIAG][job-transition] job=${jobId} pipeline-result success=${result.success} error=${JSON.stringify(String(result.error ?? "").slice(0, 200))} ${diagTags()}`);
+    // Lifecycle fence: a "Cancelled" result whose batch is NOT cancelled means
+    // this attempt lost permission (deadline elapsed / revoked / ownership lost
+    // and its score write was fenced). Treat it exactly like a watchdog timeout
+    // (non-retriable final failure) so the job is released, not left claimed.
+    if (!result.success && result.error === "Cancelled" && !(cancelledBatches.has(batchId) || isBatchCancelledCached(batchId))) {
+      const why = dispatchRevokedReason(diagCtx) || lifecycle.revokedReason || "permission_revoked";
+      result = { ...result, error: "Job watchdog timeout after " + JOB_TIMEOUT + "ms (attempt revoked: " + why + ")" };
+    }
     let jobCompletionTransitioned = false;
     if (result.success) {
-      const _jt = await storage.completeJob(jobId);
+      const _jt = await storage.completeJob(jobId, ownership);
       jobCompletionTransitioned = _jt.transitioned;
       console.log("[Worker] Job " + jobId + " completed successfully (attempt " + currentAttempt + ")");
 
@@ -548,9 +567,13 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     } else {
       // Pipeline returned a failure result
       const errorMsg = result.error || "Unknown error";
-      await storage.failJob(jobId, errorMsg);
+      const _f = await storage.failJob(jobId, errorMsg, ownership);
 
-      if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(errorMsg)) {
+      if (!_f.transitioned) {
+        // Stale attempt (another attempt owns the job / already released):
+        // its terminal write was ignored, so it must neither retry nor count.
+        console.warn(`[DIAG][job-transition] job=${jobId} -> stale-attempt-no-op ${diagTags()}`);
+      } else if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(errorMsg)) {
         // Retry: re-enqueue without incrementing batch failed
         console.log("[Worker] Job " + jobId + " failed (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + "), will retry: " + errorMsg);
         console.warn(`[DIAG][job-transition] job=${jobId} -> retry-enqueue ${diagTags()}`);
@@ -634,7 +657,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
         console.warn(`[Worker] Non-fatal: failed to persist provider failure event: ${persistErr.message}`);
       }
       // Reset job back to pending (not failed) so it can be resumed
-      await storage.failJob(jobId, `provider_paused:${failureClass}:${error.message?.slice(0, 200)}`);
+      await storage.failJob(jobId, `provider_paused:${failureClass}:${error.message?.slice(0, 200)}`, ownership);
       // Re-enqueue with credit-pause delay for auto-resume
       const delayMs = parseInt(process.env.CREDIT_PAUSE_REQUEUE_MS || "60000", 10);
       try {
@@ -648,9 +671,11 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       return { success: false, error: `provider_paused:${failureClass}`, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
     }
 
-    await storage.failJob(jobId, error.message);
+    const _fe = await storage.failJob(jobId, error.message, ownership);
 
-    if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(error.message)) {
+    if (!_fe.transitioned) {
+      console.warn(`[DIAG][job-transition] job=${jobId} -> stale-attempt-no-op (after exception) ${diagTags()}`);
+    } else if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(error.message)) {
       // Retry: re-enqueue without incrementing batch failed
       console.log("[Worker] Job " + jobId + " will retry after exception (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + ")");
       console.warn(`[DIAG][job-transition] job=${jobId} -> retry-enqueue (after exception) ${diagTags()}`);
@@ -725,7 +750,7 @@ async function maybeHandleBatchCompletion(
         batchRow.reliability_run_id + ") with " + failed +
         " failure(s) — handled via reliability lifecycle, not surfaced to the interactive review queue",
       );
-      await storage.completeBatchRun(batchId);
+      await storage.completeBatchRun(batchId); // conditional: refused if cancelled/terminal
       return;
     }
 
@@ -735,7 +760,10 @@ async function maybeHandleBatchCompletion(
         "[Worker] Batch " + batchId + " finished with " + failed +
         " terminal failure(s) — entering pending_review (results NOT saved)",
       );
-      await storage.setBatchRunStatus(batchId, "pending_review");
+      if (!(await storage.setBatchRunStatus(batchId, "pending_review"))) {
+        // Lifecycle fence: batch was cancelled/superseded concurrently — no review alert.
+        return;
+      }
 
       // Build a concise failure list for the alert payload.
       let failedList: Array<{ companyId: number; companyName: string; error: string }> = [];
@@ -766,7 +794,11 @@ async function maybeHandleBatchCompletion(
     console.log(
       "[Worker] Batch " + batchId + " complete with no failures: " + completed + " succeeded — finalising",
     );
-    await storage.completeBatchRun(batchId);
+    if (!(await storage.completeBatchRun(batchId))) {
+      // Lifecycle fence: a cancelled/superseded/terminal batch never becomes
+      // completed and never gets a Results snapshot from this path.
+      return;
+    }
 
     // Option A: suppress Results snapshot for single-company / re-exam batches.
     // These are typically auto-reexaminations or manual single-company analyses
@@ -814,8 +846,26 @@ export async function finalizeBatchAndSave(
   frameworkId: number,
   workspaceId: number,
   listId?: number,
+  opts: { adminRecoverTerminal?: boolean } = {},
 ): Promise<void> {
-  await storage.completeBatchRun(batchId);
+  // Lifecycle fence: a cancelled (incl. superseded), failed or already
+  // completed batch is terminal — this path never flips it to completed.
+  // Automatic callers (reconciler, review endpoints) also skip the save. The
+  // explicit admin recover-results endpoint (adminRecoverTerminal) may still
+  // rebuild the Results snapshot for a terminal batch, but the status flip is
+  // refused by completeBatchRun's conditional UPDATE either way.
+  const { db } = await import("./db.js");
+  const { sql } = await import("drizzle-orm");
+  const cur = (await db.execute(sql`SELECT status FROM batch_runs WHERE id = ${batchId}`)).rows[0] as any;
+  const curStatus = String(cur?.status ?? "");
+  const terminal = curStatus === "cancelled" || curStatus === "failed" || curStatus === "completed";
+  if (terminal && !opts.adminRecoverTerminal) {
+    console.warn(`[LIFECYCLE] finalizeBatchAndSave REFUSED batch=${batchId} status=${curStatus}`);
+    return;
+  }
+  // Conditional UPDATE is the atomic guard (closes the read→write race above).
+  const flipped = await storage.completeBatchRun(batchId);
+  if (!flipped && !opts.adminRecoverTerminal) return;
   await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
   try {
     await storage.clearSystemAlert("batch_review", String(batchId));

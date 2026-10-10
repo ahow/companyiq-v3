@@ -23,6 +23,7 @@ import {
   PROXY_CREDIT_ALERT_KIND,
 } from "./credit-breaker.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
+import { dispatchRevokedReason } from "./lifecycle-fence.js";
 import { beginStage } from "./diag-context.js";
 
 // User-facing message shown on the dashboard banner when the residential proxy
@@ -850,6 +851,19 @@ async function acquireBrowserSlot(): Promise<void> {
   // Slot count was retained on our behalf by the releaser; do not increment.
 }
 
+/**
+ * Lifecycle dispatch gate for browser work: true (and logged) when the current
+ * attempt was cancelled / superseded / timed out, so no new page is opened.
+ * Callers treat a refusal exactly like an open browser circuit (transient,
+ * never a permanent "dead" verdict).
+ */
+function browserDispatchRefused(where: string): boolean {
+  const reason = dispatchRevokedReason();
+  if (!reason) return false;
+  console.warn(`[LIFECYCLE-GATE] dispatch refused at ${where} reason=${reason}`);
+  return true;
+}
+
 function releaseBrowserSlot(): void {
   const next = browserWaiters.shift();
   if (next) {
@@ -1016,7 +1030,9 @@ async function fetchWithBrowser(url: string): Promise<string> {
   if (isBrowserCircuitOpen()) {
     return "";
   }
+  if (browserDispatchRefused("processor.fetchWithBrowser:pre-acquire")) return "";
   await acquireBrowserSlot();
+  if (browserDispatchRefused("processor.fetchWithBrowser:post-acquire")) { releaseBrowserSlot(); return ""; }
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   try {
@@ -1496,7 +1512,9 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     // caller keeps the URL retryable rather than marking it permanently dead.
     throw new BrowserUnavailableError(`browser circuit open: ${url}`);
   }
+  if (browserDispatchRefused("processor.fetchPdfViaBrowser:pre-acquire")) throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`);
   await acquireBrowserSlot();
+  if (browserDispatchRefused("processor.fetchPdfViaBrowser:post-acquire")) { releaseBrowserSlot(); throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`); }
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;
@@ -1703,7 +1721,9 @@ export async function fetchIssuerPdfsWithPrimedSession(
   // the main fetch phase so we actually get a browser here.
   resetBrowserCircuit();
 
+  if (browserDispatchRefused("processor.pdfRecovery:pre-acquire")) return recovered;
   await acquireBrowserSlot();
+  if (browserDispatchRefused("processor.pdfRecovery:post-acquire")) { releaseBrowserSlot(); return recovered; }
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;

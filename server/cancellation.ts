@@ -16,6 +16,7 @@
  */
 
 import { redis } from "./redis.js";
+import { registerBatchCancelSource } from "./lib/lifecycle-fence.js";
 
 const KEY_PREFIX = "cancelled:batch:";
 const REDIS_TTL_SECONDS = 60 * 60; // remember a cancel for 1 hour
@@ -78,3 +79,7 @@ export function isBatchCancelledCached(batchId: number): boolean {
 export function forgetBatchCancellation(batchId: number): void {
   cache.delete(batchId);
 }
+
+// Expose the cached (non-authoritative) cancel notification to discovery's
+// dispatch gate without discovery importing Redis (see lib/lifecycle-fence.ts).
+registerBatchCancelSource(isBatchCancelledCached);
