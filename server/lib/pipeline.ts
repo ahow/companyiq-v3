@@ -176,9 +176,13 @@ class TimeoutError extends Error {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string, onTimeout?: () => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
+      // onTimeout runs synchronously at the timer instant, before the
+      // rejection is delivered to any awaiter (used by the pipeline timeout to
+      // revoke the lifecycle attempt before anything else can react).
+      try { onTimeout?.(); } catch { /* never let the hook mask the timeout */ }
       reject(new TimeoutError(`${label} timed out after ${Math.round(ms / 1000)}s`));
     }, ms);
     promise.then(
@@ -3552,8 +3556,28 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   // Apply the hard pipeline timeout
   // TEST-ONLY: equals PIPELINE_TIMEOUT_MS unless DIAG_FAULT_INJECT targets this batch/job.
   const pipelineDeadlineMs = faultTimeoutMs("pipeline_timeout", PIPELINE_TIMEOUT_MS, { batchId, companyId });
+  // Lifecycle — REVOCATION PATHS (independent; all converge on revokeAttempt):
+  //   #1 worker JOB_TIMEOUT watchdog  → worker.ts processJob watchdog timer
+  //      (revokeAttempt(lifecycle, "job_watchdog_timeout")).
+  //   #2 THIS pipeline timeout        → revoked synchronously inside the
+  //      withTimeout timer callback below (reason "pipeline_timeout").
+  //   #3 discovery's own timeout      → discovery.ts searchCompanyDocuments
+  //      timer callback (reason "discovery_timeout").
+  // None waits for another: whichever deadline fires first revokes. Each
+  // revocation happens at the timer instant, i.e. BEFORE this function returns
+  // its failure result, and therefore before the worker runs failJob and
+  // before any requeue/retry of the job. The in-process flag is a fast path;
+  // the SQL ownership/deadline predicates in runFencedWrite remain the
+  // authority (a late write from this attempt is refused even if this
+  // process never observed the revoke).
+  const pipelineLifecycle = getDiagContext()?.lifecycle;
   try {
-    const diagResult = await withTimeout(pipelinePromise, pipelineDeadlineMs, `[${companyName}] pipeline`);
+    const diagResult = await withTimeout(
+      pipelinePromise,
+      pipelineDeadlineMs,
+      `[${companyName}] pipeline`,
+      () => revokeAttempt(pipelineLifecycle, "pipeline_timeout"),
+    );
     diagPipelineTimer?.finish(diagResult?.success ? "ok" : `failed:${diagResult?.failureType ?? "result"}`, diagResult?.error);
     return diagResult;
   } catch (timeoutError: any) {
@@ -3566,7 +3590,8 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // Lifecycle: the timeout revokes this attempt's permission to dispatch or
       // persist (in-process notification; the SQL deadline/ownership guards are
       // the authority). Aborts in-flight search requests.
-      revokeAttempt(getDiagContext()?.lifecycle, "pipeline_timeout");
+      // Already revoked at the timer instant (onTimeout above); idempotent.
+      revokeAttempt(pipelineLifecycle, "pipeline_timeout");
       const elapsed = Math.round((Date.now() - pipelineStart) / 1000);
       console.error(`[${companyName}] PIPELINE TIMEOUT after ${elapsed}s — marking as failed; signalling orphan abort`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });

@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import * as storage from "../storage.js";
 import { startStageTimer, runWithChildTimer, setDiagStage, timeStage, beginStage, getDiagContext } from "./diag-context.js";
 import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
-import { assertDispatchAllowed, requestAbortSignal, isLifecycleCancelledError } from "./lifecycle-fence.js";
+import { assertDispatchAllowed, requestAbortSignal, isLifecycleCancelledError, revokeAttempt } from "./lifecycle-fence.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
@@ -3489,8 +3489,23 @@ export async function searchCompanyDocuments(opts: {
   // DIAG_FAULT_INJECT targets this batch/job (DIAG_FAULT_BATCH/JOB) with mode
   // discovery_timeout (companyId is only an optional extra check).
   const discoveryDeadlineMs = faultTimeoutMs("discovery_timeout", DISCOVERY_TIMEOUT_MS, { companyId: opts.companyId });
+  // Lifecycle (independent revoke path #3 of 3 — see the "Revocation paths"
+  // block in lifecycle-fence.ts): capture the attempt's lifecycle handle NOW,
+  // while we are still inside the attempt's diag context, so the timer
+  // callback revokes exactly this attempt. A discovery timeout is fatal for
+  // the attempt (the rejection propagates out of runPipelineForCompany's inner
+  // try → failure result → worker failJob), so the attempt is revoked at the
+  // timer instant, synchronously, BEFORE the rejection is observed and
+  // therefore before any failJob/requeue/retry. `discoverySettled` guarantees
+  // a discovery that already finished never revokes its attempt when the
+  // (never-cleared, pre-existing behaviour) timer fires later.
+  const discoveryLifecycle = getDiagContext()?.lifecycle;
+  let discoverySettled = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`Discovery timeout: ${opts.companyName} exceeded ${discoveryDeadlineMs / 1000}s`)), discoveryDeadlineMs);
+    setTimeout(() => {
+      if (!discoverySettled) revokeAttempt(discoveryLifecycle, "discovery_timeout");
+      reject(new Error(`Discovery timeout: ${opts.companyName} exceeded ${discoveryDeadlineMs / 1000}s`));
+    }, discoveryDeadlineMs);
   });
   // DIAGNOSTIC-ONLY (batch-1255 §6.3): discovery stage timer. The inner run
   // executes in a child diag context carrying the timer; the timer is closed
@@ -3506,6 +3521,7 @@ export async function searchCompanyDocuments(opts: {
     }),
     timeoutPromise,
   ]);
+  raced.then(() => { discoverySettled = true; }, () => { discoverySettled = true; });
   if (diagTimer) {
     raced.then(
       () => diagTimer.finish("ok"),

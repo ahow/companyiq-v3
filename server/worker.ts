@@ -441,6 +441,11 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
                 jobWatchdogFired = true;
                 // Lifecycle fence: revoke this attempt's permission to dispatch
                 // or persist (aborts in-flight HTTP via the attempt AbortSignal).
+                // Revocation path #1 of 3. Independent of #2 (pipeline.ts
+                // PIPELINE_TIMEOUT_MS, withTimeout onTimeout) and #3
+                // (discovery.ts DISCOVERY_TIMEOUT_MS timer): each revokes on its
+                // own at its own deadline; none waits for this watchdog. All
+                // three revoke before failJob/requeue below can run.
                 revokeAttempt(lifecycle, "job_watchdog_timeout");
                 console.warn(`[DIAG][job-transition] job=${jobId} watchdog-fired after ${JOB_TIMEOUT}ms ${diagTags()}`);
                 reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms"));
@@ -564,6 +569,13 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     } else if (result.error === "Cancelled") {
       console.log("[Worker] Job " + jobId + " cancelled");
       console.log(`[DIAG][job-transition] job=${jobId} -> cancelled ${diagTags()}`);
+      // Rule (iii): the owning attempt records its (cancellation) failure and
+      // releases its claim. failJob sees the batch is not running → job
+      // 'failed', batchTerminal; never requeued, never counted, batch_runs
+      // untouched. If the batch row is somehow still 'running' (Redis flag
+      // seen before PG cancel committed) the job goes back to 'pending' and
+      // claimJob's PG fence refuses it once the cancel lands. No retry here.
+      await storage.failJob(jobId, "Cancelled (batch cancelled)", ownership);
     } else {
       // Pipeline returned a failure result
       const errorMsg = result.error || "Unknown error";
@@ -573,6 +585,10 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
         // Stale attempt (another attempt owns the job / already released):
         // its terminal write was ignored, so it must neither retry nor count.
         console.warn(`[DIAG][job-transition] job=${jobId} -> stale-attempt-no-op ${diagTags()}`);
+      } else if (_f.batchTerminal) {
+        // Rule (iii): failure recorded (job 'failed') but the batch is
+        // cancelled/superseded/terminal → no requeue, no failed_jobs count.
+        console.warn(`[DIAG][job-transition] job=${jobId} -> failed-batch-terminal-no-retry ${diagTags()}`);
       } else if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(errorMsg)) {
         // Retry: re-enqueue without incrementing batch failed
         console.log("[Worker] Job " + jobId + " failed (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + "), will retry: " + errorMsg);
@@ -675,6 +691,8 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
 
     if (!_fe.transitioned) {
       console.warn(`[DIAG][job-transition] job=${jobId} -> stale-attempt-no-op (after exception) ${diagTags()}`);
+    } else if (_fe.batchTerminal) {
+      console.warn(`[DIAG][job-transition] job=${jobId} -> failed-batch-terminal-no-retry (after exception) ${diagTags()}`);
     } else if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(error.message)) {
       // Retry: re-enqueue without incrementing batch failed
       console.log("[Worker] Job " + jobId + " will retry after exception (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + ")");

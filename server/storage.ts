@@ -6,7 +6,7 @@ import crypto from "crypto";
 import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironment, isHeartbeatStalled, type DeploymentFingerprint, type RunKeyInput, type RunLifecycleState } from "./lib/reliability.js";
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 import { diagTags, getDiagContext } from "./lib/diag-context.js";
-import { type AttemptOwnership, permissionPredicate, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason } from "./lib/lifecycle-fence.js";
+import { type AttemptOwnership, type FenceDb, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason, lockJobAndBatch, claimPredicate, successCompletionPredicate, failureRecordPredicate } from "./lib/lifecycle-fence.js";
 
 // ─── URL Hashing for Content Deduplication ─────────────────────────────────
 
@@ -989,13 +989,19 @@ export async function replaceMeasureScoresFenced(
   companyId: number,
   frameworkId: number,
   scores: any[],
+  /** Test seam: defaults to the module pool. Lets a DB test run the real
+   *  fenced replacement against its own (e.g. max=1) pool. */
+  fenceDb: FenceDb = db,
 ): Promise<boolean> {
   const early = dispatchRevokedReason();
   if (early) {
     fenceLogScore(ownership, `reason=${early} (pre-acquire)`);
     return false;
   }
-  return runFencedWrite(db, ownership, async (tx) => {
+  // Rule (i) score persistence: owner ∧ batch running ∧ deadline.
+  // Framework-scoped replacement: delete this company+framework's rows, insert
+  // the new set (~36 rows), atomically under the canonical job/batch lock.
+  return runFencedWrite(fenceDb, ownership, async (tx) => {
     await tx.delete(schema.measureScores).where(
       and(eq(schema.measureScores.companyId, companyId), eq(schema.measureScores.frameworkId, frameworkId))
     );
@@ -1744,7 +1750,19 @@ export async function requeueFailedJobsForBatch(
 export async function cancelBatchRun(batchId: number, reason = "cancelled by user") {
   const [batch] = await db.select().from(schema.batchRuns).where(eq(schema.batchRuns.id, batchId)).limit(1);
   const now = new Date();
-  await db.update(schema.batchRuns).set({ status: "cancelled", completedAt: now, terminalAt: now, acceptanceState: "rejected", rejectionReason: reason }).where(eq(schema.batchRuns.id, batchId));
+  // Rule (iv) cancellation cleanup — authoritative PG write, idempotent: a
+  // repeat cancel of an already-cancelled batch matches 0 rows, so it neither
+  // rewrites the original completedAt/terminalAt/reason nor re-emits the
+  // reliability side-effects below. Batch-side lock only (single autocommit
+  // UPDATE on batch_runs; never touches analysis_jobs) — see LOCK ORDER in
+  // lifecycle-fence.ts. Redis flag + queue purge are done by the caller,
+  // best-effort.
+  const transitioned = await db.update(schema.batchRuns)
+    .set({ status: "cancelled", completedAt: now, terminalAt: now, acceptanceState: "rejected", rejectionReason: reason })
+    .where(and(eq(schema.batchRuns.id, batchId), sql`${schema.batchRuns.status} <> 'cancelled'`))
+    .returning({ id: schema.batchRuns.id });
+  console.warn(`[LIFECYCLE] cancelBatchRun batch=${batchId} transitioned=${transitioned.length > 0}${transitioned.length === 0 ? " (already cancelled or missing — idempotent no-op)" : ""}`);
+  if (transitioned.length === 0) return;
   const run = await getReliabilityRunForBatch(batchId);
   if (run) {
     await db.execute(sql`UPDATE analysis_results SET acceptance_state = 'rejected', rejection_reason = ${reason} WHERE batch_id = ${batchId} AND immutable_snapshot = TRUE`);
@@ -1884,20 +1902,27 @@ export async function enqueueReexamination(opts: {
 
 export async function claimJob(jobId: number) {
   const now = new Date();
-  const result = await db.execute(sql`
-    UPDATE analysis_jobs SET
-      status = 'claimed',
-      claimed_at = ${now},
-      last_progress_at = ${now},
-      attempts = attempts + 1
-    WHERE id = ${jobId} AND (status = 'pending' OR (status = 'claimed' AND attempts < 3))
-      -- Lifecycle fence: never claim (or retry) a job whose batch is cancelled,
-      -- superseded or otherwise terminal. Durable PG check — holds even when the
-      -- Redis cancel flag or the BullMQ purge was lost.
-      AND EXISTS (SELECT 1 FROM batch_runs b WHERE b.id = analysis_jobs.batch_id AND b.status = 'running')
-    RETURNING *
-  `);
-  const row = result.rows[0] as any;
+  // Canonical job-side lock (LOCK ORDER, lifecycle-fence.ts): lock j FOR UPDATE
+  // + b FOR SHARE under claimPredicate (claimable ∧ batch running), then
+  // increment attempts. Lifecycle fence: never claim (or retry) a job whose
+  // batch is cancelled, superseded or otherwise terminal — durable PG check
+  // that holds even when the Redis cancel flag or the BullMQ purge was lost,
+  // and that linearises against a concurrent cancel/supersede UPDATE.
+  const row = await db.transaction(async (tx) => {
+    const locked = await lockJobAndBatch(tx, jobId, claimPredicate(jobId));
+    if (!locked) return null;
+    const result = await tx.execute(sql`
+      UPDATE analysis_jobs SET
+        status = 'claimed',
+        claimed_at = ${now},
+        last_progress_at = ${now},
+        attempts = attempts + 1
+      WHERE id = ${jobId}
+      RETURNING *
+    `);
+    return (result.rows[0] as any) ?? null;
+  });
+  // Progress heartbeat strictly AFTER commit (never inside the lock txn).
   if (row?.batch_id) await touchBatchHeartbeat(Number(row.batch_id), { lastProgressAt: now, detail: { jobId, status: "claimed" } });
   return row || null;
 }
@@ -1908,53 +1933,93 @@ export async function completeJob(jobId: number, ownership?: AttemptOwnership | 
   // success execution of an already-completed job (BullMQ at-least-once redelivery, worker
   // lock-expiry/redeploy mid-job, reconciler resurrection) matches 0 rows -> transitioned=false,
   // so the caller can skip the completed_jobs increment and avoid a double-count.
-  // Lifecycle fence (when `ownership` is given): the same statement also requires that this
-  // attempt still owns the claimed job, the batch is still running and the attempt deadline
-  // has not elapsed (permissionPredicate). A stale/cancelled attempt matches 0 rows.
-  const result = ownership
-    ? await db.execute(sql`UPDATE analysis_jobs AS j SET status = 'completed', completed_at = ${now}, last_progress_at = ${now}
-        FROM batch_runs AS b
-        WHERE b.id = j.batch_id AND j.status <> 'completed' AND ${permissionPredicate({ ...ownership, jobId })}
-        RETURNING j.batch_id`)
-    : await db.execute(sql`UPDATE analysis_jobs SET status = 'completed', completed_at = ${now}, last_progress_at = ${now} WHERE id = ${jobId} AND status <> 'completed' RETURNING batch_id`);
+  // Rule (ii) success completion (when `ownership` is given): canonical job-side
+  // lock under successCompletionPredicate (owner ∧ batch running ∧ deadline),
+  // then the transition, in one short txn. A stale/cancelled/timed-out attempt
+  // matches 0 rows. Without ownership (legacy/admin callers) the plain
+  // idempotent single-statement guard is used.
+  if (ownership) {
+    const o = { ...ownership, jobId };
+    let batchIdOwned: number | null = null;
+    const ok = await runFencedWrite(db, o, async (tx) => {
+      const r = await tx.execute(sql`UPDATE analysis_jobs SET status = 'completed', completed_at = ${now}, last_progress_at = ${now}
+        WHERE id = ${jobId} AND status <> 'completed' RETURNING batch_id`);
+      batchIdOwned = (r.rows[0] as any)?.batch_id != null ? Number((r.rows[0] as any).batch_id) : null;
+    }, { predicate: successCompletionPredicate(o), onFenced: (why) => fenceLogTerminal(jobId, ownership.attemptNumber, `completeJob ${why}`) });
+    const transitionedOwned = ok && batchIdOwned != null;
+    console.log(`[DIAG][job-transition] job=${jobId} -> completed transitioned=${transitionedOwned} ${diagTags()}`);
+    if (batchIdOwned != null) await touchBatchHeartbeat(batchIdOwned, { lastProgressAt: now, detail: { jobId, status: "completed" } });
+    return { transitioned: transitionedOwned, batchId: batchIdOwned };
+  }
+  const result = await db.execute(sql`UPDATE analysis_jobs SET status = 'completed', completed_at = ${now}, last_progress_at = ${now} WHERE id = ${jobId} AND status <> 'completed' RETURNING batch_id`);
   const row = result.rows[0] as any;
   const batchId = row?.batch_id != null ? Number(row.batch_id) : null;
   const transitioned = !!row;
   console.log(`[DIAG][job-transition] job=${jobId} -> completed transitioned=${transitioned} ${diagTags()}`);
-  if (!transitioned && ownership) fenceLogTerminal(jobId, ownership.attemptNumber, "completeJob");
   if (batchId != null) await touchBatchHeartbeat(batchId, { lastProgressAt: now, detail: { jobId, status: "completed" } });
   return { transitioned, batchId };
 }
 
 /**
- * Release/fail a job. With `ownership`, the statement only matches while THIS
- * attempt still owns the claimed job (`attempts = N AND status = 'claimed'`);
+ * Rule (iii) failure recording. Writes ONLY analysis_jobs — never batch_runs.
+ *
+ * With `ownership`: canonical job-side lock (j FOR UPDATE, b FOR SHARE) under
+ * failureRecordPredicate (owner only: `attempts = N AND status = 'claimed'`);
  * deliberately NOT gated on the deadline or batch status, so the owning
- * attempt can still release its own claim after a timeout/cancel. A stale
- * attempt (superseded by a newer claim, or already released) matches 0 rows:
- * logged, and the caller must not count it as a batch failure.
+ * attempt ALWAYS records its failure / releases its claim after a timeout or
+ * cancel. A stale attempt (superseded by a newer claim, or already released)
+ * matches 0 rows: logged, transitioned=false, caller must not count/retry.
+ *
+ * What it writes, by batch state (read under the FOR SHARE lock, so a
+ * concurrent cancel linearises strictly before or after):
+ *   • batch 'running'      → job 'pending' (retry) or 'failed' (attempts >= 3),
+ *                            exactly as before; batchTerminal=false.
+ *   • batch NOT 'running'  → job 'failed' (released, NOT requeued);
+ *     (cancelled/superseded/  batchTerminal=true → caller must not requeue and
+ *      completed/failed/      must not increment failed_jobs. batch_runs.status
+ *      pending_review)        is never written, so a cancelled batch cannot be
+ *                            resurrected to running/completed.
+ * Without ownership (legacy/admin/reconciler callers) the same state mapping
+ * is applied in a single statement without the ownership clause.
  */
-export async function failJob(jobId: number, error: string, ownership?: AttemptOwnership | null): Promise<{ transitioned: boolean; finalFailed: boolean }> {
+export async function failJob(jobId: number, error: string, ownership?: AttemptOwnership | null): Promise<{ transitioned: boolean; finalFailed: boolean; batchTerminal: boolean }> {
   const now = new Date();
-  const ownerClause = ownership ? sql` AND attempts = ${ownership.attemptNumber} AND status = 'claimed'` : sql``;
-  const result = await db.execute(sql`
+  const detail = JSON.stringify(withDiagAttempt({ error: String(error).slice(0, 500) }));
+  const doUpdate = (exec: { execute: (q: any) => Promise<any> }, batchRunning: boolean) => exec.execute(sql`
     UPDATE analysis_jobs SET
-      status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END,
+      status = CASE WHEN ${batchRunning} = FALSE OR attempts >= 3 THEN 'failed' ELSE 'pending' END,
       last_error = ${error},
       worker_id = NULL,
       claimed_at = NULL,
       last_progress_at = ${now},
-      progress_detail = ${JSON.stringify(withDiagAttempt({ error: String(error).slice(0, 500) }))}::jsonb
-    WHERE id = ${jobId}${ownerClause}
+      progress_detail = ${detail}::jsonb
+    WHERE id = ${jobId}
     RETURNING batch_id, status
   `);
-  const row = result.rows[0] as any;
+  let row: any = null;
+  let batchTerminal = false;
+  if (ownership) {
+    row = await db.transaction(async (tx) => {
+      const locked = await lockJobAndBatch(tx, jobId, failureRecordPredicate({ jobId, attemptNumber: ownership.attemptNumber }));
+      if (!locked) return null;
+      batchTerminal = locked.batchStatus !== "running";
+      const r = await doUpdate(tx, !batchTerminal);
+      return (r.rows[0] as any) ?? null;
+    });
+  } else {
+    const st = await db.execute(sql`SELECT b.status FROM analysis_jobs j JOIN batch_runs b ON b.id = j.batch_id WHERE j.id = ${jobId}`);
+    const bs = (st.rows[0] as any)?.status;
+    batchTerminal = bs != null && bs !== "running";
+    const r = await doUpdate(db, !batchTerminal);
+    row = (r.rows[0] as any) ?? null;
+  }
   const transitioned = !!row;
-  console.warn(`[DIAG][job-transition] job=${jobId} -> failJob transitioned=${transitioned} error=${JSON.stringify(String(error).slice(0, 200))} ${diagTags()}`);
+  console.warn(`[DIAG][job-transition] job=${jobId} -> failJob transitioned=${transitioned} batchTerminal=${batchTerminal} error=${JSON.stringify(String(error).slice(0, 200))} ${diagTags()}`);
   if (!transitioned && ownership) fenceLogTerminal(jobId, ownership.attemptNumber, "failJob");
   const batchId = row?.batch_id;
+  // Progress heartbeat strictly AFTER commit (never inside the lock txn).
   if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail: { jobId, status: "failed", error } });
-  return { transitioned, finalFailed: row?.status === "failed" };
+  return { transitioned, finalFailed: row?.status === "failed", batchTerminal: transitioned && batchTerminal };
 }
 
 // DIAGNOSTIC-ONLY (batch-1255 §6.2): additively stamp the current attempt_id
