@@ -317,7 +317,7 @@ async function s6PipelineTimeoutLateResponse() {
   const company = await storage.getCompanyById(cid, wsId);
   const framework = await storage.getFrameworkById(fwId, wsId);
   const run = runWithDiagContext(att.ctx, () => runAnalysisPipeline({
-    company: company as any, framework: framework as any, measures: [], workspaceId: wsId, batchId: B6.id, skipFetch: true, attemptId: att.ctx.attemptId,
+    company: company as any, framework: framework as any, measures: [], workspaceId: wsId, batchId: B6.id, skipFetch: true, attemptId: att.ctx.attemptId ?? undefined,
   }));
   const revoked = await waitFor(() => att.ctx.lifecycle!.revoked, 10_000);
   check("S6: real pipeline timeout revoked the attempt (withTimeout timer callback)", revoked && att.ctx.lifecycle!.revokedReason === "pipeline_timeout", att.ctx.lifecycle!.revokedReason);
