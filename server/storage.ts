@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironment, isHeartbeatStalled, type DeploymentFingerprint, type RunKeyInput, type RunLifecycleState } from "./lib/reliability.js";
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
+import { diagTags, getDiagContext } from "./lib/diag-context.js";
 
 // ─── URL Hashing for Content Deduplication ─────────────────────────────────
 
@@ -1817,6 +1818,7 @@ export async function completeJob(jobId: number): Promise<{ transitioned: boolea
   const row = result.rows[0] as any;
   const batchId = row?.batch_id != null ? Number(row.batch_id) : null;
   const transitioned = !!row;
+  console.log(`[DIAG][job-transition] job=${jobId} -> completed transitioned=${transitioned} ${diagTags()}`);
   if (batchId != null) await touchBatchHeartbeat(batchId, { lastProgressAt: now, detail: { jobId, status: "completed" } });
   return { transitioned, batchId };
 }
@@ -1830,15 +1832,27 @@ export async function failJob(jobId: number, error: string) {
       worker_id = NULL,
       claimed_at = NULL,
       last_progress_at = ${now},
-      progress_detail = ${JSON.stringify({ error: String(error).slice(0, 500) })}::jsonb
+      progress_detail = ${JSON.stringify(withDiagAttempt({ error: String(error).slice(0, 500) }))}::jsonb
     WHERE id = ${jobId}
     RETURNING batch_id
   `);
+  console.warn(`[DIAG][job-transition] job=${jobId} -> failJob error=${JSON.stringify(String(error).slice(0, 200))} ${diagTags()}`);
   const batchId = (result.rows[0] as any)?.batch_id;
   if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail: { jobId, status: "failed", error } });
 }
 
+// DIAGNOSTIC-ONLY (batch-1255 §6.2): additively stamp the current attempt_id
+// into a plain-object progress_detail (jsonb; no reader depends on its exact
+// key set). Non-objects / no active job context pass through unchanged.
+function withDiagAttempt<T>(detail: T): T {
+  const attemptId = getDiagContext()?.attemptId;
+  if (!attemptId || detail == null || typeof detail !== "object" || Array.isArray(detail)) return detail;
+  if ("attemptId" in (detail as any)) return detail;
+  return { ...(detail as any), attemptId };
+}
+
 export async function updateJobProgress(jobId: number, detail: unknown = null) {
+  detail = withDiagAttempt(detail);
   const now = new Date();
   const result = await db.execute(sql`UPDATE analysis_jobs SET last_progress_at = ${now}, progress_detail = ${detail == null ? null : JSON.stringify(detail)}::jsonb WHERE id = ${jobId} RETURNING batch_id`);
   const batchId = (result.rows[0] as any)?.batch_id;

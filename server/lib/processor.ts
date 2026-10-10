@@ -23,6 +23,7 @@ import {
   PROXY_CREDIT_ALERT_KIND,
 } from "./credit-breaker.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
+import { beginStage } from "./diag-context.js";
 
 // User-facing message shown on the dashboard banner when the residential proxy
 // runs out of credit. Kept as a constant so the raise + any future references
@@ -843,7 +844,9 @@ async function acquireBrowserSlot(): Promise<void> {
     return;
   }
   // At capacity — wait until releaseBrowserSlot() hands a slot directly to us.
+  const diagEndWait = beginStage("browser_admission_wait", "browser_slot"); // DIAGNOSTIC-ONLY
   await new Promise<void>((resolve) => browserWaiters.push(resolve));
+  diagEndWait(true);
   // Slot count was retained on our behalf by the releaser; do not increment.
 }
 
@@ -1014,6 +1017,7 @@ async function fetchWithBrowser(url: string): Promise<string> {
     return "";
   }
   await acquireBrowserSlot();
+  const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   try {
     const browser = await getSharedBrowser();
@@ -1112,6 +1116,7 @@ async function fetchWithBrowser(url: string): Promise<string> {
         // Ignore close errors
       }
     }
+    diagEndBrowser();
     releaseBrowserSlot();
   }
 }
@@ -1492,6 +1497,7 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     throw new BrowserUnavailableError(`browser circuit open: ${url}`);
   }
   await acquireBrowserSlot();
+  const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;
   try {
@@ -1623,6 +1629,7 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     if (page) {
       try { await page.close(); } catch { /* ignore */ }
     }
+    diagEndBrowser();
     releaseBrowserSlot();
   }
 }
@@ -1697,6 +1704,7 @@ export async function fetchIssuerPdfsWithPrimedSession(
   resetBrowserCircuit();
 
   await acquireBrowserSlot();
+  const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;
   try {
@@ -1925,6 +1933,7 @@ export async function fetchIssuerPdfsWithPrimedSession(
     if (page) {
       try { await page.close(); } catch { /* ignore */ }
     }
+    diagEndBrowser();
     releaseBrowserSlot();
   }
   return recovered;

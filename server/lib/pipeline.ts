@@ -27,6 +27,7 @@
  */
 
 import * as storage from "../storage.js";
+import { getDiagContext, setDiagStage, diagTags, startStageTimer, runWithChildTimer } from "./diag-context.js";
 import { searchCompanyDocuments, runTargetedDisclosureQuery, resolveCikForCompany, type DiscoveryResult } from "./discovery.js";
 import {
   getRequirementsForJurisdiction,
@@ -150,6 +151,7 @@ export interface PipelineOptions {
   skipDiscovery?: boolean; // Resume-not-restart retry: skip discovery search, still run fetch on persisted corpus
   sourceBatchId?: number; // Corpus replay: read corpus from this source batch instead of current
   batchFetchState?: BatchFetchState; // 42-F: batch-scoped circuit-breaker
+  attemptId?: string; // DIAGNOSTIC-ONLY: worker-minted per-claim UUID (log correlation / score provenance)
 }
 
 export interface PipelineResult {
@@ -2825,10 +2827,17 @@ async function runAnalyzePhase(opts: {
           frameworkVersion: (framework as any).version ?? null,
           frameworkHash: runFrameworkHash,
         }),
+
+        // DIAGNOSTIC-ONLY score-write provenance (batch-1255 §6.2): which job
+        // attempt / batch wrote this row. Nullable; never read by scoring.
+        attemptId: getDiagContext()?.attemptId ?? null,
+        batchId: batchId ?? null,
       };
     })
   );
 
+  setDiagStage("score-write");
+  console.log(`[DIAG][score-write] company=${companyId} rows=${scoreRows.length} ${diagTags()}`);
   await storage.createMeasureScores(scoreRows);
 
   // Update company with results.
@@ -3315,13 +3324,20 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   // Wrap the entire pipeline in a hard timeout to prevent any single company
   // from blocking the worker indefinitely. This ensures batch counters always
   // increment and the batch eventually completes.
-  const pipelinePromise = (async (): Promise<PipelineResult> => {
+  // DIAGNOSTIC-ONLY (batch-1255 §6.3): attempt-wide stage timer. The pipeline
+  // body runs in a child diag context carrying it, so ops the orphaned body
+  // performs AFTER the hard timeout are logged as post-close ops. Pure
+  // observation — the promise, its result and the timeout race are unchanged.
+  const diagPipelineTimer = startStageTimer("pipeline", companyName);
+  console.log(`[DIAG][pipeline] start company="${companyName}" opts_attempt_id=${opts.attemptId ?? "-"} ${diagTags()}`);
+  const pipelinePromise = runWithChildTimer(diagPipelineTimer, () => (async (): Promise<PipelineResult> => {
     try {
       // Phase 1: Fetch (unless skipping to reuse cached docs)
       // PR 1 · Change 1c: type widened to carry the optional issuerProfile returned
       // by runFetchPhase; used to thread the profile into the analyze phase.
       let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } } = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
+        setDiagStage("fetch");
         fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck: effectiveCancel, batchFetchState: opts.batchFetchState, skipDiscovery });
         
         if (effectiveCancel()) {
@@ -3398,6 +3414,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // PR 1 · Change 4: pass the reviewQueue + skipFetch through so the analyzer
       // can gate auto re-retrieval on the same dedupe registry used for the
       // whole pipeline run.
+      setDiagStage("analyze");
       const analysis = await runAnalyzePhase({
         company, framework, measures, workspaceId, batchId,
         sourceBatchId: opts.sourceBatchId,
@@ -3497,12 +3514,15 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         failureType: (isTimeout ? "timeout" : "error") as "timeout" | "error",
       };
     }
-  })();
+  })());
 
   // Apply the hard pipeline timeout
   try {
-    return await withTimeout(pipelinePromise, PIPELINE_TIMEOUT_MS, `[${companyName}] pipeline`);
+    const diagResult = await withTimeout(pipelinePromise, PIPELINE_TIMEOUT_MS, `[${companyName}] pipeline`);
+    diagPipelineTimer?.finish(diagResult?.success ? "ok" : `failed:${diagResult?.failureType ?? "result"}`, diagResult?.error);
+    return diagResult;
   } catch (timeoutError: any) {
+    diagPipelineTimer?.finish(timeoutError instanceof TimeoutError ? "timeout" : "error", timeoutError);
     if (timeoutError instanceof TimeoutError) {
       // Fix 1: flip the abort flag so the still-running pipelinePromise (the
       // orphan) stops launching/awaiting new work at its next checkpoint,

@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import * as storage from "../storage.js";
+import { startStageTimer, runWithChildTimer, setDiagStage, timeStage, beginStage } from "./diag-context.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
@@ -237,7 +238,12 @@ export function rankSweepPdfs(results: SearchResult[], max: number): SearchResul
     .map(x => x.r);
 }
 
-async function issuerPdfSweepForDomain(domain: string): Promise<SearchResult[]> {
+// DIAGNOSTIC-ONLY: stage-timed pass-through (same result / rejection).
+function issuerPdfSweepForDomain(domain: string): Promise<SearchResult[]> {
+  return timeStage("issuer_domain_sweep", domain, () => issuerPdfSweepForDomainInner(domain));
+}
+
+async function issuerPdfSweepForDomainInner(domain: string): Promise<SearchResult[]> {
   const out = new Map<string, SearchResult>();
   const hits = await webSearch(`site:${domain} filetype:pdf`, { num: ISSUER_SWEEP_NUM });
   for (const h of hits) {
@@ -1060,8 +1066,19 @@ const serperBucket = createTokenBucket(envNum("SERPER_BUCKET_TOKENS", 8), envNum
 const serpApiBucket = createTokenBucket(envNum("SERPAPI_BUCKET_TOKENS", 4), envNum("SERPAPI_BUCKET_REFILL", 2));
 
 async function withBucket<T>(bucket: TokenBucket, fn: () => Promise<T>): Promise<T> {
-  await bucket.acquire();
-  try { return await fn(); } finally { bucket.release(); }
+  // DIAGNOSTIC-ONLY stage timing around the unchanged acquire / call / release.
+  const endWait = beginStage("search_rate_wait", "bucket.acquire");
+  try { await bucket.acquire(); } catch (e) { endWait(false); throw e; }
+  endWait(true);
+  const endCall = beginStage("search_provider", "web_search");
+  try {
+    const r = await fn();
+    endCall(true);
+    return r;
+  } catch (e) {
+    endCall(false);
+    throw e;
+  } finally { bucket.release(); }
 }
 
 // ─── SerpAPI Circuit-Breaker ────────────────────────────────────────────────
@@ -1167,7 +1184,7 @@ async function webSearchInner(
       // On 429 (rate limit), wait and retry once
       if (error?.response?.status === 429) {
         console.warn(`[Discovery] Serper 429 rate-limited, backing off 5s for "${query.slice(0, 60)}"`);
-        await new Promise(r => setTimeout(r, 5000 + Math.random() * 2000));
+        await timeStage("retry_backoff", "search_429_backoff", () => new Promise(r => setTimeout(r, 5000 + Math.random() * 2000)));
         try { return await withBucket(serperBucket, () => webSearchSerper(query, serperKey, opts)); } catch { /* fall through */ }
       }
       noteRateLimited(); // genuine Serper failure (429-retry-success returns earlier) = back-pressure signal for adaptive concurrency
@@ -1196,7 +1213,7 @@ async function webSearchInner(
     } catch (error: any) {
       if (error?.response?.status === 429) {
         console.warn(`[Discovery] SerpAPI 429 rate-limited, backing off 5s for "${query.slice(0, 60)}"`);
-        await new Promise(r => setTimeout(r, 5000 + Math.random() * 2000));
+        await timeStage("retry_backoff", "search_429_backoff", () => new Promise(r => setTimeout(r, 5000 + Math.random() * 2000)));
         try {
           const res = await withBucket(serpApiBucket, () => webSearchSerpApi(query, serpApiKey, opts));
           if (gated) serpApiBreaker.success();
@@ -3438,7 +3455,27 @@ export async function searchCompanyDocuments(opts: {
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new Error(`Discovery timeout: ${opts.companyName} exceeded ${DISCOVERY_TIMEOUT_MS / 1000}s`)), DISCOVERY_TIMEOUT_MS);
   });
-  return Promise.race([searchCompanyDocumentsInner(opts), timeoutPromise]);
+  // DIAGNOSTIC-ONLY (batch-1255 §6.3): discovery stage timer. The inner run
+  // executes in a child diag context carrying the timer; the timer is closed
+  // when the (unchanged) race settles, logging per-stage busy/union time, the
+  // last op that made progress and the ops pending at timeout. Ops the orphaned
+  // inner run starts afterwards are logged as post-close ops. The returned
+  // promise is the same race object as before.
+  const diagTimer = startStageTimer("discovery", opts.companyName);
+  const raced = Promise.race([
+    runWithChildTimer(diagTimer, () => {
+      setDiagStage("discovery");
+      return searchCompanyDocumentsInner(opts);
+    }),
+    timeoutPromise,
+  ]);
+  if (diagTimer) {
+    raced.then(
+      () => diagTimer.finish("ok"),
+      (e: any) => diagTimer.finish(/Discovery timeout/.test(String(e?.message || e)) ? "timeout" : "error", e),
+    );
+  }
+  return raced;
 }
 
 async function searchCompanyDocumentsInner(opts: {

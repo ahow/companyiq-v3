@@ -2,6 +2,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import * as schema from "../shared/schema.js";
+import { instrumentedQuery, isPoolInstrumented, registerPoolForDiagnostics } from "./lib/pg-diag.js";
 
 const { Pool } = pg;
 
@@ -52,6 +53,12 @@ const PG_QUERY_RETRIES = Math.max(1, parseInt(process.env.PG_QUERY_RETRIES || "4
 const ACQUIRE_TIMEOUT_RE =
   /Connection terminated due to connection timeout|timeout exceeded when trying to connect/i;
 const _rawPoolQuery = pool.query.bind(pool);
+// DIAGNOSTIC-ONLY (batch-1255 §6.1): per-op checkout-wait / exec / total timing.
+// instrumentedQuery mirrors pg-pool's query() lifecycle exactly; disable with
+// DIAG_DB_INSTRUMENTATION=false to fall back to the raw pool.query.
+registerPoolForDiagnostics("main", pool, PG_POOL_MAX);
+const _diagPoolQuery = (...args: any[]): Promise<any> =>
+  isPoolInstrumented("main") ? instrumentedQuery("main", args) : (_rawPoolQuery as any)(...args);
 (pool as any).query = async function patchedQuery(...args: any[]): Promise<any> {
   // Callback / submittable style (last arg is a function) passes straight through
   // — those callers manage their own lifecycle and must not be auto-retried.
@@ -61,7 +68,7 @@ const _rawPoolQuery = pool.query.bind(pool);
   let lastErr: any = null;
   for (let attempt = 1; attempt <= PG_QUERY_RETRIES; attempt++) {
     try {
-      return await (_rawPoolQuery as any)(...args);
+      return await _diagPoolQuery(...args);
     } catch (err: any) {
       lastErr = err;
       if (attempt < PG_QUERY_RETRIES && ACQUIRE_TIMEOUT_RE.test(String(err?.message || err))) {
@@ -827,6 +834,10 @@ export async function initializeDatabase(): Promise<void> {
     // Change C/D: rationale↔score consistency flags (design-time re-adjudication).
     await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS rationale_score_inconsistent BOOLEAN NOT NULL DEFAULT false`);
     await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS inconsistency_reason TEXT`);
+    // DIAGNOSTIC-ONLY score-write provenance (batch-1255 §6.2): nullable, no
+    // index/constraint; populated at insert time, never read by scoring logic.
+    await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS attempt_id UUID`);
+    await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS batch_id INTEGER`);
     await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS needs_readjudication BOOLEAN NOT NULL DEFAULT false`);
     // WS-B (P1 per-decision traceability): immutable per-decision audit record.
     await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS decision_trace JSONB`);

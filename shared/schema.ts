@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, boolean, timestamp, real, jsonb, uniqueIndex, index, doublePrecision } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, timestamp, real, jsonb, uniqueIndex, index, doublePrecision, uuid } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
 // ─── Users & Workspaces ─────────────────────────────────────────────────────
@@ -337,6 +337,11 @@ export const measureScores = pgTable("measure_scores", {
   // three-valued validation status. Additive JSONB sidecar; see
   // server/lib/framework-v2/reliability/decision-trace.ts (DecisionTrace).
   decisionTrace: jsonb("decision_trace"),
+  // DIAGNOSTIC-ONLY score-write provenance (batch-1255 §6.2): which job attempt
+  // (worker-minted UUID per claim) and batch wrote this row. Nullable, no
+  // constraint/index, never read by scoring/selection logic.
+  attemptId: uuid("attempt_id"),
+  batchId: integer("batch_id"),
   displayOrder: integer("display_order").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({

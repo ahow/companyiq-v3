@@ -31,6 +31,7 @@ import {
 import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
 import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
 import { runWithLlmContext } from "./lib/llm-usage.js";
+import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -338,6 +339,20 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   const currentAttempt = (claimed as any).attempts || 1;
   console.log("[Worker] Job " + jobId + " claimed (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + ")");
 
+  // DIAGNOSTIC-ONLY (batch-1255 §6.2): a fresh attempt_id per claim (each retry
+  // gets a new one). Everything below runs inside this AsyncLocalStorage
+  // context so DB ops, progress writes, stage timers and score rows can be
+  // correlated to this exact attempt. The closure body is the unchanged
+  // original code (left at its original indentation to keep the diff minimal);
+  // control flow, awaits and return values are identical.
+  const attemptId = crypto.randomUUID();
+  const diagCtx = { batchId, jobId: jobId as number, attemptId, attemptNumber: currentAttempt, companyId, frameworkId, stage: "claimed" };
+  console.log(`[DIAG][job-transition] job=${jobId} -> claimed ${diagTags(diagCtx)}`);
+  // Same object as job.data; a const keeps the reliability_finalizer narrowing
+  // inside the closure below (type-only; no runtime difference).
+  const analysisJobData = job.data;
+  return runWithDiagContext(diagCtx, async (): Promise<PipelineResult> => {
+
   // Load company, framework, and measures
   const company = await storage.getCompanyById(companyId, workspaceId);
   if (!company) {
@@ -383,6 +398,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     // fetch/discovery step that has no inner socket timeout. The heartbeat above
     // records genuine work even when aggregate counters remain unchanged.
     let result: PipelineResult;
+    setDiagStage("pipeline");
     try {
       // Attribution context for LLM token/cost logging. Propagated implicitly
       // via AsyncLocalStorage to every LLM call made anywhere in the pipeline,
@@ -402,6 +418,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
             skipFetch,
             skipDiscovery,
             sourceBatchId,
+            attemptId, // DIAGNOSTIC-ONLY: log correlation / score provenance
             // 42-F: Share circuit-breaker state across all companies in the batch
             batchFetchState: (() => {
               if (!batchFetchStates.has(batchId)) batchFetchStates.set(batchId, newBatchFetchState());
@@ -414,6 +431,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
                 // Fix 1: signal the orphaned pipeline to abort at its next
                 // cooperative-cancel checkpoint before we reject the race.
                 jobWatchdogFired = true;
+                console.warn(`[DIAG][job-transition] job=${jobId} watchdog-fired after ${JOB_TIMEOUT}ms ${diagTags()}`);
                 reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms"));
               },
               JOB_TIMEOUT
@@ -425,6 +443,8 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       clearInterval(heartbeatTimer);
     }
 
+    setDiagStage("finalize");
+    console.log(`[DIAG][job-transition] job=${jobId} pipeline-result success=${result.success} error=${JSON.stringify(String(result.error ?? "").slice(0, 200))} ${diagTags()}`);
     let jobCompletionTransitioned = false;
     if (result.success) {
       const _jt = await storage.completeJob(jobId);
@@ -524,6 +544,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       }
     } else if (result.error === "Cancelled") {
       console.log("[Worker] Job " + jobId + " cancelled");
+      console.log(`[DIAG][job-transition] job=${jobId} -> cancelled ${diagTags()}`);
     } else {
       // Pipeline returned a failure result
       const errorMsg = result.error || "Unknown error";
@@ -532,10 +553,12 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(errorMsg)) {
         // Retry: re-enqueue without incrementing batch failed
         console.log("[Worker] Job " + jobId + " failed (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + "), will retry: " + errorMsg);
-        await reEnqueueForRetry(job.data, currentAttempt);
+        console.warn(`[DIAG][job-transition] job=${jobId} -> retry-enqueue ${diagTags()}`);
+        await reEnqueueForRetry(analysisJobData, currentAttempt);
       } else {
         // Final failure: increment batch failed counter
         console.warn("[Worker] Job " + jobId + " permanently failed: " + errorMsg);
+        console.warn(`[DIAG][job-transition] job=${jobId} -> permanently-failed ${diagTags()}`);
         await storage.incrementBatchFailed(batchId);
       }
     }
@@ -575,6 +598,8 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     return result;
   } catch (error: any) {
     console.error("[Worker] Job " + jobId + " threw error (attempt " + currentAttempt + "): " + error.message);
+    setDiagStage("error-handling");
+    console.warn(`[DIAG][job-transition] job=${jobId} threw error=${JSON.stringify(String(error?.message ?? error).slice(0, 300))} code=${error?.code ?? "-"} ${diagTags()}`);
 
     // PROVIDER QUOTA PAUSE: if the error is a provider quota/auth failure,
     // do NOT count this as a permanent failure or burn retries. Instead,
@@ -585,6 +610,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       const failureClass = (error instanceof ProviderScoringError) ? error.failureClass : "quota_exhausted";
       const failedProvider = (error instanceof ProviderScoringError) ? error.provider : "unknown";
       console.warn(`[Worker] PROVIDER QUOTA PAUSE for job ${jobId} [${failureClass}] — re-enqueuing for resume (not counting as failure)`);
+      console.warn(`[DIAG][job-transition] job=${jobId} -> provider-paused class=${failureClass} ${diagTags()}`);
       // Record the failure class in job progress_detail for audit
       await storage.updateJobProgress(jobId, {
         stage: "provider_paused",
@@ -627,7 +653,8 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(error.message)) {
       // Retry: re-enqueue without incrementing batch failed
       console.log("[Worker] Job " + jobId + " will retry after exception (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + ")");
-      await reEnqueueForRetry(job.data, currentAttempt);
+      console.warn(`[DIAG][job-transition] job=${jobId} -> retry-enqueue (after exception) ${diagTags()}`);
+      await reEnqueueForRetry(analysisJobData, currentAttempt);
     } else {
       // Final failure
       await storage.incrementBatchFailed(batchId);
@@ -644,6 +671,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     }
     return { success: false, error: error.message, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
+  }); // end runWithDiagContext (DIAGNOSTIC-ONLY wrapper)
 }
 
 // ─── Batch Completion Review Gate ────────────────────────────────────────────

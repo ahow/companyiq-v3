@@ -315,6 +315,9 @@ async function getUsagePool(): Promise<import("pg").Pool> {
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "10000", 10),
   });
+  // DIAGNOSTIC-ONLY (batch-1255 §6.1): tag this SEPARATE pool distinctly ("usage").
+  const diag = await import("./pg-diag.js");
+  diag.registerPoolForDiagnostics("usage", usagePool, USAGE_POOL_MAX);
   return usagePool;
 }
 
@@ -357,7 +360,10 @@ async function flushUsage(): Promise<void> {
       values.push(...r);
     });
     const p = await getUsagePool();
-    await p.query(
+    const diag = await import("./pg-diag.js");
+    const runQuery = (...args: any[]): Promise<any> =>
+      diag.isPoolInstrumented("usage") ? diag.instrumentedQuery("usage", args) : (p.query as any)(...args);
+    await runQuery(
       `INSERT INTO llm_usage_events
          (workspace_id, batch_id, company_id, framework_id, model, provider, call_type,
           prompt_tokens, completion_tokens, total_tokens,
