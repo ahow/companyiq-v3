@@ -561,6 +561,11 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await db.execute(sql`ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS last_progress_at TIMESTAMP DEFAULT NOW()`);
     await db.execute(sql`ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS progress_detail JSONB`);
+    // Lifecycle ownership identity (lifecycle-fence.ts ownerPredicate): a fresh
+    // UUID minted by every claimJob and NEVER reset (requeueFailedJobsForBatch
+    // resets `attempts`, which therefore cannot be the identity on its own).
+    // Additive + nullable, no default: metadata-only ALTER, old code ignores it.
+    await db.execute(sql`ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS attempt_token UUID`);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS analysis_jobs_progress_idx ON analysis_jobs(batch_id, last_progress_at)`);
     // Quarantine duplicate job rows from historical race windows before enforcing
     // one company job per batch. Rows are retained with an explicit reason.

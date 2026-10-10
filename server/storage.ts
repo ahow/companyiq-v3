@@ -6,7 +6,7 @@ import crypto from "crypto";
 import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironment, isHeartbeatStalled, type DeploymentFingerprint, type RunKeyInput, type RunLifecycleState } from "./lib/reliability.js";
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 import { diagTags, getDiagContext } from "./lib/diag-context.js";
-import { type AttemptOwnership, type FenceDb, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason, lockJobAndBatch, claimPredicate, successCompletionPredicate, failureRecordPredicate } from "./lib/lifecycle-fence.js";
+import { type AttemptOwnership, type FenceDb, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason, lockJobAndBatch, claimPredicate, successCompletionPredicate, failureRecordPredicate, ownershipFromContext } from "./lib/lifecycle-fence.js";
 
 // ─── URL Hashing for Content Deduplication ─────────────────────────────────
 
@@ -1902,6 +1902,10 @@ export async function enqueueReexamination(opts: {
 
 export async function claimJob(jobId: number) {
   const now = new Date();
+  // Fresh ownership identity for THIS claim (lifecycle-fence.ts ownerPredicate).
+  // Minted on every claim and never reset, so it stays unique even when
+  // requeueFailedJobsForBatch resets `attempts` (the retry counter) to 0.
+  const attemptToken = crypto.randomUUID();
   // Canonical job-side lock (LOCK ORDER, lifecycle-fence.ts): lock j FOR UPDATE
   // + b FOR SHARE under claimPredicate (claimable ∧ batch running), then
   // increment attempts. Lifecycle fence: never claim (or retry) a job whose
@@ -1916,7 +1920,8 @@ export async function claimJob(jobId: number) {
         status = 'claimed',
         claimed_at = ${now},
         last_progress_at = ${now},
-        attempts = attempts + 1
+        attempts = attempts + 1,
+        attempt_token = ${attemptToken}::uuid
       WHERE id = ${jobId}
       RETURNING *
     `);
@@ -2000,7 +2005,7 @@ export async function failJob(jobId: number, error: string, ownership?: AttemptO
   let batchTerminal = false;
   if (ownership) {
     row = await db.transaction(async (tx) => {
-      const locked = await lockJobAndBatch(tx, jobId, failureRecordPredicate({ jobId, attemptNumber: ownership.attemptNumber }));
+      const locked = await lockJobAndBatch(tx, jobId, failureRecordPredicate({ ...ownership, jobId }));
       if (!locked) return null;
       batchTerminal = locked.batchStatus !== "running";
       const r = await doUpdate(tx, !batchTerminal);
@@ -2032,12 +2037,32 @@ function withDiagAttempt<T>(detail: T): T {
   return { ...(detail as any), attemptId };
 }
 
-export async function updateJobProgress(jobId: number, detail: unknown = null) {
+/**
+ * Job progress heartbeat. With `ownership` (worker attempts — explicit, or the
+ * current attempt context) the write is ownership-conditional in ONE short
+ * DB-only statement: `id ∧ attempts ∧ attempt_token ∧ status='claimed'`.
+ * A stale attempt (released by watchdog/reaper/failJob, or superseded by a
+ * newer claim) matches 0 rows → "stale progress ignored", no batch heartbeat,
+ * so it can never refresh last_progress_at on behalf of the current owner.
+ * Without any ownership (no worker context: admin/scripts) the legacy
+ * unconditional write is used.
+ */
+export async function updateJobProgress(jobId: number, detail: unknown = null, ownership?: AttemptOwnership | null): Promise<{ applied: boolean }> {
   detail = withDiagAttempt(detail);
   const now = new Date();
-  const result = await db.execute(sql`UPDATE analysis_jobs SET last_progress_at = ${now}, progress_detail = ${detail == null ? null : JSON.stringify(detail)}::jsonb WHERE id = ${jobId} RETURNING batch_id`);
+  const ctxOwner = ownershipFromContext();
+  const o = ownership ?? (ctxOwner && ctxOwner.jobId === jobId ? ctxOwner : null);
+  const ownerClause = o
+    ? sql` AND attempts = ${o.attemptNumber} AND status = 'claimed' AND attempt_token IS NOT DISTINCT FROM ${o.attemptToken ?? null}::uuid`
+    : sql``;
+  const result = await db.execute(sql`UPDATE analysis_jobs SET last_progress_at = ${now}, progress_detail = ${detail == null ? null : JSON.stringify(detail)}::jsonb WHERE id = ${jobId}${ownerClause} RETURNING batch_id`);
+  if (o && (result.rowCount ?? result.rows.length) === 0) {
+    console.warn(`[LIFECYCLE-FENCE] stale progress ignored (job=${jobId} attempt=${o.attemptNumber}${o.attemptId ? `/${o.attemptId}` : ""})`);
+    return { applied: false };
+  }
   const batchId = (result.rows[0] as any)?.batch_id;
   if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail });
+  return { applied: result.rows.length > 0 };
 }
 
 // ─── Summary Cache ──────────────────────────────────────────────────────────

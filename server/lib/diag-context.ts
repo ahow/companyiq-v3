@@ -36,6 +36,8 @@ export interface AttemptLifecycleState {
   batchId: number;
   attemptNumber: number;
   deadlineAt: Date | null;
+  /** analysis_jobs.attempt_token minted by this attempt's claimJob (never reused). */
+  attemptToken?: string | null;
   revoked: boolean;
   revokedReason: string | null;
   abort: AbortController;

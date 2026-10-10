@@ -3,9 +3,13 @@
 // loss: STOP, NO RETRY, TERMINAL STATE.
 //
 // Authority model:
-//   • Postgres is authoritative: batch_runs.status + analysis_jobs.attempts
-//     (the owning-attempt identity, incremented atomically by claimJob) +
-//     analysis_jobs.status='claimed'. Every authoritative write is guarded
+//   • Postgres is authoritative: batch_runs.status + analysis_jobs.attempt_token
+//     (the owning-attempt identity: a fresh UUID minted by EVERY claimJob and
+//     never reset) + analysis_jobs.attempts (the retry counter, also matched)
+//     + analysis_jobs.status='claimed'. `attempts` alone is NOT a unique
+//     identity: storage.requeueFailedJobsForBatch resets it to 0, so a later
+//     claim can re-issue the same attempt number to a different attempt.
+//     attempt_token closes that reuse. Every authoritative write is guarded
 //     atomically against these in ONE statement or ONE short DB-only
 //     transaction that locks the job row (FOR UPDATE) and share-locks the batch
 //     row (FOR SHARE, so a concurrent cancel/supersede UPDATE linearises
@@ -130,6 +134,8 @@ export function createAttemptLifecycle(opts: {
   batchId: number;
   attemptNumber: number;
   deadlineAt: Date | null;
+  /** analysis_jobs.attempt_token returned by claimJob. */
+  attemptToken?: string | null;
 }): AttemptLifecycleState {
   return { ...opts, revoked: false, revokedReason: null, abort: new AbortController() };
 }
@@ -203,6 +209,13 @@ export interface AttemptOwnership {
   attemptNumber: number;
   /** Hard attempt deadline (claim time + JOB_TIMEOUT). null = no deadline check. */
   deadlineAt: Date | null;
+  /**
+   * analysis_jobs.attempt_token minted by this attempt's claimJob: the unique,
+   * never-reused ownership identity. null/undefined only matches a row whose
+   * token is NULL (pre-column legacy claims); every new claim mints non-null,
+   * so a token-less ownership can never match a newer claim (fail-closed).
+   */
+  attemptToken?: string | null;
   /** Diagnostic attempt UUID for log correlation only. */
   attemptId?: string | null;
 }
@@ -211,16 +224,40 @@ export interface AttemptOwnership {
 export function ownershipFromContext(ctx: DiagContext | undefined = getDiagContext()): AttemptOwnership | null {
   const lc = ctx?.lifecycle;
   if (!lc) return null;
-  return { jobId: lc.jobId, batchId: lc.batchId, attemptNumber: lc.attemptNumber, deadlineAt: lc.deadlineAt, attemptId: ctx?.attemptId ?? null };
+  return { jobId: lc.jobId, batchId: lc.batchId, attemptNumber: lc.attemptNumber, deadlineAt: lc.deadlineAt, attemptToken: lc.attemptToken ?? null, attemptId: ctx?.attemptId ?? null };
+}
+
+/**
+ * Ownership for a score write, FAIL-CLOSED for batch work: a write that belongs
+ * to a batch (batchId != null) MUST carry the attempt's ownership; if the
+ * worker context is missing it throws LifecycleCancelledError
+ * ("ownership_context_missing") instead of falling back to the unfenced
+ * clear/insert. Only batch-less direct calls (scripts / ad-hoc re-score with
+ * no batch) may proceed unfenced (returns null).
+ */
+export function requireOwnershipForBatchWrite(
+  batchId: number | null | undefined,
+  where: string,
+  ctx: DiagContext | undefined = getDiagContext(),
+): AttemptOwnership | null {
+  const o = ownershipFromContext(ctx);
+  if (o) return o;
+  if (batchId != null) {
+    console.error(`[LIFECYCLE-FENCE] batch score write refused: no attempt ownership in context (batch=${batchId}) at ${where}`);
+    throw new LifecycleCancelledError("ownership_context_missing", where);
+  }
+  return null;
 }
 
 // ─── Predicate helpers (aliases j = analysis_jobs, b = batch_runs) ───────────
 // Small single-purpose predicates, composed per write class below. Keep them
 // separate: the four write classes deliberately have DIFFERENT rules.
 
-/** This attempt still owns the claimed job (attempt identity = attempts). */
-export function ownerPredicate(o: Pick<AttemptOwnership, "jobId" | "attemptNumber">): SQL {
-  return sql`(j.id = ${o.jobId} AND j.attempts = ${o.attemptNumber} AND j.status = 'claimed')`;
+/** This attempt still owns the claimed job. Identity = attempt_token (unique
+ *  per claim, never reset); attempts is kept as a second conjunct. */
+export function ownerPredicate(o: Pick<AttemptOwnership, "jobId" | "attemptNumber" | "attemptToken">): SQL {
+  const token = o.attemptToken ?? null;
+  return sql`(j.id = ${o.jobId} AND j.attempts = ${o.attemptNumber} AND j.status = 'claimed' AND j.attempt_token IS NOT DISTINCT FROM ${token}::uuid)`;
 }
 
 /** Batch is running (not cancelled / superseded / completed / failed / review). */
@@ -247,7 +284,7 @@ export function successCompletionPredicate(o: AttemptOwnership): SQL {
 /** Rule (iii): failure recording — ownership only; batch status and deadline
  *  deliberately NOT required (the owner must be able to release its claim
  *  after a timeout/cancel). What failJob may then write depends on b.status. */
-export function failureRecordPredicate(o: Pick<AttemptOwnership, "jobId" | "attemptNumber">): SQL {
+export function failureRecordPredicate(o: Pick<AttemptOwnership, "jobId" | "attemptNumber" | "attemptToken">): SQL {
   return ownerPredicate(o);
 }
 

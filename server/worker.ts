@@ -351,7 +351,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   // original code (left at its original indentation to keep the diff minimal);
   // control flow, awaits and return values are identical.
   const attemptId = crypto.randomUUID();
-  const lifecycle = createAttemptLifecycle({ jobId: jobId as number, batchId, attemptNumber: currentAttempt, deadlineAt: new Date(claimTimeMs + JOB_TIMEOUT) });
+  const lifecycle = createAttemptLifecycle({ jobId: jobId as number, batchId, attemptNumber: currentAttempt, deadlineAt: new Date(claimTimeMs + JOB_TIMEOUT), attemptToken: (claimed as any).attempt_token ?? null });
   const diagCtx = { batchId, jobId: jobId as number, attemptId, attemptNumber: currentAttempt, companyId, frameworkId, stage: "claimed", lifecycle };
   // Durable ownership token for every terminal/score write of THIS attempt.
   const ownership = ownershipFromContext(diagCtx)!;
@@ -396,7 +396,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
 
   const heartbeatIntervalMs = parseInt(process.env.JOB_HEARTBEAT_MS || "30000", 10);
   const heartbeatTimer = setInterval(() => {
-    void storage.updateJobProgress(jobId, { stage: "pipeline", companyId, frameworkId }).catch((error: any) => {
+    void storage.updateJobProgress(jobId, { stage: "pipeline", companyId, frameworkId }, ownership).catch((error: any) => {
       console.warn(`[Worker] heartbeat failed for job ${jobId}: ${error?.message || error}`);
     });
   }, heartbeatIntervalMs);
@@ -657,7 +657,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
         provider: failedProvider,
         pausedAt: new Date().toISOString(),
         message: error.message?.slice(0, 500),
-      });
+      }, ownership);
       // Persist durable failure event for auditability and status reporting
       try {
         const record = buildFailureRecord({

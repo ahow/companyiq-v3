@@ -29,7 +29,7 @@
 import * as storage from "../storage.js";
 import { getDiagContext, setDiagStage, diagTags, startStageTimer, runWithChildTimer } from "./diag-context.js";
 import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
-import { LifecycleCancelledError, isLifecycleCancelledError, ownershipFromContext, revokeAttempt } from "./lifecycle-fence.js";
+import { LifecycleCancelledError, isLifecycleCancelledError, requireOwnershipForBatchWrite, revokeAttempt } from "./lifecycle-fence.js";
 import { searchCompanyDocuments, runTargetedDisclosureQuery, resolveCikForCompany, type DiscoveryResult } from "./discovery.js";
 import {
   getRequirementsForJurisdiction,
@@ -2189,7 +2189,8 @@ async function runAnalyzePhase(opts: {
     // Lifecycle fence: inside a worker attempt the delete runs under the same
     // ownership/batch-running guard as the score insert (empty replace), so a
     // stale/cancelled attempt cannot wipe a newer attempt's scores.
-    const noDocsOwnership = ownershipFromContext();
+    // Fail-closed: batch work without ownership context throws (no unfenced clear).
+    const noDocsOwnership = requireOwnershipForBatchWrite(batchId, "pipeline.no-docs-clear");
     if (noDocsOwnership) await storage.replaceMeasureScoresFenced(noDocsOwnership, companyId, framework.id, []);
     else await storage.clearMeasureScoresForFramework(companyId, framework.id);
     return null;
@@ -2721,7 +2722,9 @@ async function runAnalyzePhase(opts: {
   // fenced transaction as the insert below (replaceMeasureScoresFenced), so a
   // stale/cancelled attempt can never delete a newer attempt's scores. Outside a
   // worker attempt (scripts / direct calls) behaviour is unchanged.
-  const scoreOwnership = ownershipFromContext();
+  // Fail-closed: batch work without ownership context throws instead of
+  // falling back to the unfenced clear + createMeasureScores below.
+  const scoreOwnership = requireOwnershipForBatchWrite(batchId, "pipeline.score-write");
   if (!scoreOwnership) await storage.clearMeasureScoresForFramework(companyId, framework.id);
 
   // v3j (Obs 3.2): the deterministic force-include path is otherwise invisible to
