@@ -5151,6 +5151,21 @@ async function searchCompanyDocumentsInner(opts: {
   const lastYear = currentYear - 1;
   const recencyStatus: Record<string, { status: string; bestYear: number | null; researchAttempted: boolean; backfilledUrl?: string }> = {};
 
+  // ─── RECENCY-CHECK BACKFILL CAP (wall-clock control) ───────────────────────
+  // Each stale required docType below triggers 3 serial webSearch calls AND pushes
+  // one backfill doc that must then pass through the (browser-limited, 1-per-replica)
+  // fetch phase. With ~30 required types per framework — most of them stale — an
+  // uncapped backfill dominates per-company wall-clock and was the direct cause of
+  // the 35-min PIPELINE_TIMEOUT_MS re-enqueue cycle observed in batch 1252.
+  //
+  // This path is AUGMENT-ONLY: it looks for a *fresher copy* of a type already
+  // represented in the corpus and never evicts the existing version (see Instruction
+  // 16 below). Capping the number of backfill ATTEMPTS therefore limits speculative
+  // "find an even newer copy" work — it does NOT drop any primary discovery document,
+  // so it is consistent with the no-skip requirement. Tunable via RECENCY_BACKFILL_MAX
+  // (default 10; set 0 to disable backfill, a very large value to restore old behaviour).
+  const RECENCY_BACKFILL_MAX = Math.max(0, parseInt(process.env.RECENCY_BACKFILL_MAX || "10", 10));
+  let recencyBackfillAttempts = 0;
   if (requiredDocTypes.length > 0) {
     for (const docType of requiredDocTypes) {
       const docTypeLower = docType.toLowerCase();
@@ -5176,8 +5191,15 @@ async function searchCompanyDocumentsInner(opts: {
         recencyStatus[docType] = { status: "current", bestYear, researchAttempted: false };
         continue;
       }
-      // Not current (missing OR older than currentYear): trigger targeted re-search.
-      console.log(`[${companyName}] RECENCY-CHECK: "${docType}" bestYear=${bestYear ?? "none"} < ${currentYear}, searching for fresher version`);
+      // Not current (missing OR older than currentYear): would trigger targeted re-search.
+      // Enforce the per-company backfill cap first — once reached, record the type as
+      // capped (corpus keeps its existing version) and skip the 3× webSearch + extra fetch.
+      if (recencyBackfillAttempts >= RECENCY_BACKFILL_MAX) {
+        recencyStatus[docType] = { status: "recency-check-capped", bestYear, researchAttempted: false };
+        continue;
+      }
+      recencyBackfillAttempts++;
+      console.log(`[${companyName}] RECENCY-CHECK: "${docType}" bestYear=${bestYear ?? "none"} < ${currentYear}, searching for fresher version (attempt ${recencyBackfillAttempts}/${RECENCY_BACKFILL_MAX})`);
       recencyStatus[docType] = { status: "stale", bestYear, researchAttempted: true };
       try {
         const reSearchQueries = [
@@ -5219,6 +5241,10 @@ async function searchCompanyDocumentsInner(opts: {
       } catch (err: any) {
         console.warn(`[${companyName}] RECENCY-CHECK: re-search for "${docType}" failed: ${err?.message}`);
       }
+    }
+    const cappedTypes = Object.entries(recencyStatus).filter(([, v]) => v.status === "recency-check-capped").map(([k]) => k);
+    if (cappedTypes.length > 0) {
+      console.log(`[${companyName}] RECENCY-CHECK: reached RECENCY_BACKFILL_MAX=${RECENCY_BACKFILL_MAX}; skipped fresher-version search for ${cappedTypes.length} stale type(s) (corpus retains existing versions): ${cappedTypes.join(", ")}`);
     }
     const staleTypes = Object.entries(recencyStatus).filter(([, v]) => v.status === "stale").map(([k]) => k);
     if (staleTypes.length > 0) {
