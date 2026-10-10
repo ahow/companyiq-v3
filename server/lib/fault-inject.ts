@@ -147,10 +147,19 @@ export function maybeFireCancel(
     firedCancels.add(key);
     const attempt = getDiagContext()?.attemptId ?? "-";
     const stage = getDiagContext()?.stage ?? "-";
-    faultLog(`${mode} FIRING markBatchCancelled(${batchId}) at ${where} company ${companyId} attempt ${attempt} stage ${stage}`);
-    return import("../cancellation.js").then(({ markBatchCancelled }) => markBatchCancelled(batchId)).then(
-      () => faultLog(`${mode} markBatchCancelled(${batchId}) resolved (company ${companyId} attempt ${attempt})`),
-      (e: any) => faultLog(`${mode} markBatchCancelled(${batchId}) error (ignored): ${e?.message || e}`),
+    faultLog(`${mode} FIRING real-cancel(${batchId}) at ${where} company ${companyId} attempt ${attempt} stage ${stage}`);
+    // Faithfully simulate a real admin cancellation: set BOTH the durable Redis
+    // cooperative-cancel flag (what actually fences in-flight work) AND the PG
+    // terminal lifecycle (status=cancelled/terminal/rejected), exactly like the
+    // production POST /api/batch/cancel path (cancelBatch + cancelBatchRun).
+    // This is a TEST-INJECTION faithfulness change only; it does NOT alter any
+    // production fencing/cancellation behaviour.
+    return Promise.allSettled([
+      import("../cancellation.js").then(({ markBatchCancelled }) => markBatchCancelled(batchId)),
+      import("../storage.js").then((s) => s.cancelBatchRun(batchId, "fault-injection controlled cancel test")),
+    ]).then(
+      () => faultLog(`${mode} real-cancel(${batchId}) resolved (company ${companyId} attempt ${attempt})`),
+      (e: any) => faultLog(`${mode} real-cancel(${batchId}) error (ignored): ${e?.message || e}`),
     );
   } catch (e: any) {
     try { console.error(`[FAULT-INJECT] maybeFireCancel error (ignored): ${e?.message || e}`); } catch { /* */ }
