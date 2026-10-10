@@ -72,7 +72,13 @@ export function parseFaultConfig(env: Record<string, string | undefined> = proce
   }
   const target: FaultTarget = { batchId: parseIntEnv(env.DIAG_FAULT_BATCH), jobId: parseIntEnv(env.DIAG_FAULT_JOB) };
   if (target.batchId == null && target.jobId == null) {
-    console.warn("[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT set but neither DIAG_FAULT_BATCH nor DIAG_FAULT_JOB is a valid id)");
+    // FAIL CLOSED: a fault spec without an explicit batch/job target could hit
+    // every job in the process (companyId alone is NOT a target). Refuse loudly.
+    console.error(
+      "[FAULT-INJECT] REFUSING TO ARM — fail-closed: DIAG_FAULT_INJECT is set but neither " +
+      "DIAG_FAULT_BATCH nor DIAG_FAULT_JOB is a valid id. NO faults will be injected " +
+      "(a companyId in the spec is not a target). Set DIAG_FAULT_BATCH or DIAG_FAULT_JOB.",
+    );
     return INERT;
   }
   const specs: FaultSpec[] = [];
