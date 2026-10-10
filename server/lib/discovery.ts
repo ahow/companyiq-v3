@@ -3,7 +3,8 @@ import { createHash } from "crypto";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import * as storage from "../storage.js";
-import { startStageTimer, runWithChildTimer, setDiagStage, timeStage, beginStage } from "./diag-context.js";
+import { startStageTimer, runWithChildTimer, setDiagStage, timeStage, beginStage, getDiagContext } from "./diag-context.js";
+import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
@@ -1072,7 +1073,11 @@ async function withBucket<T>(bucket: TokenBucket, fn: () => Promise<T>): Promise
   endWait(true);
   const endCall = beginStage("search_provider", "web_search");
   try {
-    const r = await fn();
+    const p = fn();
+    // TEST-ONLY (inert unless DIAG_FAULT_INJECT flags this company): simulate an
+    // operator cancel arriving while this external search request is in flight.
+    { const dc = getDiagContext(); maybeFireCancel("cancel_external_inflight", dc?.batchId, dc?.companyId, "discovery.withBucket:web_search_in_flight"); }
+    const r = await p;
     endCall(true);
     return r;
   } catch (e) {
@@ -3452,8 +3457,11 @@ export async function searchCompanyDocuments(opts: {
   retrievalV2?: boolean;
 }): Promise<DiscoveryResult> {
   // Wrap the entire discovery in a hard timeout
+  // TEST-ONLY: per-job deadline override; equals DISCOVERY_TIMEOUT_MS unless
+  // DIAG_FAULT_INJECT flags this company with mode discovery_timeout.
+  const discoveryDeadlineMs = faultTimeoutMs(opts.companyId, "discovery_timeout", DISCOVERY_TIMEOUT_MS);
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`Discovery timeout: ${opts.companyName} exceeded ${DISCOVERY_TIMEOUT_MS / 1000}s`)), DISCOVERY_TIMEOUT_MS);
+    setTimeout(() => reject(new Error(`Discovery timeout: ${opts.companyName} exceeded ${discoveryDeadlineMs / 1000}s`)), discoveryDeadlineMs);
   });
   // DIAGNOSTIC-ONLY (batch-1255 §6.3): discovery stage timer. The inner run
   // executes in a child diag context carrying the timer; the timer is closed

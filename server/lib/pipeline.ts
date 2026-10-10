@@ -28,6 +28,7 @@
 
 import * as storage from "../storage.js";
 import { getDiagContext, setDiagStage, diagTags, startStageTimer, runWithChildTimer } from "./diag-context.js";
+import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
 import { searchCompanyDocuments, runTargetedDisclosureQuery, resolveCikForCompany, type DiscoveryResult } from "./discovery.js";
 import {
   getRequirementsForJurisdiction,
@@ -3415,6 +3416,9 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // can gate auto re-retrieval on the same dedupe registry used for the
       // whole pipeline run.
       setDiagStage("analyze");
+      // TEST-ONLY (inert unless DIAG_FAULT_INJECT flags this company): simulate an
+      // operator cancel arriving as the attempt enters DB-bound analysis/scoring.
+      await maybeFireCancel("cancel_waiting_db", batchId, companyId, "pipeline.analyze:pre-runAnalyzePhase");
       const analysis = await runAnalyzePhase({
         company, framework, measures, workspaceId, batchId,
         sourceBatchId: opts.sourceBatchId,
@@ -3517,8 +3521,10 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
   })());
 
   // Apply the hard pipeline timeout
+  // TEST-ONLY: equals PIPELINE_TIMEOUT_MS unless DIAG_FAULT_INJECT flags this company.
+  const pipelineDeadlineMs = faultTimeoutMs(companyId, "pipeline_timeout", PIPELINE_TIMEOUT_MS);
   try {
-    const diagResult = await withTimeout(pipelinePromise, PIPELINE_TIMEOUT_MS, `[${companyName}] pipeline`);
+    const diagResult = await withTimeout(pipelinePromise, pipelineDeadlineMs, `[${companyName}] pipeline`);
     diagPipelineTimer?.finish(diagResult?.success ? "ok" : `failed:${diagResult?.failureType ?? "result"}`, diagResult?.error);
     return diagResult;
   } catch (timeoutError: any) {
@@ -3540,8 +3546,8 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         error: JSON.stringify({
           type: "timeout",
           elapsedSeconds: elapsed,
-          limitSeconds: Math.round(PIPELINE_TIMEOUT_MS / 1000),
-          message: `Pipeline timed out after ${elapsed}s (limit: ${PIPELINE_TIMEOUT_MS / 1000}s)`,
+          limitSeconds: Math.round(pipelineDeadlineMs / 1000),
+          message: `Pipeline timed out after ${elapsed}s (limit: ${pipelineDeadlineMs / 1000}s)`,
         }),
       });
       return {
