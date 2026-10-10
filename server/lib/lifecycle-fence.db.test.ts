@@ -31,6 +31,15 @@
  *      (A') cancel UPDATE holds b; fenced SELECT blocks, re-evaluates -> refused
  *      (B) fenced write holds FOR SHARE OF b; cancel UPDATE blocks until the
  *          write commits -> write lands, then cancel applies; later stale write refused
+ *   S8 ownership identity never reused: the REAL reset path
+ *      (requeueFailedJobsForBatch sets attempts=0) re-issues attempt number 1 to
+ *      a NEW attempt; the OLD attempt's score/complete/fail/progress writes are
+ *      refused by attempt_token
+ *   S9 ownership-conditional progress writes: attempt #1 released by the
+ *      reaper statement, #2 claims, #1's heartbeat -> rowCount 0, ignored
+ *   S10 supersession through the REAL storage.createBatchRun with a REAL
+ *      BullMQ job for the old batch: old batch cannot write/complete/retry
+ *      (claim refused + queue job removed); new batch claims/persists/completes
  */
 import pg from "pg";
 import { sql } from "drizzle-orm";
@@ -48,6 +57,7 @@ import { redis } from "../redis.js";
 import { finalizeBatchAndSave } from "../worker.js";
 import { runAnalysisPipeline } from "./pipeline.js";
 import { __reloadFaultConfigForTests } from "./fault-inject.js";
+import { addBatchJobs, getQueue } from "../queue.js";
 
 process.exitCode = 1; // premature exit must not look like success
 
@@ -82,7 +92,9 @@ async function fixtures() {
   wsId = w.id;
   const [f] = await q(`INSERT INTO frameworks (workspace_id, name) VALUES (${wsId},'fw-${tag}') RETURNING id`);
   fwId = f.id;
-  for (let i = 0; i < 12; i++) {
+  // Self-configuring: same additive DDL as db.ts startup (idempotent).
+  await q(`ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS attempt_token UUID`);
+  for (let i = 0; i < 16; i++) {
     const [c] = await q(`INSERT INTO companies (workspace_id, name) VALUES (${wsId},'co${i}-${tag}') RETURNING id`);
     companyIds.push(c.id);
   }
@@ -97,7 +109,7 @@ async function newJob(batchId: number, companyId: number): Promise<number> {
 async function claimAttempt(jobId: number, batchId: number, companyId: number, deadlineMs = 60_000): Promise<{ ctx: DiagContext; own: AttemptOwnership } | null> {
   const claimed: any = await storage.claimJob(jobId);
   if (!claimed) return null;
-  const lifecycle = createAttemptLifecycle({ jobId, batchId, attemptNumber: claimed.attempts, deadlineAt: new Date(Date.now() + deadlineMs) });
+  const lifecycle = createAttemptLifecycle({ jobId, batchId, attemptNumber: claimed.attempts, deadlineAt: new Date(Date.now() + deadlineMs), attemptToken: claimed.attempt_token ?? null });
   const ctx: DiagContext = { batchId, jobId, attemptId: `t-${jobId}-${claimed.attempts}`, attemptNumber: claimed.attempts, companyId, frameworkId: fwId, stage: "test", lifecycle };
   return { ctx, own: ownershipFromContext(ctx)! };
 }
@@ -432,6 +444,119 @@ async function s7LockOrder() {
   await fencePool.end();
 }
 
+async function s8TokenNeverReused() {
+  console.log("── S8 ownership identity never reused across the requeue reset path (attempts -> 0) ──");
+  const B8 = (await storage.createBatchRun(wsId, fwId, 1)) as any;
+  const cid = companyIds[12];
+  const j = await newJob(B8.id, cid);
+  const A = (await claimAttempt(j, B8.id, cid))!;
+  check("S8: attempt A claimed (attempts=1, token minted)", A.own.attemptNumber === 1 && !!A.own.attemptToken);
+  // Watchdog releases A (owner-only failJob -> pending); A's orphan keeps running.
+  const rel = await storage.failJob(j, "Job watchdog timeout", A.own);
+  check("S8: A released by watchdog failJob (-> pending)", rel.transitioned && !rel.finalFailed, rel);
+  // EXACT operator re-examine path (routes/api.ts): pending_review -> requeueFailedJobsForBatch -> running.
+  check("S8: batch -> pending_review", await storage.setBatchRunStatus(B8.id, "pending_review"));
+  const requeued = await storage.requeueFailedJobsForBatch(B8.id);
+  check("S8: requeueFailedJobsForBatch reset the job", requeued.some((r) => r.id === j));
+  check("S8: attempts reset to 0 by the real reset path", Number((await jobRow(j)).attempts) === 0);
+  check("S8: batch -> running (re-examine)", await storage.setBatchRunStatus(B8.id, "running"));
+  const Bt = (await claimAttempt(j, B8.id, cid))!;
+  check("S8: NEW attempt B re-issued the SAME attempt number (1)", Bt.own.attemptNumber === A.own.attemptNumber);
+  check("S8: B has a DIFFERENT attempt_token", !!Bt.own.attemptToken && Bt.own.attemptToken !== A.own.attemptToken);
+  // Proof the reuse is real: the pre-token owner clause would have matched A.
+  const legacy = await q(`SELECT count(*)::int n FROM analysis_jobs j JOIN batch_runs b ON b.id=j.batch_id WHERE j.id=${j} AND j.attempts=${A.own.attemptNumber} AND j.status='claimed' AND b.status='running'`);
+  check("S8: WITHOUT attempt_token, A's owner/batch clause matches (reuse reproduced)", legacy[0].n === 1, legacy[0]);
+  // A's late writes with a FRESH non-revoked lifecycle and a far-future deadline:
+  // only the SQL token conjunct can refuse them.
+  const freshA = createAttemptLifecycle({ jobId: j, batchId: B8.id, attemptNumber: 1, deadlineAt: new Date(Date.now() + 3_600_000), attemptToken: A.own.attemptToken });
+  const ctxA: DiagContext = { ...A.ctx, lifecycle: freshA };
+  const ownA = { ...A.own, deadlineAt: freshA.deadlineAt };
+  const w = await runWithDiagContext(ctxA, () => storage.replaceMeasureScoresFenced(ownA, cid, fwId, scoreRows(cid, 36, "oldA")));
+  check("S8: OLD attempt A score write REFUSED (attempt_token mismatch)", w === false && (await scoresFor(cid)).length === 0);
+  check("S8: OLD attempt A completeJob REFUSED", (await storage.completeJob(j, ownA)).transitioned === false);
+  check("S8: OLD attempt A failJob REFUSED", (await storage.failJob(j, "late A error", ownA)).transitioned === false);
+  check("S8: OLD attempt A progress write ignored", (await storage.updateJobProgress(j, { stage: "oldA" }, ownA)).applied === false);
+  const mid = await jobRow(j);
+  check("S8: job still claimed by B (status claimed, attempts 1)", mid.status === "claimed" && Number(mid.attempts) === 1, mid);
+  // B persists + completes.
+  check("S8: B score write persists", (await runWithDiagContext(Bt.ctx, () => storage.replaceMeasureScoresFenced(Bt.own, cid, fwId, scoreRows(cid, 3, "newB")))) === true);
+  const rows = await scoresFor(cid);
+  check("S8: only B's rows present", rows.length === 3 && rows.every((r) => String(r.measure_id).startsWith("newB")), rows);
+  const cB = await storage.completeJob(j, Bt.own);
+  check("S8: B completeJob transitions", cB.transitioned === true);
+  if (cB.transitioned) await storage.incrementBatchCompleted(B8.id);
+  check("S8: completeBatchRun transitions", (await storage.completeBatchRun(B8.id)) === true);
+  await assertFinal("S8", [[j, "completed", 1]], [[B8.id, "completed", { completed: 1, failed: 0 }]]);
+}
+
+async function s9ProgressFencing() {
+  console.log("── S9 ownership-conditional progress writes ──");
+  const B9 = (await storage.createBatchRun(wsId, fwId, 1)) as any;
+  const cid = companyIds[13];
+  const j = await newJob(B9.id, cid);
+  const a1 = (await claimAttempt(j, B9.id, cid))!;
+  check("S9: attempt #1 running: own progress applies", (await storage.updateJobProgress(j, { stage: "a1-running" }, a1.own)).applied === true);
+  // Release #1 with the reconciler reap statement verbatim (attempts untouched).
+  await q(`UPDATE analysis_jobs SET status='pending', claimed_at=NULL WHERE id=${j}`);
+  const a2 = (await claimAttempt(j, B9.id, cid))!;
+  check("S9: attempt #2 claimed (attempts=2)", a2.own.attemptNumber === 2);
+  check("S9: #2 progress applies", (await storage.updateJobProgress(j, { stage: "a2" }, a2.own)).applied === true);
+  const after2 = (await q(`SELECT last_progress_at, progress_detail FROM analysis_jobs WHERE id=${j}`))[0];
+  await sleep(20);
+  const r1 = await storage.updateJobProgress(j, { stage: "a1-stale" }, a1.own);
+  check("S9: stale #1 progress (explicit ownership) -> rowCount 0, ignored", r1.applied === false);
+  const r1ctx = await runWithDiagContext(a1.ctx, () => storage.updateJobProgress(j, { stage: "a1-stale-ctx" }));
+  check("S9: stale #1 progress via attempt context default -> ignored", r1ctx.applied === false);
+  const now = (await q(`SELECT last_progress_at, progress_detail FROM analysis_jobs WHERE id=${j}`))[0];
+  check("S9: last_progress_at reflects ONLY #2", new Date(now.last_progress_at).getTime() === new Date(after2.last_progress_at).getTime());
+  check("S9: progress_detail is #2's", now.progress_detail?.stage === "a2", now.progress_detail);
+  check("S9: #2 completeJob transitions", (await storage.completeJob(j, a2.own)).transitioned === true);
+  await assertFinal("S9", [[j, "completed", 2]], [[B9.id, "running", { completed: 0, failed: 0 }]]);
+}
+
+async function s10SupersessionQueue() {
+  console.log("── S10 supersession through REAL storage.createBatchRun (+ real BullMQ job for the old batch) ──");
+  const OLD = (await storage.createBatchRun(wsId, fwId, 2)) as any;
+  const c1 = companyIds[14], c2 = companyIds[15];
+  const jo1 = await newJob(OLD.id, c1);
+  const jo2 = await newJob(OLD.id, c2);
+  // Old batch's retry/next job sits in the REAL queue (test-scoped ids).
+  await addBatchJobs([{ jobId: jo2, companyId: c2, frameworkId: fwId, batchId: OLD.id, workspaceId: wsId } as any], wsId, OLD.id);
+  const qid = `batch-${OLD.id}-company-${c2}`;
+  check("S10: old batch job enqueued in BullMQ", !!(await getQueue().getJob(qid)));
+  const ao = (await claimAttempt(jo1, OLD.id, c1))!;
+  check("S10: old attempt claimed while running", ao.own.attemptNumber === 1);
+
+  const NEW = (await storage.createBatchRun(wsId, fwId, 2)) as any; // REAL supersession entry point
+  check("S10: OLD cancelled by createBatchRun", (await batchStatus(OLD.id)) === "cancelled");
+  check("S10: NEW running", (await batchStatus(NEW.id)) === "running");
+  check("S10: removeBatchJobs applied (old queue job gone)", !(await getQueue().getJob(qid)));
+  // Old attempt: fresh lifecycle (no in-process cancel/revoke shortcut) -> SQL alone decides.
+  const freshO = createAttemptLifecycle({ jobId: jo1, batchId: OLD.id, attemptNumber: 1, deadlineAt: null, attemptToken: ao.own.attemptToken });
+  const wo = await runWithDiagContext({ ...ao.ctx, batchId: -1, lifecycle: freshO }, () => storage.replaceMeasureScoresFenced(ao.own, c1, fwId, scoreRows(c1, 36, "OLD")));
+  check("S10: OLD score write refused", wo === false && (await scoresFor(c1)).length === 0);
+  check("S10: OLD completeJob refused", (await storage.completeJob(jo1, ao.own)).transitioned === false);
+  check("S10: OLD completeBatchRun refused", (await storage.completeBatchRun(OLD.id)) === false);
+  const fo = await storage.failJob(jo1, "Cancelled (batch superseded)", ao.own);
+  check("S10: OLD failJob -> failed, batchTerminal (no requeue)", fo.transitioned && fo.batchTerminal && fo.finalFailed, fo);
+  check("S10: OLD retry claim refused (job 1)", (await storage.claimJob(jo1)) === null);
+  check("S10: OLD claim refused (queued job 2)", (await storage.claimJob(jo2)) === null);
+
+  const jn1 = await newJob(NEW.id, c1), jn2 = await newJob(NEW.id, c2);
+  for (const [jn, cid] of [[jn1, c1], [jn2, c2]] as const) {
+    const an = (await claimAttempt(jn, NEW.id, cid))!;
+    check(`S10: NEW claims job ${jn}`, !!an);
+    check(`S10: NEW persists scores for job ${jn}`, (await runWithDiagContext(an.ctx, () => storage.replaceMeasureScoresFenced(an.own, cid, fwId, scoreRows(cid, 2, "NEW")))) === true);
+    const cn = await storage.completeJob(jn, an.own);
+    check(`S10: NEW completeJob ${jn}`, cn.transitioned === true);
+    if (cn.transitioned) await storage.incrementBatchCompleted(NEW.id);
+  }
+  check("S10: NEW completeBatchRun transitions", (await storage.completeBatchRun(NEW.id)) === true);
+  check("S10: NEW scores present for both companies", (await scoresFor(c1)).length === 2 && (await scoresFor(c2)).length === 2);
+  await assertFinal("S10", [[jo1, "failed", 1], [jo2, "pending", 0], [jn1, "completed", 1], [jn2, "completed", 1]],
+    [[OLD.id, "cancelled", { completed: 0, failed: 0 }], [NEW.id, "completed", { completed: 2, failed: 0 }]]);
+}
+
 async function main() {
   await fixtures();
   await s1Supersession();
@@ -441,6 +566,9 @@ async function main() {
   await s5AdminCancel();
   await s6PipelineTimeoutLateResponse();
   await s7LockOrder();
+  await s8TokenNeverReused();
+  await s9ProgressFencing();
+  await s10SupersessionQueue();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

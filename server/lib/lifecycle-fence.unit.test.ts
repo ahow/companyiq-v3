@@ -21,7 +21,9 @@ import { runWithDiagContext, type DiagContext } from "./diag-context.js";
 import {
   createAttemptLifecycle, revokeAttempt, assertDispatchAllowed, dispatchRevokedReason,
   registerBatchCancelSource, requestAbortSignal, isLifecycleCancelledError,
+  ownershipFromContext, requireOwnershipForBatchWrite, ownerPredicate,
 } from "./lifecycle-fence.js";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { withBucket, runTargetedDisclosureQuery } from "./discovery.js";
 import axios from "axios";
 import {
@@ -208,6 +210,24 @@ async function main() {
     check("wrong job does not match", getFaultSpec("discovery_timeout", { batchId: 900, jobId: 34, companyId: 5 }) === null);
     check("companyId only an extra filter", getFaultSpec("discovery_timeout", { batchId: 900, jobId: 33, companyId: 6 }) === null);
     __reloadFaultConfigForTests({});
+  }
+
+  console.log("── ownership identity (attempt_token) + fail-closed batch writes (Items 1/4) ──");
+  {
+    const lc = createAttemptLifecycle({ jobId: 5, batchId: 9, attemptNumber: 1, deadlineAt: null, attemptToken: "11111111-1111-4111-8111-111111111111" });
+    const own = ownershipFromContext({ batchId: 9, jobId: 5, lifecycle: lc })!;
+    check("ownershipFromContext carries attemptToken", own.attemptToken === "11111111-1111-4111-8111-111111111111");
+    const q = new PgDialect().sqlToQuery(ownerPredicate(own));
+    check("ownerPredicate keys on attempt_token (IS NOT DISTINCT FROM, bound param)", /j\.attempt_token IS NOT DISTINCT FROM \$\d+::uuid/.test(q.sql) && q.params.includes(own.attemptToken));
+    check("ownerPredicate still matches attempts + status='claimed'", /j\.attempts = \$\d+/.test(q.sql) && q.sql.includes("j.status = 'claimed'"));
+    const qNull = new PgDialect().sqlToQuery(ownerPredicate({ jobId: 5, attemptNumber: 1 }));
+    check("token-less ownership binds NULL (matches only legacy NULL-token rows)", qNull.params.includes(null));
+    // Fail-closed: batch write with no attempt context must throw, never fall back.
+    let err: unknown = null;
+    try { requireOwnershipForBatchWrite(42, "pipeline.score-write", undefined); } catch (e) { err = e; }
+    check("batch write without ownership context -> LifecycleCancelledError(ownership_context_missing)", isLifecycleCancelledError(err) && (err as any).reason === "ownership_context_missing");
+    check("batch-less direct call (scripts) -> null, unfenced path allowed", requireOwnershipForBatchWrite(null, "x", undefined) === null);
+    check("inside an attempt context -> returns that ownership", requireOwnershipForBatchWrite(9, "x", { batchId: 9, jobId: 5, lifecycle: lc })?.attemptToken === own.attemptToken);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
