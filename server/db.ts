@@ -15,7 +15,19 @@ if (!process.env.DATABASE_URL) {
 // pool demand is N * PG_POOL_MAX (plus the app service). Keep N*PG_POOL_MAX
 // comfortably under ~90. e.g. 8 replicas * 10 = 80. Each replica only runs
 // WORKER_CONCURRENCY jobs at a time, so 10 connections/replica is ample.
-const PG_POOL_MAX = parseInt(process.env.PG_POOL_MAX || "20", 10);
+const PG_POOL_MAX_CONFIGURED = parseInt(process.env.PG_POOL_MAX || "20", 10);
+// Worker isolation (docs/worker-isolation/DESIGN.md §7): when per-job child
+// processes are enabled, the replica's PG_POOL_MAX budget is PARTITIONED, not
+// grown — the worker parent keeps a small reserve for the control plane
+// (claim, heartbeat, reaper, status writes) and each job child is forked with
+// PG_POOL_MAX = floor((PG_POOL_MAX − reserve) / WORKER_CONCURRENCY). The
+// replica-wide total therefore never exceeds the configured PG_POOL_MAX.
+// CIQ_PROCESS_ROLE is set by server/lib/process-role.ts (worker entrypoint only).
+export const PG_PARENT_RESERVE = Math.max(1, parseInt(process.env.WORKER_ISOLATION_PARENT_PG_RESERVE || "4", 10));
+const PG_POOL_MAX =
+  process.env.CIQ_PROCESS_ROLE === "worker-parent" && process.env.WORKER_ISOLATION_ENABLED === "true"
+    ? Math.min(PG_PARENT_RESERVE, PG_POOL_MAX_CONFIGURED)
+    : PG_POOL_MAX_CONFIGURED;
 // Defaults to 10000ms; can be raised per-environment via PG_CONNECTION_TIMEOUT_MS
 // so callers queue through transient pool-acquisition spikes instead of failing fast.
 const PG_CONNECTION_TIMEOUT_MS = parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "10000", 10);

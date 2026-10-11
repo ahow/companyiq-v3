@@ -21,6 +21,8 @@
 // timer and applies the returned concurrency. When disabled, the worker keeps
 // its fixed configured concurrency and this module is never consulted.
 
+import { shouldForwardToParent, sendToParent } from "./isolation-ipc.js";
+
 export interface AdaptiveConcurrencyConfig {
   enabled: boolean;
   /** Upper bound (also the starting/fixed concurrency). */
@@ -165,6 +167,10 @@ const MAX_EVENTS = 5000;
 let signalRing: SignalEvent[] = [];
 
 function pushSignal(kind: SignalKind): void {
+  // Worker isolation: the controller that reads this window runs in the worker
+  // PARENT (worker.ts adaptive tick), so a job child forwards its provider
+  // back-pressure signals instead of recording them in a window nobody reads.
+  if (shouldForwardToParent()) { sendToParent({ t: "signal", kind }); return; }
   signalRing.push({ t: Date.now(), kind });
   if (signalRing.length > MAX_EVENTS) {
     // Drop oldest half in one shot (amortized O(1)).
@@ -193,6 +199,11 @@ export function getSignalSnapshot(windowMs: number, now: number = Date.now()): S
     else success++;
   }
   return { rateLimited, success, total: rateLimited + success };
+}
+
+/** Worker isolation (parent side): record a signal forwarded by a job child. */
+export function ingestSignalFromChild(kind: unknown): void {
+  if (kind === "rate_limited" || kind === "success") pushSignal(kind);
 }
 
 /** Test/utility hook: clear the signal window. */

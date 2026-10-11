@@ -31,6 +31,7 @@ import {
 import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
 import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
 import { runWithLlmContext } from "./lib/llm-usage.js";
+import { isolationEnabled, runPipelineIsolated } from "./lib/job-isolation.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
 import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
 import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
@@ -429,7 +430,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       result = await runWithLlmContext(
         { workspaceId, batchId, companyId, frameworkId, callType: "scoring" },
         () => raceWithWatchdog(
-          runAnalysisPipeline({
+          (isolationEnabled() ? runPipelineIsolated : runAnalysisPipeline)({
             company,
             framework,
             measures,

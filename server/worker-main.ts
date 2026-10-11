@@ -17,6 +17,7 @@
  *   Enable cleanup here by setting WORKER_RUN_CLEANUP=true on the worker service.
  */
 
+import "./lib/process-role.js"; // must precede ./db.js (worker isolation PG budget, DESIGN §4)
 import crypto from "crypto";
 import { initializeDatabase } from "./db.js";
 import { startWorker, stopWorker } from "./worker.js";

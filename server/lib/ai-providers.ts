@@ -30,6 +30,7 @@ import {
   assertDispatchAllowed,
   requestAbortSignal,
 } from "./lifecycle-fence.js";
+import { isIsolatedChild, remoteAcquire, remoteRelease } from "./isolation-ipc.js";
 
 // ─── Key Collection Helper ───────────────────────────────────────────────────
 
@@ -77,6 +78,9 @@ const llmWaiters: Array<() => void> = [];
 // when it never aborts) behaviour is identical to the original semaphore.
 async function acquireLlmSlot(signal?: AbortSignal | null): Promise<void> {
   if (signal?.aborted) throw cancellationFromSignal(signal, "llm-slot-wait");
+  // Worker isolation: in a job child the per-replica permit pool lives in the
+  // parent (LLM_MAX_CONCURRENCY stays a per-replica limit, not per-child).
+  if (isIsolatedChild()) return remoteAcquire("llm", signal, () => cancellationFromSignal(signal, "llm-slot-wait"));
   if (llmActive < LLM_MAX_CONCURRENCY) {
     llmActive++;
     return;
@@ -117,7 +121,14 @@ export const __llmSlotForTests = {
   state: () => ({ active: llmActive, waiting: llmWaiters.length, max: LLM_MAX_CONCURRENCY }),
 };
 
+/**
+ * Worker isolation (parent side): job-isolation.ts grants LLM permits to job
+ * children from THIS process's semaphore. Same object shape as the test hook.
+ */
+export const llmSlotBroker = __llmSlotForTests;
+
 function releaseLlmSlot(): void {
+  if (isIsolatedChild()) { remoteRelease("llm"); return; }
   llmActive = Math.max(0, llmActive - 1);
   const next = llmWaiters.shift();
   if (next) next();

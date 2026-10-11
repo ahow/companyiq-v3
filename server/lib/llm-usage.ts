@@ -16,6 +16,7 @@
 // up the right attribution without threading params through every function.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isIsolatedChild, sendToParent } from "./isolation-ipc.js";
 
 // ─── Attribution context (propagated via AsyncLocalStorage) ──────────────────
 
@@ -337,6 +338,10 @@ function ensureFlusher(): void {
 }
 
 function enqueueUsageEvent(row: UsageRow): void {
+  // Worker isolation (DESIGN.md §4): a job child opens NO usage pool; rows go to
+  // the worker parent, whose buffer + pool (max PG_USAGE_POOL_MAX) persist them,
+  // so the replica-wide usage connection budget is unchanged.
+  if (isIsolatedChild()) { sendToParent({ t: "usage", row }); return; }
   usageBuffer.push(row);
   if (usageBuffer.length > BUFFER_MAX_ROWS) {
     const dropped = usageBuffer.length - BUFFER_MAX_ROWS;
@@ -345,6 +350,16 @@ function enqueueUsageEvent(row: UsageRow): void {
   }
   ensureFlusher();
   if (usageBuffer.length >= FLUSH_MAX_ROWS) void flushUsage();
+}
+
+/** Worker isolation (parent side): buffer a usage row forwarded by a job child. */
+export function ingestUsageRowFromChild(row: unknown): void {
+  if (Array.isArray(row) && row.length === USAGE_COLS) enqueueUsageEvent(row as UsageRow);
+}
+
+/** Test-only: number of rows currently buffered (not yet flushed). */
+export function __usageBufferLengthForTests(): number {
+  return usageBuffer.length;
 }
 
 async function flushUsage(): Promise<void> {

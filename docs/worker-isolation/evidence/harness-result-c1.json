@@ -1,0 +1,160 @@
+{
+  "concurrency": 1,
+  "corpora": [
+    "12"
+  ],
+  "providerLatencyMs": 400,
+  "phases": {
+    "analyze": {
+      "wallMs": 36131,
+      "eld": {
+        "p50": 10,
+        "p90": 11,
+        "p99": 14,
+        "max": 5876,
+        "mean": 16,
+        "count": 2311
+      },
+      "perCompany": [
+        {
+          "corpus": "12",
+          "docs": 166,
+          "ms": 36131,
+          "success": false,
+          "error": "Cancelled",
+          "measures": 0,
+          "yes": 0,
+          "scoringErrors": 0
+        }
+      ]
+    }
+  },
+  "stalls": [
+    {
+      "at": 2475,
+      "lagMs": 254,
+      "phase": "analyze",
+      "stages": []
+    },
+    {
+      "at": 3257,
+      "lagMs": 732,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 4602,
+      "lagMs": 944,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 18991,
+      "lagMs": 5862,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 20367,
+      "lagMs": 575,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 21060,
+      "lagMs": 642,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 24822,
+      "lagMs": 512,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 25448,
+      "lagMs": 576,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 28659,
+      "lagMs": 359,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 29272,
+      "lagMs": 564,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 32428,
+      "lagMs": 288,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 32831,
+      "lagMs": 352,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 34845,
+      "lagMs": 406,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 35368,
+      "lagMs": 474,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    }
+  ],
+  "stallSummary": {
+    "count": 14,
+    "totalMs": 12540,
+    "maxMs": 5862,
+    "over1s": 1,
+    "over5s": 1
+  },
+  "providerCalls": 169,
+  "sqlCount": 18,
+  "blockedNetwork": {
+    "count": 1,
+    "sample": [
+      "https.request:www.sec.gov"
+    ]
+  },
+  "rssMB": 876
+}

@@ -25,6 +25,7 @@ import {
 import { noteRateLimited } from "./adaptive-concurrency.js";
 import { dispatchRevokedReason } from "./lifecycle-fence.js";
 import { beginStage } from "./diag-context.js";
+import { isIsolatedChild, remoteAcquire, remoteRelease } from "./isolation-ipc.js";
 
 // User-facing message shown on the dashboard banner when the residential proxy
 // runs out of credit. Kept as a constant so the raise + any future references
@@ -558,6 +559,8 @@ let activeSubprocs = 0;
 const subprocWaiters: Array<() => void> = [];
 
 async function acquireProcSlot(): Promise<void> {
+  // Worker isolation: brokered by the parent (per-replica limit across children).
+  if (isIsolatedChild()) return remoteAcquire("proc");
   if (activeSubprocs < MAX_CONCURRENT_SUBPROC) {
     activeSubprocs++;
     return;
@@ -568,6 +571,7 @@ async function acquireProcSlot(): Promise<void> {
 }
 
 function releaseProcSlot(): void {
+  if (isIsolatedChild()) { remoteRelease("proc"); return; }
   const next = subprocWaiters.shift();
   if (next) {
     // Hand our slot straight to the next waiter without touching the count.
@@ -840,6 +844,14 @@ const browserWaiters: Array<() => void> = [];
 // acquire could observe the transient (count-1) window and push activeBrowserFetches
 // above MAX_CONCURRENT_BROWSER — important now that MAX may be > 1.
 async function acquireBrowserSlot(): Promise<void> {
+  if (isIsolatedChild()) {
+    // Worker isolation: MAX_CONCURRENT_BROWSER is brokered by the parent so it
+    // stays a per-replica limit across all job children.
+    const diagEndRemote = beginStage("browser_admission_wait", "browser_slot"); // DIAGNOSTIC-ONLY
+    await remoteAcquire("browser");
+    diagEndRemote(true);
+    return;
+  }
   if (activeBrowserFetches < MAX_CONCURRENT_BROWSER) {
     activeBrowserFetches++;
     return;
@@ -865,6 +877,7 @@ function browserDispatchRefused(where: string): boolean {
 }
 
 function releaseBrowserSlot(): void {
+  if (isIsolatedChild()) { remoteRelease("browser"); return; }
   const next = browserWaiters.shift();
   if (next) {
     // Hand our slot straight to the next waiter without touching the count.
@@ -873,6 +886,24 @@ function releaseBrowserSlot(): void {
   }
   activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
 }
+
+/**
+ * Worker isolation (parent side): job-isolation.ts grants browser / subprocess
+ * permits to job children from THIS process's semaphores, so the configured
+ * maxima remain per-replica. Also used by tests for leak assertions.
+ */
+export const processorSlotBroker = {
+  browser: {
+    acquire: () => acquireBrowserSlot(),
+    release: () => releaseBrowserSlot(),
+    state: () => ({ active: activeBrowserFetches, waiting: browserWaiters.length, max: MAX_CONCURRENT_BROWSER }),
+  },
+  proc: {
+    acquire: () => acquireProcSlot(),
+    release: () => releaseProcSlot(),
+    state: () => ({ active: activeSubprocs, waiting: subprocWaiters.length, max: MAX_CONCURRENT_SUBPROC }),
+  },
+};
 
 // A single shared Chromium instance is reused across fetches (one new *page* per
 // fetch) instead of launching a fresh browser per document. This drastically
