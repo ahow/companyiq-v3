@@ -415,3 +415,197 @@ test("G1. 4 concurrent CPU-bound children on this 2-CPU host: parent lag, fork a
   assert.ok(s.maxHandlerMs < 20);
   await assertNoLeaks();
 });
+
+// ─── FIX 1: unconfirmed descendant cleanup → quarantine, never a clean success ─
+const { processorSlotBroker } = await import("./processor.js");
+const { quarantinedChildren, recoverQuarantinedChildren, probeGroups } = await import("./job-isolation.js");
+const forcedAlive = async () => ({ live: [999_999], zombies: [], reliable: true });
+async function acquiredWithin(p: Promise<void>, ms: number): Promise<boolean> {
+  return Promise.race([p.then(() => true), sleep(ms).then(() => false)]);
+}
+
+test("Q1. forced-alive probe: child reported success but cleanup unconfirmed → rejected (non-retriable), quarantined, browser permit NOT reassigned; released once termination is confirmed", async () => {
+  __testing.resetStats();
+  __testing.setLivenessProbe(forcedAlive);
+  try {
+    const t0 = Date.now();
+    const err: any = await withEnv({ FIXTURE_MODE: "hold-browser", WORKER_ISOLATION_REAP_WINDOW_MS: "300", WORKER_ISOLATION_QUARANTINE_POLL_MS: "100" }, async () => {
+      freshPidfile();
+      return inCtx(() => runPipelineIsolated(mkOpts()).then(() => null, (e) => e));
+    });
+    const q = quarantinedChildren();
+    console.log(`# Q1 quarantine: settled after ${Date.now() - t0}ms err="${err?.message}" quarantine=${JSON.stringify(q)}`);
+    assert.ok(err, "not a success");
+    assert.match(err.message, /^Isolated job child cleanup unconfirmed: child pid=\d+ quarantined, cleanup unconfirmed after 300ms: live=\[999999\]/);
+    assert.equal(isRetriableError(err.message), false);
+    assert.equal(q.length, 1);
+    assert.deepEqual(q[0].withheld, { llm: 0, browser: 1, proc: 0 });
+    assert.equal(q[0].jobId, 77);
+    assert.equal(__testing.stats().quarantined, 1);
+    assert.equal(__testing.liveChildren(), 0);
+    assert.equal(__testing.brokerState().browser.active, 1, "permit still held by the quarantined child");
+    // capacity is not reassigned: a new browser acquire (max 1) does not resolve while quarantined
+    const next = processorSlotBroker.browser.acquire();
+    assert.equal(await acquiredWithin(next, 500), false, "browser permit re-granted while descendants may still run");
+    // termination established → monitor releases the withheld permit → waiter gets it
+    __testing.setLivenessProbe(null);
+    assert.equal(await acquiredWithin(next, 2000), true, "permit returned after termination confirmed");
+    processorSlotBroker.browser.release();
+    assert.equal(quarantinedChildren().length, 0);
+    await assertNoLeaks();
+  } finally { __testing.setLivenessProbe(null); recoverQuarantinedChildren(); }
+});
+
+test("Q2. quarantine persists while the probe says live; deliberate recovery returns the permits", async () => {
+  __testing.setLivenessProbe(forcedAlive);
+  try {
+    await withEnv({ FIXTURE_MODE: "hold-browser", WORKER_ISOLATION_REAP_WINDOW_MS: "200", WORKER_ISOLATION_QUARANTINE_POLL_MS: "100" }, async () => {
+      freshPidfile();
+      await inCtx(() => runPipelineIsolated(mkOpts()).then(() => null, (e) => e));
+    });
+    await sleep(500); // several monitor ticks
+    const q = quarantinedChildren();
+    assert.equal(q.length, 1, "still quarantined while live");
+    assert.equal(__testing.brokerState().browser.active, 1);
+    assert.equal(recoverQuarantinedChildren(q[0].childPid), 1);
+    assert.equal(quarantinedChildren().length, 0);
+    await assertNoLeaks();
+  } finally { __testing.setLivenessProbe(null); recoverQuarantinedChildren(); }
+});
+
+test("Q3. zombie vs live: a group holding only an unreaped zombie counts as terminated (kill(-g,0) alone would not tell) → clean success, no quarantine, no 2s wait", async () => {
+  // helper P (own group) forks C; C moves to its own group and exits; P never reaps → C is a zombie alone in group C
+  const helper = spawn("python3", ["-c", "import os,sys,time\npid=os.fork()\nif pid==0:\n  os.setpgid(0,0); os._exit(0)\nprint(pid,flush=True); time.sleep(60)"], { stdio: ["ignore", "pipe", "inherit"], detached: true });
+  try {
+    const zpid = await new Promise<number>((res) => helper.stdout!.once("data", (d) => res(parseInt(String(d), 10))));
+    for (let i = 0; i < 100 && fs.readFileSync(`/proc/${zpid}/stat`, "utf8").split(") ")[1][0] !== "Z"; i++) await sleep(10);
+    let killSeesGroup = true; try { process.kill(-zpid, 0); } catch { killSeesGroup = false; }
+    const pr = await probeGroups([zpid]);
+    console.log(`# Q3 zombie pgid=${zpid}: kill(-g,0) succeeds=${killSeesGroup} probe=${JSON.stringify(pr)}`);
+    assert.deepEqual(pr, { live: [], zombies: [zpid], reliable: true });
+    // a live member (helper P leads its own group) is reported as live
+    const pl = await probeGroups([helper.pid!]);
+    assert.ok(pl.live.includes(helper.pid!));
+    __testing.resetStats();
+    const t0 = Date.now();
+    const r: any = await withEnv({ FIXTURE_MODE: "zombie-group", FIXTURE_ZOMBIE_PGID: String(zpid), WORKER_ISOLATION_REAP_WINDOW_MS: "3000" }, () => inCtx(() => runPipelineIsolated(mkOpts())));
+    const elapsed = Date.now() - t0;
+    console.log(`# Q3 settled after ${elapsed}ms success=${r.success} quarantined=${__testing.stats().quarantined}`);
+    assert.equal(r.success, true);
+    assert.equal(__testing.stats().quarantined, 0);
+    assert.ok(elapsed < 2500, `waited ${elapsed}ms on a zombie`);
+    await assertNoLeaks();
+  } finally { try { process.kill(-helper.pid!, "SIGKILL"); } catch {} }
+});
+
+// ─── FIX 2: monotonic terminal decision (explicit ordering barriers) ────────
+function goFiles() {
+  const b = path.join(os.tmpdir(), `iso-go-${process.pid}-${++pidSeq}`);
+  for (const s of [".go", ".saw"]) { try { fs.unlinkSync(b + s); } catch {} }
+  return { go: b + ".go", saw: b + ".saw" };
+}
+async function until(cond: () => boolean, ms = 15000) {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(10)) if (cond()) return;
+  throw new Error("barrier timeout");
+}
+
+test("M1. report accepted BEFORE the job deadline keeps precedence even though the deadline fires before the child exits → success", async () => {
+  const f = goFiles();
+  __testing.resetStats();
+  const r: any = await withEnv({ FIXTURE_MODE: "report-on-go", FIXTURE_GO: f.go, FIXTURE_LINGER: "1", WORKER_ISOLATION_EXIT_GRACE_MS: "30000", PIPELINE_TIMEOUT_MS: "60000" }, async () => {
+    const pidfile = freshPidfile();
+    return inCtx(async (lc) => {
+      const t0 = Date.now();
+      const p = runPipelineIsolated(mkOpts());
+      await waitFile(pidfile);
+      fs.writeFileSync(f.go, "1");            // barrier: report goes out now, deadline is ~2.5s away
+      const res: any = await p;
+      return { ...res, elapsed: Date.now() - t0, revoked: lc.revoked, deadline: lc.deadlineAt.getTime() - t0 };
+    }, 2500);
+  });
+  console.log(`# M1 report-before-deadline: success=${r.success} elapsed=${r.elapsed}ms deadlineAt=+${r.deadline}ms revoked=${r.revoked} late=${__testing.stats().lateReportsDiscarded}`);
+  assert.equal(r.success, true);
+  assert.equal(r.revoked, false, "accepted report: deadline did not take a terminal decision");
+  assert.ok(r.elapsed >= 2400 && r.elapsed < 6000, `lingering child killed at the deadline, not after the 30s exit grace (${r.elapsed}ms)`);
+  assert.equal(__testing.stats().lateReportsDiscarded, 0);
+  await assertNoLeaks();
+});
+
+test("M2. job deadline BEFORE the report → stays job watchdog timeout (non-retriable); late success discarded", async () => {
+  const f = goFiles();
+  __testing.resetStats();
+  __testing.setSuppressDeadlineKill(true);   // deadline decides + revokes, but the child is left alive to report late
+  try {
+    const r: any = await withEnv({ FIXTURE_MODE: "report-on-go", FIXTURE_GO: f.go, PIPELINE_TIMEOUT_MS: "60000", WORKER_ISOLATION_KILL_GRACE_MS: "30000" }, async () => {
+      const pidfile = freshPidfile();
+      return inCtx(async (lc) => {
+        const p = runPipelineIsolated(mkOpts()).then(() => null, (e) => e);
+        await waitFile(pidfile);
+        await until(() => lc.revoked);          // barrier: terminal decision taken
+        fs.writeFileSync(f.go, "1");            // only now may the child report success
+        return { err: await p, reason: lc.revokedReason };
+      }, 1500);
+    });
+    const late = __testing.lateReports();
+    console.log(`# M2 deadline-before-report: err="${r.err?.message}" late=${JSON.stringify(late)}`);
+    assert.match(r.err.message, /^Job watchdog timeout: isolated child killed at job deadline \(code=0 /);
+    assert.equal(isRetriableError(r.err.message), false);
+    assert.equal(r.reason, "job_watchdog_timeout");
+    assert.equal(late.length, 1);
+    assert.equal(late[0].killReason, "job_deadline");
+    assert.match(late[0].summary, /^success=true/);
+    await assertNoLeaks();
+  } finally { __testing.setSuppressDeadlineKill(false); }
+});
+
+test("M2b. pipeline deadline BEFORE the report → stays pipeline timeout (retriable, existing policy); late success discarded", async () => {
+  const f = goFiles();
+  __testing.resetStats();
+  __testing.setSuppressDeadlineKill(true);
+  try {
+    const r: any = await withEnv({ FIXTURE_MODE: "report-on-go", FIXTURE_GO: f.go, PIPELINE_TIMEOUT_MS: "1500", WORKER_ISOLATION_KILL_GRACE_MS: "30000" }, async () => {
+      const pidfile = freshPidfile();
+      return inCtx(async (lc) => {
+        const p = runPipelineIsolated(mkOpts());
+        await waitFile(pidfile);
+        await until(() => lc.revoked);
+        fs.writeFileSync(f.go, "1");
+        return { ...(await p), reason: lc.revokedReason };
+      });
+    });
+    console.log(`# M2b pipeline-deadline-before-report: error="${r.error}" failureType=${r.failureType} late=${__testing.stats().lateReportsDiscarded}`);
+    assert.equal(r.success, false);
+    assert.match(r.error, /^Pipeline timed out after \d+s$/);
+    assert.equal(r.failureType, "timeout");
+    assert.equal(isRetriableError(r.error), true);
+    assert.equal(r.reason, "pipeline_timeout");
+    assert.equal(__testing.stats().lateReportsDiscarded, 1);
+    await assertNoLeaks();
+  } finally { __testing.setSuppressDeadlineKill(false); }
+});
+
+test("M3. cancel BEFORE the report → stays a cancellation; late success discarded", async () => {
+  const f = goFiles();
+  __testing.resetStats();
+  let flag = false;
+  const r: any = await withEnv({ FIXTURE_MODE: "report-on-go", FIXTURE_GO: f.go, FIXTURE_SAWCANCEL: f.saw, PIPELINE_TIMEOUT_MS: "60000", WORKER_ISOLATION_KILL_GRACE_MS: "30000" }, async () => {
+    const pidfile = freshPidfile();
+    return inCtx(async () => {
+      const p = runPipelineIsolated(mkOpts({ cancelCheck: () => flag }));
+      await waitFile(pidfile);
+      flag = true;
+      await waitFile(f.saw);                    // barrier: child observed the cancel (parent decided first)
+      fs.writeFileSync(f.go, "1");
+      return p;
+    });
+  });
+  const late = __testing.lateReports();
+  console.log(`# M3 cancel-before-report: error="${r.error}" late=${JSON.stringify(late)}`);
+  assert.equal(r.success, false);
+  assert.equal(r.error, "Cancelled");
+  assert.equal(fenceCancelledResult(r, true, "cancel", 600000).error, "Cancelled");
+  assert.equal(late.length, 1);
+  assert.equal(late[0].killReason, "cancel");
+  assert.match(late[0].summary, /^success=true/);
+  await assertNoLeaks();
+});

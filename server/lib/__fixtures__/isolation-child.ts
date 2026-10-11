@@ -125,6 +125,34 @@ export async function run(opts: any, h: { isCancelled: () => boolean; lifecycle:
       pgTotal: pool.totalCount, usagePool: llm.__usagePoolCreatedForTests(), redisUrl: process.env.REDIS_URL ?? null,
     });
   }
+  // ── FIX 2 ordering barrier: report only when the test creates FIXTURE_GO.
+  // FIXTURE_SAWCANCEL is written once the child observes cancel/revoke;
+  // FIXTURE_LINGER keeps the child alive after reporting (exit suppressed).
+  if (mode === "report-on-go") {
+    writePids({ child: process.pid });
+    const go = process.env.FIXTURE_GO!, saw = process.env.FIXTURE_SAWCANCEL;
+    for (;;) {
+      if (saw && h.isCancelled() && !fs.existsSync(saw)) fs.writeFileSync(saw, String(Date.now()));
+      if (fs.existsSync(go)) break;
+      await sleep(10);
+    }
+    if (process.env.FIXTURE_LINGER === "1") { (process as any).exit = () => {}; setInterval(() => {}, 1000); }
+    return ok({ pid: process.pid, cancelledAtReport: h.isCancelled() });
+  }
+  // ── FIX 1: hold a browser permit (never released) and report success.
+  if (mode === "hold-browser") {
+    const { processorSlotBroker } = await import("../processor.js");
+    await processorSlotBroker.browser.acquire();
+    writePids({ child: process.pid });
+    return ok({ pid: process.pid });
+  }
+  // ── FIX 1: register a process group that holds only an unreaped zombie.
+  if (mode === "zombie-group") {
+    const { registerDescendantGroup } = await import("../isolation-ipc.js");
+    registerDescendantGroup(Number(process.env.FIXTURE_ZOMBIE_PGID));
+    await sleep(100);
+    return ok({ pid: process.pid });
+  }
   throw new Error("unknown FIXTURE_MODE " + mode);
 }
 

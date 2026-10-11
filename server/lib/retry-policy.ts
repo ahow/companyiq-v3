@@ -24,6 +24,11 @@ export const NON_RETRIABLE_ERRORS = [
   // would reuse the same corpus and burn the general budget. Eligible re-runs
   // are enqueued by the pipeline as their own re-examination batch.
   "Insufficient corpus",
+  // Worker isolation only (job-isolation.ts; never produced by the in-process
+  // path, so 35884ee behaviour is unchanged): the child's descendants could
+  // not be confirmed terminated and the replica quarantined its permits. The
+  // attempt may already have done (paid) work; do not re-run it automatically.
+  "Isolated job child cleanup unconfirmed",
 ] as const;
 
 export function isRetriableError(error: string): boolean {
