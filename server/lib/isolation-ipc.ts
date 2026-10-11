@@ -104,6 +104,20 @@ export function remoteRelease(kind: PermitKind): void {
   if (id !== undefined) sendToParent({ t: "release", id });
 }
 
+// ─── Descendant process groups ───────────────────────────────────────────────
+// Puppeteer launches Chromium with detached:true (@puppeteer/browsers launch.js),
+// i.e. in its OWN process group, so killing the job child's group does not reach
+// it. A child registers every such group here: the parent kills them on child
+// exit/kill, and the child's parent-death watchdog kills them if the parent dies.
+const groupListeners: Array<(pid: number) => void> = [];
+export function onDescendantGroup(fn: (pid: number) => void): void { groupListeners.push(fn); }
+/** Register a detached descendant (its pid == its process-group id). No-op outside a child. */
+export function registerDescendantGroup(pid: number | undefined | null): void {
+  if (!pid || !isIsolatedChild()) return;
+  sendToParent({ t: "pgroup", pid });
+  for (const fn of groupListeners) { try { fn(pid); } catch { /* best effort */ } }
+}
+
 /** Test/diagnostic view of the child-side permit bookkeeping. */
 export function remotePermitState(): { pending: number; outstanding: Record<PermitKind, number> } {
   return {

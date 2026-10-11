@@ -7,14 +7,41 @@
 import { createAttemptLifecycle, registerBatchCancelSource, revokeAttempt } from "./lifecycle-fence.js";
 import { runWithDiagContext, getDiagContext } from "./diag-context.js";
 import { runWithLlmContext } from "./llm-usage.js";
-import { sendToParent } from "./isolation-ipc.js";
+import { sendToParent, onDescendantGroup } from "./isolation-ipc.js";
+import { Worker } from "node:worker_threads";
 
 let cancelFlag = false;
 let lc: ReturnType<typeof createAttemptLifecycle> | null = null;
 let started = false;
 registerBatchCancelSource(() => cancelFlag);
 
-process.on("disconnect", () => process.exit(0));
+// ─── Parent-death watchdog ───────────────────────────────────────────────────
+// process.on("exit") in the parent cannot run when the parent is SIGKILLed /
+// OOM-killed. This thread has its own event loop, so it keeps running even
+// while the pipeline blocks this process's main thread: when the original
+// parent disappears (ppid changes on reparenting) it SIGKILLs our own process
+// group (us + pdftotext etc.) and every registered detached group (Chromium).
+const WATCHDOG_SRC = `
+const { parentPort, workerData } = require("node:worker_threads");
+const groups = new Set();
+parentPort.on("message", (pid) => groups.add(pid));
+setInterval(() => {
+  if (process.ppid === workerData.ppid) return;
+  for (const g of groups) { try { process.kill(-g, "SIGKILL"); } catch {} }
+  try { process.kill(-workerData.self, "SIGKILL"); } catch {}
+  try { process.kill(workerData.self, "SIGKILL"); } catch {}
+}, workerData.pollMs);
+`;
+const watchdog = new Worker(WATCHDOG_SRC, { eval: true, workerData: { ppid: process.ppid, self: process.pid, pollMs: parseInt(process.env.WORKER_ISOLATION_PARENT_POLL_MS || "250", 10) } });
+watchdog.unref();
+const descendantGroups = new Set<number>();
+onDescendantGroup((pid) => { descendantGroups.add(pid); watchdog.postMessage(pid); });
+
+// IPC channel closed (parent exited or died) while our loop is free: same cleanup.
+process.on("disconnect", () => {
+  for (const g of descendantGroups) { try { process.kill(-g, "SIGKILL"); } catch { /* gone */ } }
+  try { process.kill(-process.pid, "SIGKILL"); } catch { process.exit(0); }
+});
 process.on("message", (m: any) => {
   if (!m || typeof m !== "object") return;
   if (m.t === "revoke") revokeAttempt(lc, m.reason || "revoked");

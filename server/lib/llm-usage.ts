@@ -357,6 +357,11 @@ export function ingestUsageRowFromChild(row: unknown): void {
   if (Array.isArray(row) && row.length === USAGE_COLS) enqueueUsageEvent(row as UsageRow);
 }
 
+/** Test-only: whether this process has instantiated its dedicated usage pool. */
+export function __usagePoolCreatedForTests(): boolean {
+  return usagePool !== null;
+}
+
 /** Test-only: number of rows currently buffered (not yet flushed). */
 export function __usageBufferLengthForTests(): number {
   return usageBuffer.length;

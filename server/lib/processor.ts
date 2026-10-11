@@ -25,7 +25,7 @@ import {
 import { noteRateLimited } from "./adaptive-concurrency.js";
 import { dispatchRevokedReason } from "./lifecycle-fence.js";
 import { beginStage } from "./diag-context.js";
-import { isIsolatedChild, remoteAcquire, remoteRelease } from "./isolation-ipc.js";
+import { isIsolatedChild, remoteAcquire, remoteRelease, registerDescendantGroup } from "./isolation-ipc.js";
 
 // User-facing message shown on the dashboard banner when the residential proxy
 // runs out of credit. Kept as a constant so the raise + any future references
@@ -1030,6 +1030,9 @@ async function getSharedBrowser(): Promise<any> {
     .then((b: any) => {
       sharedBrowser = b;
       sharedBrowserLaunching = null;
+      // Worker isolation: Chromium runs in its own process group (puppeteer
+      // detached:true); register it so the supervisor can reap it.
+      registerDescendantGroup(b.process?.()?.pid);
       // If Chromium dies, clear the handle so the next call relaunches.
       b.on("disconnected", () => {
         if (sharedBrowser === b) sharedBrowser = null;

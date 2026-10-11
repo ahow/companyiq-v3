@@ -32,6 +32,7 @@ import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqua
 import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
 import { runWithLlmContext } from "./lib/llm-usage.js";
 import { isolationEnabled, runPipelineIsolated } from "./lib/job-isolation.js";
+import { isRetriableError, fenceCancelledResult } from "./lib/retry-policy.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
 import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
 import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
@@ -163,27 +164,8 @@ export async function enqueueReliabilityFinalizer(data: ReliabilityFinalizerData
 
 // ─── Retry Helpers ─────────────────────────────────────────────────────────
 
-function isRetriableError(error: string): boolean {
-  const nonRetriable = [
-    "Company not found",
-    "Framework not found",
-    "No measures in framework",
-    "Could not claim job",
-    // A watchdog timeout means the pipeline hung (typically un-fetchable company /
-    // no domain). Retrying just hangs again for another full timeout window, so
-    // treat it as a final failure to free the slot and let the batch close.
-    "Job watchdog timeout",
-    // R1 / auto-rerun: the pipeline itself owns the bounded re-run decision for
-    // an incomplete/empty corpus. When it returns an "Insufficient corpus"
-    // failure it has ALREADY decided not to (or exhausted its dedicated
-    // MAX_ZERO_CORPUS_RERUNS budget / quarantined a deterministic class), so the
-    // worker's generic MAX_RETRY_ATTEMPTS loop must NOT re-run it on top — that
-    // would reuse the same corpus and burn the general budget. Eligible re-runs
-    // are enqueued by the pipeline as their own re-examination batch.
-    "Insufficient corpus",
-  ];
-  return !nonRetriable.some(msg => error.includes(msg));
-}
+// isRetriableError / fenceCancelledResult live in ./lib/retry-policy.ts (moved
+// verbatim) so the isolated path is classified by the same implementation.
 
 /**
  * Detect if an error is a provider quota/auth failure that should trigger a
@@ -478,9 +460,9 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     // this attempt lost permission (deadline elapsed / revoked / ownership lost
     // and its score write was fenced). Treat it exactly like a watchdog timeout
     // (non-retriable final failure) so the job is released, not left claimed.
-    if (!result.success && result.error === "Cancelled" && !(cancelledBatches.has(batchId) || isBatchCancelledCached(batchId))) {
+    if (!result.success && result.error === "Cancelled") {
       const why = dispatchRevokedReason(diagCtx) || lifecycle.revokedReason || "permission_revoked";
-      result = { ...result, error: "Job watchdog timeout after " + JOB_TIMEOUT + "ms (attempt revoked: " + why + ")" };
+      result = fenceCancelledResult(result, cancelledBatches.has(batchId) || isBatchCancelledCached(batchId), why, JOB_TIMEOUT);
     }
     let jobCompletionTransitioned = false;
     if (result.success) {
