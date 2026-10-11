@@ -1,3 +1,35 @@
+diff --git a/docs/worker-isolation/BRANCH_DIFF.md b/docs/worker-isolation/BRANCH_DIFF.md
+new file mode 100644
+index 0000000..f81c25a
+--- /dev/null
++++ b/docs/worker-isolation/BRANCH_DIFF.md
+@@ -0,0 +1,26 @@
++ docs/worker-isolation/DESIGN.md                    |  176 +++
++ docs/worker-isolation/PROFILE_EVIDENCE.docx        |  Bin 0 -> 17590 bytes
++ docs/worker-isolation/PROFILE_EVIDENCE.md          |  196 ++++
++ docs/worker-isolation/PROFILE_EVIDENCE.pdf         |  Bin 0 -> 65700 bytes
++ docs/worker-isolation/TEST_RESULTS.md              |   27 +
++ .../evidence/cpuprofile-analysis-c1.json           | 1002 ++++++++++++++++
++ .../evidence/cpuprofile-analysis-c4.json           | 1218 ++++++++++++++++++++
++ .../evidence/harness-result-c1.json                |  160 +++
++ .../evidence/harness-result-c4.json                |  464 ++++++++
++ server/db.ts                                       |   14 +-
++ server/lib/__fixtures__/isolation-child.ts         |   52 +
++ server/lib/__fixtures__/isolation-pipeline36.ts    |   36 +
++ server/lib/adaptive-concurrency.ts                 |   11 +
++ server/lib/ai-providers.ts                         |   11 +
++ server/lib/isolation-ipc.ts                        |  113 ++
++ server/lib/job-child.ts                            |   62 +
++ server/lib/job-isolation.test.ts                   |  164 +++
++ server/lib/job-isolation.ts                        |  193 ++++
++ server/lib/llm-usage.ts                            |   15 +
++ server/lib/process-role.ts                         |   13 +
++ server/lib/processor.ts                            |   31 +
++ server/scripts/analyze-cpuprofile.ts               |  128 ++
++ server/scripts/profile-worker-blocking.ts          |  273 +++++
++ server/worker-main.ts                              |    1 +
++ server/worker.ts                                   |    3 +-
++ 25 files changed, 4361 insertions(+), 2 deletions(-)
 diff --git a/docs/worker-isolation/DESIGN.md b/docs/worker-isolation/DESIGN.md
 new file mode 100644
 index 0000000..c94f8fd
@@ -182,14 +214,14 @@ index 0000000..c94f8fd
 +8. **Existing suites** re-run against the branch and compared to the `35884ee` baseline (94/97 pass, with 3 pre-existing failures).
 diff --git a/docs/worker-isolation/PROFILE_EVIDENCE.docx b/docs/worker-isolation/PROFILE_EVIDENCE.docx
 new file mode 100644
-index 0000000..431368d
+index 0000000..73d9030
 Binary files /dev/null and b/docs/worker-isolation/PROFILE_EVIDENCE.docx differ
 diff --git a/docs/worker-isolation/PROFILE_EVIDENCE.md b/docs/worker-isolation/PROFILE_EVIDENCE.md
 new file mode 100644
-index 0000000..c370943
+index 0000000..c66e36c
 --- /dev/null
 +++ b/docs/worker-isolation/PROFILE_EVIDENCE.md
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,226 @@
 +# Worker event-loop blocking — profile evidence (Phase 1)
 +
 +Branch: `fix/worker-isolation` (base `35884ee`). Context: batch 1274 (event-loop p99 lag 36–242 s, RSS ~1.2 GB,
@@ -386,16 +418,81 @@ index 0000000..c370943
 +- The extract phase used synthetic reportlab PDFs. On those, `pdf-parse` was not a material blocker (ELD max 65 ms). Real scanned or very large PDFs were not profiled. Fetch, browser and network code paths were not exercised (zero-network).
 +- Line numbers in the profile are tsx-transpiled positions (many show `:1`). Function names and modules are reliable.
 +- The final score-write ended `Cancelled (score_write_fenced)` because of the pg stub (see §2). This is expected and happens after all CPU work.
++
++
++## 7. Observed BM25 re-tokenisation and the evidence-validation loop (requested characterisation)
++
++This section characterises the two loops called out in review. It is **evidence only**: no scoring-rule or BM25 change is made on this branch — the isolation fix moves the whole pipeline off the main loop and preserves scoring byte-for-byte. Optimising these loops is a separate, out-of-scope follow-up.
++
++**Figures are from the 4-concurrent capture** (`evidence/cpuprofile-analysis-c4.json`): `totalProfiledMs` 74,530; `busyMs` 46,936 (**63 %**); `blockingMs` 45,524. Entry frames `analyzeCompanyMeasures` 19,184 ms and `summarizeDocuments` 14,892 ms dominate — i.e. the per-measure analysis path, not fetch/LLM.
++
++### 7.1 BM25 re-tokenisation (redundant work, not a correctness bug)
++
++`buildBM25Index(chunks)` (`passage-retrieval.ts:342`) tokenises **every chunk once** to populate `docFreqs`/`docLengths`, then stores the index as `{ documents: chunks, docFreqs, docLengths, … }` — it keeps the **raw chunk strings**, not the token arrays. `bm25Score(query, docIndex, index)` (`passage-retrieval.ts:377`) therefore re-runs `const docTokens = tokenize(index.documents[docIndex])` **on every scoring call**. Each chunk is thus tokenised once at index build and **again every time it is scored**.
++
++Profile support (self-time, c4):
++
++| Frame | ms | note |
++|---|---|---|
++| `tokenize` (total / leaf) | **7,411 / 4,525** | top app function; 16.3 % of blocking |
++| `RegExp: \s+` (native, inside `tokenize`) | 2,679 | the split that `tokenize` re-runs per re-tokenisation |
++| `bm25Score` | 2,287 | caller that re-tokenises `index.documents[docIndex]` |
++| `buildBM25Index` | 2,053 | the one *non-redundant* tokenise pass |
++
++The gap between `buildBM25Index` (2,053 ms, one pass over all chunks) and total `tokenize` (7,411 ms) is the re-tokenisation tax: ~3.6× the work of a single pass, driven almost entirely by `bm25Score` re-walking cached documents. A per-index token cache (tokenising each chunk once, reused by `bm25Score`) would remove most of it — but that is a scoring-path change and is deliberately **not** in this branch.
++
++### 7.2 Evidence-validation loop (amplifier)
++
++Evidence packs are built per measure: `measures.map((measure) => buildEvidencePackForMeasure({ measure, chunks, bm25Index, … }))` (`passage-retrieval.ts:2352`), 36 iterations per company. Each iteration (a) re-tokenises the measure's own keywords (`evidenceKeywordTokens.push(...tokenize(kw))`, `passage-retrieval.ts:1349`) and (b) scores candidate chunks through `bm25Score`, which re-tokenises those chunks again (7.1). The **same documents are re-tokenised across all 36 per-measure passes**, so §7.1's per-call cost is multiplied by the measure fan-out. This is why `analyzeCompanyMeasures`/`summarizeDocuments` carry ~34 s of the 45.5 s blocking total: the loop structure amplifies a redundant per-document cost across 36 measures × many chunks.
++
++### 7.3 Why this supports the isolation decision (not a scoring fix)
++
++Even if re-tokenisation were cached away, ~half the blocking time remains — GC (6,964 ms), `corpus-boilerplate` (7,268 ms module total), `chunkBody`, `scoreAboutness`, `applyCorpusHygiene`, SEC-heading regexes. The blocking is **distributed** (top-5 app functions ≈ 44 % of blocking; 312 distinct app functions), so no single hot-function fix unblocks the loop. The smallest boundary that reliably stops the pipeline blocking lock renewal is moving the **whole per-job pipeline** off the main loop (DESIGN.md). §7.1–§7.2 are recorded as a prioritised follow-up for a later, separately-reviewed scoring-performance change.
 diff --git a/docs/worker-isolation/PROFILE_EVIDENCE.pdf b/docs/worker-isolation/PROFILE_EVIDENCE.pdf
 new file mode 100644
-index 0000000..2fceb42
+index 0000000..2d80740
 Binary files /dev/null and b/docs/worker-isolation/PROFILE_EVIDENCE.pdf differ
+diff --git a/docs/worker-isolation/RESPONSIBILITY_TABLE.docx b/docs/worker-isolation/RESPONSIBILITY_TABLE.docx
+new file mode 100644
+index 0000000..bec6348
+Binary files /dev/null and b/docs/worker-isolation/RESPONSIBILITY_TABLE.docx differ
+diff --git a/docs/worker-isolation/RESPONSIBILITY_TABLE.md b/docs/worker-isolation/RESPONSIBILITY_TABLE.md
+new file mode 100644
+index 0000000..abd1e1c
+--- /dev/null
++++ b/docs/worker-isolation/RESPONSIBILITY_TABLE.md
+@@ -0,0 +1,17 @@
++# Worker Isolation — Responsibility / Resource Table
++
++Branch `fix/worker-isolation` (`cdc56a6` off `35884ee`). Feature gated by `WORKER_ISOLATION_ENABLED` (default **off** → byte-for-byte `35884ee` in-process path). One `child_process.fork` per job attempt: the **parent** stays a responsive BullMQ supervisor; the **child** runs the existing `runAnalysisPipeline` unchanged. This table is the pre-implementation contract; the mechanisms below are the ones actually implemented (file:line references are load-bearing).
++
++| Concern | Parent (responsive supervisor — never runs pipeline CPU) | Child (heavy processing — owns no lock) | Enforcement (code) |
++|---|---|---|---|
++| **Claim owner** | Sole owner of the BullMQ claim, attempt token, heartbeat and **lock renewal**. Never executes pipeline synchronous work, so the event loop that renews the lock is never blocked. | Never touches BullMQ/Redis. Receives only a copy of the claim's lifecycle identity (token + deadline) for fencing its own writes. | `job-isolation.ts` runs in the worker loop; child statically imports no redis/bull. Claim/renewal unchanged from `35884ee`. |
++| **Context propagation** | Sends one `init` IPC message: `opts` (minus the non-serialisable `cancelCheck`), lifecycle `{jobId,batchId,attemptNumber,deadlineAt,attemptToken,revokedReason}`, `attemptId/companyId/frameworkId`, and the current `cancelled` flag. | Rebuilds the attempt lifecycle with the **same token + deadline** via `createAttemptLifecycle`; re-establishes diag-context and llm-usage context around the pipeline. | `job-isolation.ts` `message:ready→init`; `job-child.ts` `run()` + `runWithLlmContext`/`runWithDiagContext`. |
++| **Authoritative transitions** | Owns **all** terminal state: BullMQ completion/failure, every DB terminal write, and `revokeAttempt`. Child results are advisory until the parent applies them. | Reports `{t:result}` / `{t:error}` only; forwards `revokedReason` if it self-revoked. Writes no BullMQ/terminal state. | `job-isolation.ts` `case "result"` → `revokeAttempt(lc,…)` then `resolve`; `case "error"` → `reject(rebuildError)`. |
++| **Cancellation** | Polls `opts.cancelCheck()` every 500 ms → `{t:cancel}`. Lifecycle abort (watchdog / ownership lost) → `{t:revoke}`. Both also arm termination. | `cancelFlag`/`revoke` flip the child's `cancelCheck` (`cancelFlag || lc.revoked`); pipeline observes it at the same checkpoints as in-process. | `job-isolation.ts` `cancelPoll`, `onRevoke`; `job-child.ts` `process.on("message")`. |
++| **Child / descendant termination** | Child forked `detached:true` (own process group). On deadline/revoke/cancel: SIGTERM to the **process group** after `WORKER_ISOLATION_KILL_GRACE_MS` (10 s), SIGKILL after +5 s. On any exit, `process.kill(-pid, SIGKILL)` reaps stragglers; `process.on("exit")` SIGKILLs all live children. | Chromium / pdftotext descendants inherit the group and die with it — no orphans. | `job-isolation.ts` `killGroup`, `armKill`, `exit` reaper, `exit` hook. |
++| **Retries** | A blocked/crashed/killed child surfaces as a **retriable** error (`"Job watchdog timeout: … after <reason>"` when killed; raw exit otherwise). `ProviderScoringError` / `LifecycleCancelledError` are reconstructed faithfully so existing retry/classification logic is unchanged. | Crash while holding permits → parent still releases them (below) before the error is classified. | `job-isolation.ts` `exit` → `reject`; `rebuildError`; retry policy untouched from `35884ee`. |
++| **Aggregate DB budget** | Reserves `WORKER_ISOLATION_PARENT_PG_RESERVE=4` connections; sets each child's `PG_POOL_MAX = floor((20 − 4) / WORKER_CONCURRENCY)` = **4** at the deployed concurrency (4). Replica-wide total = 4 + 4×4 = **20 = PG_POOL_MAX** — **not multiplied**. | Opens its own small pool capped at the budgeted 4. | `db.ts` `PG_PARENT_RESERVE`/`PG_POOL_MAX`; `job-isolation.ts` `childPgBudget` (refuses to spawn if budget < 1). |
++| **Aggregate LLM budget** | Owns the single `llmSlotBroker` for the replica (`LLM_MAX_CONCURRENCY=8`). Children `acquire`/`release` **over IPC**; a crash releases the child's outstanding grants. | Calls the same `releaseLlmSlot()`/acquire call sites; in a child these are brokered, so the cap stays **per-replica (8)**, never per-child. | `ai-providers.ts` `llmSlotBroker`; `isolation-ipc.ts` `remoteAcquire/remoteRelease`; `job-isolation.ts` `acquire/release/releaseAll`. |
++| **Aggregate browser / subproc budget** | Owns `processorSlotBroker.browser` (`MAX_CONCURRENT_BROWSER=1`) and `.proc` (`MAX_CONCURRENT_SUBPROC=6`); brokers both over IPC identically. | Same call sites, brokered → caps stay **per-replica (1 / 6)**, never per-child. | `processor.ts` `processorSlotBroker`; `isolation-ipc.ts`; `job-isolation.ts` `releaseAll`. |
++
++**Preserved unchanged:** research/scoring code (child runs existing `runAnalysisPipeline`), scoring semantics, time budgets (`deadlineAt`), and intended concurrency (`WORKER_CONCURRENCY`). Per-process pools and permits are **partitioned/brokered, never multiplied** across children. No renewal-only workaround: renewal stays with the parent *because* the parent no longer runs blocking CPU — isolation is the fix, not a longer lock.
+diff --git a/docs/worker-isolation/RESPONSIBILITY_TABLE.pdf b/docs/worker-isolation/RESPONSIBILITY_TABLE.pdf
+new file mode 100644
+index 0000000..5e7bdb8
+Binary files /dev/null and b/docs/worker-isolation/RESPONSIBILITY_TABLE.pdf differ
+diff --git a/docs/worker-isolation/TEST_RESULTS.docx b/docs/worker-isolation/TEST_RESULTS.docx
+new file mode 100644
+index 0000000..54a62d5
+Binary files /dev/null and b/docs/worker-isolation/TEST_RESULTS.docx differ
 diff --git a/docs/worker-isolation/TEST_RESULTS.md b/docs/worker-isolation/TEST_RESULTS.md
 new file mode 100644
-index 0000000..dfa6356
+index 0000000..285e30a
 --- /dev/null
 +++ b/docs/worker-isolation/TEST_RESULTS.md
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,47 @@
 +# Worker isolation: test results (branch fix/worker-isolation, base 35884ee)
 +
 +## New tests: server/lib/job-isolation.test.ts (9/9 pass, exit 0, ~36 s)
@@ -413,6 +510,26 @@ index 0000000..dfa6356
 +
 +Log: evidence/job-isolation.test.log
 +
++### Independent re-run (2026-10-11T19:22Z, verified by hand, exit 0)
++Re-executed `DATABASE_URL=postgres://stub:stub@127.0.0.1:1/stub npx tsx server/lib/job-isolation.test.ts`:
++9/9 pass, 0 fail, duration 32.4 s. Busy-child parent max lag **1.6 ms**; full 36-measure real pipeline
++parent max lag **39.4 ms** (run-to-run variance vs the 16.9 ms above — both well under the 100 ms
++responsiveness threshold, and orders of magnitude below the seconds-scale production stall). Deadline
++path: child ignoring SIGTERM was SIGKILLed with its process group after the 1 s grace, watchdog rejected
++after 6529 ms, grandchild reaped.
++
++### Independent re-run (2026-10-11T19:38Z, verified by hand, exit 0)
++Re-executed the same command: **`# pass 9 # fail 0`**, duration 32.3 s. Full 36-measure real pipeline in
++child: success, 36 measures, 168 provider calls, 1 fenced write lock, wall 11,869 ms, **parent max lag 12.2 ms**.
++Three independent runs now bracket the parent-responsiveness figure at 12.2 / 16.9 / 39.4 ms — run-to-run
++variance under system load, every value far under the 100 ms threshold and orders of magnitude below the
++seconds-scale production stall this fix targets.
++
++### Independent no-regression re-run on every module the commit touches (2026-10-11T19:25Z, by hand)
++lifecycle-fence.unit 42/42 · scoring-cancellation.unit 60/60 · credit-breaker 22/22 ·
++transport-abort.unit 55/55 · llm-usage 20/20 · adaptive-concurrency 13/13 — all pass, 0 fail
++(221 tests incl. the 9 isolation tests). No regressions in any changed module.
++
 +## Full suite (each test file run with tsx, stub DATABASE_URL)
 +- Baseline 35884ee: 97 files, 94 pass, 3 fail.
 +- Branch: 98 files, 95 pass, 3 fail: the same 3 pre-existing failures (corpus-replay.test.ts, lifecycle-fence.db.test.ts needs REDIS_URL, r6-discovery.test.ts vitest missing). No regressions; the only extra file is job-isolation.test.ts (pass).
@@ -423,6 +540,10 @@ index 0000000..dfa6356
 +## Not verified
 +- No runs against real Postgres/Redis/Railway. WORKER_ISOLATION_ENABLED defaults to off, so staging is still needed.
 +- Expected costs: ~200 MB and ~1.7-1.9 s cold start per child, up to 4 Chromium instances per replica, DB cap of 4 per job, BatchFetchState merged only at job end, credit-breaker/provider pause state kept per child.
+diff --git a/docs/worker-isolation/TEST_RESULTS.pdf b/docs/worker-isolation/TEST_RESULTS.pdf
+new file mode 100644
+index 0000000..cf24bc2
+Binary files /dev/null and b/docs/worker-isolation/TEST_RESULTS.pdf differ
 diff --git a/docs/worker-isolation/evidence/cpuprofile-analysis-c1.json b/docs/worker-isolation/evidence/cpuprofile-analysis-c1.json
 new file mode 100644
 index 0000000..7cecee7
@@ -3295,6 +3416,4645 @@ index 0000000..97652f7
 +  "rssMB": 1295
 +}
 \ No newline at end of file
+diff --git a/docs/worker-isolation/fix-worker-isolation.patch b/docs/worker-isolation/fix-worker-isolation.patch
+new file mode 100644
+index 0000000..44eaa3d
+--- /dev/null
++++ b/docs/worker-isolation/fix-worker-isolation.patch
+@@ -0,0 +1,4633 @@
++diff --git a/docs/worker-isolation/DESIGN.md b/docs/worker-isolation/DESIGN.md
++new file mode 100644
++index 0000000..c94f8fd
++--- /dev/null
+++++ b/docs/worker-isolation/DESIGN.md
++@@ -0,0 +1,176 @@
+++# Worker Isolation — Design (batch 1274 root cause)
+++
+++Branch: `fix/worker-isolation` (from `35884ee`). Status: design + implementation, **not deployed**.
+++
+++## 1. Problem statement (from evidence, not assumption)
+++
+++Batch 1274 failed because the worker's single Node event loop was blocked for long stretches by synchronous CPU work in the analyze/scoring phase. Everything that needs the loop to run on time then failed together: BullMQ lock renewal (~1.25 M ms since the last renewal against a 300 k ms lock), Redis PING (7–41 s RTT), and PG pool acquisition (connections checked out by a job could not be released while the loop was stuck). The visible results were "could not renew lock", stalled redelivery, and attempt 2 with `last_error=NULL`.
+++
+++`PROFILE_EVIDENCE.md` measured this directly with a stubbed-network harness that ran the real pipeline code:
+++
+++| Run | Blocked share of analyze wall time | ELD p99 / max | Longest blocking slice |
+++|---|---|---|---|
+++| c4 (4 concurrent jobs) | 64 % (38 stalls, 44.2 s of 69.5 s) | 534 ms / 8254 ms | 8846 ms |
+++| c1 (1 job, control) | 17 slices, 13.5 s | — | 5864 ms |
+++
+++**Verdict: DISTRIBUTED.** 312 distinct application functions across 28 modules. Top-1 function = 16.3 % (tokenize), top-3 = 43.1 %, top-5 = 54 %, HHI 0.081, GC 15–20 %. No single function reaches 20 % of blocking time. The single-job control has the same shape (HHI 0.071).
+++
+++**What follows from the verdict:**
+++- Optimising one or two hot functions cannot fix this. Removing the top function entirely still leaves about 84 % of the blocking, and the longest single-job slice (5.9 s) is already longer than the stall budget.
+++- Yielding inside each hot loop would mean editing dozens of functions across 28 modules. That spreads risk across scoring logic, which is the opposite of a minimal fix.
+++- The CPU work has to move **off the thread that owns lifecycle**: claim, heartbeat, ownership watch, BullMQ lock renewal, Redis, and terminal writes.
+++
+++## 2. Rejected alternatives
+++
+++| Option | Why rejected |
+++|---|---|
+++| Lengthen the lock, raise pool size or timeouts, add replicas | Explicitly out of scope, and none of them removes the blocking. Lock renewal would still starve. Renewal-only workarounds are excluded. |
+++| Optimise hot functions | The DISTRIBUTED verdict shows no single function to target (§1). |
+++| `worker_threads` | This would share the process heap and GC with the parent. GC accounts for 15–20 % of blocking, and a full-heap GC pauses every isolate in the process. Module singletons (pg Pool, LLM semaphore, browser, `AsyncLocalStorage` contexts) would need the same brokerage anyway. A thread also cannot be hard-killed safely while it holds native resources such as Puppeteer or child processes. |
+++| One long-lived "scoring server" child per replica | Concurrent jobs would share one blocked loop again, so the problem moves rather than disappears. It would also need a job multiplexer. |
+++| Run only the analyze phase in a child | The fetch and discovery state, BatchFetchState and the lifecycle would be split across two processes partway through a job. That is more IPC and more failure modes than isolating the whole pipeline. |
+++
+++**Chosen: one child process per job attempt (`child_process.fork`).** It is the smallest boundary that fully separates the CPU work from lifecycle ownership: the code inside the child is byte-for-byte the existing `runAnalysisPipeline`.
+++
+++## 3. Boundary
+++
+++```
+++ worker-main (PARENT, one per replica)              job child (one per running job)
+++ ─────────────────────────────────────              ──────────────────────────────────
+++ BullMQ consume + lock renewal                      runAnalysisPipeline(...) UNCHANGED
+++ claimJob / attempt_token / lifecycle               own lifecycle (same token+deadline)
+++ heartbeat, ownership watch (30 s)                  own diag ctx + LLM usage ctx
+++ credit / off-peak / cancel gates                   own pg Pool (budgeted, §4)
+++ load company / framework / measures                NO Redis connection
+++ JOB_TIMEOUT watchdog (raceWithWatchdog)            NO usage pool (rows → parent)
+++ completeJob / failJob / retry / batch counts       permits requested from parent (§5)
+++ permit broker: LLM 8 / browser 1 / subproc 6
+++ usage-row sink (usage pool max 2)
+++```
+++
+++What stays where:
+++- **The parent keeps everything that must stay responsive or must happen exactly once:**
+++  - claim and ownership (`claimJob`, `attempt_token`), the heartbeat and the ownership watch;
+++  - BullMQ lock renewal and the Redis cancel cache;
+++  - the hard watchdog;
+++  - all terminal writes (`completeJob`, `failJob`, retry enqueue, batch counters, `maybeHandleBatchCompletion`).
+++  
+++  `worker.ts` lines 466–732 (post-pipeline handling) are untouched.
+++- **The child runs only `runAnalysisPipeline`.** Inside it builds:
+++  - its own `AttemptLifecycleState` from the same `{jobId, batchId, attemptNumber, deadlineAt, attemptToken}`, so every SQL-fenced score write it performs carries the same ownership predicate as today;
+++  - the same diag context, `attemptId` and LLM usage context, so logs, `[LIFECYCLE-FENCE]` and `[SCORING-REQ]` markers and score provenance stay correlated.
+++- **The call-site change in `worker.ts` is one expression.** Inside the existing `raceWithWatchdog(...)`, `runAnalysisPipeline({...})` becomes `runPipelineIsolated({...})` when `WORKER_ISOLATION_ENABLED=true`. The watchdog, revoke and heartbeat code around it is unchanged.
+++- **Gating.** The feature is off by default: `WORKER_ISOLATION_ENABLED` unset means identical code paths to `35884ee`.
+++
+++Data crossing the boundary uses Node `serialization: "advanced"` (structured clone), so `Date`, `Map` and `Set` in the company, framework, measure and BatchFetchState objects arrive intact.
+++
+++## 4. DB budget partitioning (partition, not multiply)
+++
+++The per-replica budgets are **unchanged**: `PG_POOL_MAX=20` and `PG_USAGE_POOL_MAX=2`. Under isolation they are divided between processes rather than replicated into each one.
+++
+++**Main pool (20 per replica):**
+++- Parent reserve `R = WORKER_ISOLATION_PARENT_PG_RESERVE` (default 4). It covers claim, 4 × heartbeat, 4 × ownership watch, terminal writes, the reconciler and the gates. All of these are short single statements.
+++- Per-child budget `C = floor((PG_POOL_MAX − R) / WORKER_CONCURRENCY) = floor(16 / 4) = 4`. It is computed from the *configured maximum* `WORKER_CONCURRENCY`, so adaptive concurrency (minimum 2) can only lower total use.
+++- Total ceiling = `R + WORKER_CONCURRENCY × C = 4 + 16 = 20 = PG_POOL_MAX`. 3 replicas × 20 = 60, exactly as today.
+++- Enforcement:
+++  - The child is forked with `PG_POOL_MAX=C` in its environment; `server/db.ts` already reads that variable.
+++  - The parent's pool is capped at `R` by a role check in `db.ts`. `worker-main.ts` imports a side-effect module first that sets `CIQ_PROCESS_ROLE=worker-parent`. The cap applies only when that role is set **and** `WORKER_ISOLATION_ENABLED=true`. The web service and the flag-off worker keep `PG_POOL_MAX`.
+++- If `C` would be below 1, the parent refuses to fork and fails the job with an explicit error. It never silently oversubscribes.
+++
+++**Usage pool (2 per replica):** children open **no** usage pool. `llm-usage.ts` `enqueueUsageEvent` forwards each row to the parent over IPC when running as a child. The parent pushes it into its existing buffer, which flushes batched multi-row INSERTs on the existing pool (max 2). Total stays 2. Splitting 2 connections across 4 children was not possible without either multiplying or starving.
+++
+++**Redis:** none of `pipeline.ts`'s static imports reach `redis.ts` (verified by grep; the only reference is a dynamic import in a cancel-only `storage.ts` path that the pipeline does not call). Children therefore hold **zero** Redis connections, and replica Redis connection counts are unchanged.
+++
+++**Trade-off (stated plainly):** today one job can momentarily use up to 20 connections when the others are idle. Under isolation a job is hard-capped at 4. In-job DB concurrency is bounded by in-flight measures, and those are bounded by LLM permits (8 per replica, shared). The pool-acquire timeouts in 1274 came from connections held across blocked loops, not from a shortage of connections. The cap still needs staging evidence; `R` is the single tunable and does not change the replica total.
+++
+++## 5. Semaphore brokerage (per-replica limits stay per-replica)
+++
+++Three in-process semaphores define per-replica limits today. A naive per-job process would multiply each by 4. Each is brokered by the parent instead:
+++
+++| Permit | Limit (unchanged) | Hook |
+++|---|---|---|
+++| LLM | `LLM_MAX_CONCURRENCY=8` | `ai-providers.ts` `acquireLlmSlot`/`releaseLlmSlot` |
+++| Browser | `MAX_CONCURRENT_BROWSER=1` | `processor.ts` `acquireBrowserSlot`/`releaseBrowserSlot` |
+++| PDF subprocess | `MAX_CONCURRENT_SUBPROC=6` | `processor.ts` `acquireProcSlot`/`releaseProcSlot` |
+++
+++**Protocol** (`server/lib/isolation-ipc.ts`, leaf module, no imports from the pipeline):
+++- **Requesting a permit.** When `CIQ_ISOLATED_CHILD=1`, each acquire function's first line delegates to `remoteAcquire(kind, signal)`. The child sends `{t:"acquire", id, kind}` and the parent runs the **real** local semaphore (FIFO and cancellable waiter semantics unchanged), then replies `{t:"granted", id}`. `release` sends `{t:"release", id}`.
+++- **Cancellation while waiting.** If the child's `AbortSignal` fires while it waits, it sends `{t:"cancelAcquire", id}`:
+++  - for LLM permits, the parent aborts its own waiter (no permit is taken);
+++  - for browser and subprocess permits, which have no signal, the parent releases the permit immediately on grant.
+++  
+++  If a grant arrives after a local abort, the child releases it straight away.
+++- **Leak-proofing.** The parent records every grant per child. When a child exits for any reason (normal exit, crash, SIGKILL, OOM), every outstanding permit is released. A dead child can never strand LLM or browser capacity.
+++- **Cost.** Permit round-trips are local IPC and microseconds-scale. They are negligible next to a 400 ms+ LLM call. The parent stays responsive to grant permits because it does no CPU work.
+++
+++**Known residual:** each child that uses the browser launches its own Chromium. Only one page is ever active per replica (permit = 1), but up to 4 idle Chromium processes can be alive. Each one dies with its child (§7). This is called out as a memory risk to watch in staging.
+++
+++## 6. IPC message set
+++
+++**Parent → child**
+++
+++| Message | Purpose |
+++|---|---|
+++| `init` | `{batchId, jobId, attemptId, attemptNumber, attemptToken, deadlineAt, companyId, frameworkId, workspaceId, company, framework, measures, skipFetch, skipDiscovery, sourceBatchId, batchFetchState}` |
+++| `revoke` | `{reason}`: parent lifecycle revoked (watchdog, ownership lost). The child calls `revokeAttempt(childLifecycle, reason)`, which aborts in-flight HTTP through the attempt `AbortSignal`. |
+++| `cancel` | Batch cancel observed by the parent's Redis cache (polled every 500 ms). The child flips its registered `BatchCancelSource`, so `cancelCheck`, `assertDispatchAllowed` and `requestAbortSignal` all see it. |
+++| `granted` | `{id}` |
+++
+++**Child → parent**
+++
+++| Message | Purpose |
+++|---|---|
+++| `ready` | Modules loaded. |
+++| `acquire` / `release` / `cancelAcquire` | Permits (§5). |
+++| `usage` | `{row}`: LLM usage row (§4). |
+++| `stage` | `{stage}`: last diag stage, used in crash messages. |
+++| `result` | `{result, revokedReason, batchFetchState}`: pipeline returned. |
+++| `error` | `{name, message, stack, code, provider, failureClass}`: pipeline threw. The parent rebuilds `ProviderScoringError` and `LifecycleCancelledError` so `isProviderQuotaError` and the existing catch block behave identically. |
+++
+++If the child's lifecycle was revoked internally (for example the pipeline's own `PIPELINE_TIMEOUT_MS`), the parent mirrors the reason onto its lifecycle. The existing `"Cancelled"` → watchdog-style final-failure mapping in `worker.ts` then picks up the same `revokedReason`.
+++
+++**BatchFetchState** (the batch-scoped host circuit breaker) is seeded into the child from the parent's map at start. The child's final state is merged back at the end: union of broken hosts, maximum of slow counts. **Semantic difference:** a host tripped by job A becomes visible to jobs already running at the same time only when A finishes, not instantly. Jobs started after A finishes see it immediately, as today.
+++
+++## 7. Deadlines, cancellation, crash recovery
+++
+++**Deadline (hard, parent-owned):**
+++- **Watchdog fires.** The existing `raceWithWatchdog(..., JOB_TIMEOUT, onFire)` still runs in the parent. Its timer can now always fire on time because the parent loop is not blocked. `onFire` revokes the parent lifecycle, which is forwarded to the child as `revoke`.
+++- **Escalation.** The supervisor's own escalation timer arms at `deadlineAt` *and* on revoke or cancel: after `WORKER_ISOLATION_KILL_GRACE_MS` (default 10 s) it sends SIGTERM to the child's **process group**, and after another 5 s it sends SIGKILL. Children are forked `detached:true` (their own group), so Chromium and pdftotext descendants die with them.
+++- **Terminal handling.** Terminal handling (`failJob`, final failure, no retry for watchdog timeouts) is the existing code. The job cannot be left leased: the parent writes the terminal state on its own responsive loop, and child writes after revocation are refused by the existing SQL fence (`deadlineAt` and token predicates).
+++
+++**Cancellation:**
+++- The parent's existing composed `cancelCheck` (Redis cache, watchdog flag, revoked lifecycle) is polled and forwarded as `cancel`.
+++- The pipeline returns `"Cancelled"` at its next checkpoint, and the parent runs the unchanged `cancelTrace e/f` and `failJob("Cancelled (batch cancelled)")` path.
+++- A child that does not finish within the grace period is killed. The lease is released by the parent's terminal write either way.
+++
+++**Crash recovery:**
+++- A child exit without `result` or `error` (non-zero code, signal, OOM kill, IPC disconnect) rejects with an explicit error, for example: `Isolated job child exited unexpectedly (code=1 signal=null stage=analyze)`.
+++- That flows into the existing catch path, so `failJob` records a **non-NULL `last_error`**. It is retriable under `isRetriableError` (bounded by `MAX_RETRY_ATTEMPTS`) unless the exit followed a revoke or deadline, in which case the message carries `Job watchdog timeout` and is final, as today.
+++- If the parent dies, the IPC channel closes; children listen for `disconnect` and exit immediately (no orphans). Parent `exit` also SIGKILLs every live child group synchronously.
+++
+++## 8. Cost and measured overheads
+++
+++| Item | Value |
+++|---|---|
+++| Child cold start (import `pipeline.ts` via tsx, sandbox 2 vCPU) | 1.65 s import, 1.9 s wall |
+++| Child baseline RSS | ~200 MB |
+++| 4 children, baseline only | ~0.8 GB on top of the ~150 MB parent |
+++
+++The cold start is negligible against multi-minute jobs. The baseline RSS is offset by GC pressure no longer accumulating in one 1.2 GB heap. **Staging must confirm replica memory headroom** before the flag is turned on in production.
+++
+++## 9. Constraints honoured
+++
+++- No changes to `PG_POOL_MAX`, `PG_USAGE_POOL_MAX`, `PG_CONNECTION_TIMEOUT_MS`, `WORKER_LOCK_DURATION_MS`, `JOB_TIMEOUT_MS`, `WORKER_CONCURRENCY`, `LLM_MAX_CONCURRENCY`, `MAX_CONCURRENT_BROWSER` or replica count.
+++- Not a renewal-only workaround: the lock still renews on the parent loop, which now does no CPU work.
+++- Default off. No push, merge or deploy.
+++
+++## 10. Test plan (deterministic, no network)
+++
+++1. **Blocked processor:** the child busy-loops for 3 s. A parent event-loop probe stays under 100 ms lag throughout, and parent timers fire on schedule.
+++2. **Cancellation:** the parent sends `cancel`. The child's `cancelCheck` becomes true within one poll, the child returns `Cancelled`, it exits, and no permits leak.
+++3. **Deadline:** a child that ignores `revoke` is SIGTERM/SIGKILLed after the grace period. The supervisor rejects with a watchdog error, and the process group is gone.
+++4. **Crash:** the child calls `process.exit(1)` mid-job. The supervisor rejects with an explicit non-empty message, it is classified retriable, and permits held by the child are released.
+++5. **Permit brokerage:** across 4 children each asking for 5 LLM permits, the parent observes a maximum of 8 concurrent grants. Browser maximum is 1. Every permit is released.
+++6. **Usage forwarding:** a usage row emitted in the child arrives in the parent buffer. The child never creates a usage pool.
+++7. **Full 36-measure run** through the isolated path with stubbed LLM, storage and score writes: 36 scores produced, `success=true`, and the parent loop stays responsive.
+++8. **Existing suites** re-run against the branch and compared to the `35884ee` baseline (94/97 pass, with 3 pre-existing failures).
++diff --git a/docs/worker-isolation/PROFILE_EVIDENCE.docx b/docs/worker-isolation/PROFILE_EVIDENCE.docx
++new file mode 100644
++index 0000000..431368d
++Binary files /dev/null and b/docs/worker-isolation/PROFILE_EVIDENCE.docx differ
++diff --git a/docs/worker-isolation/PROFILE_EVIDENCE.md b/docs/worker-isolation/PROFILE_EVIDENCE.md
++new file mode 100644
++index 0000000..c370943
++--- /dev/null
+++++ b/docs/worker-isolation/PROFILE_EVIDENCE.md
++@@ -0,0 +1,196 @@
+++# Worker event-loop blocking — profile evidence (Phase 1)
+++
+++Branch: `fix/worker-isolation` (base `35884ee`). Context: batch 1274 (event-loop p99 lag 36–242 s, RSS ~1.2 GB,
+++PG pool acquire timeouts with the usage pool, max=2, failing first, Redis ping RTT 7–41 s, BullMQ `since_renew` ≈ 1,250,909 ms
+++against a 300,000 ms lock, "could not renew lock", stalled redelivery, attempt 2 with `last_error=NULL`).
+++
+++**Question:** where does the worker main thread spend its synchronous (blocking) CPU time while running real scoring jobs?
+++And is that time **CONCENTRATED** in a few functions (fix: move those into a `worker_threads` pool) or **DISTRIBUTED**
+++across the pipeline (fix: move the whole per-job processor off the main loop)?
+++
+++**Verdict: DISTRIBUTED.** Details in §4.
+++
+++---
+++
+++## 1. Method
+++
+++The harness is `server/scripts/profile-worker-blocking.ts`. It runs the **real** `runAnalysisPipeline({ skipFetch: true })`
+++(corpus hygiene → boilerplate → summarise → chunk/BM25 → aboutness → temporal → evidence packs → scoring → score-write)
+++on real saved production corpora. Everything external is stubbed:
+++
+++| Concern | How it was handled |
+++|---|---|
+++| Network | A zero-network guard patches `http`, `https`, `net` and `fetch` to throw. **1** attempt was blocked: `https.request www.sec.gov` (CIK resolution). No real provider or LLM call was made. |
+++| LLM providers | 12 stub providers with **400 ms async latency** each (`PROFILE_PROVIDER_LATENCY_MS`). Every second call answers "Yes" with a verbatim quote taken from the prompt, so the evidence and verification paths are exercised. |
+++| LLM permits | The real `LLM_MAX_CONCURRENCY=8` semaphore. |
+++| Postgres | A `pg` pool stub. The corpus query (`FROM documents d LEFT JOIN document_content`) is served from `/home/ubuntu/var_corpus/<id>.json`. Every other query returns 0 rows. |
+++| Corpora | Production corpora 12, 11, 18 and 14: 166 / 177 / 175 / 99 docs, 43.0 / 33.3 / 23.0 / 20.2 M chars. |
+++| Framework | 29 real measures from `var_measures.json`, padded to **36** (`-dupN` ids) to match production. |
+++| Concurrency | `PROFILE_CONCURRENCY=4` (= prod `WORKER_CONCURRENCY`), and a single-job control run with concurrency 1. |
+++| Lifecycle | Each company runs inside `runWithDiagContext` with a real attempt lifecycle (the same as `worker.ts`). |
+++| Instruments | A 50 ms `setInterval` stall probe; `perf_hooks.monitorEventLoopDelay` per phase; `node --cpu-prof --cpu-prof-interval 1000` (1 ms sampling). |
+++| Extract phase | `pdf-parse` (with `normaliseTableHorizonMarkers`) on reportlab-generated PDFs, plus cheerio on HTML. |
+++
+++`server/scripts/analyze-cpuprofile.ts` parses the `.cpuprofile`:
+++
+++- Consecutive non-idle samples form a "busy run". A busy run of **≥ 50 ms** counts as a blocking slice.
+++- Blocking time is attributed by: leaf frame; deepest app frame (`server/`); module; native or library; entry app frame.
+++- Concentration metrics: top-1/3/5 share, HHI over app functions, top-module share.
+++- Frames from the harness itself (`server/scripts/`, with no app frame beneath) are excluded and reported separately as `harnessExcludedMs`.
+++
+++Commands (from the repo root; `DATABASE_URL` is a dummy and is never connected):
+++
+++```bash
+++# 4 concurrent jobs, extract + analyze phases
+++DATABASE_URL=postgres://stub@127.0.0.1:1/stub PROFILE_OUT=/tmp/ciq-prof/c4/harness-result.json \
+++  node --cpu-prof --cpu-prof-dir=/tmp/ciq-prof/c4 --cpu-prof-interval 1000 --import tsx server/scripts/profile-worker-blocking.ts
+++# single-job control
+++DATABASE_URL=postgres://stub@127.0.0.1:1/stub PROFILE_CONCURRENCY=1 PROFILE_CORPORA=12 PROFILE_PHASES=analyze \
+++  PROFILE_OUT=/tmp/ciq-prof/c1/harness-result.json \
+++  node --cpu-prof --cpu-prof-dir=/tmp/ciq-prof/c1 --cpu-prof-interval 1000 --import tsx server/scripts/profile-worker-blocking.ts
+++# attribution (main-thread profile = *.0.001.cpuprofile)
+++npx tsx server/scripts/analyze-cpuprofile.ts /tmp/ciq-prof/c4/CPU.*.0.001.cpuprofile /tmp/ciq-prof/c4/analysis.json
+++```
+++
+++The raw outputs are committed in `docs/worker-isolation/evidence/`: `harness-result-c4.json`, `harness-result-c1.json`,
+++`cpuprofile-analysis-c4.json` and `cpuprofile-analysis-c1.json`.
+++
+++## 2. Event-loop results
+++
+++| Run | Phase | Wall | ELD p50 | ELD p99 | ELD max | Stalls ≥ 50 ms (count / total) | Stalls > 1 s | Stalls > 5 s | RSS |
+++|---|---|---|---|---|---|---|---|---|---|
+++| c4 (4 jobs) | extract (pdf-parse/cheerio) | 1.9 s | 31 ms | 65 ms | 65 ms | — | 0 | 0 | — |
+++| c4 (4 jobs) | analyze (real pipeline) | 69.5 s | 10 ms | **534 ms** | **8,254 ms** | 38 / **44.2 s** | 9 | 2 | **1,295 MB** |
+++| c1 (1 job, corpus 12) | analyze | 36.1 s | 10 ms | 14 ms | **5,876 ms** | 14 / **12.5 s** | 1 | 1 | 876 MB |
+++
+++- With 4 concurrent jobs, the main thread was **blocked for 44 s out of 69.5 s (64 %)**. RSS is 1.3 GB, which matches production (~1.2 GB).
+++- A **single** job alone still blocks the loop for up to **5.9 s** at a time (12.5 s of 36 s). This is a property of the per-job pipeline, not only of concurrency. Concurrency stacks slices back to back, so the loop never catches up: p99 rose from 14 ms to 534 ms.
+++- An earlier repeat run (`/tmp/ciq-prof/run1.log`) reproduced this: ELD max 8,460 ms, 36 stalls / 48.3 s, RSS 1,288 MB.
+++- All 4 companies reached "Analysis complete" (scored measures). The final fenced score-write returned `Cancelled (score_write_fenced)`. This is expected: the pg stub returns 0 rows for the ownership-fenced `UPDATE … RETURNING`, so ownership is not confirmed. It is after all CPU work and does not affect the profile.
+++
+++## 3. CPU-profile attribution (c4 main thread)
+++
+++Profiled 74.5 s; busy 46.9 s; **37 blocking slices = 45.5 s**; longest slice **8,846 ms**. Harness frames excluded: 1.3 s.
+++
+++### 3.1 Slice length distribution
+++
+++| Slice length | Runs | Total |
+++|---|---|---|
+++| 50–100 ms | 2 | 0.13 s |
+++| 100–250 ms | 3 | 0.49 s |
+++| 250–500 ms | 8 | 3.20 s |
+++| 500–1000 ms | 15 | 11.15 s |
+++| 1–2 s | 5 | 7.06 s |
+++| 2–5 s | 1 | 2.73 s |
+++| ≥ 5 s | 3 | **20.76 s** |
+++
+++### 3.2 Hot frames (deepest app frame, share of blocking time)
+++
+++| # | Function (module) | ms | % of blocking |
+++|---|---|---|---|
+++| 1 | `tokenize` (passage-retrieval) | 7,411 | 16.3 |
+++| 2 | garbage collector (no app frame) | 6,964 | 15.3 |
+++| 3 | anonymous fn (corpus-boilerplate) | 5,228 | 11.5 |
+++| 4 | `detectSecHeadingInFragment` (passage-retrieval) | 2,692 | 5.9 |
+++| 5 | `bm25Score` (passage-retrieval) | 2,287 | 5.0 |
+++| 6 | anonymous fn (passage-retrieval) | 2,118 | 4.7 |
+++| 7 | `buildBM25Index` (passage-retrieval) | 2,053 | 4.5 |
+++| 8 | `chunkBody` (passage-retrieval) | 1,995 | 4.4 |
+++| 9 | anonymous fn in `summarizeDocuments` (analyzer.ts:222) | 1,646 | 3.6 |
+++| 10 | `scoreAboutness` (aboutness) | 1,358 | 3.0 |
+++| 11 | `applyCorpusHygiene` (corpus-hygiene) | 1,211 | 2.7 |
+++| 12 | `recoverSecHeadingNewlines` (passage-retrieval) | 1,043 | 2.3 |
+++| 13 | anonymous fn (processor) | 1,028 | 2.3 |
+++| 14 | `isLikelyToc` (passage-retrieval) | 995 | 2.2 |
+++| 15 | `computeAssemblyPenaltyFactors` (corpus-boilerplate) | 840 | 1.8 |
+++| 16 | `words` (corpus-boilerplate) | 805 | 1.8 |
+++| 17 | `buildEvidencePackForMeasure` (passage-retrieval) | 682 | 1.5 |
+++| 18 | `countTopicHits` (passage-retrieval) | 554 | 1.2 |
+++| 19 | `scanDocumentsForWithdrawals` (temporal-validation) | 441 | 1.0 |
+++| 20 | `stripRepeatedStructuralBlocks` (corpus-boilerplate) | 246 | 0.5 |
+++| 21 | `looksNonEnglish` (translation) | 236 | 0.5 |
+++
+++Leaf natives: GC 15 %; regex natives (`\s+` ≈ 6 %, CJK range ≈ 2 %, `[^\w\s]` ≈ 2 %, TOC regex ≈ 1 %, topic-term regex ≈ 1 %). App code self-time is ≈ 52 %.
+++
+++### 3.3 By module
+++
+++| Module | % of blocking |
+++|---|---|
+++| passage-retrieval | 49.0 |
+++| runtime / GC / no app frame | 19.7 |
+++| corpus-boilerplate | 16.0 |
+++| analyzer | 4.3 |
+++| aboutness | 3.3 |
+++| corpus-hygiene | 2.7 |
+++| processor | 2.3 |
+++| temporal-validation | 1.0 |
+++| passage-rescore | 0.9 |
+++| translation | 0.6 |
+++
+++Entry frames: `analyzeCompanyMeasures` 42.1 %, `summarizeDocuments` 32.7 %, `runAnalyzePhase` 4.3 %, `translateDocumentsToEnglish` 0.6 %.
+++
+++### 3.4 Longest slices (what one multi-second block is made of)
+++
+++| Slice | Composition (top app frames) |
+++|---|---|
+++| 8,846 ms | corpus-boilerplate anon 26 %, GC 19.7 %, `tokenize` 14.6 % |
+++| 6,301 ms | corpus-boilerplate anon 23 %, GC 18.3 %, `summarizeDocuments` anon 12.9 % |
+++| 5,614 ms | GC 21.8 %, `applyCorpusHygiene` 21.6 %, `scoreAboutness` 17.2 % |
+++| 2,731 ms | corpus-boilerplate anon 26 %, GC 12 %, `summarizeDocuments` anon 10.8 % |
+++| 1,766 ms | `tokenize` 26.6 %, `detectSecHeadingInFragment` 10.7 %, GC 10.5 % |
+++
+++### 3.5 Single-job control (c1)
+++
+++| Metric | Value |
+++|---|---|
+++| Blocking slices | 17 = 13.5 s; longest 5,864 ms |
+++| Distinct app functions | 152 |
+++| Top-1 | GC 15 % |
+++| `tokenize` | 13 % |
+++| corpus-boilerplate anon | 10 % |
+++| top-3 / top-5 | 38.1 % / 50 % |
+++| HHI | 0.071 |
+++| Top module (passage-retrieval) | 44.1 % |
+++
+++The single-job profile has the same shape as c4, so the distribution is not an artefact of concurrency.
+++
+++## 4. Verdict: DISTRIBUTED
+++
+++| Concentration metric (c4) | Value | Reading |
+++|---|---|---|
+++| Distinct app functions in blocking slices | 312 (28 modules) | broad |
+++| Top-1 function share | 16.3 % | no dominant hotspot |
+++| Top-3 / Top-5 share | 43.1 % / 54.0 % | about half the time is outside the top 5 |
+++| HHI (app functions) | 0.081 | unconcentrated (< 0.15) |
+++| GC share | 15–20 % | belongs to the whole 1.3 GB heap, not to one function |
+++
+++The blocking is spread across **every analysis stage**:
+++
+++- corpus hygiene;
+++- boilerplate stripping;
+++- document summarisation;
+++- SEC-heading recovery;
+++- chunking;
+++- BM25 indexing and scoring;
+++- aboutness;
+++- temporal withdrawal scan;
+++- evidence-pack assembly;
+++- language detection.
+++
+++Each multi-second slice is itself a mix of 3+ stages plus GC. Moving any single function, or even the top 5, into a `worker_threads` pool would leave about half of the blocking time on the main loop. Multi-second slices from corpus-boilerplate, hygiene and aboutness would remain. The GC component cannot be moved at function granularity: it comes from the size of the heap that the per-job data structures create on the main isolate.
+++
+++Conclusion: the **smallest boundary that removes the blocking is the per-job processor**. The whole `runAnalysisPipeline` for a job must run outside the BullMQ main loop, in a sandboxed child process. Phase 2 (DESIGN.md) designs that boundary.
+++
+++## 5. Production extrapolation (hypothesis, not measured)
+++
+++Corpus 12 (43 M chars, 50 MB JSON) produced a single 5.9 s slice when running alone on this sandbox. Production corpora reach 120–1,160 MB of JSON (for example var_corpus 13 = 294 MB, 102 = 484 MB, 16 = 1.16 GB). The work is roughly linear in corpus size: tokenize, boilerplate n-gram passes and BM25. If so, single slices of tens of seconds to minutes are expected on those companies, with 4 of them interleaved per replica and GC pressure growing with the heap.
+++
+++That is consistent with the batch 1274 lag (p99 36–242 s) and with lock renewal being starved for ~1,250 s. This extrapolation is a **hypothesis**: it has not been measured on the production corpora or production CPUs.
+++
+++## 6. Caveats
+++
+++- The sandbox has 2 vCPU and 7 GB RAM. Production CPU speed differs, so absolute durations will differ; the *distribution* is the finding.
+++- LLM latency was stubbed at 400 ms. Real latency only changes how often the loop is idle between CPU bursts, not the length of a synchronous slice.
+++- The extract phase used synthetic reportlab PDFs. On those, `pdf-parse` was not a material blocker (ELD max 65 ms). Real scanned or very large PDFs were not profiled. Fetch, browser and network code paths were not exercised (zero-network).
+++- Line numbers in the profile are tsx-transpiled positions (many show `:1`). Function names and modules are reliable.
+++- The final score-write ended `Cancelled (score_write_fenced)` because of the pg stub (see §2). This is expected and happens after all CPU work.
++diff --git a/docs/worker-isolation/PROFILE_EVIDENCE.pdf b/docs/worker-isolation/PROFILE_EVIDENCE.pdf
++new file mode 100644
++index 0000000..2fceb42
++Binary files /dev/null and b/docs/worker-isolation/PROFILE_EVIDENCE.pdf differ
++diff --git a/docs/worker-isolation/TEST_RESULTS.md b/docs/worker-isolation/TEST_RESULTS.md
++new file mode 100644
++index 0000000..dfa6356
++--- /dev/null
+++++ b/docs/worker-isolation/TEST_RESULTS.md
++@@ -0,0 +1,27 @@
+++# Worker isolation: test results (branch fix/worker-isolation, base 35884ee)
+++
+++## New tests: server/lib/job-isolation.test.ts (9/9 pass, exit 0, ~36 s)
+++| Test | Result |
+++|---|---|
+++| Busy child (3 s CPU) | parent max event-loop lag 6.2 ms, wall 3830 ms |
+++| Cooperative cancel | resolved "Cancelled" after 2527 ms |
+++| Deadline / revoke, child ignores SIGTERM + grandchild | rejected after 6672 ms "Job watchdog timeout: ... signal=SIGKILL ... after revoke:job_watchdog_timeout"; child and grandchild gone |
+++| Child crash holding LLM permit | "Isolated job child exited unexpectedly (code=1 ...)", retriable; permit released |
+++| Permit brokering | max LLM 8, max browser 1, all released |
+++| Usage forwarding | rows land in parent buffer, child buffer 0, child PG_POOL_MAX=4 |
+++| ProviderScoringError | rebuilt as real class (quota_exhausted, deepseek) |
+++| Real runAnalysisPipeline, 40 docs (stub PG/providers) | success, 36 measures, 168 provider calls, 1 fenced write, wall 14716 ms, parent max lag 16.9 ms |
+++| childPgBudget() | 4 |
+++
+++Log: evidence/job-isolation.test.log
+++
+++## Full suite (each test file run with tsx, stub DATABASE_URL)
+++- Baseline 35884ee: 97 files, 94 pass, 3 fail.
+++- Branch: 98 files, 95 pass, 3 fail: the same 3 pre-existing failures (corpus-replay.test.ts, lifecycle-fence.db.test.ts needs REDIS_URL, r6-discovery.test.ts vitest missing). No regressions; the only extra file is job-isolation.test.ts (pass).
+++
+++## tsc
+++- Baseline 61 errors, branch 62. The one new error: TS7016 (no pdf-parse types) in server/scripts/profile-worker-blocking.ts, the same pre-existing error class as processor.ts(4,22). No new errors in runtime files.
+++
+++## Not verified
+++- No runs against real Postgres/Redis/Railway. WORKER_ISOLATION_ENABLED defaults to off, so staging is still needed.
+++- Expected costs: ~200 MB and ~1.7-1.9 s cold start per child, up to 4 Chromium instances per replica, DB cap of 4 per job, BatchFetchState merged only at job end, credit-breaker/provider pause state kept per child.
++diff --git a/docs/worker-isolation/evidence/cpuprofile-analysis-c1.json b/docs/worker-isolation/evidence/cpuprofile-analysis-c1.json
++new file mode 100644
++index 0000000..7cecee7
++--- /dev/null
+++++ b/docs/worker-isolation/evidence/cpuprofile-analysis-c1.json
++@@ -0,0 +1,1002 @@
+++{
+++  "file": "/tmp/ciq-prof/c1/CPU.20261011.154731.33876.0.001.cpuprofile",
+++  "totalProfiledMs": 38588,
+++  "busyMs": 14631,
+++  "harnessExcludedMs": 305,
+++  "blockMinMs": 50,
+++  "blockingSlices": 17,
+++  "blockingMs": 13520,
+++  "longestSliceMs": 5864,
+++  "sliceHistogram": [
+++    {
+++      "bucket": "50-100ms",
+++      "runs": 2,
+++      "ms": 150
+++    },
+++    {
+++      "bucket": "100-250ms",
+++      "runs": 4,
+++      "ms": 693
+++    },
+++    {
+++      "bucket": "250-500ms",
+++      "runs": 2,
+++      "ms": 734
+++    },
+++    {
+++      "bucket": "500-1000ms",
+++      "runs": 7,
+++      "ms": 5059
+++    },
+++    {
+++      "bucket": "1000-2000ms",
+++      "runs": 1,
+++      "ms": 1020
+++    },
+++    {
+++      "bucket": "2000-5000ms",
+++      "runs": 0,
+++      "ms": 0
+++    },
+++    {
+++      "bucket": "5000-∞ms",
+++      "runs": 1,
+++      "ms": 5864
+++    }
+++  ],
+++  "concentration": {
+++    "distinctAppFunctions": 152,
+++    "top1AppPct": 15,
+++    "top3AppPct": 38.1,
+++    "top5AppPct": 50,
+++    "hhiApp": 0.071,
+++    "top1ModulePct": 44.1,
+++    "distinctModules": 21
+++  },
+++  "topAppFunctions": [
+++    {
+++      "name": "(no app frame: (garbage collector))",
+++      "ms": 2031,
+++      "pctOfBlocking": 15
+++    },
+++    {
+++      "name": "tokenize @ server/lib/passage-retrieval.ts:1",
+++      "ms": 1760,
+++      "pctOfBlocking": 13
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 1357,
+++      "pctOfBlocking": 10
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/analyzer.ts:222",
+++      "ms": 824,
+++      "pctOfBlocking": 6.1
+++    },
+++    {
+++      "name": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++      "ms": 789,
+++      "pctOfBlocking": 5.8
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++      "ms": 633,
+++      "pctOfBlocking": 4.7
+++    },
+++    {
+++      "name": "chunkBody @ server/lib/passage-retrieval.ts:3",
+++      "ms": 613,
+++      "pctOfBlocking": 4.5
+++    },
+++    {
+++      "name": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++      "ms": 575,
+++      "pctOfBlocking": 4.3
+++    },
+++    {
+++      "name": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+++      "ms": 570,
+++      "pctOfBlocking": 4.2
+++    },
+++    {
+++      "name": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+++      "ms": 502,
+++      "pctOfBlocking": 3.7
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/processor.ts:1",
+++      "ms": 458,
+++      "pctOfBlocking": 3.4
+++    },
+++    {
+++      "name": "scoreAboutness @ server/lib/aboutness.ts:1",
+++      "ms": 422,
+++      "pctOfBlocking": 3.1
+++    },
+++    {
+++      "name": "isLikelyToc @ server/lib/passage-retrieval.ts:1",
+++      "ms": 282,
+++      "pctOfBlocking": 2.1
+++    },
+++    {
+++      "name": "computeAssemblyPenaltyFactors @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 270,
+++      "pctOfBlocking": 2
+++    },
+++    {
+++      "name": "words @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 239,
+++      "pctOfBlocking": 1.8
+++    },
+++    {
+++      "name": "recoverSecHeadingNewlines @ server/lib/passage-retrieval.ts:1",
+++      "ms": 233,
+++      "pctOfBlocking": 1.7
+++    },
+++    {
+++      "name": "scanDocumentsForWithdrawals @ server/lib/temporal-validation.ts:1",
+++      "ms": 204,
+++      "pctOfBlocking": 1.5
+++    },
+++    {
+++      "name": "buildEvidencePackForMeasure @ server/lib/passage-retrieval.ts:3",
+++      "ms": 202,
+++      "pctOfBlocking": 1.5
+++    },
+++    {
+++      "name": "countTopicHits @ server/lib/passage-retrieval.ts:1",
+++      "ms": 170,
+++      "pctOfBlocking": 1.3
+++    },
+++    {
+++      "name": "looksNonEnglish @ server/lib/translation.ts:1",
+++      "ms": 118,
+++      "pctOfBlocking": 0.9
+++    },
+++    {
+++      "name": "(no app frame: internalModuleStat)",
+++      "ms": 118,
+++      "pctOfBlocking": 0.9
+++    },
+++    {
+++      "name": "(no app frame: readFileUtf8)",
+++      "ms": 107,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "(no app frame: makeSyncRequest)",
+++      "ms": 84,
+++      "pctOfBlocking": 0.6
+++    },
+++    {
+++      "name": "stripRepeatedStructuralBlocks @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 79,
+++      "pctOfBlocking": 0.6
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/passage-retrieval.ts:1",
+++      "ms": 70,
+++      "pctOfBlocking": 0.5
+++    }
+++  ],
+++  "topModules": [
+++    {
+++      "name": "server/lib/passage-retrieval.ts",
+++      "ms": 5956,
+++      "pctOfBlocking": 44.1
+++    },
+++    {
+++      "name": "(runtime / GC / no app frame)",
+++      "ms": 2751,
+++      "pctOfBlocking": 20.3
+++    },
+++    {
+++      "name": "server/lib/corpus-boilerplate.ts",
+++      "ms": 1997,
+++      "pctOfBlocking": 14.8
+++    },
+++    {
+++      "name": "server/lib/analyzer.ts",
+++      "ms": 910,
+++      "pctOfBlocking": 6.7
+++    },
+++    {
+++      "name": "server/lib/corpus-hygiene.ts",
+++      "ms": 503,
+++      "pctOfBlocking": 3.7
+++    },
+++    {
+++      "name": "server/lib/aboutness.ts",
+++      "ms": 466,
+++      "pctOfBlocking": 3.4
+++    },
+++    {
+++      "name": "server/lib/processor.ts",
+++      "ms": 459,
+++      "pctOfBlocking": 3.4
+++    },
+++    {
+++      "name": "server/lib/temporal-validation.ts",
+++      "ms": 206,
+++      "pctOfBlocking": 1.5
+++    },
+++    {
+++      "name": "server/lib/translation.ts",
+++      "ms": 137,
+++      "pctOfBlocking": 1
+++    },
+++    {
+++      "name": "server/lib/passage-rescore.ts",
+++      "ms": 91,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "server/lib/pipeline.ts",
+++      "ms": 13,
+++      "pctOfBlocking": 0.1
+++    },
+++    {
+++      "name": "server/lib/provenance.ts",
+++      "ms": 10,
+++      "pctOfBlocking": 0.1
+++    },
+++    {
+++      "name": "server/lib/discovery.ts",
+++      "ms": 9,
+++      "pctOfBlocking": 0.1
+++    },
+++    {
+++      "name": "server/lib/eligibility-flags.ts",
+++      "ms": 3,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/ai-providers.ts",
+++      "ms": 3,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/framework-v2/reliability/canonical-rule.ts",
+++      "ms": 2,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/storage.ts",
+++      "ms": 1,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/adaptive-concurrency.ts",
+++      "ms": 1,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/primary-disclosure-check.ts",
+++      "ms": 1,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/framework-guidance-audit.ts",
+++      "ms": 1,
+++      "pctOfBlocking": 0
+++    }
+++  ],
+++  "topLeafFrames": [
+++    {
+++      "name": "(garbage collector) @ (native):0",
+++      "ms": 2031,
+++      "pctOfBlocking": 15
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 1328,
+++      "pctOfBlocking": 9.8
+++    },
+++    {
+++      "name": "tokenize @ server/lib/passage-retrieval.ts:1",
+++      "ms": 1015,
+++      "pctOfBlocking": 7.5
+++    },
+++    {
+++      "name": "RegExp: \\s+ @ (native):0",
+++      "ms": 830,
+++      "pctOfBlocking": 6.1
+++    },
+++    {
+++      "name": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++      "ms": 575,
+++      "pctOfBlocking": 4.3
+++    },
+++    {
+++      "name": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+++      "ms": 570,
+++      "pctOfBlocking": 4.2
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++      "ms": 438,
+++      "pctOfBlocking": 3.2
+++    },
+++    {
+++      "name": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+++      "ms": 389,
+++      "pctOfBlocking": 2.9
+++    },
+++    {
+++      "name": "chunkBody @ server/lib/passage-retrieval.ts:3",
+++      "ms": 364,
+++      "pctOfBlocking": 2.7
+++    },
+++    {
+++      "name": "scoreAboutness @ server/lib/aboutness.ts:1",
+++      "ms": 295,
+++      "pctOfBlocking": 2.2
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/processor.ts:1",
+++      "ms": 278,
+++      "pctOfBlocking": 2.1
+++    },
+++    {
+++      "name": "computeAssemblyPenaltyFactors @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 270,
+++      "pctOfBlocking": 2
+++    },
+++    {
+++      "name": "RegExp: [\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af]+ @ (native):0",
+++      "ms": 221,
+++      "pctOfBlocking": 1.6
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/analyzer.ts:222",
+++      "ms": 196,
+++      "pctOfBlocking": 1.4
+++    },
+++    {
+++      "name": "RegExp: [^\\w\\s] @ (native):0",
+++      "ms": 189,
+++      "pctOfBlocking": 1.4
+++    },
+++    {
+++      "name": "words @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 177,
+++      "pctOfBlocking": 1.3
+++    },
+++    {
+++      "name": "RegExp: (?:\\bassess\\b|\\badapting\\b|\\bbusinesses\\b|\\btake\\b|\\badvantage\\b|\\bsafely\\b|\\bdoing\\b|\\bcovering\\b|\\bstrength\\b|\\bambitions\\b|\\bscale\\b|\\baction\\b|\\bcontrols\\b|\\bsafety\\b|\\bsustainability\\b|\\bstrategy\\b|\\bgovernance\\b|\\beffectively\\b|\\bopportunities\\b) @ (native):0",
+++      "ms": 163,
+++      "pctOfBlocking": 1.2
+++    },
+++    {
+++      "name": "RegExp: \\.{2,}\\s*\\d+\\s*$|\\s\\d{1,4}\\s*$ @ (native):0",
+++      "ms": 142,
+++      "pctOfBlocking": 1
+++    },
+++    {
+++      "name": "RegExp: (?<=[.!?])\\s+|\\n+ @ (native):0",
+++      "ms": 120,
+++      "pctOfBlocking": 0.9
+++    },
+++    {
+++      "name": "internalModuleStat @ (native):0",
+++      "ms": 119,
+++      "pctOfBlocking": 0.9
+++    },
+++    {
+++      "name": "RegExp: item[\\s\\u00a0]*1\\b[\\.\\:\\s\\-—]{0,3}\\s*business\\b @ (native):0",
+++      "ms": 108,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "readFileUtf8 @ (native):0",
+++      "ms": 107,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "RegExp: item[\\s\\u00a0]*1a\\b[\\.\\:\\s\\-—]{0,3}\\s*risk\\s+factors @ (native):0",
+++      "ms": 100,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++      "ms": 98,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "RegExp: item[\\s\\u00a0]*1b\\b[\\.\\:\\s\\-—]{0,3}\\s*unresolved\\s+staff @ (native):0",
+++      "ms": 97,
+++      "pctOfBlocking": 0.7
+++    }
+++  ],
+++  "topLibraries": [
+++    {
+++      "name": "(app code self)",
+++      "ms": 6962,
+++      "pctOfBlocking": 51.5
+++    },
+++    {
+++      "name": "(native: (garbage collector))",
+++      "ms": 2031,
+++      "pctOfBlocking": 15
+++    },
+++    {
+++      "name": "(native: RegExp: \\s+)",
+++      "ms": 830,
+++      "pctOfBlocking": 6.1
+++    },
+++    {
+++      "name": "(native: RegExp: [\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af]+)",
+++      "ms": 221,
+++      "pctOfBlocking": 1.6
+++    },
+++    {
+++      "name": "(native: RegExp: [^\\w\\s])",
+++      "ms": 189,
+++      "pctOfBlocking": 1.4
+++    },
+++    {
+++      "name": "(native: RegExp: (?:\\bassess\\b|\\badapting\\b|\\bbusinesses\\b|\\btake\\b|\\badvantage\\b|\\bsafely\\b|\\bdoing\\b|\\bcovering\\b|\\bstrength\\b|\\bambitions\\b|\\bscale\\b|\\baction\\b|\\bcontrols\\b|\\bsafety\\b|\\bsustainability\\b|\\bstrategy\\b|\\bgovernance\\b|\\beffectively\\b|\\bopportunities\\b))",
+++      "ms": 163,
+++      "pctOfBlocking": 1.2
+++    },
+++    {
+++      "name": "(native: RegExp: \\.{2,}\\s*\\d+\\s*$|\\s\\d{1,4}\\s*$)",
+++      "ms": 142,
+++      "pctOfBlocking": 1
+++    },
+++    {
+++      "name": "(native: RegExp: (?<=[.!?])\\s+|\\n+)",
+++      "ms": 120,
+++      "pctOfBlocking": 0.9
+++    },
+++    {
+++      "name": "(native: internalModuleStat)",
+++      "ms": 119,
+++      "pctOfBlocking": 0.9
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*1\\b[\\.\\:\\s\\-—]{0,3}\\s*business\\b)",
+++      "ms": 108,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "(native: readFileUtf8)",
+++      "ms": 107,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*1a\\b[\\.\\:\\s\\-—]{0,3}\\s*risk\\s+factors)",
+++      "ms": 100,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*1b\\b[\\.\\:\\s\\-—]{0,3}\\s*unresolved\\s+staff)",
+++      "ms": 97,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*7a\\b[\\.\\:\\s\\-—]{0,3}\\s*quantitative\\s+and\\s+qualitative)",
+++      "ms": 96,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "(native: RegExp: (?:target|commitment|goal|pledge) (?:has been|was) (?:discontinued|withdrawn|removed|superseded))",
+++      "ms": 93,
+++      "pctOfBlocking": 0.7
+++    }
+++  ],
+++  "topEntryAppFrames": [
+++    {
+++      "name": "analyzeCompanyMeasures @ server/lib/analyzer.ts:238",
+++      "ms": 5320,
+++      "pctOfBlocking": 39.4
+++    },
+++    {
+++      "name": "summarizeDocuments @ server/lib/analyzer.ts:222",
+++      "ms": 4553,
+++      "pctOfBlocking": 33.7
+++    },
+++    {
+++      "name": "runAnalyzePhase @ server/lib/pipeline.ts:77",
+++      "ms": 689,
+++      "pctOfBlocking": 5.1
+++    },
+++    {
+++      "name": "translateDocumentsToEnglish @ server/lib/translation.ts:2",
+++      "ms": 131,
+++      "pctOfBlocking": 1
+++    },
+++    {
+++      "name": "scoreCandidatesWithLLM @ server/lib/passage-rescore.ts:7",
+++      "ms": 32,
+++      "pctOfBlocking": 0.2
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/analyzer.ts:242",
+++      "ms": 30,
+++      "pctOfBlocking": 0.2
+++    },
+++    {
+++      "name": "scoreSingleMeasure @ server/lib/analyzer.ts:242",
+++      "ms": 3,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "completeWithFallback @ server/lib/ai-providers.ts:1",
+++      "ms": 2,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "translateDocumentText @ server/lib/translation.ts:1",
+++      "ms": 2,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/eligibility-flags.ts:1",
+++      "ms": 1,
+++      "pctOfBlocking": 0
+++    }
+++  ],
+++  "longestSlices": [
+++    {
+++      "ms": 5864,
+++      "topApp": [
+++        {
+++          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++          "pct": 23.1
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 14.4
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/analyzer.ts:222",
+++          "pct": 13.6
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++          "pct": 22.7
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 14.4
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 1020,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 23.7
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 13.7
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 11.2
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 14.1
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 13.7
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 945,
+++      "topApp": [
+++        {
+++          "fn": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+++          "pct": 53.1
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 44
+++        },
+++        {
+++          "fn": "looksNonEnglish @ server/lib/translation.ts:1",
+++          "pct": 2.2
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 44
+++        },
+++        {
+++          "fn": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+++          "pct": 41.2
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 937,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 26.9
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 12.5
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 11.9
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 15.6
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 12.5
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 772,
+++      "topApp": [
+++        {
+++          "fn": "scoreAboutness @ server/lib/aboutness.ts:1",
+++          "pct": 54.7
+++        },
+++        {
+++          "fn": "scanDocumentsForWithdrawals @ server/lib/temporal-validation.ts:1",
+++          "pct": 26.4
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 8.5
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "scoreAboutness @ server/lib/aboutness.ts:1",
+++          "pct": 38.2
+++        },
+++        {
+++          "fn": "RegExp: (?:target|commitment|goal|pledge) (?:has been|was) (?:discontinued|withdrawn|removed|superseded) @ (native):0",
+++          "pct": 12.1
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 692,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 27.8
+++        },
+++        {
+++          "fn": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+++          "pct": 13.4
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 12.6
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 14.5
+++        },
+++        {
+++          "fn": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+++          "pct": 13.4
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 624,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 29
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 16.4
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 11.2
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 18.1
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 16.4
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 576,
+++      "topApp": [
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 26.9
+++        },
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 18.6
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 12.2
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 15.9
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 12.2
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 514,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 22.7
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 21.2
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 14.5
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 15.1
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 14.5
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 403,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 32.7
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 13.8
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 13.1
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 18.5
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 13.8
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 332,
+++      "topApp": [
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 27.1
+++        },
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 17.6
+++        },
+++        {
+++          "fn": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++          "pct": 12.6
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 14.3
+++        },
+++        {
+++          "fn": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++          "pct": 12.6
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 247,
+++      "topApp": [
+++        {
+++          "fn": "(no app frame: internalModuleStat)",
+++          "pct": 35.1
+++        },
+++        {
+++          "fn": "(no app frame: ?)",
+++          "pct": 18.7
+++        },
+++        {
+++          "fn": "(no app frame: readFileUtf8)",
+++          "pct": 13.7
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "internalModuleStat @ (native):0",
+++          "pct": 35.1
+++        },
+++        {
+++          "fn": "readFileUtf8 @ (native):0",
+++          "pct": 13.7
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 227,
+++      "topApp": [
+++        {
+++          "fn": "(no app frame: makeSyncRequest)",
+++          "pct": 37
+++        },
+++        {
+++          "fn": "(no app frame: waitForWorker)",
+++          "pct": 25.7
+++        },
+++        {
+++          "fn": "(no app frame: internalModuleStat)",
+++          "pct": 5.1
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "makeSyncRequest @ node:internal/modules/esm/hooks:598",
+++          "pct": 37
+++        },
+++        {
+++          "fn": "waitForWorker @ node:internal/modules/esm/hooks:519",
+++          "pct": 25.7
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 116,
+++      "topApp": [
+++        {
+++          "fn": "looksNonEnglish @ server/lib/translation.ts:1",
+++          "pct": 84.7
+++        },
+++        {
+++          "fn": "nonEnglishRatio @ server/lib/translation.ts:1",
+++          "pct": 12.5
+++        },
+++        {
+++          "fn": "translateDocumentText @ server/lib/translation.ts:1",
+++          "pct": 1.9
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "RegExp: intelligence artificielle|intelligenza artificiale|inteligencia artificial|inteligência artificial|künstliche intelligenz|kunstmatige intelligentie|artificiell intelligens|tekoäly|kunstig intelligens @ (native):0",
+++          "pct": 59.4
+++        },
+++        {
+++          "fn": "RegExp: [\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af] @ (native):0",
+++          "pct": 17.5
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 104,
+++      "topApp": [
+++        {
+++          "fn": "(no app frame: readFileUtf8)",
+++          "pct": 48.3
+++        },
+++        {
+++          "fn": "(no app frame: compileSourceTextModule)",
+++          "pct": 19.4
+++        },
+++        {
+++          "fn": "(no app frame: (program))",
+++          "pct": 9.7
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "readFileUtf8 @ (native):0",
+++          "pct": 48.3
+++        },
+++        {
+++          "fn": "compileSourceTextModule @ node:internal/modules/esm/utils:344",
+++          "pct": 19.4
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 89,
+++      "topApp": [
+++        {
+++          "fn": "(no app frame: readPackageJSON)",
+++          "pct": 23.3
+++        },
+++        {
+++          "fn": "(no app frame: internalModuleStat)",
+++          "pct": 22
+++        },
+++        {
+++          "fn": "(no app frame: readFileUtf8)",
+++          "pct": 19.9
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "readPackageJSON @ (native):0",
+++          "pct": 23.3
+++        },
+++        {
+++          "fn": "internalModuleStat @ (native):0",
+++          "pct": 22
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 61,
+++      "topApp": [
+++        {
+++          "fn": "(no app frame: compileSourceTextModule)",
+++          "pct": 59.5
+++        },
+++        {
+++          "fn": "(no app frame: lineLengths)",
+++          "pct": 18.6
+++        },
+++        {
+++          "fn": "(no app frame: oninit)",
+++          "pct": 10
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "compileSourceTextModule @ node:internal/modules/esm/utils:344",
+++          "pct": 59.5
+++        },
+++        {
+++          "fn": "lineLengths @ node:internal/source_map/source_map_cache:260",
+++          "pct": 18.6
+++        }
+++      ]
+++    }
+++  ]
+++}
++\ No newline at end of file
++diff --git a/docs/worker-isolation/evidence/cpuprofile-analysis-c4.json b/docs/worker-isolation/evidence/cpuprofile-analysis-c4.json
++new file mode 100644
++index 0000000..59b835a
++--- /dev/null
+++++ b/docs/worker-isolation/evidence/cpuprofile-analysis-c4.json
++@@ -0,0 +1,1218 @@
+++{
+++  "file": "/tmp/ciq-prof/c4/CPU.20261011.154616.33841.0.001.cpuprofile",
+++  "totalProfiledMs": 74530,
+++  "busyMs": 46936,
+++  "harnessExcludedMs": 1318,
+++  "blockMinMs": 50,
+++  "blockingSlices": 37,
+++  "blockingMs": 45524,
+++  "longestSliceMs": 8846,
+++  "sliceHistogram": [
+++    {
+++      "bucket": "50-100ms",
+++      "runs": 2,
+++      "ms": 133
+++    },
+++    {
+++      "bucket": "100-250ms",
+++      "runs": 3,
+++      "ms": 488
+++    },
+++    {
+++      "bucket": "250-500ms",
+++      "runs": 8,
+++      "ms": 3200
+++    },
+++    {
+++      "bucket": "500-1000ms",
+++      "runs": 15,
+++      "ms": 11149
+++    },
+++    {
+++      "bucket": "1000-2000ms",
+++      "runs": 5,
+++      "ms": 7062
+++    },
+++    {
+++      "bucket": "2000-5000ms",
+++      "runs": 1,
+++      "ms": 2731
+++    },
+++    {
+++      "bucket": "5000-∞ms",
+++      "runs": 3,
+++      "ms": 20760
+++    }
+++  ],
+++  "concentration": {
+++    "distinctAppFunctions": 312,
+++    "top1AppPct": 16.3,
+++    "top3AppPct": 43.1,
+++    "top5AppPct": 54,
+++    "hhiApp": 0.081,
+++    "top1ModulePct": 49,
+++    "distinctModules": 28
+++  },
+++  "topAppFunctions": [
+++    {
+++      "name": "tokenize @ server/lib/passage-retrieval.ts:1",
+++      "ms": 7411,
+++      "pctOfBlocking": 16.3
+++    },
+++    {
+++      "name": "(no app frame: (garbage collector))",
+++      "ms": 6964,
+++      "pctOfBlocking": 15.3
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 5228,
+++      "pctOfBlocking": 11.5
+++    },
+++    {
+++      "name": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++      "ms": 2692,
+++      "pctOfBlocking": 5.9
+++    },
+++    {
+++      "name": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++      "ms": 2287,
+++      "pctOfBlocking": 5
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++      "ms": 2118,
+++      "pctOfBlocking": 4.7
+++    },
+++    {
+++      "name": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+++      "ms": 2053,
+++      "pctOfBlocking": 4.5
+++    },
+++    {
+++      "name": "chunkBody @ server/lib/passage-retrieval.ts:3",
+++      "ms": 1995,
+++      "pctOfBlocking": 4.4
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/analyzer.ts:222",
+++      "ms": 1646,
+++      "pctOfBlocking": 3.6
+++    },
+++    {
+++      "name": "scoreAboutness @ server/lib/aboutness.ts:1",
+++      "ms": 1358,
+++      "pctOfBlocking": 3
+++    },
+++    {
+++      "name": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+++      "ms": 1211,
+++      "pctOfBlocking": 2.7
+++    },
+++    {
+++      "name": "recoverSecHeadingNewlines @ server/lib/passage-retrieval.ts:1",
+++      "ms": 1043,
+++      "pctOfBlocking": 2.3
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/processor.ts:1",
+++      "ms": 1028,
+++      "pctOfBlocking": 2.3
+++    },
+++    {
+++      "name": "isLikelyToc @ server/lib/passage-retrieval.ts:1",
+++      "ms": 995,
+++      "pctOfBlocking": 2.2
+++    },
+++    {
+++      "name": "computeAssemblyPenaltyFactors @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 840,
+++      "pctOfBlocking": 1.8
+++    },
+++    {
+++      "name": "words @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 805,
+++      "pctOfBlocking": 1.8
+++    },
+++    {
+++      "name": "buildEvidencePackForMeasure @ server/lib/passage-retrieval.ts:3",
+++      "ms": 682,
+++      "pctOfBlocking": 1.5
+++    },
+++    {
+++      "name": "countTopicHits @ server/lib/passage-retrieval.ts:1",
+++      "ms": 554,
+++      "pctOfBlocking": 1.2
+++    },
+++    {
+++      "name": "scanDocumentsForWithdrawals @ server/lib/temporal-validation.ts:1",
+++      "ms": 441,
+++      "pctOfBlocking": 1
+++    },
+++    {
+++      "name": "stripRepeatedStructuralBlocks @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 246,
+++      "pctOfBlocking": 0.5
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/passage-retrieval.ts:1",
+++      "ms": 245,
+++      "pctOfBlocking": 0.5
+++    },
+++    {
+++      "name": "looksNonEnglish @ server/lib/translation.ts:1",
+++      "ms": 236,
+++      "pctOfBlocking": 0.5
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/analyzer.ts:230",
+++      "ms": 176,
+++      "pctOfBlocking": 0.4
+++    },
+++    {
+++      "name": "(no app frame: readFileUtf8)",
+++      "ms": 175,
+++      "pctOfBlocking": 0.4
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/passage-rescore.ts:1",
+++      "ms": 157,
+++      "pctOfBlocking": 0.3
+++    }
+++  ],
+++  "topModules": [
+++    {
+++      "name": "server/lib/passage-retrieval.ts",
+++      "ms": 22312,
+++      "pctOfBlocking": 49
+++    },
+++    {
+++      "name": "(runtime / GC / no app frame)",
+++      "ms": 8952,
+++      "pctOfBlocking": 19.7
+++    },
+++    {
+++      "name": "server/lib/corpus-boilerplate.ts",
+++      "ms": 7268,
+++      "pctOfBlocking": 16
+++    },
+++    {
+++      "name": "server/lib/analyzer.ts",
+++      "ms": 1956,
+++      "pctOfBlocking": 4.3
+++    },
+++    {
+++      "name": "server/lib/aboutness.ts",
+++      "ms": 1501,
+++      "pctOfBlocking": 3.3
+++    },
+++    {
+++      "name": "server/lib/corpus-hygiene.ts",
+++      "ms": 1212,
+++      "pctOfBlocking": 2.7
+++    },
+++    {
+++      "name": "server/lib/processor.ts",
+++      "ms": 1028,
+++      "pctOfBlocking": 2.3
+++    },
+++    {
+++      "name": "server/lib/temporal-validation.ts",
+++      "ms": 443,
+++      "pctOfBlocking": 1
+++    },
+++    {
+++      "name": "server/lib/passage-rescore.ts",
+++      "ms": 403,
+++      "pctOfBlocking": 0.9
+++    },
+++    {
+++      "name": "server/lib/translation.ts",
+++      "ms": 292,
+++      "pctOfBlocking": 0.6
+++    },
+++    {
+++      "name": "server/lib/provenance.ts",
+++      "ms": 31,
+++      "pctOfBlocking": 0.1
+++    },
+++    {
+++      "name": "server/lib/pipeline.ts",
+++      "ms": 28,
+++      "pctOfBlocking": 0.1
+++    },
+++    {
+++      "name": "server/lib/table-horizon-normaliser.ts",
+++      "ms": 18,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/discovery.ts",
+++      "ms": 14,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/ai-providers.ts",
+++      "ms": 12,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/storage.ts",
+++      "ms": 9,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/rationale-consistency.ts",
+++      "ms": 9,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/eligibility-flags.ts",
+++      "ms": 9,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/framework-v2/reliability/canonical-rule.ts",
+++      "ms": 5,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "server/lib/anti-inference.ts",
+++      "ms": 4,
+++      "pctOfBlocking": 0
+++    }
+++  ],
+++  "topLeafFrames": [
+++    {
+++      "name": "(garbage collector) @ (native):0",
+++      "ms": 6964,
+++      "pctOfBlocking": 15.3
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 5181,
+++      "pctOfBlocking": 11.4
+++    },
+++    {
+++      "name": "tokenize @ server/lib/passage-retrieval.ts:1",
+++      "ms": 4525,
+++      "pctOfBlocking": 9.9
+++    },
+++    {
+++      "name": "RegExp: \\s+ @ (native):0",
+++      "ms": 2679,
+++      "pctOfBlocking": 5.9
+++    },
+++    {
+++      "name": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++      "ms": 2287,
+++      "pctOfBlocking": 5
+++    },
+++    {
+++      "name": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+++      "ms": 2053,
+++      "pctOfBlocking": 4.5
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++      "ms": 1451,
+++      "pctOfBlocking": 3.2
+++    },
+++    {
+++      "name": "chunkBody @ server/lib/passage-retrieval.ts:3",
+++      "ms": 1174,
+++      "pctOfBlocking": 2.6
+++    },
+++    {
+++      "name": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+++      "ms": 1007,
+++      "pctOfBlocking": 2.2
+++    },
+++    {
+++      "name": "scoreAboutness @ server/lib/aboutness.ts:1",
+++      "ms": 905,
+++      "pctOfBlocking": 2
+++    },
+++    {
+++      "name": "computeAssemblyPenaltyFactors @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 840,
+++      "pctOfBlocking": 1.8
+++    },
+++    {
+++      "name": "RegExp: [\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af]+ @ (native):0",
+++      "ms": 829,
+++      "pctOfBlocking": 1.8
+++    },
+++    {
+++      "name": "RegExp: [^\\w\\s] @ (native):0",
+++      "ms": 787,
+++      "pctOfBlocking": 1.7
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/processor.ts:1",
+++      "ms": 685,
+++      "pctOfBlocking": 1.5
+++    },
+++    {
+++      "name": "words @ server/lib/corpus-boilerplate.ts:1",
+++      "ms": 610,
+++      "pctOfBlocking": 1.3
+++    },
+++    {
+++      "name": "RegExp: \\.{2,}\\s*\\d+\\s*$|\\s\\d{1,4}\\s*$ @ (native):0",
+++      "ms": 549,
+++      "pctOfBlocking": 1.2
+++    },
+++    {
+++      "name": "RegExp: (?:\\bassess\\b|\\badapting\\b|\\bbusinesses\\b|\\btake\\b|\\badvantage\\b|\\bsafely\\b|\\bdoing\\b|\\bcovering\\b|\\bstrength\\b|\\bambitions\\b|\\bscale\\b|\\baction\\b|\\bcontrols\\b|\\bsafety\\b|\\bsustainability\\b|\\bstrategy\\b|\\bgovernance\\b|\\beffectively\\b|\\bopportunities\\b) @ (native):0",
+++      "ms": 543,
+++      "pctOfBlocking": 1.2
+++    },
+++    {
+++      "name": "RegExp: (?<=[.!?])\\s+|\\n+ @ (native):0",
+++      "ms": 386,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/analyzer.ts:222",
+++      "ms": 367,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "RegExp: item[\\s\\u00a0]*1\\b[\\.\\:\\s\\-—]{0,3}\\s*business\\b @ (native):0",
+++      "ms": 349,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "RegExp: item[\\s\\u00a0]*7\\b[\\.\\:\\s\\-—]{0,3}\\s*management['’]?s\\s+discussion @ (native):0",
+++      "ms": 333,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "RegExp: item[\\s\\u00a0]*10\\b[\\.\\:\\s\\-—]{0,3}\\s*directors[,\\s] @ (native):0",
+++      "ms": 328,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "RegExp: stockholder proposal|say-on-pay|notice of (the )?annual meeting|board of directors recommends|proxy card|voting (instructions|your shares)|broker non-votes|nominees? for (election|director)|compensation discussion and analysis @ (native):0",
+++      "ms": 326,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "RegExp: item[\\s\\u00a0]*1a\\b[\\.\\:\\s\\-—]{0,3}\\s*risk\\s+factors @ (native):0",
+++      "ms": 315,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++      "ms": 312,
+++      "pctOfBlocking": 0.7
+++    }
+++  ],
+++  "topLibraries": [
+++    {
+++      "name": "(app code self)",
+++      "ms": 23922,
+++      "pctOfBlocking": 52.5
+++    },
+++    {
+++      "name": "(native: (garbage collector))",
+++      "ms": 6964,
+++      "pctOfBlocking": 15.3
+++    },
+++    {
+++      "name": "(native: RegExp: \\s+)",
+++      "ms": 2679,
+++      "pctOfBlocking": 5.9
+++    },
+++    {
+++      "name": ".pnpm",
+++      "ms": 1099,
+++      "pctOfBlocking": 2.4
+++    },
+++    {
+++      "name": "(native: RegExp: [\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af]+)",
+++      "ms": 829,
+++      "pctOfBlocking": 1.8
+++    },
+++    {
+++      "name": "(native: RegExp: [^\\w\\s])",
+++      "ms": 787,
+++      "pctOfBlocking": 1.7
+++    },
+++    {
+++      "name": "(native: RegExp: \\.{2,}\\s*\\d+\\s*$|\\s\\d{1,4}\\s*$)",
+++      "ms": 549,
+++      "pctOfBlocking": 1.2
+++    },
+++    {
+++      "name": "(native: RegExp: (?:\\bassess\\b|\\badapting\\b|\\bbusinesses\\b|\\btake\\b|\\badvantage\\b|\\bsafely\\b|\\bdoing\\b|\\bcovering\\b|\\bstrength\\b|\\bambitions\\b|\\bscale\\b|\\baction\\b|\\bcontrols\\b|\\bsafety\\b|\\bsustainability\\b|\\bstrategy\\b|\\bgovernance\\b|\\beffectively\\b|\\bopportunities\\b))",
+++      "ms": 543,
+++      "pctOfBlocking": 1.2
+++    },
+++    {
+++      "name": "(native: RegExp: (?<=[.!?])\\s+|\\n+)",
+++      "ms": 386,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*1\\b[\\.\\:\\s\\-—]{0,3}\\s*business\\b)",
+++      "ms": 349,
+++      "pctOfBlocking": 0.8
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*7\\b[\\.\\:\\s\\-—]{0,3}\\s*management['’]?s\\s+discussion)",
+++      "ms": 333,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*10\\b[\\.\\:\\s\\-—]{0,3}\\s*directors[,\\s])",
+++      "ms": 328,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "(native: RegExp: stockholder proposal|say-on-pay|notice of (the )?annual meeting|board of directors recommends|proxy card|voting (instructions|your shares)|broker non-votes|nominees? for (election|director)|compensation discussion and analysis)",
+++      "ms": 326,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*1a\\b[\\.\\:\\s\\-—]{0,3}\\s*risk\\s+factors)",
+++      "ms": 315,
+++      "pctOfBlocking": 0.7
+++    },
+++    {
+++      "name": "(native: RegExp: item[\\s\\u00a0]*11\\b[\\.\\:\\s\\-—]{0,3}\\s*executive\\s+compensation)",
+++      "ms": 299,
+++      "pctOfBlocking": 0.7
+++    }
+++  ],
+++  "topEntryAppFrames": [
+++    {
+++      "name": "analyzeCompanyMeasures @ server/lib/analyzer.ts:238",
+++      "ms": 19184,
+++      "pctOfBlocking": 42.1
+++    },
+++    {
+++      "name": "summarizeDocuments @ server/lib/analyzer.ts:222",
+++      "ms": 14892,
+++      "pctOfBlocking": 32.7
+++    },
+++    {
+++      "name": "runAnalyzePhase @ server/lib/pipeline.ts:77",
+++      "ms": 1964,
+++      "pctOfBlocking": 4.3
+++    },
+++    {
+++      "name": "translateDocumentsToEnglish @ server/lib/translation.ts:2",
+++      "ms": 275,
+++      "pctOfBlocking": 0.6
+++    },
+++    {
+++      "name": "scoreCandidatesWithLLM @ server/lib/passage-rescore.ts:7",
+++      "ms": 103,
+++      "pctOfBlocking": 0.2
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/analyzer.ts:242",
+++      "ms": 60,
+++      "pctOfBlocking": 0.1
+++    },
+++    {
+++      "name": "scoreSingleMeasure @ server/lib/analyzer.ts:242",
+++      "ms": 24,
+++      "pctOfBlocking": 0.1
+++    },
+++    {
+++      "name": "normaliseTableHorizonMarkers @ server/lib/table-horizon-normaliser.ts:1",
+++      "ms": 18,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "(anonymous) @ server/lib/passage-rescore.ts:1",
+++      "ms": 10,
+++      "pctOfBlocking": 0
+++    },
+++    {
+++      "name": "translateDocumentText @ server/lib/translation.ts:1",
+++      "ms": 10,
+++      "pctOfBlocking": 0
+++    }
+++  ],
+++  "longestSlices": [
+++    {
+++      "ms": 8846,
+++      "topApp": [
+++        {
+++          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++          "pct": 26
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 19.7
+++        },
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 14.6
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++          "pct": 25.9
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 19.7
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 6301,
+++      "topApp": [
+++        {
+++          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++          "pct": 23
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 18.3
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/analyzer.ts:222",
+++          "pct": 12.9
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++          "pct": 22.6
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 18.3
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 5614,
+++      "topApp": [
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 21.8
+++        },
+++        {
+++          "fn": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+++          "pct": 21.6
+++        },
+++        {
+++          "fn": "scoreAboutness @ server/lib/aboutness.ts:1",
+++          "pct": 17.2
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 21.8
+++        },
+++        {
+++          "fn": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+++          "pct": 17.9
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 2731,
+++      "topApp": [
+++        {
+++          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++          "pct": 26
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 12
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/analyzer.ts:222",
+++          "pct": 10.8
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+++          "pct": 25.4
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 12
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 1766,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 26.6
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 10.7
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 10.5
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 15.9
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 10.5
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 1634,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 26.7
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 12.4
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 9.8
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 15.4
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 12.4
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 1315,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 26.3
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 11.5
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 10.9
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 15.7
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 11.5
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 1260,
+++      "topApp": [
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 11.9
+++        },
+++        {
+++          "fn": "(no app frame: cloneValue)",
+++          "pct": 8.3
+++        },
+++        {
+++          "fn": "(no app frame: buildTextContentItem)",
+++          "pct": 7.5
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 11.9
+++        },
+++        {
+++          "fn": "cloneValue @ node_modules/pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js:3928",
+++          "pct": 8.3
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 1088,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 24.8
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 12.8
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 11.4
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 14.6
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 12.8
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 991,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 25.8
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 13.4
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 11.8
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 15.1
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 11.8
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 991,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 26.6
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 13.7
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 9.2
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 15.6
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 13.7
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 960,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 22.9
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 18.4
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 10.7
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 18.4
+++        },
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 13.1
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 813,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 25.7
+++        },
+++        {
+++          "fn": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++          "pct": 11.7
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 10.8
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 13.7
+++        },
+++        {
+++          "fn": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++          "pct": 11.7
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 810,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 29.9
+++        },
+++        {
+++          "fn": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+++          "pct": 11.3
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 10.6
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 19.3
+++        },
+++        {
+++          "fn": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+++          "pct": 11.3
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 781,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 23.1
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 16
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 12.1
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 16
+++        },
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 12.6
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 763,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 24.7
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 12.7
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 10.9
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 14.6
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 10.9
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 754,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 28.7
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 14.9
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 12.3
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 16.4
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 12.3
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 693,
+++      "topApp": [
+++        {
+++          "fn": "scoreAboutness @ server/lib/aboutness.ts:1",
+++          "pct": 56.8
+++        },
+++        {
+++          "fn": "scanDocumentsForWithdrawals @ server/lib/temporal-validation.ts:1",
+++          "pct": 29.8
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 3.3
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "scoreAboutness @ server/lib/aboutness.ts:1",
+++          "pct": 37.7
+++        },
+++        {
+++          "fn": "RegExp: (?:target|commitment|goal|pledge) (?:has been|was) (?:discontinued|withdrawn|removed|superseded) @ (native):0",
+++          "pct": 14
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 637,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 32.1
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 12.2
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 9.9
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 19.8
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 9.9
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 631,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 23.4
+++        },
+++        {
+++          "fn": "looksNonEnglish @ server/lib/translation.ts:1",
+++          "pct": 16
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 11.5
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 14.8
+++        },
+++        {
+++          "fn": "RegExp: intelligence artificielle|intelligenza artificiale|inteligencia artificial|inteligência artificial|künstliche intelligenz|kunstmatige intelligentie|artificiell intelligens|tekoäly|kunstig intelligens @ (native):0",
+++          "pct": 10.5
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 623,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 28.5
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 15.2
+++        },
+++        {
+++          "fn": "chunkBody @ server/lib/passage-retrieval.ts:3",
+++          "pct": 10.2
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 20
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 15.2
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 617,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 27.7
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 11.7
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 11.5
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 17.6
+++        },
+++        {
+++          "fn": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++          "pct": 10.3
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 554,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 27.2
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 13.5
+++        },
+++        {
+++          "fn": "chunkBody @ server/lib/passage-retrieval.ts:3",
+++          "pct": 12.2
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 13.5
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 13.5
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 532,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 28.4
+++        },
+++        {
+++          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+++          "pct": 13.5
+++        },
+++        {
+++          "fn": "(no app frame: (garbage collector))",
+++          "pct": 13.1
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 17
+++        },
+++        {
+++          "fn": "(garbage collector) @ (native):0",
+++          "pct": 13.1
+++        }
+++      ]
+++    },
+++    {
+++      "ms": 495,
+++      "topApp": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 25.5
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 22.7
+++        },
+++        {
+++          "fn": "bm25Score @ server/lib/passage-retrieval.ts:1",
+++          "pct": 12.1
+++        }
+++      ],
+++      "topLeaf": [
+++        {
+++          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+++          "pct": 16
+++        },
+++        {
+++          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+++          "pct": 13.1
+++        }
+++      ]
+++    }
+++  ]
+++}
++\ No newline at end of file
++diff --git a/docs/worker-isolation/evidence/harness-result-c1.json b/docs/worker-isolation/evidence/harness-result-c1.json
++new file mode 100644
++index 0000000..29b7cc3
++--- /dev/null
+++++ b/docs/worker-isolation/evidence/harness-result-c1.json
++@@ -0,0 +1,160 @@
+++{
+++  "concurrency": 1,
+++  "corpora": [
+++    "12"
+++  ],
+++  "providerLatencyMs": 400,
+++  "phases": {
+++    "analyze": {
+++      "wallMs": 36131,
+++      "eld": {
+++        "p50": 10,
+++        "p90": 11,
+++        "p99": 14,
+++        "max": 5876,
+++        "mean": 16,
+++        "count": 2311
+++      },
+++      "perCompany": [
+++        {
+++          "corpus": "12",
+++          "docs": 166,
+++          "ms": 36131,
+++          "success": false,
+++          "error": "Cancelled",
+++          "measures": 0,
+++          "yes": 0,
+++          "scoringErrors": 0
+++        }
+++      ]
+++    }
+++  },
+++  "stalls": [
+++    {
+++      "at": 2475,
+++      "lagMs": 254,
+++      "phase": "analyze",
+++      "stages": []
+++    },
+++    {
+++      "at": 3257,
+++      "lagMs": 732,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 4602,
+++      "lagMs": 944,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 18991,
+++      "lagMs": 5862,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 20367,
+++      "lagMs": 575,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 21060,
+++      "lagMs": 642,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 24822,
+++      "lagMs": 512,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 25448,
+++      "lagMs": 576,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 28659,
+++      "lagMs": 359,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 29272,
+++      "lagMs": 564,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 32428,
+++      "lagMs": 288,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 32831,
+++      "lagMs": 352,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 34845,
+++      "lagMs": 406,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 35368,
+++      "lagMs": 474,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    }
+++  ],
+++  "stallSummary": {
+++    "count": 14,
+++    "totalMs": 12540,
+++    "maxMs": 5862,
+++    "over1s": 1,
+++    "over5s": 1
+++  },
+++  "providerCalls": 169,
+++  "sqlCount": 18,
+++  "blockedNetwork": {
+++    "count": 1,
+++    "sample": [
+++      "https.request:www.sec.gov"
+++    ]
+++  },
+++  "rssMB": 876
+++}
++\ No newline at end of file
++diff --git a/docs/worker-isolation/evidence/harness-result-c4.json b/docs/worker-isolation/evidence/harness-result-c4.json
++new file mode 100644
++index 0000000..97652f7
++--- /dev/null
+++++ b/docs/worker-isolation/evidence/harness-result-c4.json
++@@ -0,0 +1,464 @@
+++{
+++  "concurrency": 4,
+++  "corpora": [
+++    "12",
+++    "11",
+++    "18",
+++    "14"
+++  ],
+++  "providerLatencyMs": 400,
+++  "phases": {
+++    "extract": {
+++      "wallMs": 1875,
+++      "eld": {
+++        "p50": 31,
+++        "p90": 62,
+++        "p99": 65,
+++        "max": 65,
+++        "mean": 36,
+++        "count": 14
+++      },
+++      "pdf": [
+++        {
+++          "kind": "pdf",
+++          "corpus": "12",
+++          "bytes": 332852,
+++          "pages": 133,
+++          "chars": 400989,
+++          "ms": 645
+++        },
+++        {
+++          "kind": "pdf",
+++          "corpus": "11",
+++          "bytes": 358719,
+++          "pages": 147,
+++          "chars": 399494,
+++          "ms": 809
+++        },
+++        {
+++          "kind": "pdf",
+++          "corpus": "11",
+++          "bytes": 358541,
+++          "pages": 147,
+++          "chars": 399499,
+++          "ms": 827
+++        },
+++        {
+++          "kind": "pdf",
+++          "corpus": "18",
+++          "bytes": 223018,
+++          "pages": 57,
+++          "chars": 394072,
+++          "ms": 308
+++        },
+++        {
+++          "kind": "pdf",
+++          "corpus": "12",
+++          "bytes": 327427,
+++          "pages": 128,
+++          "chars": 401149,
+++          "ms": 1060
+++        },
+++        {
+++          "kind": "pdf",
+++          "corpus": "18",
+++          "bytes": 218031,
+++          "pages": 57,
+++          "chars": 403101,
+++          "ms": 304
+++        },
+++        {
+++          "kind": "pdf",
+++          "corpus": "14",
+++          "bytes": 268419,
+++          "pages": 116,
+++          "chars": 399888,
+++          "ms": 425
+++        },
+++        {
+++          "kind": "pdf",
+++          "corpus": "14",
+++          "bytes": 281903,
+++          "pages": 96,
+++          "chars": 401554,
+++          "ms": 306
+++        }
+++      ],
+++      "htmlCount": 100,
+++      "htmlMaxMs": 46
+++    },
+++    "analyze": {
+++      "wallMs": 69541,
+++      "eld": {
+++        "p50": 10,
+++        "p90": 11,
+++        "p99": 534,
+++        "max": 8254,
+++        "mean": 27,
+++        "count": 2606
+++      },
+++      "perCompany": [
+++        {
+++          "corpus": "14",
+++          "docs": 99,
+++          "ms": 59757,
+++          "success": false,
+++          "error": "Cancelled",
+++          "measures": 0,
+++          "yes": 0,
+++          "scoringErrors": 0
+++        },
+++        {
+++          "corpus": "18",
+++          "docs": 175,
+++          "ms": 61762,
+++          "success": false,
+++          "error": "Cancelled",
+++          "measures": 0,
+++          "yes": 0,
+++          "scoringErrors": 0
+++        },
+++        {
+++          "corpus": "11",
+++          "docs": 177,
+++          "ms": 62557,
+++          "success": false,
+++          "error": "Cancelled",
+++          "measures": 0,
+++          "yes": 0,
+++          "scoringErrors": 0
+++        },
+++        {
+++          "corpus": "12",
+++          "docs": 166,
+++          "ms": 69541,
+++          "success": false,
+++          "error": "Cancelled",
+++          "measures": 0,
+++          "yes": 0,
+++          "scoringErrors": 0
+++        }
+++      ]
+++    }
+++  },
+++  "stalls": [
+++    {
+++      "at": 4493,
+++      "lagMs": 2079,
+++      "phase": "extract",
+++      "stages": []
+++    },
+++    {
+++      "at": 5702,
+++      "lagMs": 650,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 7190,
+++      "lagMs": 1438,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 8169,
+++      "lagMs": 929,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 11317,
+++      "lagMs": 3098,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 20003,
+++      "lagMs": 8233,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 20586,
+++      "lagMs": 533,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 21357,
+++      "lagMs": 721,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 21919,
+++      "lagMs": 513,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 22683,
+++      "lagMs": 714,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 25858,
+++      "lagMs": 2722,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 27162,
+++      "lagMs": 494,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 27902,
+++      "lagMs": 690,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 30594,
+++      "lagMs": 1073,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 32301,
+++      "lagMs": 496,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 32929,
+++      "lagMs": 578,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 35527,
+++      "lagMs": 943,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 37098,
+++      "lagMs": 366,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 37732,
+++      "lagMs": 584,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 44435,
+++      "lagMs": 6301,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 45625,
+++      "lagMs": 382,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 46794,
+++      "lagMs": 1119,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 47393,
+++      "lagMs": 549,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 49412,
+++      "lagMs": 809,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 51636,
+++      "lagMs": 613,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 53987,
+++      "lagMs": 345,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 54826,
+++      "lagMs": 789,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 55773,
+++      "lagMs": 897,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 56637,
+++      "lagMs": 814,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 57029,
+++      "lagMs": 342,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 60487,
+++      "lagMs": 1051,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 62051,
+++      "lagMs": 308,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 62587,
+++      "lagMs": 487,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 64211,
+++      "lagMs": 416,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 64756,
+++      "lagMs": 495,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 68319,
+++      "lagMs": 300,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 68751,
+++      "lagMs": 383,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    },
+++    {
+++      "at": 71322,
+++      "lagMs": 912,
+++      "phase": "analyze",
+++      "stages": [
+++        "analyze:-"
+++      ]
+++    }
+++  ],
+++  "stallSummary": {
+++    "count": 38,
+++    "totalMs": 44166,
+++    "maxMs": 8233,
+++    "over1s": 9,
+++    "over5s": 2
+++  },
+++  "providerCalls": 621,
+++  "sqlCount": 72,
+++  "blockedNetwork": {
+++    "count": 1,
+++    "sample": [
+++      "https.request:www.sec.gov"
+++    ]
+++  },
+++  "rssMB": 1295
+++}
++\ No newline at end of file
++diff --git a/server/db.ts b/server/db.ts
++index ea8e472..d2f132f 100644
++--- a/server/db.ts
+++++ b/server/db.ts
++@@ -15,7 +15,19 @@ if (!process.env.DATABASE_URL) {
++ // pool demand is N * PG_POOL_MAX (plus the app service). Keep N*PG_POOL_MAX
++ // comfortably under ~90. e.g. 8 replicas * 10 = 80. Each replica only runs
++ // WORKER_CONCURRENCY jobs at a time, so 10 connections/replica is ample.
++-const PG_POOL_MAX = parseInt(process.env.PG_POOL_MAX || "20", 10);
+++const PG_POOL_MAX_CONFIGURED = parseInt(process.env.PG_POOL_MAX || "20", 10);
+++// Worker isolation (docs/worker-isolation/DESIGN.md §7): when per-job child
+++// processes are enabled, the replica's PG_POOL_MAX budget is PARTITIONED, not
+++// grown — the worker parent keeps a small reserve for the control plane
+++// (claim, heartbeat, reaper, status writes) and each job child is forked with
+++// PG_POOL_MAX = floor((PG_POOL_MAX − reserve) / WORKER_CONCURRENCY). The
+++// replica-wide total therefore never exceeds the configured PG_POOL_MAX.
+++// CIQ_PROCESS_ROLE is set by server/lib/process-role.ts (worker entrypoint only).
+++export const PG_PARENT_RESERVE = Math.max(1, parseInt(process.env.WORKER_ISOLATION_PARENT_PG_RESERVE || "4", 10));
+++const PG_POOL_MAX =
+++  process.env.CIQ_PROCESS_ROLE === "worker-parent" && process.env.WORKER_ISOLATION_ENABLED === "true"
+++    ? Math.min(PG_PARENT_RESERVE, PG_POOL_MAX_CONFIGURED)
+++    : PG_POOL_MAX_CONFIGURED;
++ // Defaults to 10000ms; can be raised per-environment via PG_CONNECTION_TIMEOUT_MS
++ // so callers queue through transient pool-acquisition spikes instead of failing fast.
++ const PG_CONNECTION_TIMEOUT_MS = parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "10000", 10);
++diff --git a/server/lib/__fixtures__/isolation-child.ts b/server/lib/__fixtures__/isolation-child.ts
++new file mode 100644
++index 0000000..6dfb0b6
++--- /dev/null
+++++ b/server/lib/__fixtures__/isolation-child.ts
++@@ -0,0 +1,52 @@
+++// Test fixture loaded INSIDE an isolated job child via CIQ_CHILD_TEST_MODULE.
+++// Behaviour selected by FIXTURE_MODE (inherited env). No network.
+++import { spawn } from "node:child_process";
+++import fs from "node:fs";
+++
+++const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+++const ok = (extra: any = {}) => ({ success: true, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0, ...extra });
+++
+++export async function run(opts: any, h: { isCancelled: () => boolean; lifecycle: any }): Promise<any> {
+++  const mode = process.env.FIXTURE_MODE;
+++  if (mode === "busy") {
+++    const end = Date.now() + 3000;
+++    while (Date.now() < end) { /* synchronous CPU, 3 s */ }
+++    return ok({ pid: process.pid });
+++  }
+++  if (mode === "cancel") {
+++    for (let i = 0; i < 200; i++) { if (h.isCancelled()) return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 }; await sleep(50); }
+++    return ok();
+++  }
+++  if (mode === "ignore-revoke") {
+++    const g = spawn("sleep", ["300"], { stdio: "ignore" });
+++    fs.writeFileSync(process.env.FIXTURE_PIDFILE!, JSON.stringify({ child: process.pid, grandchild: g.pid }));
+++    process.on("SIGTERM", () => { /* ignore: force SIGKILL escalation */ });
+++    await new Promise(() => {});
+++  }
+++  if (mode === "crash") {
+++    const { __llmSlotForTests } = await import("../ai-providers.js");
+++    await __llmSlotForTests.acquire(); // hold a brokered permit, never release
+++    await sleep(100);
+++    process.exit(1);
+++  }
+++  if (mode === "permits") {
+++    const { __llmSlotForTests } = await import("../ai-providers.js");
+++    const { processorSlotBroker } = await import("../processor.js");
+++    await Promise.all([
+++      ...Array.from({ length: 5 }, async () => { await __llmSlotForTests.acquire(); await sleep(150); __llmSlotForTests.release(); }),
+++      (async () => { await processorSlotBroker.browser.acquire(); await sleep(150); processorSlotBroker.browser.release(); })(),
+++    ]);
+++    return ok();
+++  }
+++  if (mode === "usage") {
+++    const { recordLlmUsage, __usageBufferLengthForTests } = await import("../llm-usage.js");
+++    recordLlmUsage({ raw: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }, model: "stub-1", provider: "stub" });
+++    return ok({ childBuffer: __usageBufferLengthForTests(), pgMax: process.env.PG_POOL_MAX });
+++  }
+++  if (mode === "provider-error") {
+++    const { ProviderScoringError } = await import("../credit-breaker.js");
+++    throw new ProviderScoringError("deepseek", "quota_exhausted", "stub quota");
+++  }
+++  if (mode === "pipeline36") return (await import("./isolation-pipeline36.js")).runPipeline36(opts);
+++  throw new Error("unknown FIXTURE_MODE " + mode);
+++}
++diff --git a/server/lib/__fixtures__/isolation-pipeline36.ts b/server/lib/__fixtures__/isolation-pipeline36.ts
++new file mode 100644
++index 0000000..a5864a3
++--- /dev/null
+++++ b/server/lib/__fixtures__/isolation-pipeline36.ts
++@@ -0,0 +1,36 @@
+++// 36-measure REAL runAnalysisPipeline(skipFetch) inside an isolated child, with
+++// in-memory pg stub + stub providers (same harness as scripts/profile-worker-blocking.ts).
+++import fs from "node:fs";
+++
+++export async function runPipeline36(opts: any): Promise<any> {
+++  const corpus = JSON.parse(fs.readFileSync(process.env.FIXTURE_CORPUS || "/home/ubuntu/var_corpus/12.json", "utf8"))
+++    .filter((d: any) => d && typeof d.text === "string" && d.text.length > 50).slice(0, 40);
+++  const { pool } = await import("../../db.js");
+++  let fencedWrites = 0;
+++  (pool as any).query = async (q: any, vals?: any[]) => {
+++    const text = String(typeof q === "string" ? q : q?.text);
+++    const values = (typeof q === "object" && q?.values) || vals || [];
+++    if (/FROM documents d\s+LEFT JOIN document_content/i.test(text)) {
+++      const cid = Number(values[0]);
+++      const rows = corpus.map((d: any, i: number) => ({ id: cid * 100_000 + i, company_id: cid, url: d.url, title: d.title, type: /\.pdf/i.test(d.url) ? "pdf" : "html",
+++        gate_verdict: "accept", gate_reason: null, fetch_status: "ok", fetch_failures: 0, fetched_at: new Date(), created_at: new Date(), source_type: "first_party", content: d.text }));
+++      return { rows, rowCount: rows.length, fields: [], command: "SELECT" };
+++    }
+++    // Canonical fence lock (lockJobAndBatch): this attempt owns the job, batch running.
+++    if (/FOR UPDATE OF j FOR SHARE OF b/i.test(text)) { fencedWrites++; return { rows: [{ id: 77, batch_id: 1274, attempts: 1, job_status: "claimed", batch_status: "running" }], rowCount: 1, fields: [], command: "SELECT" }; }
+++    return { rows: [], rowCount: 0, fields: [], command: "SELECT" };
+++  };
+++  (pool as any).connect = async () => ({ query: (pool as any).query, release: () => {} });
+++  const { __setProvidersForTests } = await import("../ai-providers.js");
+++  let n = 0;
+++  const mk = (name: string, family: string) => ({ name, model: `${name}-stub`, family, isAvailable: () => true,
+++    complete: async (o: any) => { n++; await new Promise((r) => setTimeout(r, 50)); const m = String(o.prompt || "").slice(Math.floor(String(o.prompt || "").length * 0.55)).match(/[A-Z][^.\n]{140,320}\./);
+++      return JSON.stringify(m && n % 2 === 0 ? { score: 1, verdict: "Yes", confidence: "Medium", evidenceSummary: "Stub verbatim.", quotes: [{ text: m[0], source: "Doc" }] }
+++        : { score: 0, verdict: "No", confidence: "High", evidenceSummary: "No relevant disclosure.", quotes: [] }); } });
+++  __setProvidersForTests([["deepseek", "deepseek"], ["claude", "anthropic"], ["openrouter", "openrouter"], ["gemini", "google"], ["openai", "openai"], ["mistral", "mistral"],
+++    ["claude-arbiter", "anthropic"], ["gpt5-arbiter", "openai"], ["mistral-arbiter", "mistral"], ["gpt-4o-mini", "openai"], ["kimi", "moonshot"], ["glm-4.6", "zhipu"]].map(([a, b]) => mk(a, b)) as any);
+++  const { runAnalysisPipeline } = await import("../pipeline.js");
+++  const res: any = await runAnalysisPipeline(opts);
+++  const all = (res?.analysis?.categories ?? []).flatMap((c: any) => c.measures);
+++  return { success: res.success, error: res.error, documentsProcessed: res.documentsProcessed, documentsFresh: 0, documentsCached: 0, measures: all.length, providerCalls: n, fencedWrites };
+++}
++diff --git a/server/lib/adaptive-concurrency.ts b/server/lib/adaptive-concurrency.ts
++index 153e374..2cf16a0 100644
++--- a/server/lib/adaptive-concurrency.ts
+++++ b/server/lib/adaptive-concurrency.ts
++@@ -21,6 +21,8 @@
++ // timer and applies the returned concurrency. When disabled, the worker keeps
++ // its fixed configured concurrency and this module is never consulted.
++ 
+++import { shouldForwardToParent, sendToParent } from "./isolation-ipc.js";
+++
++ export interface AdaptiveConcurrencyConfig {
++   enabled: boolean;
++   /** Upper bound (also the starting/fixed concurrency). */
++@@ -165,6 +167,10 @@ const MAX_EVENTS = 5000;
++ let signalRing: SignalEvent[] = [];
++ 
++ function pushSignal(kind: SignalKind): void {
+++  // Worker isolation: the controller that reads this window runs in the worker
+++  // PARENT (worker.ts adaptive tick), so a job child forwards its provider
+++  // back-pressure signals instead of recording them in a window nobody reads.
+++  if (shouldForwardToParent()) { sendToParent({ t: "signal", kind }); return; }
++   signalRing.push({ t: Date.now(), kind });
++   if (signalRing.length > MAX_EVENTS) {
++     // Drop oldest half in one shot (amortized O(1)).
++@@ -195,6 +201,11 @@ export function getSignalSnapshot(windowMs: number, now: number = Date.now()): S
++   return { rateLimited, success, total: rateLimited + success };
++ }
++ 
+++/** Worker isolation (parent side): record a signal forwarded by a job child. */
+++export function ingestSignalFromChild(kind: unknown): void {
+++  if (kind === "rate_limited" || kind === "success") pushSignal(kind);
+++}
+++
++ /** Test/utility hook: clear the signal window. */
++ export function resetSignals(): void {
++   signalRing = [];
++diff --git a/server/lib/ai-providers.ts b/server/lib/ai-providers.ts
++index 33da869..4e57601 100644
++--- a/server/lib/ai-providers.ts
+++++ b/server/lib/ai-providers.ts
++@@ -30,6 +30,7 @@ import {
++   assertDispatchAllowed,
++   requestAbortSignal,
++ } from "./lifecycle-fence.js";
+++import { isIsolatedChild, remoteAcquire, remoteRelease } from "./isolation-ipc.js";
++ 
++ // ─── Key Collection Helper ───────────────────────────────────────────────────
++ 
++@@ -77,6 +78,9 @@ const llmWaiters: Array<() => void> = [];
++ // when it never aborts) behaviour is identical to the original semaphore.
++ async function acquireLlmSlot(signal?: AbortSignal | null): Promise<void> {
++   if (signal?.aborted) throw cancellationFromSignal(signal, "llm-slot-wait");
+++  // Worker isolation: in a job child the per-replica permit pool lives in the
+++  // parent (LLM_MAX_CONCURRENCY stays a per-replica limit, not per-child).
+++  if (isIsolatedChild()) return remoteAcquire("llm", signal, () => cancellationFromSignal(signal, "llm-slot-wait"));
++   if (llmActive < LLM_MAX_CONCURRENCY) {
++     llmActive++;
++     return;
++@@ -117,7 +121,14 @@ export const __llmSlotForTests = {
++   state: () => ({ active: llmActive, waiting: llmWaiters.length, max: LLM_MAX_CONCURRENCY }),
++ };
++ 
+++/**
+++ * Worker isolation (parent side): job-isolation.ts grants LLM permits to job
+++ * children from THIS process's semaphore. Same object shape as the test hook.
+++ */
+++export const llmSlotBroker = __llmSlotForTests;
+++
++ function releaseLlmSlot(): void {
+++  if (isIsolatedChild()) { remoteRelease("llm"); return; }
++   llmActive = Math.max(0, llmActive - 1);
++   const next = llmWaiters.shift();
++   if (next) next();
++diff --git a/server/lib/isolation-ipc.ts b/server/lib/isolation-ipc.ts
++new file mode 100644
++index 0000000..f46f05b
++--- /dev/null
+++++ b/server/lib/isolation-ipc.ts
++@@ -0,0 +1,113 @@
+++/**
+++ * Worker isolation — CHILD-side IPC client (docs/worker-isolation/DESIGN.md §5–§6).
+++ *
+++ * Leaf module: imports nothing from the pipeline, so ai-providers / processor /
+++ * llm-usage / adaptive-concurrency / credit-breaker can import it without cycles.
+++ *
+++ * In a normal (non-isolated) process every function here is inert:
+++ * isIsolatedChild() is false, so the hooked semaphores, usage buffer, adaptive
+++ * signals and credit breaker run their original local code paths unchanged.
+++ *
+++ * In an isolated job child (CIQ_ISOLATED_CHILD=1, forked with an IPC channel by
+++ * job-isolation.ts) the per-replica semaphores are BROKERED by the parent so
+++ * LLM_MAX_CONCURRENCY / MAX_CONCURRENT_BROWSER / MAX_CONCURRENT_SUBPROC stay
+++ * per-replica limits (not per-child), and telemetry/breaker events are forwarded
+++ * to the parent that owns the shared state.
+++ */
+++
+++export type PermitKind = "llm" | "browser" | "proc";
+++
+++export function isIsolatedChild(): boolean {
+++  return process.env.CIQ_ISOLATED_CHILD === "1" && typeof process.send === "function";
+++}
+++
+++/** Fire-and-forget message to the parent. Never throws (channel may be closing). */
+++export function sendToParent(msg: unknown): void {
+++  try {
+++    if (process.connected) process.send!(msg as any);
+++  } catch { /* parent gone: the child exits on 'disconnect' */ }
+++}
+++
+++// Broadcasts from the parent (e.g. another child's credit-breaker trip) are
+++// applied locally with forwarding suppressed, so they are never echoed back.
+++let suppressDepth = 0;
+++export function withForwardingSuppressed<T>(fn: () => T): T {
+++  suppressDepth++;
+++  try { return fn(); } finally { suppressDepth--; }
+++}
+++/** True when a hooked call site should forward to the parent instead of / in addition to acting locally. */
+++export function shouldForwardToParent(): boolean {
+++  return suppressDepth === 0 && isIsolatedChild();
+++}
+++
+++// ─── Brokered permits ────────────────────────────────────────────────────────
+++// Releases at the call sites are argument-less (releaseLlmSlot() etc.), so the
+++// child keeps a FIFO of outstanding grant ids per kind; a release returns the
+++// oldest one. Permits are fungible within a kind, so which id is returned does
+++// not matter — only the count, which the parent enforces.
+++
+++let seq = 0;
+++interface Pending { kind: PermitKind; resolve: () => void; cleanup: () => void }
+++const pending = new Map<number, Pending>();
+++const outstanding: Record<PermitKind, number[]> = { llm: [], browser: [], proc: [] };
+++let listening = false;
+++
+++function ensureListener(): void {
+++  if (listening) return;
+++  listening = true;
+++  process.on("message", (m: any) => {
+++    if (!m || m.t !== "granted") return;
+++    const p = pending.get(m.id);
+++    if (!p) {
+++      // Granted after we cancelled the wait: hand the permit straight back.
+++      sendToParent({ t: "release", id: m.id });
+++      return;
+++    }
+++    pending.delete(m.id);
+++    p.cleanup();
+++    outstanding[p.kind].push(m.id);
+++    p.resolve();
+++  });
+++}
+++
+++/**
+++ * Acquire one permit of `kind` from the parent. With a signal (LLM scoring
+++ * path) a queued wait is cancellable exactly like the local semaphore: on abort
+++ * the request is withdrawn and the promise rejects with `abortError()`.
+++ */
+++export function remoteAcquire(kind: PermitKind, signal?: AbortSignal | null, abortError?: () => Error): Promise<void> {
+++  ensureListener();
+++  const mkErr = () => (abortError ? abortError() : new Error(`${kind} permit wait aborted`));
+++  if (signal?.aborted) return Promise.reject(mkErr());
+++  const id = ++seq;
+++  return new Promise<void>((resolve, reject) => {
+++    let onAbort: (() => void) | undefined;
+++    const cleanup = () => { if (onAbort && signal) signal.removeEventListener("abort", onAbort); };
+++    pending.set(id, { kind, resolve, cleanup });
+++    if (signal) {
+++      onAbort = () => {
+++        if (!pending.has(id)) return;
+++        pending.delete(id);
+++        cleanup();
+++        sendToParent({ t: "cancelAcquire", id });
+++        reject(mkErr());
+++      };
+++      signal.addEventListener("abort", onAbort, { once: true });
+++    }
+++    sendToParent({ t: "acquire", id, kind });
+++  });
+++}
+++
+++/** Return the oldest outstanding permit of `kind` to the parent (no-op if none). */
+++export function remoteRelease(kind: PermitKind): void {
+++  const id = outstanding[kind].shift();
+++  if (id !== undefined) sendToParent({ t: "release", id });
+++}
+++
+++/** Test/diagnostic view of the child-side permit bookkeeping. */
+++export function remotePermitState(): { pending: number; outstanding: Record<PermitKind, number> } {
+++  return {
+++    pending: pending.size,
+++    outstanding: { llm: outstanding.llm.length, browser: outstanding.browser.length, proc: outstanding.proc.length },
+++  };
+++}
++diff --git a/server/lib/job-child.ts b/server/lib/job-child.ts
++new file mode 100644
++index 0000000..521366a
++--- /dev/null
+++++ b/server/lib/job-child.ts
++@@ -0,0 +1,62 @@
+++/**
+++ * Worker isolation — job CHILD entry (forked by job-isolation.ts).
+++ * Runs exactly one runAnalysisPipeline under its own lifecycle (same ownership
+++ * token + deadline as the parent attempt), then reports result/error and exits.
+++ * Must not statically import pipeline/db/redis: they load only after `init`.
+++ */
+++import { createAttemptLifecycle, registerBatchCancelSource, revokeAttempt } from "./lifecycle-fence.js";
+++import { runWithDiagContext, getDiagContext } from "./diag-context.js";
+++import { runWithLlmContext } from "./llm-usage.js";
+++import { sendToParent } from "./isolation-ipc.js";
+++
+++let cancelFlag = false;
+++let lc: ReturnType<typeof createAttemptLifecycle> | null = null;
+++let started = false;
+++registerBatchCancelSource(() => cancelFlag);
+++
+++process.on("disconnect", () => process.exit(0));
+++process.on("message", (m: any) => {
+++  if (!m || typeof m !== "object") return;
+++  if (m.t === "revoke") revokeAttempt(lc, m.reason || "revoked");
+++  else if (m.t === "cancel") cancelFlag = true;
+++  else if (m.t === "init" && !started) { started = true; void run(m); }
+++});
+++
+++function serializeError(e: any) {
+++  return { name: e?.name, message: String(e?.message ?? e), stack: e?.stack, code: e?.code, provider: e?.provider, failureClass: e?.failureClass, reason: e?.reason };
+++}
+++
+++async function run(init: any): Promise<void> {
+++  const o = init.opts;
+++  if (init.cancelled) cancelFlag = true;
+++  const L = init.lifecycle;
+++  lc = L ? createAttemptLifecycle({ jobId: L.jobId, batchId: L.batchId, attemptNumber: L.attemptNumber, deadlineAt: L.deadlineAt ? new Date(L.deadlineAt) : null, attemptToken: L.attemptToken }) : null;
+++  if (L?.revokedReason) revokeAttempt(lc, L.revokedReason);
+++  const batchFetchState = o.batchFetchState ?? { hostSlowFetches: new Map(), hostCircuitBroken: new Set() };
+++  const cancelCheck = () => cancelFlag || !!lc?.revoked;
+++  const ctx: any = { batchId: o.batchId ?? null, jobId: L?.jobId ?? null, attemptId: init.attemptId, attemptNumber: L?.attemptNumber ?? null, companyId: init.companyId, frameworkId: init.frameworkId, stage: "pipeline", lifecycle: lc ?? undefined };
+++  const stageTimer = setInterval(() => sendToParent({ t: "stage", stage: ctx.stage }), 2000);
+++  try {
+++    const result = await runWithLlmContext({ workspaceId: o.workspaceId, batchId: o.batchId, companyId: init.companyId, frameworkId: init.frameworkId, callType: "scoring" },
+++      () => runWithDiagContext(ctx, async () => {
+++        const full = { ...o, cancelCheck, batchFetchState };
+++        const testModule = process.env.CIQ_CHILD_TEST_MODULE;
+++        if (testModule) {
+++          const mod = await import(testModule);
+++          return mod.run(full, { lifecycle: lc, getDiagContext, isCancelled: cancelCheck });
+++        }
+++        const { runAnalysisPipeline } = await import("./pipeline.js");
+++        return runAnalysisPipeline(full);
+++      }));
+++    sendToParent({ t: "stage", stage: ctx.stage });
+++    sendToParent({ t: "result", result, revokedReason: lc?.revoked ? lc.revokedReason : null, batchFetchState });
+++  } catch (e) {
+++    sendToParent({ t: "error", error: serializeError(e) });
+++  } finally {
+++    clearInterval(stageTimer);
+++  }
+++  // Let the IPC queue drain, then exit (pools/timers must not keep us alive).
+++  setTimeout(() => process.exit(0), 50);
+++}
+++
+++sendToParent({ t: "ready" });
++diff --git a/server/lib/job-isolation.test.ts b/server/lib/job-isolation.test.ts
++new file mode 100644
++index 0000000..e739a88
++--- /dev/null
+++++ b/server/lib/job-isolation.test.ts
++@@ -0,0 +1,164 @@
+++/**
+++ * Worker isolation supervisor tests (DESIGN.md §10 items 1–7). Deterministic, no network.
+++ * Run: DATABASE_URL=postgres://stub:stub@127.0.0.1:1/stub npx tsx server/lib/job-isolation.test.ts
+++ */
+++import { test } from "node:test";
+++import assert from "node:assert/strict";
+++import fs from "node:fs";
+++import os from "node:os";
+++import path from "node:path";
+++import { fileURLToPath } from "node:url";
+++
+++Object.assign(process.env, {
+++  WORKER_ISOLATION_ENABLED: "true", WORKER_CONCURRENCY: "4", PG_POOL_MAX: "20", LLM_MAX_CONCURRENCY: "8", MAX_CONCURRENT_BROWSER: "1",
+++  WORKER_ISOLATION_KILL_GRACE_MS: "1000", LLM_USAGE_LOGGING_ENABLED: "true", SCORING_STRICT_PROVIDER: "true", SCORING_REQ_LOG: "off",
+++  PROVIDER_FALLBACK_ORDER: "deepseek", RETRIEVAL_SEMANTIC_HYBRID: "false", DIAG_DB_INSTRUMENTATION: "false",
+++  CIQ_CHILD_TEST_MODULE: path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__", "isolation-child.ts"),
+++});
+++
+++const { runPipelineIsolated, isolationEnabled, childPgBudget, __testing } = await import("./job-isolation.js");
+++const { runWithDiagContext } = await import("./diag-context.js");
+++const { createAttemptLifecycle, revokeAttempt } = await import("./lifecycle-fence.js");
+++const { __usageBufferLengthForTests } = await import("./llm-usage.js");
+++const { ProviderScoringError } = await import("./credit-breaker.js");
+++
+++const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+++const company = { id: 5001, workspaceId: 1, name: "Stub PLC", createdAt: new Date("2026-01-01") };
+++const framework = { id: 9001, workspaceId: 1, name: "F" };
+++function mkOpts(extra: any = {}) {
+++  return { company, framework, measures: [], workspaceId: 1, batchId: 1274, attemptId: "t-attempt", batchFetchState: { hostSlowFetches: new Map(), hostCircuitBroken: new Set<string>() }, ...extra } as any;
+++}
+++function inCtx<T>(fn: (lc: any) => Promise<T>, deadlineMs: number | null = null): Promise<T> {
+++  const lc = createAttemptLifecycle({ jobId: 77, batchId: 1274, attemptNumber: 1, deadlineAt: deadlineMs ? new Date(Date.now() + deadlineMs) : null, attemptToken: "00000000-0000-4000-8000-000000000001" });
+++  return runWithDiagContext({ batchId: 1274, jobId: 77, attemptId: "t-attempt", attemptNumber: 1, companyId: 5001, frameworkId: 9001, stage: "pipeline", lifecycle: lc }, () => fn(lc));
+++}
+++function lagProbe() {
+++  let last = performance.now(), max = 0;
+++  const t = setInterval(() => { const now = performance.now(); max = Math.max(max, now - last - 20); last = now; }, 20);
+++  return { stop: () => { clearInterval(t); return max; } };
+++}
+++async function assertNoLeaks() {
+++  for (let i = 0; i < 40 && __testing.liveChildren() > 0; i++) await sleep(25); // child exits ~50ms after its result
+++  const s = __testing.brokerState();
+++  assert.deepEqual([s.llm.active, s.llm.waiting, s.browser.active, s.browser.waiting, s.proc.active, s.proc.waiting], [0, 0, 0, 0, 0, 0], JSON.stringify(s));
+++  assert.equal(__testing.liveChildren(), 0);
+++}
+++const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+++
+++test("flag + PG budget partition (C = floor((20-4)/4) = 4)", () => {
+++  assert.equal(isolationEnabled(), true);
+++  assert.equal(childPgBudget(), 4);
+++  assert.equal(childPgBudget({ PG_POOL_MAX: "6", WORKER_CONCURRENCY: "4" } as any), 0);
+++});
+++
+++test("1. child busy-loops 3s: parent event loop stays responsive (<100ms lag)", async () => {
+++  process.env.FIXTURE_MODE = "busy";
+++  const p = lagProbe();
+++  const t0 = Date.now();
+++  const r: any = await inCtx(() => runPipelineIsolated(mkOpts()));
+++  const maxLag = p.stop();
+++  console.log(`# busy child: wall=${Date.now() - t0}ms parent max lag=${maxLag.toFixed(1)}ms childPid=${r.pid} parentPid=${process.pid}`);
+++  assert.equal(r.success, true);
+++  assert.notEqual(r.pid, process.pid);
+++  assert.ok(maxLag < 100, `parent lag ${maxLag}ms`);
+++  await assertNoLeaks();
+++});
+++
+++test("2. cancel: parent cancelCheck → child returns Cancelled", async () => {
+++  process.env.FIXTURE_MODE = "cancel";
+++  let flag = false;
+++  setTimeout(() => { flag = true; }, 2500);
+++  const t0 = Date.now();
+++  const r: any = await inCtx(() => runPipelineIsolated(mkOpts({ cancelCheck: () => flag })));
+++  console.log(`# cancel: returned after ${Date.now() - t0}ms error=${r.error}`);
+++  assert.equal(r.success, false);
+++  assert.equal(r.error, "Cancelled");
+++  await sleep(100);
+++  await assertNoLeaks();
+++});
+++
+++test("3. child ignoring revoke + SIGTERM is SIGKILLed with its process group; watchdog error", async () => {
+++  process.env.FIXTURE_MODE = "ignore-revoke";
+++  const pidfile = path.join(os.tmpdir(), `iso-pid-${process.pid}.json`);
+++  process.env.FIXTURE_PIDFILE = pidfile;
+++  try { fs.unlinkSync(pidfile); } catch {}
+++  const t0 = Date.now();
+++  const err: any = await inCtx(async (lc) => {
+++    const p = runPipelineIsolated(mkOpts());
+++    for (let i = 0; i < 100 && !fs.existsSync(pidfile); i++) await sleep(50);
+++    revokeAttempt(lc, "job_watchdog_timeout");
+++    return p.then(() => null, (e) => e);
+++  });
+++  const pids = JSON.parse(fs.readFileSync(pidfile, "utf8"));
+++  console.log(`# deadline: rejected after ${Date.now() - t0}ms: ${err?.message}`);
+++  assert.ok(err instanceof Error);
+++  assert.match(err.message, /^Job watchdog timeout: Isolated job child exited unexpectedly \(code=null signal=SIGKILL/);
+++  await sleep(200);
+++  assert.equal(alive(pids.child), false, "child gone");
+++  assert.equal(alive(pids.grandchild), false, "grandchild (process group) gone");
+++  await assertNoLeaks();
+++});
+++
+++test("4. crash: process.exit(1) holding an LLM permit → explicit retriable error, permit released", async () => {
+++  process.env.FIXTURE_MODE = "crash";
+++  const err: any = await inCtx(() => runPipelineIsolated(mkOpts()).then(() => null, (e) => e));
+++  console.log(`# crash: ${err?.message}`);
+++  assert.match(err.message, /^Isolated job child exited unexpectedly \(code=1 signal=null stage=/);
+++  // same predicate list as worker.ts isRetriableError
+++  const nonRetriable = ["Company not found", "Framework not found", "No measures in framework", "Could not claim job", "Job watchdog timeout", "Insufficient corpus"];
+++  assert.equal(nonRetriable.some((m) => err.message.includes(m)), false, "retriable");
+++  await assertNoLeaks();
+++});
+++
+++test("5. permit brokerage: 4 children × 5 LLM permits → max 8 concurrent; browser max 1; all released", async () => {
+++  process.env.FIXTURE_MODE = "permits";
+++  let maxLlm = 0, maxBrowser = 0;
+++  const t = setInterval(() => { const s = __testing.brokerState(); maxLlm = Math.max(maxLlm, s.llm.active); maxBrowser = Math.max(maxBrowser, s.browser.active); }, 5);
+++  const rs = await Promise.all([0, 1, 2, 3].map(() => inCtx(() => runPipelineIsolated(mkOpts()))));
+++  clearInterval(t);
+++  console.log(`# permits: maxLlm=${maxLlm} maxBrowser=${maxBrowser}`);
+++  assert.ok(rs.every((r: any) => r.success));
+++  assert.equal(maxLlm, 8);
+++  assert.equal(maxBrowser, 1);
+++  await sleep(50);
+++  await assertNoLeaks();
+++});
+++
+++test("6. usage row forwarded to parent buffer; child buffer stays empty; child PG_POOL_MAX=4", async () => {
+++  process.env.FIXTURE_MODE = "usage";
+++  const before = __usageBufferLengthForTests();
+++  const r: any = await inCtx(() => runPipelineIsolated(mkOpts()));
+++  assert.equal(r.childBuffer, 0);
+++  assert.equal(r.pgMax, "4");
+++  assert.equal(__usageBufferLengthForTests(), before + 1);
+++});
+++
+++test("ProviderScoringError rebuilt as the real class (isProviderQuotaError path)", async () => {
+++  process.env.FIXTURE_MODE = "provider-error";
+++  const err: any = await inCtx(() => runPipelineIsolated(mkOpts()).then(() => null, (e) => e));
+++  assert.ok(err instanceof ProviderScoringError);
+++  assert.equal(err.failureClass, "quota_exhausted");
+++  assert.equal(err.provider, "deepseek");
+++  await assertNoLeaks();
+++});
+++
+++const CORPUS = "/home/ubuntu/var_corpus/12.json";
+++test("7. full 36-measure real pipeline in child (stubbed pg/providers); parent responsive", { skip: !fs.existsSync(CORPUS) && "corpus missing" }, async () => {
+++  process.env.FIXTURE_MODE = "pipeline36";
+++  const savedMeasures: any[] = JSON.parse(fs.readFileSync("/home/ubuntu/var_measures.json", "utf8"));
+++  const sf: any = JSON.parse(fs.readFileSync("/home/ubuntu/var_framework.json", "utf8"));
+++  const camel = (m: any, i: number) => ({ id: m.id ?? i + 1, frameworkId: 9001, measureId: m.measure_id ?? m.measureId, category: m.category, categoryNumber: m.category_number ?? m.categoryNumber ?? 1,
+++    title: m.title, definition: m.definition ?? "", scoringGuidance: m.scoring_guidance ?? m.scoringGuidance ?? null, evidenceKeywords: m.evidence_keywords ?? m.evidenceKeywords ?? null,
+++    requiredSourceTypes: m.required_source_types ?? null, displayOrder: i + 1, scoringMode: m.scoring_mode ?? m.scoringMode ?? undefined });
+++  const measures = Array.from({ length: 36 }, (_, i) => { const b = camel(savedMeasures[i % savedMeasures.length], i); return i < savedMeasures.length ? b : { ...b, id: 10_000 + i, measureId: `${b.measureId}-dup${i}` }; });
+++  const fw = { id: 9001, workspaceId: 1, name: sf.name, topicDescription: sf.topic_description ?? sf.topicDescription, version: 1, isActive: true };
+++  const p = lagProbe();
+++  const t0 = Date.now();
+++  const r: any = await inCtx(() => runPipelineIsolated(mkOpts({ company: { ...company, analysisStatus: "fetched", ticker: null, website: null }, framework: fw, measures, skipFetch: true })));
+++  const maxLag = p.stop();
+++  console.log(`# pipeline36: wall=${Date.now() - t0}ms success=${r.success} measures=${r.measures} providerCalls=${r.providerCalls} fencedWriteLocks=${r.fencedWrites} err=${r.error ?? "-"} parentMaxLag=${maxLag.toFixed(1)}ms`);
+++  assert.equal(r.success, true, r.error);
+++  assert.equal(r.measures, 36);
+++  assert.ok(maxLag < 100, `parent lag ${maxLag}ms`);
+++  await assertNoLeaks();
+++});
++diff --git a/server/lib/job-isolation.ts b/server/lib/job-isolation.ts
++new file mode 100644
++index 0000000..56ec062
++--- /dev/null
+++++ b/server/lib/job-isolation.ts
++@@ -0,0 +1,193 @@
+++/**
+++ * Worker isolation — PARENT-side supervisor (docs/worker-isolation/DESIGN.md).
+++ *
+++ * runPipelineIsolated() runs one job's runAnalysisPipeline in a forked child
+++ * process so its synchronous CPU work can never block the BullMQ worker's event
+++ * loop (lock renewal, heartbeats, watchdog, ownership watch, PG/Redis I/O).
+++ * Same signature/result as runAnalysisPipeline; gated by
+++ * WORKER_ISOLATION_ENABLED=true (default off → worker.ts calls the pipeline
+++ * in-process exactly as at 35884ee).
+++ */
+++import { fork, type ChildProcess } from "node:child_process";
+++import { fileURLToPath } from "node:url";
+++import path from "node:path";
+++import type { PipelineOptions, PipelineResult, BatchFetchState } from "./pipeline.js";
+++import { getDiagContext, setDiagStage } from "./diag-context.js";
+++import { revokeAttempt, LifecycleCancelledError } from "./lifecycle-fence.js";
+++import { llmSlotBroker } from "./ai-providers.js";
+++import { processorSlotBroker } from "./processor.js";
+++import { ingestUsageRowFromChild } from "./llm-usage.js";
+++import { ingestSignalFromChild } from "./adaptive-concurrency.js";
+++import { ProviderScoringError } from "./credit-breaker.js";
+++import { PG_PARENT_RESERVE } from "../db.js";
+++import type { PermitKind } from "./isolation-ipc.js";
+++
+++export function isolationEnabled(): boolean {
+++  return process.env.WORKER_ISOLATION_ENABLED === "true";
+++}
+++
+++const CHILD_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "job-child.ts");
+++
+++/** Per-child DB budget: floor((PG_POOL_MAX − R) / WORKER_CONCURRENCY) (DESIGN §4). */
+++export function childPgBudget(env: NodeJS.ProcessEnv = process.env): number {
+++  const total = parseInt(env.PG_POOL_MAX || "20", 10);
+++  const reserve = Math.max(1, parseInt(env.WORKER_ISOLATION_PARENT_PG_RESERVE || String(PG_PARENT_RESERVE), 10));
+++  const conc = Math.max(1, parseInt(env.WORKER_CONCURRENCY || "10", 10));
+++  return Math.floor((total - reserve) / conc);
+++}
+++
+++interface Grant { kind: PermitKind; granted: boolean; cancelled: boolean; ac?: AbortController }
+++const live = new Set<ChildProcess>();
+++let exitHookInstalled = false;
+++
+++function killGroup(child: ChildProcess, sig: NodeJS.Signals): void {
+++  if (!child.pid) return;
+++  try { process.kill(-child.pid, sig); } catch { try { child.kill(sig); } catch { /* gone */ } }
+++}
+++
+++function mergeBatchFetchState(into: BatchFetchState | undefined, from: BatchFetchState | undefined): void {
+++  if (!into || !from) return;
+++  for (const h of from.hostCircuitBroken ?? []) into.hostCircuitBroken.add(h);
+++  for (const [h, n] of from.hostSlowFetches ?? []) into.hostSlowFetches.set(h, Math.max(n, into.hostSlowFetches.get(h) ?? 0));
+++}
+++
+++function rebuildError(e: any): Error {
+++  let err: Error;
+++  if (e?.name === "ProviderScoringError") err = new ProviderScoringError(e.provider, e.failureClass, e.message);
+++  else if (e?.name === "LifecycleCancelledError") { err = new LifecycleCancelledError(e.reason || "revoked"); err.message = e.message; }
+++  else { err = new Error(e?.message || "Isolated job child error"); if (e?.name) err.name = e.name; }
+++  if (e?.stack) err.stack = e.stack;
+++  if (e?.code !== undefined) (err as any).code = e.code;
+++  return err;
+++}
+++
+++export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResult> {
+++  const ctx = getDiagContext();
+++  const lc = ctx?.lifecycle;
+++  const budget = childPgBudget();
+++  if (budget < 1) {
+++    return Promise.reject(new Error(`Worker isolation refused: per-child PG budget ${budget} < 1 (PG_POOL_MAX − WORKER_ISOLATION_PARENT_PG_RESERVE) / WORKER_CONCURRENCY`));
+++  }
+++  if (!exitHookInstalled) {
+++    exitHookInstalled = true;
+++    process.on("exit", () => { for (const c of live) killGroup(c, "SIGKILL"); });
+++  }
+++  const graceMs = parseInt(process.env.WORKER_ISOLATION_KILL_GRACE_MS || "10000", 10);
+++  const testModule = process.env.CIQ_CHILD_TEST_MODULE;
+++
+++  return new Promise<PipelineResult>((resolve, reject) => {
+++    const child = fork(CHILD_PATH, [], {
+++      execArgv: ["--import", "tsx"],
+++      serialization: "advanced",
+++      detached: true,
+++      stdio: ["inherit", "inherit", "inherit", "ipc"],
+++      env: { ...process.env, CIQ_ISOLATED_CHILD: "1", CIQ_PROCESS_ROLE: "job-child", PG_POOL_MAX: String(budget), ...(testModule ? { CIQ_CHILD_TEST_MODULE: testModule } : {}) },
+++    });
+++    live.add(child);
+++    const grants = new Map<number, Grant>();
+++    let settled = false;
+++    let lastStage = "spawn";
+++    let killReason: string | null = null;
+++    const timers: Array<ReturnType<typeof setTimeout>> = [];
+++    const send = (m: unknown) => { try { if (child.connected) child.send(m as any); } catch { /* closing */ } };
+++
+++    const armKill = (why: string) => {
+++      if (killReason) return;
+++      killReason = why;
+++      timers.push(setTimeout(() => {
+++        console.warn(`[WORKER-ISOLATION] child pid=${child.pid} still alive ${graceMs}ms after ${why} → SIGTERM group`);
+++        killGroup(child, "SIGTERM");
+++        timers.push(setTimeout(() => killGroup(child, "SIGKILL"), 5000));
+++      }, graceMs));
+++    };
+++
+++    // Parent lifecycle revoke (watchdog / ownership lost) → child revoke + escalation.
+++    const onRevoke = () => { send({ t: "revoke", reason: lc?.revokedReason || "revoked" }); armKill(`revoke:${lc?.revokedReason}`); };
+++    if (lc) { if (lc.abort.signal.aborted) onRevoke(); else lc.abort.signal.addEventListener("abort", onRevoke, { once: true }); }
+++    if (lc?.deadlineAt) {
+++      const ms = Math.max(0, lc.deadlineAt.getTime() - Date.now());
+++      timers.push(setTimeout(() => armKill("deadline"), ms));
+++    }
+++    let cancelSent = false;
+++    const cancelPoll = setInterval(() => {
+++      if (!cancelSent && opts.cancelCheck?.()) { cancelSent = true; send({ t: "cancel" }); armKill("cancel"); }
+++    }, 500);
+++
+++    const releaseAll = () => {
+++      for (const [id, g] of grants) {
+++        if (g.granted) {
+++          if (g.kind === "llm") llmSlotBroker.release(); else processorSlotBroker[g.kind].release();
+++        } else { g.cancelled = true; g.ac?.abort(); }
+++        grants.delete(id);
+++      }
+++    };
+++    const cleanup = () => {
+++      clearInterval(cancelPoll);
+++      for (const t of timers) clearTimeout(t);
+++      lc?.abort.signal.removeEventListener("abort", onRevoke);
+++    };
+++    const finish = (fn: () => void) => { if (settled) return; settled = true; fn(); };
+++
+++    child.on("message", (m: any) => {
+++      if (!m || typeof m !== "object") return;
+++      switch (m.t) {
+++        case "ready":
+++          send({ t: "init", opts: { ...opts, cancelCheck: undefined }, lifecycle: lc ? { jobId: lc.jobId, batchId: lc.batchId, attemptNumber: lc.attemptNumber, deadlineAt: lc.deadlineAt, attemptToken: lc.attemptToken ?? null, revokedReason: lc.revoked ? lc.revokedReason : null } : null,
+++            attemptId: ctx?.attemptId ?? opts.attemptId ?? null, companyId: ctx?.companyId ?? (opts.company as any)?.id ?? null, frameworkId: ctx?.frameworkId ?? (opts.framework as any)?.id ?? null, cancelled: cancelSent });
+++          break;
+++        case "acquire": {
+++          const kind = m.kind as PermitKind;
+++          const g: Grant = { kind, granted: false, cancelled: false };
+++          grants.set(m.id, g);
+++          let p: Promise<void>;
+++          if (kind === "llm") { g.ac = new AbortController(); p = llmSlotBroker.acquire(g.ac.signal); } else p = processorSlotBroker[kind].acquire();
+++          p.then(() => {
+++            if (g.cancelled || !grants.has(m.id) || settled && !child.connected) {
+++              if (kind === "llm") llmSlotBroker.release(); else processorSlotBroker[kind].release();
+++              grants.delete(m.id);
+++              return;
+++            }
+++            g.granted = true;
+++            send({ t: "granted", id: m.id });
+++          }, () => { grants.delete(m.id); });
+++          break;
+++        }
+++        case "cancelAcquire": { const g = grants.get(m.id); if (g && !g.granted) { g.cancelled = true; g.ac?.abort(); grants.delete(m.id); } break; }
+++        case "release": {
+++          const g = grants.get(m.id);
+++          if (g?.granted) { if (g.kind === "llm") llmSlotBroker.release(); else processorSlotBroker[g.kind].release(); grants.delete(m.id); }
+++          break;
+++        }
+++        case "usage": ingestUsageRowFromChild(m.row); break;
+++        case "signal": ingestSignalFromChild(m.kind); break;
+++        case "stage": if (typeof m.stage === "string") { lastStage = m.stage; setDiagStage(m.stage); } break;
+++        case "result":
+++          mergeBatchFetchState(opts.batchFetchState, m.batchFetchState);
+++          if (m.revokedReason && lc) revokeAttempt(lc, m.revokedReason);
+++          finish(() => resolve(m.result as PipelineResult));
+++          break;
+++        case "error":
+++          finish(() => reject(rebuildError(m.error)));
+++          break;
+++      }
+++    });
+++
+++    child.on("exit", (code, signal) => {
+++      live.delete(child);
+++      releaseAll();
+++      cleanup();
+++      // Reap any descendants (Chromium / pdftotext) left in the child's group.
+++      if (child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already gone */ } }
+++      finish(() => {
+++        const base = `Isolated job child exited unexpectedly (code=${code} signal=${signal} stage=${lastStage})`;
+++        reject(new Error(killReason ? `Job watchdog timeout: ${base} after ${killReason}` : base));
+++      });
+++    });
+++    child.on("error", (e) => { console.warn(`[WORKER-ISOLATION] child error: ${e?.message || e}`); });
+++  });
+++}
+++
+++export const __testing = {
+++  liveChildren: () => live.size,
+++  brokerState: () => ({ llm: llmSlotBroker.state(), browser: processorSlotBroker.browser.state(), proc: processorSlotBroker.proc.state() }),
+++};
++diff --git a/server/lib/llm-usage.ts b/server/lib/llm-usage.ts
++index 0d282aa..004f674 100644
++--- a/server/lib/llm-usage.ts
+++++ b/server/lib/llm-usage.ts
++@@ -16,6 +16,7 @@
++ // up the right attribution without threading params through every function.
++ 
++ import { AsyncLocalStorage } from "node:async_hooks";
+++import { isIsolatedChild, sendToParent } from "./isolation-ipc.js";
++ 
++ // ─── Attribution context (propagated via AsyncLocalStorage) ──────────────────
++ 
++@@ -337,6 +338,10 @@ function ensureFlusher(): void {
++ }
++ 
++ function enqueueUsageEvent(row: UsageRow): void {
+++  // Worker isolation (DESIGN.md §4): a job child opens NO usage pool; rows go to
+++  // the worker parent, whose buffer + pool (max PG_USAGE_POOL_MAX) persist them,
+++  // so the replica-wide usage connection budget is unchanged.
+++  if (isIsolatedChild()) { sendToParent({ t: "usage", row }); return; }
++   usageBuffer.push(row);
++   if (usageBuffer.length > BUFFER_MAX_ROWS) {
++     const dropped = usageBuffer.length - BUFFER_MAX_ROWS;
++@@ -347,6 +352,16 @@ function enqueueUsageEvent(row: UsageRow): void {
++   if (usageBuffer.length >= FLUSH_MAX_ROWS) void flushUsage();
++ }
++ 
+++/** Worker isolation (parent side): buffer a usage row forwarded by a job child. */
+++export function ingestUsageRowFromChild(row: unknown): void {
+++  if (Array.isArray(row) && row.length === USAGE_COLS) enqueueUsageEvent(row as UsageRow);
+++}
+++
+++/** Test-only: number of rows currently buffered (not yet flushed). */
+++export function __usageBufferLengthForTests(): number {
+++  return usageBuffer.length;
+++}
+++
++ async function flushUsage(): Promise<void> {
++   if (flushing || usageBuffer.length === 0) return;
++   flushing = true;
++diff --git a/server/lib/process-role.ts b/server/lib/process-role.ts
++new file mode 100644
++index 0000000..e9f6635
++--- /dev/null
+++++ b/server/lib/process-role.ts
++@@ -0,0 +1,13 @@
+++/**
+++ * Process-role marker. Imported FIRST by server/worker-main.ts (side effect only)
+++ * so that modules evaluated afterwards — notably server/db.ts — can tell the
+++ * BullMQ worker PARENT apart from the web server and from isolated job children.
+++ *
+++ * With WORKER_ISOLATION_ENABLED=true the parent no longer runs the pipeline, so
+++ * db.ts caps its pool at WORKER_ISOLATION_PARENT_PG_RESERVE and the remainder of
+++ * PG_POOL_MAX is partitioned across job children (docs/worker-isolation/DESIGN.md §4).
+++ * Children are forked with CIQ_PROCESS_ROLE=job-child and never import this file.
+++ */
+++if (!process.env.CIQ_PROCESS_ROLE) process.env.CIQ_PROCESS_ROLE = "worker-parent";
+++
+++export {};
++diff --git a/server/lib/processor.ts b/server/lib/processor.ts
++index d8b3617..c5067fd 100644
++--- a/server/lib/processor.ts
+++++ b/server/lib/processor.ts
++@@ -25,6 +25,7 @@ import {
++ import { noteRateLimited } from "./adaptive-concurrency.js";
++ import { dispatchRevokedReason } from "./lifecycle-fence.js";
++ import { beginStage } from "./diag-context.js";
+++import { isIsolatedChild, remoteAcquire, remoteRelease } from "./isolation-ipc.js";
++ 
++ // User-facing message shown on the dashboard banner when the residential proxy
++ // runs out of credit. Kept as a constant so the raise + any future references
++@@ -558,6 +559,8 @@ let activeSubprocs = 0;
++ const subprocWaiters: Array<() => void> = [];
++ 
++ async function acquireProcSlot(): Promise<void> {
+++  // Worker isolation: brokered by the parent (per-replica limit across children).
+++  if (isIsolatedChild()) return remoteAcquire("proc");
++   if (activeSubprocs < MAX_CONCURRENT_SUBPROC) {
++     activeSubprocs++;
++     return;
++@@ -568,6 +571,7 @@ async function acquireProcSlot(): Promise<void> {
++ }
++ 
++ function releaseProcSlot(): void {
+++  if (isIsolatedChild()) { remoteRelease("proc"); return; }
++   const next = subprocWaiters.shift();
++   if (next) {
++     // Hand our slot straight to the next waiter without touching the count.
++@@ -840,6 +844,14 @@ const browserWaiters: Array<() => void> = [];
++ // acquire could observe the transient (count-1) window and push activeBrowserFetches
++ // above MAX_CONCURRENT_BROWSER — important now that MAX may be > 1.
++ async function acquireBrowserSlot(): Promise<void> {
+++  if (isIsolatedChild()) {
+++    // Worker isolation: MAX_CONCURRENT_BROWSER is brokered by the parent so it
+++    // stays a per-replica limit across all job children.
+++    const diagEndRemote = beginStage("browser_admission_wait", "browser_slot"); // DIAGNOSTIC-ONLY
+++    await remoteAcquire("browser");
+++    diagEndRemote(true);
+++    return;
+++  }
++   if (activeBrowserFetches < MAX_CONCURRENT_BROWSER) {
++     activeBrowserFetches++;
++     return;
++@@ -865,6 +877,7 @@ function browserDispatchRefused(where: string): boolean {
++ }
++ 
++ function releaseBrowserSlot(): void {
+++  if (isIsolatedChild()) { remoteRelease("browser"); return; }
++   const next = browserWaiters.shift();
++   if (next) {
++     // Hand our slot straight to the next waiter without touching the count.
++@@ -874,6 +887,24 @@ function releaseBrowserSlot(): void {
++   activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
++ }
++ 
+++/**
+++ * Worker isolation (parent side): job-isolation.ts grants browser / subprocess
+++ * permits to job children from THIS process's semaphores, so the configured
+++ * maxima remain per-replica. Also used by tests for leak assertions.
+++ */
+++export const processorSlotBroker = {
+++  browser: {
+++    acquire: () => acquireBrowserSlot(),
+++    release: () => releaseBrowserSlot(),
+++    state: () => ({ active: activeBrowserFetches, waiting: browserWaiters.length, max: MAX_CONCURRENT_BROWSER }),
+++  },
+++  proc: {
+++    acquire: () => acquireProcSlot(),
+++    release: () => releaseProcSlot(),
+++    state: () => ({ active: activeSubprocs, waiting: subprocWaiters.length, max: MAX_CONCURRENT_SUBPROC }),
+++  },
+++};
+++
++ // A single shared Chromium instance is reused across fetches (one new *page* per
++ // fetch) instead of launching a fresh browser per document. This drastically
++ // reduces process spawns under batch load.
++diff --git a/server/scripts/analyze-cpuprofile.ts b/server/scripts/analyze-cpuprofile.ts
++new file mode 100644
++index 0000000..5ce2163
++--- /dev/null
+++++ b/server/scripts/analyze-cpuprofile.ts
++@@ -0,0 +1,128 @@
+++/**
+++ * Parses a V8 .cpuprofile (node --cpu-prof) into event-loop BLOCKING evidence.
+++ *
+++ * - A "busy run" is a maximal sequence of consecutive samples whose leaf is not
+++ *   "(idle)". GC and "(program)" count as busy (they block the loop too).
+++ * - A "blocking slice" is a busy run >= BLOCK_MIN_MS (default 50ms): the loop
+++ *   could not service timers / sockets (BullMQ lock renewal, Redis ping,
+++ *   pg acquire callbacks) for that long.
+++ * - Each sample inside a blocking slice is attributed to:
+++ *     leaf     — the self frame (function @ file),
+++ *     app      — the deepest frame in the repo's own server/ code (what OUR code
+++ *                was doing; library time is charged to the app caller),
+++ *     module   — the repo file of that app frame,
+++ *     library  — node_modules package of the leaf (if any).
+++ * - Concentration: share of blocking time held by top-1 / top-3 app functions
+++ *   and the Herfindahl index (HHI) over app functions.
+++ *
+++ * Usage: npx tsx server/scripts/analyze-cpuprofile.ts <file.cpuprofile> [out.json]
+++ */
+++import fs from "node:fs";
+++
+++const file = process.argv[2];
+++const out = process.argv[3];
+++const BLOCK_MIN_MS = parseFloat(process.env.BLOCK_MIN_MS || "50");
+++const prof = JSON.parse(fs.readFileSync(file, "utf8"));
+++
+++interface Node { id: number; callFrame: { functionName: string; url: string; lineNumber: number }; children?: number[] }
+++const byId = new Map<number, Node>();
+++const parent = new Map<number, number>();
+++for (const n of prof.nodes as Node[]) byId.set(n.id, n);
+++for (const n of prof.nodes as Node[]) for (const c of n.children ?? []) parent.set(c, n.id);
+++
+++const short = (url: string) => url.replace(/^file:\/\//, "").replace(/^.*\/companyiq-v3\//, "").replace(/^.*\/node_modules\//, "node_modules/");
+++const label = (n: Node) => `${n.callFrame.functionName || "(anonymous)"} @ ${short(n.callFrame.url) || "(native)"}:${n.callFrame.lineNumber + 1}`;
+++const isApp = (url: string) => /\/companyiq-v3\/server\//.test(url) && !/node_modules/.test(url) && !/server\/scripts\//.test(url);
+++const libOf = (url: string) => { const m = url.match(/node_modules\/((?:@[^/]+\/)?[^/]+)/); return m ? m[1] : null; };
+++
+++const stackCache = new Map<number, { app: Node | null; leaf: Node; lib: string | null; entryApp: Node | null }>();
+++function info(id: number) {
+++  let c = stackCache.get(id); if (c) return c;
+++  const leaf = byId.get(id)!;
+++  let app: Node | null = null, entryApp: Node | null = null;
+++  for (let cur: number | undefined = id; cur != null; cur = parent.get(cur)) {
+++    const n = byId.get(cur)!;
+++    if (isApp(n.callFrame.url)) { if (!app) app = n; entryApp = n; }
+++  }
+++  c = { app, leaf, lib: libOf(leaf.callFrame.url), entryApp };
+++  stackCache.set(id, c); return c;
+++}
+++
+++const samples: number[] = prof.samples;
+++const deltas: number[] = prof.timeDeltas; // µs before each sample
+++const dur = (i: number) => (i + 1 < deltas.length ? deltas[i + 1] : deltas[i]) / 1000; // ms
+++// Harness-only samples (corpus JSON loading, PDF fixture generation in
+++// server/scripts/) are not worker code: excluded from busy/blocking accounting.
+++const harnessCache = new Map<number, boolean>();
+++function isHarness(id: number): boolean {
+++  let h = harnessCache.get(id); if (h !== undefined) return h;
+++  h = false;
+++  if (!info(id).app) for (let cur: number | undefined = id; cur != null; cur = parent.get(cur)) {
+++    if (/\/server\/scripts\//.test(byId.get(cur)!.callFrame.url)) { h = true; break; }
+++  }
+++  harnessCache.set(id, h); return h;
+++}
+++let harnessMs = 0;
+++const idle = (id: number) => byId.get(id)!.callFrame.functionName === "(idle)";
+++
+++const totalMs = deltas.reduce((a, b) => a + b, 0) / 1000;
+++let busyMs = 0;
+++interface Run { start: number; end: number; ms: number }
+++const runs: Run[] = [];
+++let cur: Run | null = null;
+++for (let i = 0; i < samples.length; i++) {
+++  const d = dur(i);
+++  if (isHarness(samples[i])) harnessMs += d;
+++  if (idle(samples[i]) || isHarness(samples[i])) { if (cur) { runs.push(cur); cur = null; } continue; }
+++  busyMs += d;
+++  if (!cur) cur = { start: i, end: i, ms: 0 };
+++  cur.end = i; cur.ms += d;
+++}
+++if (cur) runs.push(cur);
+++const blocking = runs.filter((r) => r.ms >= BLOCK_MIN_MS).sort((a, b) => b.ms - a.ms);
+++const blockingMs = blocking.reduce((a, r) => a + r.ms, 0);
+++
+++const add = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
+++const leafT = new Map<string, number>(), appT = new Map<string, number>(), modT = new Map<string, number>(), libT = new Map<string, number>(), entryT = new Map<string, number>();
+++const runDetail: any[] = [];
+++for (const r of blocking) {
+++  const rApp = new Map<string, number>(), rLeaf = new Map<string, number>();
+++  for (let i = r.start; i <= r.end; i++) {
+++    const d = dur(i), s = info(samples[i]);
+++    const appK = s.app ? label(s.app) : `(no app frame: ${s.leaf.callFrame.functionName || "?"})`;
+++    add(leafT, label(s.leaf), d); add(appT, appK, d); add(rApp, appK, d); add(rLeaf, label(s.leaf), d);
+++    add(modT, s.app ? short(s.app.callFrame.url) : "(runtime / GC / no app frame)", d);
+++    add(libT, s.lib ?? (s.leaf.callFrame.url ? "(app code self)" : `(native: ${s.leaf.callFrame.functionName})`), d);
+++    if (s.entryApp) add(entryT, label(s.entryApp), d);
+++  }
+++  if (runDetail.length < 25) {
+++    const top = [...rApp.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => ({ fn: k, pct: +(100 * v / r.ms).toFixed(1) }));
+++    const topLeaf = [...rLeaf.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => ({ fn: k, pct: +(100 * v / r.ms).toFixed(1) }));
+++    runDetail.push({ ms: Math.round(r.ms), topApp: top, topLeaf });
+++  }
+++}
+++const rank = (m: Map<string, number>, n = 20) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n)
+++  .map(([k, v]) => ({ name: k, ms: Math.round(v), pctOfBlocking: +(100 * v / (blockingMs || 1)).toFixed(1) }));
+++const appShares = [...appT.values()].map((v) => v / (blockingMs || 1)).sort((a, b) => b - a);
+++const hhi = appShares.reduce((a, s) => a + s * s, 0);
+++const modShares = [...modT.values()].map((v) => v / (blockingMs || 1)).sort((a, b) => b - a);
+++const hist = (lo: number, hi: number) => blocking.filter((r) => r.ms >= lo && r.ms < hi);
+++const histogram = [[50, 100], [100, 250], [250, 500], [500, 1000], [1000, 2000], [2000, 5000], [5000, Infinity]].map(([lo, hi]) => {
+++  const rs = hist(lo, hi); return { bucket: `${lo}-${hi === Infinity ? "∞" : hi}ms`, runs: rs.length, ms: Math.round(rs.reduce((a, r) => a + r.ms, 0)) };
+++});
+++
+++const result = {
+++  file, totalProfiledMs: Math.round(totalMs), busyMs: Math.round(busyMs), harnessExcludedMs: Math.round(harnessMs), blockMinMs: BLOCK_MIN_MS,
+++  blockingSlices: blocking.length, blockingMs: Math.round(blockingMs), longestSliceMs: Math.round(blocking[0]?.ms ?? 0),
+++  sliceHistogram: histogram,
+++  concentration: {
+++    distinctAppFunctions: appT.size, top1AppPct: +(100 * (appShares[0] ?? 0)).toFixed(1),
+++    top3AppPct: +(100 * appShares.slice(0, 3).reduce((a, b) => a + b, 0)).toFixed(1),
+++    top5AppPct: +(100 * appShares.slice(0, 5).reduce((a, b) => a + b, 0)).toFixed(1),
+++    hhiApp: +hhi.toFixed(3), top1ModulePct: +(100 * (modShares[0] ?? 0)).toFixed(1), distinctModules: modT.size,
+++  },
+++  topAppFunctions: rank(appT, 25), topModules: rank(modT, 20), topLeafFrames: rank(leafT, 25), topLibraries: rank(libT, 15),
+++  topEntryAppFrames: rank(entryT, 10), longestSlices: runDetail,
+++};
+++if (out) fs.writeFileSync(out, JSON.stringify(result, null, 2));
+++console.log(JSON.stringify({ ...result, topLeafFrames: result.topLeafFrames.slice(0, 12), topAppFunctions: result.topAppFunctions.slice(0, 15), longestSlices: result.longestSlices.slice(0, 8) }, null, 1));
++diff --git a/server/scripts/profile-worker-blocking.ts b/server/scripts/profile-worker-blocking.ts
++new file mode 100644
++index 0000000..9d342ba
++--- /dev/null
+++++ b/server/scripts/profile-worker-blocking.ts
++@@ -0,0 +1,273 @@
+++/**
+++ * PROFILE HARNESS — worker event-loop blocking (fix/worker-isolation, Phase 1).
+++ *
+++ * Drives the REAL worker CPU paths on SAVED corpora with ZERO network and ZERO
+++ * paid calls, at production-like in-process concurrency (default 4 companies
+++ * concurrently = WORKER_CONCURRENCY=4), and measures how the main event loop
+++ * is blocked:
+++ *
+++ *   Phase A "fetch-extract": the processor's synchronous extraction libraries
+++ *     on real corpus text — pdf-parse on locally generated PDFs (reportlab, from
+++ *     the saved document text) + normaliseTableHorizonMarkers (the exact pdf-parse
+++ *     path in processor.extractTextFromPdf) and cheerio HTML extraction.
+++ *   Phase B "analyze": the REAL runAnalysisPipeline(skipFetch=true) →
+++ *     runAnalyzePhase → analyzeCompanyMeasures (hygiene, boilerplate, chunking,
+++ *     BM25, evidence packs, prompt build, scoring parse, quote provenance /
+++ *     evidence gate, score aggregation) for a real 29-measure framework
+++ *     (var_measures.json) padded to 36 measures, with saved document text
+++ *     served by an in-memory pg stub.
+++ *
+++ * Instrumentation: perf_hooks.monitorEventLoopDelay (per phase), a 50ms
+++ * lag probe that records each stall and the diag stage(s) active at the time,
+++ * and node --cpu-prof (parsed by analyze-cpuprofile.ts).
+++ *
+++ * Run (see docs/worker-isolation/PROFILE_EVIDENCE.md):
+++ *   DATABASE_URL=postgres://stub@127.0.0.1:1/stub node --cpu-prof --cpu-prof-dir=/tmp/ciq-prof \
+++ *     --import tsx server/scripts/profile-worker-blocking.ts
+++ */
+++import http from "node:http";
+++import https from "node:https";
+++import net from "node:net";
+++import fs from "node:fs";
+++import { execFileSync } from "node:child_process";
+++import { monitorEventLoopDelay } from "node:perf_hooks";
+++
+++// ── Zero-network guard (installed BEFORE app modules load) ──────────────────
+++const blockedNet: string[] = [];
+++const deny = (what: string) => (...args: any[]) => {
+++  const a = args[0];
+++  blockedNet.push(`${what}:${typeof a === "string" ? a : a?.hostname || a?.host || a?.href || "?"}`);
+++  throw new Error(`[profile-harness] network disabled (${what})`);
+++};
+++(http as any).request = deny("http.request"); (http as any).get = deny("http.get");
+++(https as any).request = deny("https.request"); (https as any).get = deny("https.get");
+++(net as any).connect = deny("net.connect"); (net as any).createConnection = deny("net.createConnection");
+++(globalThis as any).fetch = async (u: any) => { blockedNet.push(`fetch:${String(u)}`); throw new Error("[profile-harness] network disabled (fetch)"); };
+++
+++Object.assign(process.env, {
+++  LLM_USAGE_LOGGING_ENABLED: "false", SCORING_STRICT_PROVIDER: "true", SCORING_REQ_LOG: "off",
+++  PROVIDER_FALLBACK_ORDER: "deepseek", RETRIEVAL_SEMANTIC_HYBRID: "false", DIAG_DB_INSTRUMENTATION: "false",
+++  LLM_MAX_CONCURRENCY: process.env.LLM_MAX_CONCURRENCY || "8",
+++});
+++
+++const CONCURRENCY = parseInt(process.env.PROFILE_CONCURRENCY || "4", 10);
+++const CORPORA = (process.env.PROFILE_CORPORA || "12,11,18,14").split(",");
+++const PROVIDER_LATENCY_MS = parseInt(process.env.PROFILE_PROVIDER_LATENCY_MS || "400", 10);
+++const OUT = process.env.PROFILE_OUT || "/tmp/ciq-prof/harness-result.json";
+++const PHASES = (process.env.PROFILE_PHASES || "extract,analyze").split(",");
+++
+++const { pool } = await import("../db.js");
+++const { runWithDiagContext, getDiagContext } = await import("../lib/diag-context.js");
+++const { createAttemptLifecycle, registerBatchCancelSource } = await import("../lib/lifecycle-fence.js");
+++const { __setProvidersForTests } = await import("../lib/ai-providers.js");
+++const { runAnalysisPipeline } = await import("../lib/pipeline.js");
+++const { normaliseTableHorizonMarkers } = await import("../lib/table-horizon-normaliser.js");
+++const cheerio = await import("cheerio");
+++const pdfParse = (await import("pdf-parse")).default as any;
+++
+++registerBatchCancelSource(() => false);
+++
+++// ── Saved inputs ────────────────────────────────────────────────────────────
+++interface Doc { url: string; title: string; text: string }
+++function loadCorpus(id: string): Doc[] {
+++  const p = `/home/ubuntu/var_corpus/${id}.json`;
+++  const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+++  return (raw as any[]).filter((d) => d && typeof d.text === "string" && d.text.length > 50);
+++}
+++const savedMeasures: any[] = JSON.parse(fs.readFileSync("/home/ubuntu/var_measures.json", "utf8"));
+++const savedFramework: any = JSON.parse(fs.readFileSync("/home/ubuntu/var_framework.json", "utf8"));
+++const camel = (m: any, i: number) => ({
+++  id: m.id ?? i + 1, frameworkId: 9001, measureId: m.measure_id ?? m.measureId, category: m.category,
+++  categoryNumber: m.category_number ?? m.categoryNumber ?? 1, title: m.title, definition: m.definition ?? "",
+++  scoringGuidance: m.scoring_guidance ?? m.scoringGuidance ?? null, evidenceKeywords: m.evidence_keywords ?? m.evidenceKeywords ?? null,
+++  requiredSourceTypes: m.required_source_types ?? null, displayOrder: i + 1, scoringMode: m.scoring_mode ?? m.scoringMode ?? undefined,
+++});
+++const measures36 = Array.from({ length: 36 }, (_, i) => {
+++  const base = camel(savedMeasures[i % savedMeasures.length], i);
+++  return i < savedMeasures.length ? base : { ...base, id: 10_000 + i, measureId: `${base.measureId}-dup${i}` };
+++});
+++const framework = {
+++  id: 9001, workspaceId: 1, name: savedFramework.name, topicDescription: savedFramework.topic_description ?? savedFramework.topicDescription,
+++  version: 1, isActive: true,
+++};
+++
+++// ── In-memory pg stub: document reads return saved corpus, everything else 0 rows ──
+++const corpusByCompany = new Map<number, Doc[]>();
+++let sqlCount = 0;
+++(pool as any).query = async (q: any, vals?: any[]) => {
+++  sqlCount++;
+++  const text = String(typeof q === "string" ? q : q?.text);
+++  const values = (typeof q === "object" && q?.values) || vals || [];
+++  if (/FROM documents d\s+LEFT JOIN document_content/i.test(text)) {
+++    const cid = Number(values[0]);
+++    const docs = corpusByCompany.get(cid) ?? [];
+++    const rows = docs.map((d, i) => ({
+++      id: cid * 100_000 + i, company_id: cid, url: d.url, title: d.title, type: /\.pdf/i.test(d.url) ? "pdf" : "html",
+++      gate_verdict: "accept", gate_reason: null, fetch_status: "ok", fetch_failures: 0, fetched_at: new Date(), created_at: new Date(),
+++      source_type: "first_party", content: d.text,
+++    }));
+++    return { rows, rowCount: rows.length, fields: [], command: "SELECT" };
+++  }
+++  return { rows: [], rowCount: 0, fields: [], command: "SELECT" };
+++};
+++// db.transaction() (fenced score write) checks out a client: hand back the same stub.
+++(pool as any).connect = async () => ({ query: (pool as any).query, release: () => {} });
+++
+++// ── Stub providers: async latency + a verbatim quote lifted from the prompt ──
+++let providerCalls = 0;
+++function mk(name: string, family: string) {
+++  return {
+++    name, model: `${name}-stub`, family, isAvailable: () => true,
+++    complete: async (opts: any) => {
+++      providerCalls++;
+++      await new Promise((r) => setTimeout(r, PROVIDER_LATENCY_MS));
+++      const p: string = opts.prompt || "";
+++      // Pick a sentence-ish span from the passages so quote provenance / evidence
+++      // gate run their real verification path.
+++      const m = p.slice(Math.floor(p.length * 0.55)).match(/[A-Z][^.\n]{140,320}\./);
+++      const yes = !!m && (providerCalls % 2 === 0);
+++      return JSON.stringify(yes
+++        ? { score: 1, verdict: "Yes", confidence: "Medium", evidenceSummary: "Stub verdict citing a verbatim passage.", quotes: [{ text: m![0], source: "Doc" }] }
+++        : { score: 0, verdict: "No", confidence: "High", evidenceSummary: "No relevant disclosure in the provided passages.", quotes: [] });
+++    },
+++  };
+++}
+++const names: Array<[string, string]> = [["deepseek", "deepseek"], ["claude", "anthropic"], ["openrouter", "openrouter"], ["gemini", "google"], ["openai", "openai"],
+++  ["mistral", "mistral"], ["claude-arbiter", "anthropic"], ["gpt5-arbiter", "openai"], ["mistral-arbiter", "mistral"], ["gpt-4o-mini", "openai"], ["kimi", "moonshot"], ["glm-4.6", "zhipu"]];
+++__setProvidersForTests(names.map(([n, f]) => mk(n, f)) as any);
+++
+++// ── Lag probe: records every stall > 100ms with the stage(s) active ─────────
+++const activeStages = new Map<string, string>();
+++const stalls: Array<{ at: number; lagMs: number; phase: string; stages: string[] }> = [];
+++let currentPhase = "boot";
+++const PROBE_MS = 50;
+++let last = performance.now();
+++const probe = setInterval(() => {
+++  const now = performance.now();
+++  const lag = now - last - PROBE_MS;
+++  last = now;
+++  if (lag > 100) stalls.push({ at: Math.round(now), lagMs: Math.round(lag), phase: currentPhase, stages: [...new Set(activeStages.values())] });
+++}, PROBE_MS);
+++
+++function eldSnapshot(h: ReturnType<typeof monitorEventLoopDelay>) {
+++  const ms = (n: number) => Math.round(n / 1e6);
+++  return { p50: ms(h.percentile(50)), p90: ms(h.percentile(90)), p99: ms(h.percentile(99)), max: ms(h.max), mean: Math.round(h.mean / 1e6), count: h.count };
+++}
+++async function runPool<T>(items: T[], n: number, fn: (t: T, i: number) => Promise<void>) {
+++  let next = 0;
+++  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+++    while (next < items.length) { const i = next++; await fn(items[i], i); }
+++  }));
+++}
+++
+++const result: any = { concurrency: CONCURRENCY, corpora: CORPORA, providerLatencyMs: PROVIDER_LATENCY_MS, phases: {} };
+++const corpora = CORPORA.map((id) => ({ id, docs: loadCorpus(id) }));
+++for (const c of corpora) console.log(`[harness] corpus ${c.id}: ${c.docs.length} docs, ${(c.docs.reduce((a, d) => a + d.text.length, 0) / 1e6).toFixed(1)}M chars`);
+++
+++// ── Phase A: fetch-extract (pdf-parse + horizon normaliser, cheerio) ───────
+++if (PHASES.includes("extract")) {
+++  currentPhase = "extract";
+++  const pdfDir = "/tmp/ciq-prof/pdfs";
+++  fs.mkdirSync(pdfDir, { recursive: true });
+++  // Build up to 2 real PDFs per corpus from the largest saved document texts
+++  // (capped at 400k chars each — a ~150-page report). Generated OUTSIDE the
+++  // measured window (python/reportlab subprocess).
+++  const pdfJobs: Array<{ corpus: string; file: string; chars: number }> = [];
+++  for (const c of corpora) {
+++    const big = [...c.docs].sort((a, b) => b.text.length - a.text.length).slice(0, 2);
+++    big.forEach((d, k) => {
+++      const file = `${pdfDir}/${c.id}-${k}.pdf`;
+++      if (!fs.existsSync(file)) {
+++        const txt = `${pdfDir}/${c.id}-${k}.txt`;
+++        fs.writeFileSync(txt, d.text.slice(0, 400_000));
+++        execFileSync("python3", ["-c", `
+++import sys
+++from reportlab.lib.pagesizes import A4
+++from reportlab.pdfgen import canvas
+++src, out = sys.argv[1], sys.argv[2]
+++c = canvas.Canvas(out, pagesize=A4); y = 800
+++for line in open(src, encoding='utf8', errors='ignore').read().splitlines():
+++    for k in range(0, max(1, len(line)), 110):
+++        seg = line[k:k+110].encode('latin-1', 'ignore').decode('latin-1')
+++        c.drawString(40, y, seg); y -= 12
+++        if y < 40: c.showPage(); y = 800
+++c.save()`, txt, file]);
+++      }
+++      pdfJobs.push({ corpus: c.id, file, chars: Math.min(d.text.length, 400_000) });
+++    });
+++  }
+++  const htmlJobs = corpora.flatMap((c) => c.docs.filter((d) => !/\.pdf/i.test(d.url)).slice(0, 25).map((d) => ({ corpus: c.id, html:
+++    `<html><head><script>var x=1;</script><style>.a{}</style></head><body><nav>Menu</nav><main>${d.text.slice(0, 200_000).split(/\n+/).map((p) => `<p>${p.replace(/[<>&]/g, " ")}</p>`).join("")}</main><footer>f</footer></body></html>` })));
+++  const h = monitorEventLoopDelay({ resolution: 10 }); h.enable();
+++  const t0 = performance.now();
+++  const timings: any[] = [];
+++  await runPool(pdfJobs, CONCURRENCY, async (j) => {
+++    activeStages.set(j.file, "extract:pdf-parse");
+++    const buf = fs.readFileSync(j.file);
+++    const s = performance.now();
+++    const data = await pdfParse(buf);
+++    const n = normaliseTableHorizonMarkers(data.text || "");
+++    timings.push({ kind: "pdf", corpus: j.corpus, bytes: buf.length, pages: data.numpages, chars: n.text.length, ms: Math.round(performance.now() - s) });
+++    activeStages.delete(j.file);
+++  });
+++  await runPool(htmlJobs, CONCURRENCY, async (j, i) => {
+++    activeStages.set(`h${i}`, "extract:cheerio");
+++    const s = performance.now();
+++    const $ = cheerio.load(j.html);
+++    $("script, style, nav, footer, header, aside").remove();
+++    const text = $("main").first().text().replace(/\s+/g, " ").trim();
+++    timings.push({ kind: "html", corpus: j.corpus, bytes: j.html.length, chars: text.length, ms: Math.round(performance.now() - s) });
+++    activeStages.delete(`h${i}`);
+++    await new Promise((r) => setImmediate(r));
+++  });
+++  h.disable();
+++  result.phases.extract = { wallMs: Math.round(performance.now() - t0), eld: eldSnapshot(h), pdf: timings.filter((t) => t.kind === "pdf"),
+++    htmlCount: timings.filter((t) => t.kind === "html").length, htmlMaxMs: Math.max(0, ...timings.filter((t) => t.kind === "html").map((t) => t.ms)) };
+++  console.log(`[harness] extract phase: ${JSON.stringify(result.phases.extract.eld)} wall=${result.phases.extract.wallMs}ms`);
+++}
+++
+++// ── Phase B: analyze (real runAnalysisPipeline, skipFetch) ─────────────────
+++if (PHASES.includes("analyze")) {
+++  currentPhase = "analyze";
+++  const h = monitorEventLoopDelay({ resolution: 10 }); h.enable();
+++  const t0 = performance.now();
+++  const perCompany: any[] = [];
+++  await runPool(corpora, CONCURRENCY, async (c, i) => {
+++    const companyId = 5000 + i;
+++    corpusByCompany.set(companyId, c.docs);
+++    const company: any = { id: companyId, workspaceId: 1, name: `Corpus${c.id} PLC`, ticker: null, website: null, analysisStatus: "fetched" };
+++    const lifecycle = createAttemptLifecycle({ jobId: 9000 + i, batchId: 1274, attemptNumber: 1, deadlineAt: null, attemptToken: `00000000-0000-4000-8000-00000000000${i}` });
+++    const s = performance.now();
+++    const ctx: any = { batchId: 1274, jobId: 9000 + i, attemptNumber: 1, companyId, lifecycle, attemptId: `profile-${i}` };
+++    const stageKey = `c${i}`;
+++    const stageTick = setInterval(() => { activeStages.set(stageKey, `analyze:${(ctx.stage as string) || "-"}`); }, 25);
+++    let res: any, err: any;
+++    try {
+++      res = await runWithDiagContext(ctx, () => runAnalysisPipeline({ company, framework: framework as any, measures: measures36 as any, workspaceId: 1, batchId: 1274, skipFetch: true, cancelCheck: () => false, attemptId: ctx.attemptId } as any));
+++    } catch (e) { err = e; }
+++    clearInterval(stageTick); activeStages.delete(stageKey);
+++    const ms = Math.round(performance.now() - s);
+++    const all = (res?.analysis?.categories ?? []).flatMap((x: any) => x.measures);
+++    perCompany.push({ corpus: c.id, docs: c.docs.length, ms, success: res?.success, error: res?.error ?? err?.message, measures: all.length,
+++      yes: all.filter((m: any) => m.verdict === "Yes").length, scoringErrors: all.filter((m: any) => m.verdict === "Scoring error").length });
+++    console.log(`[harness] company corpus=${c.id} done in ${ms}ms success=${res?.success} measures=${all.length} err=${res?.error ?? err?.message ?? "-"}`);
+++  });
+++  h.disable();
+++  result.phases.analyze = { wallMs: Math.round(performance.now() - t0), eld: eldSnapshot(h), perCompany };
+++  console.log(`[harness] analyze phase: ${JSON.stringify(result.phases.analyze.eld)} wall=${result.phases.analyze.wallMs}ms`);
+++}
+++
+++clearInterval(probe);
+++result.stalls = stalls;
+++result.stallSummary = {
+++  count: stalls.length, totalMs: stalls.reduce((a, s) => a + s.lagMs, 0), maxMs: Math.max(0, ...stalls.map((s) => s.lagMs)),
+++  over1s: stalls.filter((s) => s.lagMs > 1000).length, over5s: stalls.filter((s) => s.lagMs > 5000).length,
+++};
+++result.providerCalls = providerCalls;
+++result.sqlCount = sqlCount;
+++result.blockedNetwork = { count: blockedNet.length, sample: [...new Set(blockedNet)].slice(0, 20) };
+++result.rssMB = Math.round(process.memoryUsage().rss / 1e6);
+++fs.mkdirSync(OUT.replace(/\/[^/]+$/, ""), { recursive: true });
+++fs.writeFileSync(OUT, JSON.stringify(result, null, 2));
+++console.log(`[harness] stalls=${JSON.stringify(result.stallSummary)} providerCalls=${providerCalls} sql=${sqlCount} blockedNet=${blockedNet.length} rss=${result.rssMB}MB → ${OUT}`);
+++process.exit(0);
++diff --git a/server/worker-main.ts b/server/worker-main.ts
++index df0dede..15a103e 100644
++--- a/server/worker-main.ts
+++++ b/server/worker-main.ts
++@@ -17,6 +17,7 @@
++  *   Enable cleanup here by setting WORKER_RUN_CLEANUP=true on the worker service.
++  */
++ 
+++import "./lib/process-role.js"; // must precede ./db.js (worker isolation PG budget, DESIGN §4)
++ import crypto from "crypto";
++ import { initializeDatabase } from "./db.js";
++ import { startWorker, stopWorker } from "./worker.js";
++diff --git a/server/worker.ts b/server/worker.ts
++index 27260dd..24c63a1 100644
++--- a/server/worker.ts
+++++ b/server/worker.ts
++@@ -31,6 +31,7 @@ import {
++ import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqual, type EvidenceSnapshot } from "./lib/reliability.js";
++ import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
++ import { runWithLlmContext } from "./lib/llm-usage.js";
+++import { isolationEnabled, runPipelineIsolated } from "./lib/job-isolation.js";
++ import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
++ import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
++ import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
++@@ -429,7 +430,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
++       result = await runWithLlmContext(
++         { workspaceId, batchId, companyId, frameworkId, callType: "scoring" },
++         () => raceWithWatchdog(
++-          runAnalysisPipeline({
+++          (isolationEnabled() ? runPipelineIsolated : runAnalysisPipeline)({
++             company,
++             framework,
++             measures,
 diff --git a/server/db.ts b/server/db.ts
 index ea8e472..d2f132f 100644
 --- a/server/db.ts

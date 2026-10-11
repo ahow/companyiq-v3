@@ -194,3 +194,33 @@ That is consistent with the batch 1274 lag (p99 36–242 s) and with lock renewa
 - The extract phase used synthetic reportlab PDFs. On those, `pdf-parse` was not a material blocker (ELD max 65 ms). Real scanned or very large PDFs were not profiled. Fetch, browser and network code paths were not exercised (zero-network).
 - Line numbers in the profile are tsx-transpiled positions (many show `:1`). Function names and modules are reliable.
 - The final score-write ended `Cancelled (score_write_fenced)` because of the pg stub (see §2). This is expected and happens after all CPU work.
+
+
+## 7. Observed BM25 re-tokenisation and the evidence-validation loop (requested characterisation)
+
+This section characterises the two loops called out in review. It is **evidence only**: no scoring-rule or BM25 change is made on this branch — the isolation fix moves the whole pipeline off the main loop and preserves scoring byte-for-byte. Optimising these loops is a separate, out-of-scope follow-up.
+
+**Figures are from the 4-concurrent capture** (`evidence/cpuprofile-analysis-c4.json`): `totalProfiledMs` 74,530; `busyMs` 46,936 (**63 %**); `blockingMs` 45,524. Entry frames `analyzeCompanyMeasures` 19,184 ms and `summarizeDocuments` 14,892 ms dominate — i.e. the per-measure analysis path, not fetch/LLM.
+
+### 7.1 BM25 re-tokenisation (redundant work, not a correctness bug)
+
+`buildBM25Index(chunks)` (`passage-retrieval.ts:342`) tokenises **every chunk once** to populate `docFreqs`/`docLengths`, then stores the index as `{ documents: chunks, docFreqs, docLengths, … }` — it keeps the **raw chunk strings**, not the token arrays. `bm25Score(query, docIndex, index)` (`passage-retrieval.ts:377`) therefore re-runs `const docTokens = tokenize(index.documents[docIndex])` **on every scoring call**. Each chunk is thus tokenised once at index build and **again every time it is scored**.
+
+Profile support (self-time, c4):
+
+| Frame | ms | note |
+|---|---|---|
+| `tokenize` (total / leaf) | **7,411 / 4,525** | top app function; 16.3 % of blocking |
+| `RegExp: \s+` (native, inside `tokenize`) | 2,679 | the split that `tokenize` re-runs per re-tokenisation |
+| `bm25Score` | 2,287 | caller that re-tokenises `index.documents[docIndex]` |
+| `buildBM25Index` | 2,053 | the one *non-redundant* tokenise pass |
+
+The gap between `buildBM25Index` (2,053 ms, one pass over all chunks) and total `tokenize` (7,411 ms) is the re-tokenisation tax: ~3.6× the work of a single pass, driven almost entirely by `bm25Score` re-walking cached documents. A per-index token cache (tokenising each chunk once, reused by `bm25Score`) would remove most of it — but that is a scoring-path change and is deliberately **not** in this branch.
+
+### 7.2 Evidence-validation loop (amplifier)
+
+Evidence packs are built per measure: `measures.map((measure) => buildEvidencePackForMeasure({ measure, chunks, bm25Index, … }))` (`passage-retrieval.ts:2352`), 36 iterations per company. Each iteration (a) re-tokenises the measure's own keywords (`evidenceKeywordTokens.push(...tokenize(kw))`, `passage-retrieval.ts:1349`) and (b) scores candidate chunks through `bm25Score`, which re-tokenises those chunks again (7.1). The **same documents are re-tokenised across all 36 per-measure passes**, so §7.1's per-call cost is multiplied by the measure fan-out. This is why `analyzeCompanyMeasures`/`summarizeDocuments` carry ~34 s of the 45.5 s blocking total: the loop structure amplifies a redundant per-document cost across 36 measures × many chunks.
+
+### 7.3 Why this supports the isolation decision (not a scoring fix)
+
+Even if re-tokenisation were cached away, ~half the blocking time remains — GC (6,964 ms), `corpus-boilerplate` (7,268 ms module total), `chunkBody`, `scoreAboutness`, `applyCorpusHygiene`, SEC-heading regexes. The blocking is **distributed** (top-5 app functions ≈ 44 % of blocking; 312 distinct app functions), so no single hot-function fix unblocks the loop. The smallest boundary that reliably stops the pipeline blocking lock renewal is moving the **whole per-job pipeline** off the main loop (DESIGN.md). §7.1–§7.2 are recorded as a prioritised follow-up for a later, separately-reviewed scoring-performance change.
