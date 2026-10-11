@@ -224,3 +224,27 @@ Evidence packs are built per measure: `measures.map((measure) => buildEvidencePa
 ### 7.3 Why this supports the isolation decision (not a scoring fix)
 
 Even if re-tokenisation were cached away, ~half the blocking time remains — GC (6,964 ms), `corpus-boilerplate` (7,268 ms module total), `chunkBody`, `scoreAboutness`, `applyCorpusHygiene`, SEC-heading regexes. The blocking is **distributed** (top-5 app functions ≈ 44 % of blocking; 312 distinct app functions), so no single hot-function fix unblocks the loop. The smallest boundary that reliably stops the pipeline blocking lock renewal is moving the **whole per-job pipeline** off the main loop (DESIGN.md). §7.1–§7.2 are recorded as a prioritised follow-up for a later, separately-reviewed scoring-performance change.
+
+
+## 8. Residual parent work under isolation (gap G)
+
+Isolation moves **pipeline CPU** off the parent. It does not make the parent impossible to block. This section measures what the parent still does, on the same 2-vCPU sandbox, using `server/lib/job-isolation.test.ts`. Instrumentation comes from `job-isolation.ts` `__testing.stats()`, and lag is measured with a 10 ms `setInterval` probe on the parent.
+
+| Scenario | Parent max event-loop lag | Other parent costs |
+|---|---|---|
+| 1 child busy-looping 3 s (test 1) | 3.0 ms (earlier runs 1.6 / 3.8 ms) | n/a |
+| **4 CPU-bound children on 2 CPUs** (G1) | **10.4 ms** (earlier runs 4.5 / 4.6 ms) | forks 4, max `fork()` 7.6 ms (earlier 2.6 / 9.1), 12 IPC messages, max handler 0.10 ms |
+| Real 36-measure pipeline in child, stub PG/providers (test 7) | 67.2 ms in the final run (earlier 7.7 / 10.2 / 12.2 / 16.9 / 39.4 ms) | 168 provider calls brokered over IPC |
+
+For comparison, the in-process baseline (§2) showed ELD max **8,254 ms** at c4.
+
+The test-7 figure varies run to run under host load. Every value is below the 100 ms threshold. Likely contributors to the higher test-7 values, not isolated by measurement: the parent's usage flush retrying against the stub PG (it logs `ECONNREFUSED`), and host contention from the child's CPU.
+
+**What can still block the parent:**
+- **Host CPU saturation.** 4 CPU-bound children compete with the parent on 2 vCPU. Children run at nice 10, and their Chromium and pdftotext descendants inherit it. This mitigates the contention but does not eliminate it.
+- **Synchronous `fork()`.** Bounded, at single-digit milliseconds.
+- **Structured clone of the `init` payload and the result.** Proportional to the company, framework, measures and BatchFetchState sizes. It is small for the corpus tested. Very large payloads were not measured.
+- **GC of the parent heap.** The parent holds no pipeline objects, so its heap is small.
+- **Unchanged supervisor work.** Lock renewal, heartbeat, ownership watch, cancel poll, permit broker, usage flush and terminal writes are I/O-bound or O(1).
+
+**Not measured:** production CPUs, production corpus sizes (§5), real Postgres/Redis latency, and real Chromium launches in children.

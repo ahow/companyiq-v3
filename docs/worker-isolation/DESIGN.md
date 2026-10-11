@@ -42,10 +42,10 @@ Batch 1274 failed because the worker's single Node event loop was blocked for lo
  heartbeat, ownership watch (30 s)                  own diag ctx + LLM usage ctx
  credit / off-peak / cancel gates                   own pg Pool (budgeted, §4)
  load company / framework / measures                NO Redis connection
- JOB_TIMEOUT watchdog (raceWithWatchdog)            NO usage pool (rows → parent)
+ JOB_TIMEOUT watchdog + pipeline/job deadline kill   NO usage pool (rows → parent)
  completeJob / failJob / retry / batch counts       permits requested from parent (§5)
  permit broker: LLM 8 / browser 1 / subproc 6
- usage-row sink (usage pool max 2)
+ usage-row sink (usage pool max 2)                  parent-death watchdog thread
 ```
 
 What stays where:
@@ -71,7 +71,7 @@ The per-replica budgets are **unchanged**: `PG_POOL_MAX=20` and `PG_USAGE_POOL_M
 **Main pool (20 per replica):**
 - Parent reserve `R = WORKER_ISOLATION_PARENT_PG_RESERVE` (default 4). It covers claim, 4 × heartbeat, 4 × ownership watch, terminal writes, the reconciler and the gates. All of these are short single statements.
 - Per-child budget `C = floor((PG_POOL_MAX − R) / WORKER_CONCURRENCY) = floor(16 / 4) = 4`. It is computed from the *configured maximum* `WORKER_CONCURRENCY`, so adaptive concurrency (minimum 2) can only lower total use.
-- Total ceiling = `R + WORKER_CONCURRENCY × C = 4 + 16 = 20 = PG_POOL_MAX`. 3 replicas × 20 = 60, exactly as today.
+- Main-pool ceiling = `R + WORKER_CONCURRENCY × C = 4 + 16 = 20 = PG_POOL_MAX`. Together with the usage pool (2, below) the **full replica inventory is 22 = baseline 20 + 2** (3 replicas × 22 = 66, exactly as today). At `WORKER_CONCURRENCY=10`, C = 1 and the total is 4 + 10 + 2 = 16. The full per-pool inventory with file:line is in `RESPONSIBILITY_TABLE.md` §1 (test A1).
 - Enforcement:
   - The child is forked with `PG_POOL_MAX=C` in its environment; `server/db.ts` already reads that variable.
   - The parent's pool is capped at `R` by a role check in `db.ts`. `worker-main.ts` imports a side-effect module first that sets `CIQ_PROCESS_ROLE=worker-parent`. The cap applies only when that role is set **and** `WORKER_ISOLATION_ENABLED=true`. The web service and the flag-off worker keep `PG_POOL_MAX`.
@@ -131,22 +131,46 @@ If the child's lifecycle was revoked internally (for example the pipeline's own 
 
 **BatchFetchState** (the batch-scoped host circuit breaker) is seeded into the child from the parent's map at start. The child's final state is merged back at the end: union of broken hosts, maximum of slow counts. **Semantic difference:** a host tripped by job A becomes visible to jobs already running at the same time only when A finishes, not instantly. Jobs started after A finishes see it immediately, as today.
 
-## 7. Deadlines, cancellation, crash recovery
+## 7. Deadlines, cancellation, crash recovery, retry classification
 
-**Deadline (hard, parent-owned):**
-- **Watchdog fires.** The existing `raceWithWatchdog(..., JOB_TIMEOUT, onFire)` still runs in the parent. Its timer can now always fire on time because the parent loop is not blocked. `onFire` revokes the parent lifecycle, which is forwarded to the child as `revoke`.
-- **Escalation.** The supervisor's own escalation timer arms at `deadlineAt` *and* on revoke or cancel: after `WORKER_ISOLATION_KILL_GRACE_MS` (default 10 s) it sends SIGTERM to the child's **process group**, and after another 5 s it sends SIGKILL. Children are forked `detached:true` (their own group), so Chromium and pdftotext descendants die with them.
-- **Terminal handling.** Terminal handling (`failJob`, final failure, no retry for watchdog timeouts) is the existing code. The job cannot be left leased: the parent writes the terminal state on its own responsive loop, and child writes after revocation are refused by the existing SQL fence (`deadlineAt` and token predicates).
+**Two parent-owned hard deadlines** (`job-isolation.ts` L188-202). Both are timers on the parent loop, which is never blocked by pipeline CPU:
+- **Pipeline deadline**: `PIPELINE_TIMEOUT_MS` from spawn, the same env var as `pipeline.ts` L100 (code default 540 s; production 35 min). Normally the child's own in-process timeout fires first and reports the usual result. The parent timer is the backstop for a child that is blocked or hung.
+- **Job deadline**: `lc.deadlineAt = claimTime + JOB_TIMEOUT_MS` (`worker.ts` L339; code default 600 s; production 40 min).
+- On either deadline the parent calls `revokeAttempt(lc, "pipeline_timeout" | "job_watchdog_timeout")` and **immediately SIGKILLs** every process group of the child. No cleanup grace applies after a deadline:
+  - the cancel/revoke grace (10 s → SIGTERM → +5 s SIGKILL) is pre-empted;
+  - the 2 s post-report exit grace is cut off.
+  
+  So neither dispatch permission (the lifecycle is revoked) nor persist permission (child writes are fenced in SQL by `deadlineAt` and the token) can outlive a deadline.
+- `raceWithWatchdog(..., JOB_TIMEOUT)` in `worker.ts` is unchanged and stays as the outer guard.
 
 **Cancellation:**
-- The parent's existing composed `cancelCheck` (Redis cache, watchdog flag, revoked lifecycle) is polled and forwarded as `cancel`.
-- The pipeline returns `"Cancelled"` at its next checkpoint, and the parent runs the unchanged `cancelTrace e/f` and `failJob("Cancelled (batch cancelled)")` path.
-- A child that does not finish within the grace period is killed. The lease is released by the parent's terminal write either way.
+- The parent polls `cancelCheck` every 500 ms and forwards `cancel`. The pipeline returns `"Cancelled"` at its next checkpoint.
+- A child that ignores it is SIGTERMed after `WORKER_ISOLATION_KILL_GRACE_MS` and SIGKILLed 5 s later. If a deadline comes first, the child is killed at the deadline instead.
+- Either way the outcome stays a cancellation (test D6).
 
-**Crash recovery:**
-- A child exit without `result` or `error` (non-zero code, signal, OOM kill, IPC disconnect) rejects with an explicit error, for example: `Isolated job child exited unexpectedly (code=1 signal=null stage=analyze)`.
-- That flows into the existing catch path, so `failJob` records a **non-NULL `last_error`**. It is retriable under `isRetriableError` (bounded by `MAX_RETRY_ATTEMPTS`) unless the exit followed a revoke or deadline, in which case the message carries `Job watchdog timeout` and is final, as today.
-- If the parent dies, the IPC channel closes; children listen for `disconnect` and exit immediately (no orphans). Parent `exit` also SIGKILLs every live child group synchronously.
+**Outcome delivery (no success while work is alive):**
+- `result`/`error` only *records* the outcome. The parent settles on child **exit**: it SIGKILLs any stragglers in the child's groups, polls until every group is gone (≤ 2 s), releases the child's permits, and only then resolves.
+- A child that reports but does not exit is SIGKILLed after `WORKER_ISOLATION_EXIT_GRACE_MS` (2 s).
+
+**Retry classification** (`classifyIsolatedOutcome`, one row per event, fed into the unchanged `worker.ts` policy now in `retry-policy.ts`):
+
+| Event | Outcome | Retry |
+|---|---|---|
+| admin cancel / forced kill after cancel | `"Cancelled"` | none (cancellation) |
+| ownership lost | `"Cancelled"`, fenced to `Job watchdog timeout … (attempt revoked: ownership_lost)`; stale `failJob` is a no-op | none, no duplicate |
+| job deadline | `Job watchdog timeout: isolated child killed at job deadline` | none |
+| pipeline deadline | `Pipeline timed out after Ns` (same string as in-process) | retriable (existing policy) |
+| crash / OOM / external kill | `Isolated job child exited unexpectedly (code/signal/stage)` | retriable, non-NULL `last_error` |
+
+**Parent death:**
+- Graceful exit: `process.on("exit")` SIGKILLs every live group.
+- SIGKILL/OOM of the parent (the exit hook does not run): each child runs a **watchdog `worker_thread`** (`job-child.ts` L35) that polls `process.ppid` every 250 ms. It sits on its own thread, so it works even when the child's main loop is blocked in synchronous CPU work. When the parent is gone it SIGKILLs registered descendant groups and its own group. `disconnect` triggers the same path when the main loop is free.
+- Chromium is launched by Puppeteer with `detached:true` (its own group), so the child registers its pid with the parent via a `pgroup` message (`processor.ts` L1035).
+
+**Documented limits:**
+- A grandchild that calls `setsid` itself and is not registered escapes the group kill.
+- Parent-death detection takes up to 250 ms.
+- Outcome delivery can lag the report by up to exit grace (2 s) + group reap (2 s).
 
 ## 8. Cost and measured overheads
 
@@ -162,15 +186,16 @@ The cold start is negligible against multi-minute jobs. The baseline RSS is offs
 
 - No changes to `PG_POOL_MAX`, `PG_USAGE_POOL_MAX`, `PG_CONNECTION_TIMEOUT_MS`, `WORKER_LOCK_DURATION_MS`, `JOB_TIMEOUT_MS`, `WORKER_CONCURRENCY`, `LLM_MAX_CONCURRENCY`, `MAX_CONCURRENT_BROWSER` or replica count.
 - Not a renewal-only workaround: the lock still renews on the parent loop, which now does no CPU work.
-- Default off. No push, merge or deploy.
+- Default off. No merge or deploy; the branch is pushed for review only.
 
-## 10. Test plan (deterministic, no network)
+## 10. Test plan (deterministic, no network): `server/lib/job-isolation.test.ts`, 22 tests
 
-1. **Blocked processor:** the child busy-loops for 3 s. A parent event-loop probe stays under 100 ms lag throughout, and parent timers fire on schedule.
-2. **Cancellation:** the parent sends `cancel`. The child's `cancelCheck` becomes true within one poll, the child returns `Cancelled`, it exits, and no permits leak.
-3. **Deadline:** a child that ignores `revoke` is SIGTERM/SIGKILLed after the grace period. The supervisor rejects with a watchdog error, and the process group is gone.
-4. **Crash:** the child calls `process.exit(1)` mid-job. The supervisor rejects with an explicit non-empty message, it is classified retriable, and permits held by the child are released.
-5. **Permit brokerage:** across 4 children each asking for 5 LLM permits, the parent observes a maximum of 8 concurrent grants. Browser maximum is 1. Every permit is released.
-6. **Usage forwarding:** a usage row emitted in the child arrives in the parent buffer. The child never creates a usage pool.
-7. **Full 36-measure run** through the isolated path with stubbed LLM, storage and score writes: 36 scores produced, `success=true`, and the parent loop stays responsive.
-8. **Existing suites** re-run against the branch and compared to the `35884ee` baseline (94/97 pass, with 3 pre-existing failures).
+1. **Blocked processor:** the child busy-loops for 3 s and the parent event-loop lag stays under 100 ms.
+2. **Cancellation:** `cancel` → the child returns `Cancelled`, with no permit leak.
+3. **Revoke (ownership lost), child ignores SIGTERM:** the group is SIGKILLed, and the result is fenced to non-retriable.
+4. **Crash** holding an LLM permit: explicit retriable error, and the permit is released.
+5. **Permit brokerage:** LLM max 8, browser max 1.
+6. **Usage forwarding:** rows reach the parent, and the child has no usage pool.
+7. **Full 36-measure real pipeline** in the child (stub PG/providers).
+8. **A1** pool inventory 22 = baseline. **B1** pipeline deadline. **B2** job deadline with nothing written after `deadlineAt`. **C** (×2) supervisor SIGKILLed while the child is blocked or idle. **D** retry table. **D6** cancel + deadline. **E1/E1b** queued acquisitions withdrawn. **E2/E3** no success while background work is alive. **E4** subprocess max 6. **F1** child startup audit. **G1** 4 CPU-bound children on 2 CPUs.
+9. **Existing suites** re-run against the branch (see `TEST_RESULTS.md`).
