@@ -2,7 +2,7 @@
 
 Branch `fix/worker-isolation`, base `35884ee`. The feature is gated by `WORKER_ISOLATION_ENABLED`, which defaults to **off**. With the gate off, the worker runs the unchanged in-process path from `35884ee`. With it on, each job attempt gets one `child_process.fork`. The **parent** is the BullMQ supervisor and the **child** runs the existing `runAnalysisPipeline`.
 
-File:line references point at the branch head. Each "Test" entry names a test in `server/lib/job-isolation.test.ts` (22/22 pass, see `TEST_RESULTS.md`).
+File:line references point at the branch head. Each "Test" entry names a test in `server/lib/job-isolation.test.ts` (29/29 pass, see `TEST_RESULTS.md`), or the opt-in integration suite `server/lib/job-isolation.integration.test.ts` (real Postgres + Redis + BullMQ + Chromium).
 
 ## 1. Full DB pool inventory (gap A)
 
@@ -49,7 +49,7 @@ Tests:
 |---|---|---|
 | Graceful parent exit | `process.on("exit")` SIGKILLs all live groups (`job-isolation.ts` L141) | n/a |
 | **Parent SIGKILL / OOM** (the exit hook does not run) | child-side **watchdog `worker_thread`** (`job-child.ts` L35) polls `process.ppid` every 250 ms on its own thread, so it also works while the child's main loop is blocked. When the parent is gone it SIGKILLs registered descendant groups and the child's own group. `disconnect` does the same when the child's loop is free (L41) | **C** (blocked): supervisor SIGKILLed → child, grandchild and detached descendant gone in 41 ms. **C** (idle): 10 ms |
-| Detached descendants (Chromium uses `detached:true`) | the child sends `pgroup` with Chromium's pid (`processor.ts` L1035 → `isolation-ipc.ts` `registerDescendantGroup`). The parent adds it to the child's kill set (`job-isolation.ts` L265) | B1, C, E2 (exercised with a detached `sleep`, **not** a real Chromium) |
+| Detached descendants (Chromium uses `detached:true`) | the child sends `pgroup` with Chromium's pid (`processor.ts` L1035 → `isolation-ipc.ts` `registerDescendantGroup`). The parent adds it to the child's kill set (`job-isolation.ts` L265) | B1, C, E2 (detached `sleep`); **integration**: real Chromium launched by two children via `fetchPdfViaBrowser`, peak 18 Chromium processes, 0 Chromium processes left after completion, 0 orphaned puppeteer profiles on the host |
 
 ## 4. Retry table (gap D): same outcome as production
 
@@ -64,7 +64,9 @@ Tests:
 | Pipeline deadline | `{error:"Pipeline timed out after Ns"}` | **retriable** (existing policy, kept and verified) | yes, identical string | D row 5, **B1** |
 | Crash (non-zero exit, no kill requested) | `Error("Isolated job child exited unexpectedly (code=1 …)")` | retriable up to `MAX_RETRY_ATTEMPTS`, non-NULL `last_error` | same handling as an in-process thrown error | D row 6, test 4 |
 | OOM / external SIGKILL | same as crash | retriable | same | D row 7 |
-| Child reported before any kill | exactly what it reported | unchanged | yes | D row 8 |
+| Child reported before any kill | exactly what it reported | unchanged | yes | D row 8, **M1** |
+| Child reported **after** a terminal decision (deadline / cancel / revoke) | the terminal decision; the report is discarded (logged, `lateReportsDiscarded++`) | as the decision row above | yes (in-process, the watchdog race also wins once it has fired) | **M2, M2b, M3** |
+| Child exited but its process groups are not confirmed gone | `Error("Isolated job child cleanup unconfirmed: …")` even if it reported success | **non-retriable** (`retry-policy.ts` L31); job fails, permits stay withheld | n/a (new failure mode that only exists with a child) | **Q1** |
 
 ## 5. Permits and background work (gap E)
 
@@ -72,7 +74,7 @@ Tests:
 |---|---|---|
 | A child cannot report success while its background work is alive | `result`/`error` only records the outcome (`onReported`, L223). Settlement happens on child **exit**. Exit grace is 2 s, then SIGKILL. On exit: kill groups → poll until gone (≤ 2 s) → `releaseAll` → settle (L289-304) | **E2/E3**: delivered at 3517 ms. At delivery the child, grandchild, held proc permit and live set were all gone/0 |
 | Cancelled queued IPC acquisitions are removed | `cancelAcquire` aborts the parent's LLM waiter (L255-259). A grant arriving after withdrawal/exit is handed straight back (L249). On exit, ungranted waits are aborted (L208) | **E1**: pending 0 after abort while 8 were held. **E1b**: child dies with 8 held + 1 queued → all returned |
-| Permits are not released before the resource has stopped | `releaseAll` runs only after the child has exited and every registered group is gone (L295-300) | **E2/E3** `releasedWhileAlive=false` |
+| Permits are not released before the resource has stopped | `releaseAll` runs only after the child has exited **and** the zombie-aware probe confirms every registered group is gone. If not confirmed in `WORKER_ISOLATION_REAP_WINDOW_MS` (2 s), the permits are **withheld** in quarantine (section 8) | **E2/E3** `releasedWhileAlive=false`; **Q1/Q2** |
 | Subprocess limit = baseline 6 per replica | `MAX_CONCURRENT_SUBPROC` default 6 (`processor.ts` L557, unchanged from `35884ee`), brokered by the parent | **E4**: 3 children × 4 → max 6 |
 | LLM 8 / browser 1 per replica | parent `llmSlotBroker` / `processorSlotBroker` | test 5: max 8 / 1 |
 
@@ -107,3 +109,32 @@ Test **F1** recorded the child's state at boot:
 Test **G1**: 4 CPU-bound children on this 2-CPU host gave parent max lag **10.4 ms**, forks 4, max fork 7.6 ms, 12 messages, max handler 0.10 ms (final run; earlier runs 4.5 / 4.6 ms lag).
 
 **Preserved unchanged:** scoring rules, BM25, research and scoring code, `PG_POOL_MAX`, `PG_USAGE_POOL_MAX`, `JOB_TIMEOUT_MS`, `PIPELINE_TIMEOUT_MS`, `WORKER_CONCURRENCY`, `LLM_MAX_CONCURRENCY`, `MAX_CONCURRENT_BROWSER`, `MAX_CONCURRENT_SUBPROC`. The gate stays off by default.
+
+## 8. Unconfirmed descendant cleanup: quarantine (FIX 1)
+
+| Step | Mechanism (`job-isolation.ts`) | Test |
+|---|---|---|
+| Liveness probe | `probeGroups` (L115): scans `/proc/*/stat`, reads pgrp (field 5) and state (field 3). A group counts as live only if it has a member whose state is not `Z`. `kill(-g,0)` alone cannot tell a zombie from a live process. If `/proc` is unreadable, it falls back to `kill(-g,0)` with `reliable:false` and treats every visible group as live (conservative: capacity stays withheld) | **Q3**: group holding only an unreaped zombie → terminated, clean success, no quarantine, no 2 s wait |
+| Exit handler | after the child exits, SIGKILL groups, then poll the probe for up to 2 s (L427) | E2/E3 |
+| Not confirmed | quarantine entry {child pid, groups, reason, withheld browser/proc/llm grants}; the grants are **not** returned; queued (ungranted) waits are aborted; the attempt settles as `Isolated job child cleanup unconfirmed …` (L436-442), which is non-retriable and is **never** a clean success, even if the child reported success | **Q1**: reported success → rejected, browser permit not reassigned while quarantined |
+| Background monitor | `ensureQuarantineMonitor` (L158) re-probes every 5 s (`WORKER_ISOLATION_QUARANTINE_POLL_MS`) and releases the withheld permits only once termination is confirmed (`releaseQuarantined`, L150) | **Q1** (released after confirmation) |
+| Still alive | quarantine persists; capacity stays reduced | **Q2** |
+| Deliberate recovery | `recoverQuarantinedChildren(pid?)` (L182): SIGKILLs the groups once more and returns the permits regardless (operator action; nothing calls it automatically) | **Q2** |
+| Parent exit | the exit hook SIGKILLs quarantined groups as well as live ones | n/a |
+
+## 9. Monotonic terminal decision (FIX 2)
+
+- `killReason` is set **once**, by the first terminal event: pipeline deadline, job deadline, cancel, or revoke (`onDeadline` L283). A later deadline only brings the kill forward; it does not change the reason.
+- `onReported` (L337) accepts a child's result/error only if `killReason` is still null. Otherwise the report is logged (`[WORKER-ISOLATION] … reported AFTER terminal decision … discarded`), counted (`lateReportsDiscarded`), and kept in a 50-entry diagnostic ring. It never changes the outcome.
+- A report accepted first keeps precedence, even if a deadline fires before the child exits (the deadline still kills, so nothing outlives it).
+- Tests use ordering barriers, not sleeps: the fixture waits for a `FIXTURE_GO` file, and the test hook `setSuppressDeadlineKill` lets the deadline make its decision (and revoke) without SIGKILL so that the child can report afterwards. **M1** report→deadline = success; **M2** job deadline→report = job watchdog timeout (non-retriable); **M2b** pipeline deadline→report = pipeline timeout (retriable, existing policy); **M3** cancel→report = Cancelled.
+
+## 10. Browser permits vs Chromium instances
+
+| Item | Baseline `35884ee` (in-process) | Isolation on |
+|---|---|---|
+| Concurrent browser page fetches per replica | `MAX_CONCURRENT_BROWSER` = 1 | 1, brokered by the parent (test 5; integration broker state `browser.active=0` after completion) |
+| Chromium **instances** per replica | 1 shared instance for the whole worker | **1 per job child that used the browser**, alive until that child exits (the shared-browser singleton is per process). Up to `WORKER_CONCURRENCY` instances (4 in production) |
+| Measured (integration, 2 children, real Chromium) | n/a | peak **18 Chromium processes**, summed RSS **2401 MB** (sum of per-process RSS; shared pages are counted more than once, so this overstates real memory); all descendants together 2801 MB; parent 210-238 MB |
+
+The permit limits concurrent fetches, not instances. The memory cost of one Chromium per child is the main staging risk and is **not** solved by this branch.
