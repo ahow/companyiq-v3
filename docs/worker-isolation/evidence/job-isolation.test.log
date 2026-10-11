@@ -2,59 +2,60 @@ TAP version 13
 # Subtest: flag + PG budget partition (C = floor((20-4)/4) = 4)
 ok 1 - flag + PG budget partition (C = floor((20-4)/4) = 4)
   ---
-  duration_ms: 0.906794
+  duration_ms: 1.017282
   type: 'test'
   ...
-# busy child: wall=3556ms parent max lag=3.0ms childPid=51968 parentPid=51949
+# busy child: wall=3514ms parent max lag=4.5ms childPid=58403 parentPid=58390
 # Subtest: 1. child busy-loops 3s: parent event loop stays responsive (<100ms lag)
 ok 2 - 1. child busy-loops 3s: parent event loop stays responsive (<100ms lag)
   ---
-  duration_ms: 3557.700456
+  duration_ms: 3516.071453
   type: 'test'
   ...
-# cancel: returned after 2593ms error=Cancelled
+[WORKER-ISOLATION] child pid=58416 reported AFTER terminal decision cancel → discarded (diagnostic only: success=false error=Cancelled)
+# cancel: returned after 2613ms error=Cancelled
 # Subtest: 2. cancel: parent cancelCheck → child returns Cancelled
 ok 3 - 2. cancel: parent cancelCheck → child returns Cancelled
   ---
-  duration_ms: 2694.473675
+  duration_ms: 2717.10035
   type: 'test'
   ...
 [LIFECYCLE-FENCE] attempt revoked reason=ownership_lost (job=77 attempt=1 batch=1274)
-[DIAG][cancel-path] step=e reason=ownership_lost batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T20:22:10.824Z
+[DIAG][cancel-path] step=e reason=ownership_lost batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:03:56.126Z
 [LIFECYCLE-FENCE] attempt revoked reason=ownership_lost (job=77 attempt=1 batch=1274)
-[DIAG][cancel-path] step=e reason=ownership_lost batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T20:22:10.826Z
-[WORKER-ISOLATION] child pid=52001 still alive 1000ms after revoke:ownership_lost → SIGTERM groups
-# revoke: resolved after 6489ms: Cancelled
+[DIAG][cancel-path] step=e reason=ownership_lost batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:03:56.129Z
+[WORKER-ISOLATION] child pid=58429 still alive 1000ms after revoke:ownership_lost → SIGTERM groups
+# revoke: resolved after 6504ms: Cancelled
 # Subtest: 3. child ignoring revoke + SIGTERM is SIGKILLed with its process group; classified as revoked → fenced non-retriable
 ok 4 - 3. child ignoring revoke + SIGTERM is SIGKILLed with its process group; classified as revoked → fenced non-retriable
   ---
-  duration_ms: 6490.318156
+  duration_ms: 6507.523079
   type: 'test'
   ...
 # crash: Isolated job child exited unexpectedly (code=1 signal=null stage=spawn)
 # Subtest: 4. crash: process.exit(1) holding an LLM permit → explicit retriable error, permit released
 ok 5 - 4. crash: process.exit(1) holding an LLM permit → explicit retriable error, permit released
   ---
-  duration_ms: 1039.255004
+  duration_ms: 997.916002
   type: 'test'
   ...
 # permits: maxLlm=8 maxBrowser=1
 # Subtest: 5. permit brokerage: 4 children × 5 LLM permits → max 8 concurrent; browser max 1; all released
 ok 6 - 5. permit brokerage: 4 children × 5 LLM permits → max 8 concurrent; browser max 1; all released
   ---
-  duration_ms: 5775.054564
+  duration_ms: 5639.587403
   type: 'test'
   ...
 # Subtest: 6. usage row forwarded to parent buffer; child buffer stays empty; child PG_POOL_MAX=4
 ok 7 - 6. usage row forwarded to parent buffer; child buffer stays empty; child PG_POOL_MAX=4
   ---
-  duration_ms: 562.50693
+  duration_ms: 490.746586
   type: 'test'
   ...
 # Subtest: ProviderScoringError rebuilt as the real class (isProviderQuotaError path)
 ok 8 - ProviderScoringError rebuilt as the real class (isProviderQuotaError path)
   ---
-  duration_ms: 561.417645
+  duration_ms: 482.556398
   type: 'test'
   ...
 [FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
@@ -144,7 +145,6 @@ ok 8 - ProviderScoringError rebuilt as the real class (isProviderQuotaError path
 [bm25-reserve] 3.7-third-party-governance: guaranteed 6/6 pure-BM25 chunks (13k chars, floor=9.3 of max=20.8) on dedicated budget
 [bm25-reserve] 3.1-board-oversight-dup31: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=11.1 of max=24.6) on dedicated budget
 [Stub PLC] LLM rescoring: ON for 7 measures in category 'Governance & Oversight'
-[llm-usage] flush failed (swallowed): connect ECONNREFUSED 127.0.0.1:1
 [llm-rescore] 3.2-executive-accountability: LLM returned no parseable scores (raw 265 chars); falling back to BM25
 [llm-rescore] 3.3-governance-framework: LLM returned no parseable scores (raw 296 chars); falling back to BM25
 [llm-rescore] 3.4-risk-management-integration: LLM returned no parseable scores (raw 292 chars); falling back to BM25
@@ -152,6 +152,7 @@ ok 8 - ProviderScoringError rebuilt as the real class (isProviderQuotaError path
 [llm-rescore] 3.7-third-party-governance: LLM returned no parseable scores (raw 270 chars); falling back to BM25
 [llm-rescore] 3.1-board-oversight: LLM returned no parseable scores (raw 315 chars); falling back to BM25
 [llm-rescore] 3.1-board-oversight-dup31: LLM returned no parseable scores (raw 315 chars); falling back to BM25
+[llm-usage] flush failed (swallowed): connect ECONNREFUSED 127.0.0.1:1
 [Stub PLC] Scoring category: Sustainability & Resilience (5 measures)
 [bm25-reserve] 5.1-regulatory-alignment: guaranteed 6/6 pure-BM25 chunks (14k chars, floor=6.5 of max=14.4) on dedicated budget
 [bm25-reserve] 5.2-standards-certification: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=4.7 of max=10.4) on dedicated budget
@@ -188,99 +189,101 @@ ok 8 - ProviderScoringError rebuilt as the real class (isProviderQuotaError path
 [Stub PLC] Persisted passage-retrieval summary for 36 measures
 [Stub PLC][invariant][OK] force-include satisfied for 0 filing-bound measure(s)
 [Stub PLC] Pipeline completed in 10s
-[DIAG][stage-timer] {"kind":"pipeline","label":"Stub PLC","outcome":"ok","error":null,"started_at":"2026-10-11T20:22:27.135Z","attempt_wall_ms":9858,"tracked_wall_ms":0,"other_untracked_wall_ms":9858,"busy_sum_ms_all_stages":0,"stages":{},"last_progress":null,"pending_at_close_count":0,"pending_at_close":[],"batch_id":1274,"job_id":77,"attempt_id":"t-attempt","attempt_n":1,"company_id":5001,"stage":"pipeline"}
-# pipeline36: wall=12303ms success=true measures=36 providerCalls=168 fencedWriteLocks=1 err=- parentMaxLag=67.2ms
+[DIAG][stage-timer] {"kind":"pipeline","label":"Stub PLC","outcome":"ok","error":null,"started_at":"2026-10-11T21:04:11.938Z","attempt_wall_ms":9618,"tracked_wall_ms":0,"other_untracked_wall_ms":9618,"busy_sum_ms_all_stages":0,"stages":{},"last_progress":null,"pending_at_close_count":0,"pending_at_close":[],"batch_id":1274,"job_id":77,"attempt_id":"t-attempt","attempt_n":1,"company_id":5001,"stage":"pipeline"}
+# pipeline36: wall=11893ms success=true measures=36 providerCalls=168 fencedWriteLocks=1 err=- parentMaxLag=5.1ms
 # pool inventory: parentMain=4 children=4x4=16 parentUsage=2 childUsage=0 total=22 baseline=22
 # Subtest: 7. full 36-measure real pipeline in child (stubbed pg/providers); parent responsive
 ok 9 - 7. full 36-measure real pipeline in child (stubbed pg/providers); parent responsive
   ---
-  duration_ms: 12305.721312
+  duration_ms: 11895.227894
   type: 'test'
   ...
 # Subtest: A1. pool inventory: parent main 4 + 4 children × 4 + parent usage 2 = 22 = baseline 20 + 2
 ok 10 - A1. pool inventory: parent main 4 + 4 children × 4 + parent usage 2 = 22 = baseline 20 + 2
   ---
-  duration_ms: 0.572488
+  duration_ms: 0.66656
   type: 'test'
   ...
-[llm-usage] flush failed (swallowed): connect ECONNREFUSED 127.0.0.1:1
-[WORKER-ISOLATION] pipeline_deadline reached for child pid=52125 (stage=spawn) → revoke + SIGKILL groups
+[WORKER-ISOLATION] pipeline_deadline reached for child pid=58569 (stage=spawn) → revoke + SIGKILL groups
 [LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=77 attempt=1 batch=1274)
-[DIAG][cancel-path] step=e reason=pipeline_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T20:22:39.595Z
-# B1 pipeline deadline: resolved after 2529ms error="Pipeline timed out after 3s" revoked=pipeline_timeout
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:04:24.163Z
+# B1 pipeline deadline: resolved after 2515ms error="Pipeline timed out after 3s" revoked=pipeline_timeout
 # Subtest: B1. pipeline deadline: child blocked forever → parent SIGKILLs at PIPELINE_TIMEOUT_MS (grace 30s NOT applied); same result as in-process timeout
 ok 11 - B1. pipeline deadline: child blocked forever → parent SIGKILLs at PIPELINE_TIMEOUT_MS (grace 30s NOT applied); same result as in-process timeout
   ---
-  duration_ms: 2534.186716
+  duration_ms: 2515.886431
   type: 'test'
   ...
 [WORKER-ISOLATION] pipeline-timeout bookkeeping failed: connect ECONNREFUSED 127.0.0.1:1
-[WORKER-ISOLATION] job_deadline reached for child pid=52141 (stage=pipeline) → revoke + SIGKILL groups
+[llm-usage] flush failed (swallowed): connect ECONNREFUSED 127.0.0.1:1
+[WORKER-ISOLATION] job_deadline reached for child pid=58593 (stage=pipeline) → revoke + SIGKILL groups
 [LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=77 attempt=1 batch=1274)
-[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T20:22:42.622Z
-# B2 job deadline: Job watchdog timeout: isolated child killed at job deadline (code=null signal=SIGKILL stage=pipeline) lastWrite-deadline=1ms
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=77 attempt=1 batch=1274)
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:04:27.177Z
+# B2 job deadline: Job watchdog timeout: isolated child killed at job deadline (code=null signal=SIGKILL stage=pipeline) lastWrite-deadline=-2ms
 # Subtest: B2. job deadline: child keeps dispatching and ignores revoke/SIGTERM → nothing written after deadlineAt; non-retriable watchdog
 ok 12 - B2. job deadline: child keeps dispatching and ignores revoke/SIGTERM → nothing written after deadlineAt; non-retriable watchdog
   ---
-  duration_ms: 3212.653482
+  duration_ms: 3231.869794
   type: 'test'
   ...
-# C block-forever: supervisor SIGKILLed → all descendants gone after 41ms
+# C block-forever: supervisor SIGKILLed → all descendants gone after 42ms
 # Subtest: C. supervisor SIGKILLed while child is synchronously blocked → child, grandchild and detached descendant die
 ok 13 - C. supervisor SIGKILLed while child is synchronously blocked → child, grandchild and detached descendant die
   ---
-  duration_ms: 2595.713121
+  duration_ms: 2503.385785
   type: 'test'
   ...
 # C hang: supervisor SIGKILLed → all descendants gone after 10ms
 # Subtest: C. supervisor SIGKILLed while child is idle-waiting (event loop free) → child, grandchild and detached descendant die
 ok 14 - C. supervisor SIGKILLed while child is idle-waiting (event loop free) → child, grandchild and detached descendant die
   ---
-  duration_ms: 2514.003881
+  duration_ms: 2816.268858
   type: 'test'
   ...
 # Subtest: D. retry classification table
 ok 15 - D. retry classification table
   ---
-  duration_ms: 0.552978
+  duration_ms: 0.469782
   type: 'test'
   ...
-[WORKER-ISOLATION] job_deadline reached for child pid=52210 (stage=pipeline) → revoke + SIGKILL groups
+[WORKER-ISOLATION] job_deadline reached for child pid=58663 (stage=pipeline) → revoke + SIGKILL groups
 [LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=77 attempt=1 batch=1274)
-[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T20:22:50.444Z
-# D6 cancel+deadline: Cancelled after 2510ms
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=77 attempt=1 batch=1274)
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:04:35.232Z
+# D6 cancel+deadline: Cancelled after 2521ms
 # Subtest: D6. cancel in progress, child ignores it, job deadline arrives → still a cancellation, killed at the deadline (not after the 30s grace)
 ok 16 - D6. cancel in progress, child ignores it, job deadline arrives → still a cancellation, killed at the deadline (not after the 30s grace)
   ---
-  duration_ms: 2510.391252
+  duration_ms: 2521.423158
   type: 'test'
   ...
 # E1 queued-cancel: outcome=rejected:LifecycleCancelledError afterAbort={"pending":0,"outstanding":{"llm":8,"browser":0,"proc":0}} sawQueued=true sawWithdrawn=true
 # Subtest: E1. queued IPC LLM acquisition aborted → withdrawn from the parent broker while 8 are still held
 ok 17 - E1. queued IPC LLM acquisition aborted → withdrawn from the parent broker while 8 are still held
   ---
-  duration_ms: 1635.363798
+  duration_ms: 1548.079789
   type: 'test'
   ...
 # Subtest: E1b. child dies with 8 LLM permits held + 1 queued → parent drops the queued wait and returns all 8
 ok 18 - E1b. child dies with 8 LLM permits held + 1 queued → parent drops the queued wait and returns all 8
   ---
-  duration_ms: 1087.456044
+  duration_ms: 1195.692733
   type: 'test'
   ...
-[WORKER-ISOLATION] child pid=52350 reported but did not exit in 2000ms → SIGKILL groups
-# E2 background-alive: delivered after 3517ms atDelivery={"child":false,"grandchild":false,"proc":0,"live":0} releasedWhileAlive=false
+[WORKER-ISOLATION] child pid=58704 reported but did not exit in 2000ms → SIGKILL groups
+# E2 background-alive: delivered after 3635ms atDelivery={"child":false,"grandchild":false,"proc":0,"live":0} releasedWhileAlive=false
 # Subtest: E2/E3. child reports success with a grandchild + permit still alive and never exits → outcome delivered only after it is killed; permit never free while the process lives
 ok 19 - E2/E3. child reports success with a grandchild + permit still alive and never exits → outcome delivered only after it is killed; permit never free while the process lives
   ---
-  duration_ms: 3517.248974
+  duration_ms: 3636.271
   type: 'test'
   ...
 # E4 procs: maxProc=6
 # Subtest: E4. subprocess limit is per replica with the 35884ee baseline 6: 3 children × 4 → max 6 concurrent
 ok 20 - E4. subprocess limit is per replica with the 35884ee baseline 6: 3 children × 4 → max 6 concurrent
   ---
-  duration_ms: 3687.510966
+  duration_ms: 4051.135999
   type: 'test'
   ...
 [FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
@@ -290,22 +293,89 @@ ok 20 - E4. subprocess limit is per replica with the 35884ee baseline 6: 3 child
 # Subtest: F1. child startup audit: no Redis/Bull, no DB init / startup-cleanup / reconciler, 0 PG connections, no usage pool
 ok 21 - F1. child startup audit: no Redis/Bull, no DB init / startup-cleanup / reconciler, 0 PG connections, no usage pool
   ---
-  duration_ms: 2317.906264
+  duration_ms: 2517.137808
   type: 'test'
   ...
-# G1 4x busy on 2 CPUs: parentMaxLag=10.4ms forks=4 maxForkMs=7.6 messages=12 maxHandlerMs=0.10
+# G1 4x busy on 2 CPUs: parentMaxLag=3.9ms forks=4 maxForkMs=3.7 messages=12 maxHandlerMs=0.10
 # Subtest: G1. 4 concurrent CPU-bound children on this 2-CPU host: parent lag, fork and IPC-handler cost
 ok 22 - G1. 4 concurrent CPU-bound children on this 2-CPU host: parent lag, fork and IPC-handler cost
   ---
-  duration_ms: 4408.129214
+  duration_ms: 4359.750531
   type: 'test'
   ...
-1..22
-# tests 22
+[WORKER-ISOLATION] QUARANTINE child pid=58829 job=77 groups=[58829] cleanup unconfirmed after 300ms: live=[999999] zombies=[] probeReliable=true; permits withheld {"llm":0,"browser":1,"proc":0}
+# Q1 quarantine: settled after 1862ms err="Isolated job child cleanup unconfirmed: child pid=58829 quarantined, cleanup unconfirmed after 300ms: live=[999999] zombies=[] probeReliable=true, permits withheld browser=1 proc=0 llm=0" quarantine=[{"childPid":58829,"jobId":77,"batchId":1274,"groups":[58829],"reason":"cleanup unconfirmed after 300ms: live=[999999] zombies=[] probeReliable=true","since":1791752694417,"livePids":[999999],"zombiePids":[],"probeReliable":true,"withheld":{"llm":0,"browser":1,"proc":0}}]
+[WORKER-ISOLATION] quarantine cleared for child pid=58829 (termination confirmed); permits returned {"llm":0,"browser":1,"proc":0}
+# Subtest: Q1. forced-alive probe: child reported success but cleanup unconfirmed → rejected (non-retriable), quarantined, browser permit NOT reassigned; released once termination is confirmed
+ok 23 - Q1. forced-alive probe: child reported success but cleanup unconfirmed → rejected (non-retriable), quarantined, browser permit NOT reassigned; released once termination is confirmed
+  ---
+  duration_ms: 2462.795567
+  type: 'test'
+  ...
+[WORKER-ISOLATION] QUARANTINE child pid=58845 job=77 groups=[58845] cleanup unconfirmed after 200ms: live=[999999] zombies=[] probeReliable=true; permits withheld {"llm":0,"browser":1,"proc":0}
+[WORKER-ISOLATION] quarantine cleared for child pid=58845 (deliberate recovery); permits returned {"llm":0,"browser":1,"proc":0}
+# Subtest: Q2. quarantine persists while the probe says live; deliberate recovery returns the permits
+ok 24 - Q2. quarantine persists while the probe says live; deliberate recovery returns the permits
+  ---
+  duration_ms: 2148.776022
+  type: 'test'
+  ...
+# Q3 zombie pgid=58860: kill(-g,0) succeeds=true probe={"live":[],"zombies":[58860],"reliable":true}
+# Q3 settled after 721ms success=true quarantined=0
+# Subtest: Q3. zombie vs live: a group holding only an unreaped zombie counts as terminated (kill(-g,0) alone would not tell) → clean success, no quarantine, no 2s wait
+ok 25 - Q3. zombie vs live: a group holding only an unreaped zombie counts as terminated (kill(-g,0) alone would not tell) → clean success, no quarantine, no 2s wait
+  ---
+  duration_ms: 839.581498
+  type: 'test'
+  ...
+# M1 report-before-deadline: success=true elapsed=2514ms deadlineAt=+2500ms revoked=false late=0
+# Subtest: M1. report accepted BEFORE the job deadline keeps precedence even though the deadline fires before the child exits → success
+ok 26 - M1. report accepted BEFORE the job deadline keeps precedence even though the deadline fires before the child exits → success
+  ---
+  duration_ms: 2514.759556
+  type: 'test'
+  ...
+[WORKER-ISOLATION] job_deadline reached for child pid=58887 (stage=spawn) → revoke + SIGKILL groups
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=77 attempt=1 batch=1274)
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=77 attempt=1 batch=1274)
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:05:02.025Z
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:05:02.026Z
+[WORKER-ISOLATION] child pid=58887 reported AFTER terminal decision job_deadline → discarded (diagnostic only: success=true error=-)
+# M2 deadline-before-report: err="Job watchdog timeout: isolated child killed at job deadline (code=0 signal=null stage=pipeline)" late=[{"childPid":58887,"killReason":"job_deadline","kind":"result","summary":"success=true error=-","at":1791752702033}]
+# Subtest: M2. job deadline BEFORE the report → stays job watchdog timeout (non-retriable); late success discarded
+ok 27 - M2. job deadline BEFORE the report → stays job watchdog timeout (non-retriable); late success discarded
+  ---
+  duration_ms: 1578.527149
+  type: 'test'
+  ...
+[WORKER-ISOLATION] pipeline_deadline reached for child pid=58900 (stage=spawn) → revoke + SIGKILL groups
+[LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=77 attempt=1 batch=1274)
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:05:03.608Z
+[LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=77 attempt=1 batch=1274)
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=1274 job=77 attempt=1 token=00000000... abort_fired=true at=2026-10-11T21:05:03.612Z
+[WORKER-ISOLATION] child pid=58900 reported AFTER terminal decision pipeline_deadline → discarded (diagnostic only: success=true error=-)
+# M2b pipeline-deadline-before-report: error="Pipeline timed out after 2s" failureType=timeout late=1
+# Subtest: M2b. pipeline deadline BEFORE the report → stays pipeline timeout (retriable, existing policy); late success discarded
+ok 28 - M2b. pipeline deadline BEFORE the report → stays pipeline timeout (retriable, existing policy); late success discarded
+  ---
+  duration_ms: 1587.711132
+  type: 'test'
+  ...
+[WORKER-ISOLATION] pipeline-timeout bookkeeping failed: connect ECONNREFUSED 127.0.0.1:1
+[WORKER-ISOLATION] child pid=58913 reported AFTER terminal decision cancel → discarded (diagnostic only: success=true error=-)
+# M3 cancel-before-report: error="Cancelled" late=[{"childPid":58913,"killReason":"cancel","kind":"result","summary":"success=true error=-","at":1791752704723}]
+# Subtest: M3. cancel BEFORE the report → stays a cancellation; late success discarded
+ok 29 - M3. cancel BEFORE the report → stays a cancellation; late success discarded
+  ---
+  duration_ms: 1101.617534
+  type: 'test'
+  ...
+1..29
+# tests 29
 # suites 0
-# pass 22
+# pass 29
 # fail 0
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 63015.681185
+# duration_ms 75387.075893
