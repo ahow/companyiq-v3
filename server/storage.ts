@@ -1932,6 +1932,18 @@ export async function claimJob(jobId: number) {
   return row || null;
 }
 
+/**
+ * Read-only ownership snapshot for lifecycle-fence startOwnershipWatch: the
+ * row's current attempt_token + status. Single indexed PK lookup, no lock.
+ * Returns null when the row does not exist (watch treats null as fail-open).
+ */
+export async function getJobOwnershipSnapshot(jobId: number): Promise<{ attemptToken: string | null; status: string } | null> {
+  const result = await db.execute(sql`SELECT attempt_token::text AS attempt_token, status FROM analysis_jobs WHERE id = ${jobId}`);
+  const r = result.rows[0] as any;
+  if (!r) return null;
+  return { attemptToken: r.attempt_token ?? null, status: String(r.status) };
+}
+
 export async function completeJob(jobId: number, ownership?: AttemptOwnership | null): Promise<{ transitioned: boolean; batchId: number | null }> {
   const now = new Date();
   // Atomic terminal transition: the `AND status <> 'completed'` guard means a duplicate

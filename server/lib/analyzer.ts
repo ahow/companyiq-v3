@@ -2,6 +2,7 @@ import * as storage from "../storage.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
 import { ProviderScoringError } from "./credit-breaker.js";
 import { classifyProviderError, type ProviderFailureClass } from "./provider-resilience.js";
+import { assertDispatchAllowed, isLifecycleCancelledError } from "./lifecycle-fence.js";
 import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, applyChunkSanityGate, setShortTokenAllowlist, type EvidencePack, type Chunk, type ChunkSanityResult } from "./passage-retrieval.js";
 import type { IssuerProfile } from "./issuer-profile.js";
 // Approach 3: assembly-time boilerplate removal (generic, deterministic, no budget change).
@@ -2445,6 +2446,9 @@ export async function analyzeCompanyMeasures(opts: {
               console.warn(`[${companyName}] Change 4 re-retrieval search failed for ${measure.measureId}: ${reretrievalResult.detail || "unknown"}`);
             }
           } catch (rrErr: unknown) {
+            // Attempt cancellation must propagate, never be swallowed as a
+            // "keep the original result" soft failure.
+            if (isLifecycleCancelledError(rrErr)) throw rrErr;
             const msg = rrErr instanceof Error ? rrErr.message : String(rrErr);
             console.warn(`[${companyName}] Change 4 re-retrieval error for ${measure.measureId}: ${msg}`);
           }
@@ -2622,6 +2626,7 @@ export async function analyzeCompanyMeasures(opts: {
             }
           }
         } catch (deepErr: any) {
+          if (isLifecycleCancelledError(deepErr)) throw deepErr;
           console.warn(`[${companyName}] Deep-read pass failed for ${measure.measureId}: ${deepErr.message}`);
           // Keep the original result on any failure.
         }
@@ -2769,6 +2774,9 @@ export async function analyzeCompanyMeasures(opts: {
     // Process measures in concurrent batches
     for (let i = 0; i < categoryMeasures.length; i += MEASURE_CONCURRENCY) {
       const batch = categoryMeasures.slice(i, i + MEASURE_CONCURRENCY);
+      // Refuse to start another sibling batch once the attempt is revoked.
+      // Inert (no-op) when no attempt lifecycle is in context.
+      assertDispatchAllowed("scoring:measure-batch");
       const batchResults = await Promise.all(batch.map(scoreMeasure));
       // BINARY SCORING: collapse any residual "Partial" verdict/0.5 score to a
       // "No"/0 at the single collection chokepoint so every downstream rollup
@@ -3147,6 +3155,7 @@ async function scoreSingleMeasurePass(opts: {
         } as MeasureResult & { _gradedBy?: string; _p3Trace?: string[] };
       }
     } catch (err: any) {
+      if (isLifecycleCancelledError(err)) throw err;
       // Non-fatal — fall through to normal scoring
       console.warn(`[${companyName}] Two-step verifier failed for ${measure.measureId}, falling back to normal scoring: ${err?.message || err}`);
     }
@@ -3168,6 +3177,7 @@ async function scoreSingleMeasurePass(opts: {
       json: true,
       maxTokens: 2000,
       seed,
+      logMeta: { measureId: measure.measureId },
     });
 
     const parsed = extractAndParseJSON(text);
@@ -3259,6 +3269,7 @@ async function scoreSingleMeasurePass(opts: {
             p3Trace.push("r33_kept_yes");
           }
         } catch (err: any) {
+          if (isLifecycleCancelledError(err)) throw err;
           // Non-fatal — keep original verdict
           console.warn(`[${companyName}] R3.3 context-expansion failed for ${measure.measureId}: ${err?.message || err}`);
         }
@@ -3285,6 +3296,7 @@ async function scoreSingleMeasurePass(opts: {
           p3Trace.push("evidence_absent");
         }
       } catch (err: any) {
+        if (isLifecycleCancelledError(err)) throw err;
         console.warn(`[${companyName}] evidence-absent classification failed for ${measure.measureId}: ${err?.message || err}`);
       }
     }
@@ -3313,6 +3325,11 @@ async function scoreSingleMeasurePass(opts: {
       _p3Trace: p3Trace.length > 0 ? p3Trace : undefined,
     } as MeasureResult & { _gradedBy?: string; _p3Trace?: string[] };
   } catch (error: any) {
+    // ATTEMPT CANCELLATION (admin cancel / supersession / timeout / ownership
+    // loss): never retried, never failed over, never converted into a zero or
+    // an abstain cell. Propagate so pipeline.ts returns failureType="cancelled"
+    // without writing results.
+    if (isLifecycleCancelledError(error)) throw error;
     // PROVIDER QUOTA/AUTH FAILURE: if the error is a ProviderScoringError with
     // quota_exhausted or authentication class, DO NOT convert to a zero score.
     // Re-throw so the pipeline pauses cleanly without emitting fake results.
@@ -3340,6 +3357,7 @@ async function scoreSingleMeasurePass(opts: {
       opts._contentRetriesLeft ?? parseInt(process.env.SCORING_CONTENT_RETRIES || "2", 10);
     if ((failureType === "scoring_error" || failureType === "timeout") && retriesLeft > 0) {
       console.warn(`[${companyName}] Scoring FAILED [${failureType}/${failureClass}] for ${measure.measureId} — retrying (${retriesLeft} attempt(s) left): ${error.message}`);
+      assertDispatchAllowed("scoring:content-retry");
       return scoreSingleMeasurePass({ ...opts, _contentRetriesLeft: retriesLeft - 1 });
     }
 
@@ -3546,6 +3564,7 @@ async function scoreWithCascade(opts: {
   // Inside cascade: run ONE pass per stage (cascade IS the diversity mechanism;
   // triple self-consistency per stage would be 9 calls/measure and wasteful).
   const scoreOne = async (provider: string): Promise<MeasureResult> => {
+    assertDispatchAllowed(`scoring:cascade ${provider}`);
     const prev = process.env.SCORING_SELF_CONSISTENCY;
     process.env.SCORING_SELF_CONSISTENCY = "1";
     try {
@@ -3592,6 +3611,7 @@ async function scoreWithCascade(opts: {
   }
 
   // ─── Disagreement (~15-20% of cells) → Claude arbiter ──────────────────
+  assertDispatchAllowed("scoring:arbiter");
   const stage3 = await scoreOne(arbiter);
   const s3 = stage3.score;
 
@@ -3706,3 +3726,10 @@ async function generateSummaryNarrative(
     return `${companyName} scored ${scorePercentage}% on the ${framework.name} assessment (${yesCount} of ${results.length} measures met).`;
   }
 }
+
+/**
+ * TEST-ONLY handles to the real (non-exported) scoring functions so the
+ * cancellation unit test can drive the actual cascade / scoring-pass code with
+ * mocked providers. Never used by production code.
+ */
+export const __analyzerTestHooks = { scoreSingleMeasurePass, scoreWithCascade };

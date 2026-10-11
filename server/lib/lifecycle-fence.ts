@@ -69,6 +69,11 @@
 //      (inside the withTimeout timer callback, at the timer instant)
 //   #3 discovery.ts DISCOVERY_TIMEOUT_MS    → revokeAttempt("discovery_timeout")
 //      (inside searchCompanyDocuments' timer callback, only if still unsettled)
+//   #4 worker.ts ownership watch            → revokeAttempt("ownership_lost")
+//      (startOwnershipWatch: the owning attempt periodically re-reads its own
+//      analysis_jobs row; token mismatch / status≠claimed → self-revoke. This
+//      is the only path that aborts an OLD replica's in-process execution after
+//      a BullMQ stalled-redelivery reclaim on another replica.)
 //   Independent: none waits for another. All fire before the attempt's
 //   failure result reaches failJob, i.e. before any retry/requeue. The SQL
 //   deadline + ownership predicates remain the authority.
@@ -198,6 +203,61 @@ export function requestAbortSignal(
       parent?.removeEventListener("abort", onParent);
     },
   };
+}
+
+// ─── Ownership watch (cross-replica reclaim → self-revoke) ────────────────────
+
+export interface JobOwnershipSnapshot {
+  attemptToken: string | null;
+  status: string;
+}
+
+/**
+ * Periodically re-read this attempt's own analysis_jobs row and self-revoke
+ * (reason "ownership_lost") when another claim has superseded it: the row's
+ * attempt_token no longer equals ours, or status is no longer 'claimed'.
+ *
+ * Rationale: a BullMQ stalled-redelivery can be re-claimed by ANOTHER replica
+ * (claimPredicate admits status='claimed' AND attempts<3), minting a new token.
+ * The SQL ownership predicates already refuse the old attempt's WRITES, but
+ * nothing in the old process revokes its lifecycle, so its LLM calls keep
+ * running (and billing) until its own deadline. This closes that gap.
+ *
+ * Fail-open on read errors / null reads (a DB blip must not kill a healthy
+ * attempt — SQL fencing remains the authority). No-op when intervalMs<=0 or
+ * the lifecycle has no attemptToken (legacy claims). Timer is unref'd and has
+ * an in-flight guard so slow reads never stack. Returns stop().
+ */
+export function startOwnershipWatch(
+  lc: AttemptLifecycleState | null | undefined,
+  readOwner: () => Promise<JobOwnershipSnapshot | null>,
+  intervalMs = 30_000,
+): () => void {
+  if (!lc || !lc.attemptToken || !(intervalMs > 0)) return () => {};
+  let inFlight = false;
+  let stopped = false;
+  const tick = async () => {
+    if (inFlight || stopped || lc.revoked) return;
+    inFlight = true;
+    try {
+      const snap = await readOwner();
+      if (stopped || lc.revoked || !snap) return;
+      if (snap.attemptToken !== lc.attemptToken || snap.status !== "claimed") {
+        console.warn(
+          `[LIFECYCLE-FENCE] ownership lost token=${lc.attemptToken} job=${lc.jobId} attempt=${lc.attemptNumber} batch=${lc.batchId} ` +
+          `row_token=${snap.attemptToken ?? "null"} row_status=${snap.status}`,
+        );
+        revokeAttempt(lc, "ownership_lost");
+      }
+    } catch (e: any) {
+      console.warn(`[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=${lc.jobId} token=${lc.attemptToken}: ${e?.message || e}`);
+    } finally {
+      inFlight = false;
+    }
+  };
+  const timer = setInterval(() => { void tick(); }, intervalMs);
+  (timer as any)?.unref?.();
+  return () => { stopped = true; clearInterval(timer); };
 }
 
 // ─── Durable ownership (SQL) ─────────────────────────────────────────────────

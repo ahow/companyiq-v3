@@ -23,6 +23,13 @@ import {
 } from "./provider-resilience.js";
 import { noteRateLimited, noteProviderSuccess } from "./adaptive-concurrency.js";
 import { recordLlmUsage } from "./llm-usage.js";
+import { getDiagContext, type DiagContext } from "./diag-context.js";
+import {
+  LifecycleCancelledError,
+  isLifecycleCancelledError,
+  assertDispatchAllowed,
+  requestAbortSignal,
+} from "./lifecycle-fence.js";
 
 // ─── Key Collection Helper ───────────────────────────────────────────────────
 
@@ -79,6 +86,83 @@ function releaseLlmSlot(): void {
   if (next) next();
 }
 
+// ─── Attempt-scoped cancellation helpers (scoring path) ──────────────────────
+// Cancellation (admin cancel, supersession, pipeline/job/discovery timeout,
+// ownership loss) is NOT a provider failure: it must never be retried, never
+// fail over to another provider, and never become an error/abstain score.
+
+/** The LifecycleCancelledError carried by an aborted signal (or a fresh one). */
+export function cancellationFromSignal(signal: AbortSignal | null | undefined, where: string): LifecycleCancelledError {
+  const r: unknown = signal?.reason;
+  if (isLifecycleCancelledError(r)) return r;
+  return new LifecycleCancelledError(typeof r === "string" && r ? r : "aborted", where);
+}
+
+/** True when `error` (or the signal state) means "cancelled", not "failed". */
+export function isScoringCancellation(error: unknown, signal?: AbortSignal | null): boolean {
+  return isLifecycleCancelledError(error) || !!signal?.aborted;
+}
+
+/**
+ * setTimeout-based sleep that rejects with LifecycleCancelledError as soon as
+ * `signal` aborts. The timer is cleared and the abort listener removed in
+ * `finally` on every path (resolve, abort, or already-aborted), so no timer or
+ * listener outlives the call. Without a signal it is a plain sleep.
+ */
+export async function abortableSleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  if (!signal) {
+    await new Promise<void>((r) => setTimeout(r, ms));
+    return;
+  }
+  if (signal.aborted) throw cancellationFromSignal(signal, "backoff");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      onAbort = () => reject(cancellationFromSignal(signal, "backoff"));
+      timer = setTimeout(resolve, ms);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+// [SCORING-REQ] token-attributed dispatch/settle logs. Only emitted inside a
+// worker attempt (diag context with a lifecycle) so scripts stay quiet.
+// SCORING_REQ_LOG = "all" (default: start + settle) | "settle" | "off".
+type ScoringReqLogMeta = { measureId?: string | null };
+function scoringReqLog(
+  ctx: DiagContext | undefined,
+  phase: "start" | "settle",
+  f: { provider: string; role: string; tryN?: number; callType: string; measureId?: string | null; outcome?: string; ms?: number; reason?: string },
+): void {
+  if (!ctx?.lifecycle) return;
+  const mode = (process.env.SCORING_REQ_LOG || "all").toLowerCase();
+  if (mode === "off" || (mode === "settle" && phase === "start")) return;
+  const lc = ctx.lifecycle;
+  const parts = [
+    `[SCORING-REQ] ${phase}`,
+    `token=${lc.attemptToken ?? "-"}`,
+    `job=${ctx.jobId ?? lc.jobId ?? "-"}`,
+    `attempt=${ctx.attemptNumber ?? lc.attemptNumber ?? "-"}`,
+    `batch=${ctx.batchId ?? lc.batchId ?? "-"}`,
+    `company=${ctx.companyId ?? "-"}`,
+    `measure=${f.measureId ?? "-"}`,
+    `provider=${f.provider}`,
+    `role=${f.role}${f.tryN != null ? `#${f.tryN}` : ""}`,
+    `call=${f.callType}`,
+  ];
+  if (phase === "settle") {
+    parts.push(`outcome=${f.outcome}`, `ms=${f.ms ?? "-"}`);
+    if (f.reason) parts.push(`reason=${JSON.stringify(f.reason.slice(0, 160))}`);
+  }
+  const line = parts.join(" ");
+  if (phase === "settle" && f.outcome !== "success") console.warn(line);
+  else console.log(line);
+}
+
 // ─── Provider Interface ──────────────────────────────────────────────────────
 
 export interface AIProvider {
@@ -107,6 +191,11 @@ export interface AIProvider {
     // successful return with the provider's finishReason/stop_reason and whether
     // the text was truncated. Purely additive — never affects the return contract.
     onMeta?: (m: { finishReason?: string | null; truncated?: boolean }) => void;
+    // Optional attempt-scoped cancellation (lifecycle-fence.ts requestAbortSignal).
+    // Passed straight into the transport (Anthropic SDK RequestOptions.signal /
+    // axios config.signal) so an in-flight HTTP request is actually aborted.
+    // Absent ⇒ identical behaviour to before.
+    signal?: AbortSignal;
   }): Promise<string>;
 }
 
@@ -145,6 +234,7 @@ class ClaudeProvider implements AIProvider {
     allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
     onMeta?: (m: { finishReason?: string | null; truncated?: boolean }) => void;
+    signal?: AbortSignal;
   }): Promise<string> {
     if (this.apiKeys.length === 0) throw new Error("Claude not configured");
     // Try each available key once; rotate on rate-limit (429) or auth (401) errors
@@ -181,7 +271,7 @@ class ClaudeProvider implements AIProvider {
         // Both branches return the same contract: the response's text, and a
         // single onUsage(usage) callback with the provider usage object.
         if (effectiveMaxTokens > 20000) {
-          const stream = client.messages.stream(params);
+          const stream = client.messages.stream(params, opts.signal ? { signal: opts.signal } : undefined);
           const response = await stream.finalMessage();
           try { opts.onUsage?.(response.usage); } catch { /* usage sink must never break scoring */ }
           // FAIL-LOUD: if the model stopped because it hit the output cap the text
@@ -220,7 +310,7 @@ class ClaudeProvider implements AIProvider {
           throw new Error("Unexpected response type from Claude");
         }
 
-        const response = await client.messages.create(params);
+        const response = await client.messages.create(params, opts.signal ? { signal: opts.signal } : undefined);
         try { opts.onUsage?.(response.usage); } catch { /* usage sink must never break scoring */ }
         // FAIL-LOUD: see streaming branch above — never return cap-truncated text.
         const block = response.content[0];
@@ -239,9 +329,11 @@ class ClaudeProvider implements AIProvider {
         throw new Error("Unexpected response type from Claude");
       } catch (error: any) {
         lastError = error;
+        // Cancellation: never rotate keys / retry an aborted request.
+        if (opts.signal?.aborted) throw error;
         const status = error.status || error.response?.status;
         if ((status === 429 || status === 401) && i < attempts - 1) {
-          await new Promise(r => setTimeout(r, 500));
+          await abortableSleep(500, opts.signal);
           continue;
         }
         throw error;
@@ -328,6 +420,7 @@ class OpenAICompatibleProvider implements AIProvider {
     allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
     onMeta?: (m: { finishReason?: string | null; truncated?: boolean }) => void;
+    signal?: AbortSignal;
   }): Promise<string> {
     const body: any = {
       model: this.model,
@@ -370,6 +463,7 @@ class OpenAICompatibleProvider implements AIProvider {
               ...this.extraHeaders,
             },
             timeout: 120000,
+            ...(opts.signal ? { signal: opts.signal } : {}),
           }
         );
         try { opts.onUsage?.(response.data?.usage); } catch { /* usage sink must never break scoring */ }
@@ -389,11 +483,13 @@ class OpenAICompatibleProvider implements AIProvider {
         return choice.message.content;
       } catch (error: any) {
         lastError = error;
+        // Cancellation: never rotate keys / retry an aborted request.
+        if (opts.signal?.aborted) throw error;
         const status = error.response?.status;
         // Only rotate to another key for rate-limit or auth errors; otherwise fail fast
         if (status === 429 || status === 401) {
           if (i < attempts - 1) {
-            await new Promise(r => setTimeout(r, 500));
+            await abortableSleep(500, opts.signal);
             continue;
           }
         }
@@ -429,6 +525,7 @@ class GeminiProvider implements AIProvider {
     allowTruncated?: boolean;
     onUsage?: (rawUsage: any) => void;
     onMeta?: (m: { finishReason?: string | null; truncated?: boolean }) => void;
+    signal?: AbortSignal;
   }): Promise<string> {
     if (!this.apiKey) throw new Error("Gemini not configured");
 
@@ -450,7 +547,7 @@ class GeminiProvider implements AIProvider {
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
       body,
-      { timeout: 180000 }
+      { timeout: 180000, ...(opts.signal ? { signal: opts.signal } : {}) }
     );
 
     try { opts.onUsage?.(response.data?.usageMetadata); } catch { /* usage sink must never break scoring */ }
@@ -772,6 +869,22 @@ export function getProvider(name: string): AIProvider | undefined {
   return providers.get(name);
 }
 
+/**
+ * TEST-ONLY: replace the whole provider registry with `list` (mocks) and return
+ * a restore function. Never called by production code. Replacing the whole
+ * registry guarantees no real provider (several have default keys) can be
+ * reached by the fallback chain during a unit test.
+ */
+export function __setProvidersForTests(list: AIProvider[]): () => void {
+  const saved = new Map(providers);
+  providers.clear();
+  for (const p of list) providers.set(p.name, p);
+  return () => {
+    providers.clear();
+    for (const [k, v] of saved) providers.set(k, v);
+  };
+}
+
 export function getAvailableProviders(): AIProvider[] {
   return Array.from(providers.values()).filter((p) => p.isAvailable());
 }
@@ -930,13 +1043,36 @@ export async function completeWithFallback(
 // many times the same provider is retried before any fallback.
 export async function completeScoring(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string }
+  opts: {
+    system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string;
+    // Explicit cancellation signal (tests / non-worker callers). When omitted
+    // and a worker attempt lifecycle is active (diag context), an
+    // attempt-scoped signal is derived via requestAbortSignal(ctx).
+    signal?: AbortSignal;
+    // Log attribution only ([SCORING-REQ]); never sent to the provider.
+    logMeta?: ScoringReqLogMeta;
+  }
 ): Promise<{ text: string; provider: string; model: string }> {
+  const { signal: explicitSignal, logMeta, ...reqOpts } = opts;
   await acquireLlmSlot();
+  // Attempt-scoped cancellation. Inert (no signal, no gates, no logs) outside a
+  // worker attempt, so scripts/routes keep the exact previous behaviour.
+  const ctx = getDiagContext();
+  const lifecycleActive = !!ctx?.lifecycle;
+  const attemptSignal = !explicitSignal && lifecycleActive ? requestAbortSignal(ctx) : null;
+  const signal: AbortSignal | undefined = explicitSignal ?? attemptSignal?.signal;
+  const callType = reqOpts.callType ?? "scoring";
+  const measureId = logMeta?.measureId ?? null;
+  // Refuse dispatch when revoked (lifecycle gate) or the signal already fired.
+  const gate = (where: string) => {
+    if (lifecycleActive) assertDispatchAllowed(where, ctx);
+    if (signal?.aborted) throw cancellationFromSignal(signal, where);
+  };
   try {
+    gate(`scoring:dispatch ${providerName}`);
     const strict = (process.env.SCORING_STRICT_PROVIDER || "true").toLowerCase() !== "false";
     if (!strict) {
-      const result = await completeWithFallbackInner(providerName, opts);
+      const result = await completeWithFallbackInner(providerName, { ...reqOpts, signal });
       const p = getProvider(result.provider);
       return { ...result, model: p?.model || result.provider };
     }
@@ -954,9 +1090,20 @@ export async function completeScoring(
       const effectiveRetries = trippedNow ? 1 : retries; // probe once when tripped
       if (allowPrimary) {
         for (let attempt = 0; attempt < effectiveRetries; attempt++) {
+          // Gate EVERY primary dispatch, including retries.
+          gate(`scoring:primary ${primary.name} try ${attempt + 1}`);
+          const t0 = Date.now();
+          scoringReqLog(ctx, "start", { provider: primary.name, role: "primary", tryN: attempt + 1, callType, measureId });
+          let capturedUsage: any = null;
           try {
-            let capturedUsage: any = null;
-            const text = await primary.complete({ ...opts, onUsage: (u) => { capturedUsage = u; } });
+            const text = await primary.complete({ ...reqOpts, signal, onUsage: (u) => { capturedUsage = u; } });
+            if (signal?.aborted) {
+              // LATE RESPONSE: the attempt was revoked while this request was in
+              // flight and the transport resolved anyway. The tokens were billed,
+              // so usage is still recorded (cost truth), but the text is DISCARDED.
+              recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType });
+              throw cancellationFromSignal(signal, `scoring:primary ${primary.name} late-response`);
+            }
             // Success: clear any credit breaker/alert for this provider (recovery).
             if (isProviderTripped(primary.name)) {
               resetProvider(primary.name);
@@ -965,9 +1112,18 @@ export async function completeScoring(
               console.warn(`[AI:scoring] Credit breaker CLEARED for ${primary.name} — primary call succeeded`);
             }
             noteProviderSuccess();
-            recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType: opts.callType ?? "scoring" });
+            recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType });
+            scoringReqLog(ctx, "settle", { provider: primary.name, role: "primary", tryN: attempt + 1, callType, measureId, outcome: "success", ms: Date.now() - t0 });
             return { text, provider: primary.name, model: primary.model };
           } catch (error: any) {
+            // CANCELLATION bypasses ALL normal error handling: no classification,
+            // no credit breaker, no backoff, no retry, no fallback.
+            if (isScoringCancellation(error, signal)) {
+              const c = isLifecycleCancelledError(error) ? error : cancellationFromSignal(signal, `scoring:primary ${primary.name}`);
+              scoringReqLog(ctx, "settle", { provider: primary.name, role: "primary", tryN: attempt + 1, callType, measureId, outcome: "aborted", ms: Date.now() - t0, reason: c.reason });
+              throw c;
+            }
+            scoringReqLog(ctx, "settle", { provider: primary.name, role: "primary", tryN: attempt + 1, callType, measureId, outcome: "error", ms: Date.now() - t0, reason: String(error?.message || error) });
             const failureClass = classifyProviderError(error);
             lastFailureClass = failureClass;
             if (failureClass === "rate_limited") noteRateLimited();
@@ -992,8 +1148,10 @@ export async function completeScoring(
             }
             // Non-credit transient error: exponential backoff before retry.
             // I45: Remove random jitter from scoring backoff — deterministic retry timing
+            // Interruptible: resolves early (rejects with LifecycleCancelledError)
+            // the moment the attempt is revoked; identical delay otherwise.
             const backoff = Math.min(8000, 500 * Math.pow(2, attempt));
-            await new Promise((r) => setTimeout(r, backoff));
+            await abortableSleep(backoff, signal);
           }
         }
       } else {
@@ -1028,14 +1186,29 @@ export async function completeScoring(
     }
 
     for (const fallback of fallbackChain) {
+      // Gate EVERY fallback dispatch.
+      gate(`scoring:fallback ${fallback.name}`);
+      const t0 = Date.now();
+      scoringReqLog(ctx, "start", { provider: fallback.name, role: "fallback", callType, measureId });
+      let capturedUsage: any = null;
       try {
-        let capturedUsage: any = null;
-        const text = await fallback.complete({ ...opts, onUsage: (u) => { capturedUsage = u; } });
+        const text = await fallback.complete({ ...reqOpts, signal, onUsage: (u) => { capturedUsage = u; } });
+        if (signal?.aborted) {
+          recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType });
+          throw cancellationFromSignal(signal, `scoring:fallback ${fallback.name} late-response`);
+        }
         console.warn(`[AI:scoring] PRIMARY ${providerName} EXHAUSTED — graded by fallback ${fallback.name} (auditable variance source)`);
         noteProviderSuccess();
-        recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType: opts.callType ?? "scoring" });
+        recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType });
+        scoringReqLog(ctx, "settle", { provider: fallback.name, role: "fallback", callType, measureId, outcome: "success", ms: Date.now() - t0 });
         return { text, provider: fallback.name, model: fallback.model };
       } catch (error: any) {
+        if (isScoringCancellation(error, signal)) {
+          const c = isLifecycleCancelledError(error) ? error : cancellationFromSignal(signal, `scoring:fallback ${fallback.name}`);
+          scoringReqLog(ctx, "settle", { provider: fallback.name, role: "fallback", callType, measureId, outcome: "aborted", ms: Date.now() - t0, reason: c.reason });
+          throw c;
+        }
+        scoringReqLog(ctx, "settle", { provider: fallback.name, role: "fallback", callType, measureId, outcome: "error", ms: Date.now() - t0, reason: String(error?.message || error) });
         const fbClass = classifyProviderError(error);
         if (fbClass === "rate_limited") noteRateLimited();
         errors.push(`${fallback.name}[${fbClass}]: ${error.message || 'unknown error'}`);
@@ -1055,14 +1228,18 @@ export async function completeScoring(
     }
     throw new ProviderScoringError(providerName, lastFailureClass, `All scoring providers failed: ${errors.join(' | ')}`);
   } finally {
+    attemptSignal?.dispose();
     releaseLlmSlot();
   }
 }
 
 async function completeWithFallbackInner(
   providerName: string,
-  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string; allowTruncated?: boolean }
+  opts: { system: string; prompt: string; maxTokens?: number; json?: boolean; temperature?: number; seed?: number; callType?: string; allowTruncated?: boolean; signal?: AbortSignal }
 ): Promise<{ text: string; provider: string; meta?: CompletionMeta }> {
+  // `signal` is only ever set by completeScoring's non-strict path; for
+  // completeWithFallback callers it is undefined and every check below is inert.
+  const signal = opts.signal;
   const errors: string[] = [];
   const primary = getProvider(providerName);
   if (primary?.isAvailable()) {
@@ -1084,6 +1261,7 @@ async function completeWithFallbackInner(
         meta: { ...toks, finishReason: capturedMeta.finishReason ?? null, truncated: Boolean(capturedMeta.truncated), semaphoreWaitMs: 0 },
       };
     } catch (error: any) {
+      if (signal && isScoringCancellation(error, signal)) throw isLifecycleCancelledError(error) ? error : cancellationFromSignal(signal, `fallback-inner:${primary.name}`);
       const msg = `${primary.name}: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
       errors.push(msg);
       console.warn(`[AI] ${msg}, trying fallbacks`);
@@ -1094,6 +1272,7 @@ async function completeWithFallbackInner(
 
   const fallbacks = getFallbackProviders(providerName);
   for (const fallback of fallbacks) {
+    if (signal?.aborted) throw cancellationFromSignal(signal, `fallback-inner:${fallback.name}`);
     try {
       let capturedUsage: any = null;
       let capturedMeta: { finishReason?: string | null; truncated?: boolean } = {};
@@ -1110,6 +1289,7 @@ async function completeWithFallbackInner(
         meta: { ...toks, finishReason: capturedMeta.finishReason ?? null, truncated: Boolean(capturedMeta.truncated), semaphoreWaitMs: 0 },
       };
     } catch (error: any) {
+      if (signal && isScoringCancellation(error, signal)) throw isLifecycleCancelledError(error) ? error : cancellationFromSignal(signal, `fallback-inner:${fallback.name}`);
       const msg = `${fallback.name}: ${error.message || error.response?.data?.error?.message || 'unknown error'}`;
       errors.push(msg);
       console.warn(`[AI] Fallback ${msg}`);

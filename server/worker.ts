@@ -32,7 +32,7 @@ import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqua
 import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
 import { runWithLlmContext } from "./lib/llm-usage.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
-import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason } from "./lib/lifecycle-fence.js";
+import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch } from "./lib/lifecycle-fence.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -400,6 +400,17 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       console.warn(`[Worker] heartbeat failed for job ${jobId}: ${error?.message || error}`);
     });
   }, heartbeatIntervalMs);
+  // Revocation path #4 (cross-replica reclaim): re-read this attempt's own
+  // analysis_jobs row every OWNERSHIP_WATCH_MS (default 30s, 0 disables) and
+  // self-revoke on token mismatch / status≠claimed, which aborts every
+  // in-flight scoring request of this attempt via the lifecycle AbortSignal.
+  // Fail-open on read errors; SQL fencing stays authoritative. Stopped in the
+  // same finally as the heartbeat.
+  const stopOwnershipWatch = startOwnershipWatch(
+    lifecycle,
+    () => storage.getJobOwnershipSnapshot(jobId as number),
+    parseInt(process.env.OWNERSHIP_WATCH_MS || "30000", 10),
+  );
 
   try {
     // Hard watchdog: the analysis pipeline can occasionally hang on a network
@@ -457,6 +468,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       );
     } finally {
       clearInterval(heartbeatTimer);
+      stopOwnershipWatch();
     }
 
     setDiagStage("finalize");
