@@ -1,0 +1,1002 @@
+{
+  "file": "/tmp/ciq-prof/c1/CPU.20261011.154731.33876.0.001.cpuprofile",
+  "totalProfiledMs": 38588,
+  "busyMs": 14631,
+  "harnessExcludedMs": 305,
+  "blockMinMs": 50,
+  "blockingSlices": 17,
+  "blockingMs": 13520,
+  "longestSliceMs": 5864,
+  "sliceHistogram": [
+    {
+      "bucket": "50-100ms",
+      "runs": 2,
+      "ms": 150
+    },
+    {
+      "bucket": "100-250ms",
+      "runs": 4,
+      "ms": 693
+    },
+    {
+      "bucket": "250-500ms",
+      "runs": 2,
+      "ms": 734
+    },
+    {
+      "bucket": "500-1000ms",
+      "runs": 7,
+      "ms": 5059
+    },
+    {
+      "bucket": "1000-2000ms",
+      "runs": 1,
+      "ms": 1020
+    },
+    {
+      "bucket": "2000-5000ms",
+      "runs": 0,
+      "ms": 0
+    },
+    {
+      "bucket": "5000-∞ms",
+      "runs": 1,
+      "ms": 5864
+    }
+  ],
+  "concentration": {
+    "distinctAppFunctions": 152,
+    "top1AppPct": 15,
+    "top3AppPct": 38.1,
+    "top5AppPct": 50,
+    "hhiApp": 0.071,
+    "top1ModulePct": 44.1,
+    "distinctModules": 21
+  },
+  "topAppFunctions": [
+    {
+      "name": "(no app frame: (garbage collector))",
+      "ms": 2031,
+      "pctOfBlocking": 15
+    },
+    {
+      "name": "tokenize @ server/lib/passage-retrieval.ts:1",
+      "ms": 1760,
+      "pctOfBlocking": 13
+    },
+    {
+      "name": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+      "ms": 1357,
+      "pctOfBlocking": 10
+    },
+    {
+      "name": "(anonymous) @ server/lib/analyzer.ts:222",
+      "ms": 824,
+      "pctOfBlocking": 6.1
+    },
+    {
+      "name": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+      "ms": 789,
+      "pctOfBlocking": 5.8
+    },
+    {
+      "name": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+      "ms": 633,
+      "pctOfBlocking": 4.7
+    },
+    {
+      "name": "chunkBody @ server/lib/passage-retrieval.ts:3",
+      "ms": 613,
+      "pctOfBlocking": 4.5
+    },
+    {
+      "name": "bm25Score @ server/lib/passage-retrieval.ts:1",
+      "ms": 575,
+      "pctOfBlocking": 4.3
+    },
+    {
+      "name": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+      "ms": 570,
+      "pctOfBlocking": 4.2
+    },
+    {
+      "name": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+      "ms": 502,
+      "pctOfBlocking": 3.7
+    },
+    {
+      "name": "(anonymous) @ server/lib/processor.ts:1",
+      "ms": 458,
+      "pctOfBlocking": 3.4
+    },
+    {
+      "name": "scoreAboutness @ server/lib/aboutness.ts:1",
+      "ms": 422,
+      "pctOfBlocking": 3.1
+    },
+    {
+      "name": "isLikelyToc @ server/lib/passage-retrieval.ts:1",
+      "ms": 282,
+      "pctOfBlocking": 2.1
+    },
+    {
+      "name": "computeAssemblyPenaltyFactors @ server/lib/corpus-boilerplate.ts:1",
+      "ms": 270,
+      "pctOfBlocking": 2
+    },
+    {
+      "name": "words @ server/lib/corpus-boilerplate.ts:1",
+      "ms": 239,
+      "pctOfBlocking": 1.8
+    },
+    {
+      "name": "recoverSecHeadingNewlines @ server/lib/passage-retrieval.ts:1",
+      "ms": 233,
+      "pctOfBlocking": 1.7
+    },
+    {
+      "name": "scanDocumentsForWithdrawals @ server/lib/temporal-validation.ts:1",
+      "ms": 204,
+      "pctOfBlocking": 1.5
+    },
+    {
+      "name": "buildEvidencePackForMeasure @ server/lib/passage-retrieval.ts:3",
+      "ms": 202,
+      "pctOfBlocking": 1.5
+    },
+    {
+      "name": "countTopicHits @ server/lib/passage-retrieval.ts:1",
+      "ms": 170,
+      "pctOfBlocking": 1.3
+    },
+    {
+      "name": "looksNonEnglish @ server/lib/translation.ts:1",
+      "ms": 118,
+      "pctOfBlocking": 0.9
+    },
+    {
+      "name": "(no app frame: internalModuleStat)",
+      "ms": 118,
+      "pctOfBlocking": 0.9
+    },
+    {
+      "name": "(no app frame: readFileUtf8)",
+      "ms": 107,
+      "pctOfBlocking": 0.8
+    },
+    {
+      "name": "(no app frame: makeSyncRequest)",
+      "ms": 84,
+      "pctOfBlocking": 0.6
+    },
+    {
+      "name": "stripRepeatedStructuralBlocks @ server/lib/corpus-boilerplate.ts:1",
+      "ms": 79,
+      "pctOfBlocking": 0.6
+    },
+    {
+      "name": "(anonymous) @ server/lib/passage-retrieval.ts:1",
+      "ms": 70,
+      "pctOfBlocking": 0.5
+    }
+  ],
+  "topModules": [
+    {
+      "name": "server/lib/passage-retrieval.ts",
+      "ms": 5956,
+      "pctOfBlocking": 44.1
+    },
+    {
+      "name": "(runtime / GC / no app frame)",
+      "ms": 2751,
+      "pctOfBlocking": 20.3
+    },
+    {
+      "name": "server/lib/corpus-boilerplate.ts",
+      "ms": 1997,
+      "pctOfBlocking": 14.8
+    },
+    {
+      "name": "server/lib/analyzer.ts",
+      "ms": 910,
+      "pctOfBlocking": 6.7
+    },
+    {
+      "name": "server/lib/corpus-hygiene.ts",
+      "ms": 503,
+      "pctOfBlocking": 3.7
+    },
+    {
+      "name": "server/lib/aboutness.ts",
+      "ms": 466,
+      "pctOfBlocking": 3.4
+    },
+    {
+      "name": "server/lib/processor.ts",
+      "ms": 459,
+      "pctOfBlocking": 3.4
+    },
+    {
+      "name": "server/lib/temporal-validation.ts",
+      "ms": 206,
+      "pctOfBlocking": 1.5
+    },
+    {
+      "name": "server/lib/translation.ts",
+      "ms": 137,
+      "pctOfBlocking": 1
+    },
+    {
+      "name": "server/lib/passage-rescore.ts",
+      "ms": 91,
+      "pctOfBlocking": 0.7
+    },
+    {
+      "name": "server/lib/pipeline.ts",
+      "ms": 13,
+      "pctOfBlocking": 0.1
+    },
+    {
+      "name": "server/lib/provenance.ts",
+      "ms": 10,
+      "pctOfBlocking": 0.1
+    },
+    {
+      "name": "server/lib/discovery.ts",
+      "ms": 9,
+      "pctOfBlocking": 0.1
+    },
+    {
+      "name": "server/lib/eligibility-flags.ts",
+      "ms": 3,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "server/lib/ai-providers.ts",
+      "ms": 3,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "server/lib/framework-v2/reliability/canonical-rule.ts",
+      "ms": 2,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "server/storage.ts",
+      "ms": 1,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "server/lib/adaptive-concurrency.ts",
+      "ms": 1,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "server/lib/primary-disclosure-check.ts",
+      "ms": 1,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "server/lib/framework-guidance-audit.ts",
+      "ms": 1,
+      "pctOfBlocking": 0
+    }
+  ],
+  "topLeafFrames": [
+    {
+      "name": "(garbage collector) @ (native):0",
+      "ms": 2031,
+      "pctOfBlocking": 15
+    },
+    {
+      "name": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+      "ms": 1328,
+      "pctOfBlocking": 9.8
+    },
+    {
+      "name": "tokenize @ server/lib/passage-retrieval.ts:1",
+      "ms": 1015,
+      "pctOfBlocking": 7.5
+    },
+    {
+      "name": "RegExp: \\s+ @ (native):0",
+      "ms": 830,
+      "pctOfBlocking": 6.1
+    },
+    {
+      "name": "bm25Score @ server/lib/passage-retrieval.ts:1",
+      "ms": 575,
+      "pctOfBlocking": 4.3
+    },
+    {
+      "name": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+      "ms": 570,
+      "pctOfBlocking": 4.2
+    },
+    {
+      "name": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+      "ms": 438,
+      "pctOfBlocking": 3.2
+    },
+    {
+      "name": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+      "ms": 389,
+      "pctOfBlocking": 2.9
+    },
+    {
+      "name": "chunkBody @ server/lib/passage-retrieval.ts:3",
+      "ms": 364,
+      "pctOfBlocking": 2.7
+    },
+    {
+      "name": "scoreAboutness @ server/lib/aboutness.ts:1",
+      "ms": 295,
+      "pctOfBlocking": 2.2
+    },
+    {
+      "name": "(anonymous) @ server/lib/processor.ts:1",
+      "ms": 278,
+      "pctOfBlocking": 2.1
+    },
+    {
+      "name": "computeAssemblyPenaltyFactors @ server/lib/corpus-boilerplate.ts:1",
+      "ms": 270,
+      "pctOfBlocking": 2
+    },
+    {
+      "name": "RegExp: [\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af]+ @ (native):0",
+      "ms": 221,
+      "pctOfBlocking": 1.6
+    },
+    {
+      "name": "(anonymous) @ server/lib/analyzer.ts:222",
+      "ms": 196,
+      "pctOfBlocking": 1.4
+    },
+    {
+      "name": "RegExp: [^\\w\\s] @ (native):0",
+      "ms": 189,
+      "pctOfBlocking": 1.4
+    },
+    {
+      "name": "words @ server/lib/corpus-boilerplate.ts:1",
+      "ms": 177,
+      "pctOfBlocking": 1.3
+    },
+    {
+      "name": "RegExp: (?:\\bassess\\b|\\badapting\\b|\\bbusinesses\\b|\\btake\\b|\\badvantage\\b|\\bsafely\\b|\\bdoing\\b|\\bcovering\\b|\\bstrength\\b|\\bambitions\\b|\\bscale\\b|\\baction\\b|\\bcontrols\\b|\\bsafety\\b|\\bsustainability\\b|\\bstrategy\\b|\\bgovernance\\b|\\beffectively\\b|\\bopportunities\\b) @ (native):0",
+      "ms": 163,
+      "pctOfBlocking": 1.2
+    },
+    {
+      "name": "RegExp: \\.{2,}\\s*\\d+\\s*$|\\s\\d{1,4}\\s*$ @ (native):0",
+      "ms": 142,
+      "pctOfBlocking": 1
+    },
+    {
+      "name": "RegExp: (?<=[.!?])\\s+|\\n+ @ (native):0",
+      "ms": 120,
+      "pctOfBlocking": 0.9
+    },
+    {
+      "name": "internalModuleStat @ (native):0",
+      "ms": 119,
+      "pctOfBlocking": 0.9
+    },
+    {
+      "name": "RegExp: item[\\s\\u00a0]*1\\b[\\.\\:\\s\\-—]{0,3}\\s*business\\b @ (native):0",
+      "ms": 108,
+      "pctOfBlocking": 0.8
+    },
+    {
+      "name": "readFileUtf8 @ (native):0",
+      "ms": 107,
+      "pctOfBlocking": 0.8
+    },
+    {
+      "name": "RegExp: item[\\s\\u00a0]*1a\\b[\\.\\:\\s\\-—]{0,3}\\s*risk\\s+factors @ (native):0",
+      "ms": 100,
+      "pctOfBlocking": 0.7
+    },
+    {
+      "name": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+      "ms": 98,
+      "pctOfBlocking": 0.7
+    },
+    {
+      "name": "RegExp: item[\\s\\u00a0]*1b\\b[\\.\\:\\s\\-—]{0,3}\\s*unresolved\\s+staff @ (native):0",
+      "ms": 97,
+      "pctOfBlocking": 0.7
+    }
+  ],
+  "topLibraries": [
+    {
+      "name": "(app code self)",
+      "ms": 6962,
+      "pctOfBlocking": 51.5
+    },
+    {
+      "name": "(native: (garbage collector))",
+      "ms": 2031,
+      "pctOfBlocking": 15
+    },
+    {
+      "name": "(native: RegExp: \\s+)",
+      "ms": 830,
+      "pctOfBlocking": 6.1
+    },
+    {
+      "name": "(native: RegExp: [\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af]+)",
+      "ms": 221,
+      "pctOfBlocking": 1.6
+    },
+    {
+      "name": "(native: RegExp: [^\\w\\s])",
+      "ms": 189,
+      "pctOfBlocking": 1.4
+    },
+    {
+      "name": "(native: RegExp: (?:\\bassess\\b|\\badapting\\b|\\bbusinesses\\b|\\btake\\b|\\badvantage\\b|\\bsafely\\b|\\bdoing\\b|\\bcovering\\b|\\bstrength\\b|\\bambitions\\b|\\bscale\\b|\\baction\\b|\\bcontrols\\b|\\bsafety\\b|\\bsustainability\\b|\\bstrategy\\b|\\bgovernance\\b|\\beffectively\\b|\\bopportunities\\b))",
+      "ms": 163,
+      "pctOfBlocking": 1.2
+    },
+    {
+      "name": "(native: RegExp: \\.{2,}\\s*\\d+\\s*$|\\s\\d{1,4}\\s*$)",
+      "ms": 142,
+      "pctOfBlocking": 1
+    },
+    {
+      "name": "(native: RegExp: (?<=[.!?])\\s+|\\n+)",
+      "ms": 120,
+      "pctOfBlocking": 0.9
+    },
+    {
+      "name": "(native: internalModuleStat)",
+      "ms": 119,
+      "pctOfBlocking": 0.9
+    },
+    {
+      "name": "(native: RegExp: item[\\s\\u00a0]*1\\b[\\.\\:\\s\\-—]{0,3}\\s*business\\b)",
+      "ms": 108,
+      "pctOfBlocking": 0.8
+    },
+    {
+      "name": "(native: readFileUtf8)",
+      "ms": 107,
+      "pctOfBlocking": 0.8
+    },
+    {
+      "name": "(native: RegExp: item[\\s\\u00a0]*1a\\b[\\.\\:\\s\\-—]{0,3}\\s*risk\\s+factors)",
+      "ms": 100,
+      "pctOfBlocking": 0.7
+    },
+    {
+      "name": "(native: RegExp: item[\\s\\u00a0]*1b\\b[\\.\\:\\s\\-—]{0,3}\\s*unresolved\\s+staff)",
+      "ms": 97,
+      "pctOfBlocking": 0.7
+    },
+    {
+      "name": "(native: RegExp: item[\\s\\u00a0]*7a\\b[\\.\\:\\s\\-—]{0,3}\\s*quantitative\\s+and\\s+qualitative)",
+      "ms": 96,
+      "pctOfBlocking": 0.7
+    },
+    {
+      "name": "(native: RegExp: (?:target|commitment|goal|pledge) (?:has been|was) (?:discontinued|withdrawn|removed|superseded))",
+      "ms": 93,
+      "pctOfBlocking": 0.7
+    }
+  ],
+  "topEntryAppFrames": [
+    {
+      "name": "analyzeCompanyMeasures @ server/lib/analyzer.ts:238",
+      "ms": 5320,
+      "pctOfBlocking": 39.4
+    },
+    {
+      "name": "summarizeDocuments @ server/lib/analyzer.ts:222",
+      "ms": 4553,
+      "pctOfBlocking": 33.7
+    },
+    {
+      "name": "runAnalyzePhase @ server/lib/pipeline.ts:77",
+      "ms": 689,
+      "pctOfBlocking": 5.1
+    },
+    {
+      "name": "translateDocumentsToEnglish @ server/lib/translation.ts:2",
+      "ms": 131,
+      "pctOfBlocking": 1
+    },
+    {
+      "name": "scoreCandidatesWithLLM @ server/lib/passage-rescore.ts:7",
+      "ms": 32,
+      "pctOfBlocking": 0.2
+    },
+    {
+      "name": "(anonymous) @ server/lib/analyzer.ts:242",
+      "ms": 30,
+      "pctOfBlocking": 0.2
+    },
+    {
+      "name": "scoreSingleMeasure @ server/lib/analyzer.ts:242",
+      "ms": 3,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "completeWithFallback @ server/lib/ai-providers.ts:1",
+      "ms": 2,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "translateDocumentText @ server/lib/translation.ts:1",
+      "ms": 2,
+      "pctOfBlocking": 0
+    },
+    {
+      "name": "(anonymous) @ server/lib/eligibility-flags.ts:1",
+      "ms": 1,
+      "pctOfBlocking": 0
+    }
+  ],
+  "longestSlices": [
+    {
+      "ms": 5864,
+      "topApp": [
+        {
+          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+          "pct": 23.1
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 14.4
+        },
+        {
+          "fn": "(anonymous) @ server/lib/analyzer.ts:222",
+          "pct": 13.6
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "(anonymous) @ server/lib/corpus-boilerplate.ts:1",
+          "pct": 22.7
+        },
+        {
+          "fn": "(garbage collector) @ (native):0",
+          "pct": 14.4
+        }
+      ]
+    },
+    {
+      "ms": 1020,
+      "topApp": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 23.7
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 13.7
+        },
+        {
+          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+          "pct": 11.2
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 14.1
+        },
+        {
+          "fn": "(garbage collector) @ (native):0",
+          "pct": 13.7
+        }
+      ]
+    },
+    {
+      "ms": 945,
+      "topApp": [
+        {
+          "fn": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+          "pct": 53.1
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 44
+        },
+        {
+          "fn": "looksNonEnglish @ server/lib/translation.ts:1",
+          "pct": 2.2
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "(garbage collector) @ (native):0",
+          "pct": 44
+        },
+        {
+          "fn": "applyCorpusHygiene @ server/lib/corpus-hygiene.ts:1",
+          "pct": 41.2
+        }
+      ]
+    },
+    {
+      "ms": 937,
+      "topApp": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 26.9
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 12.5
+        },
+        {
+          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+          "pct": 11.9
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 15.6
+        },
+        {
+          "fn": "(garbage collector) @ (native):0",
+          "pct": 12.5
+        }
+      ]
+    },
+    {
+      "ms": 772,
+      "topApp": [
+        {
+          "fn": "scoreAboutness @ server/lib/aboutness.ts:1",
+          "pct": 54.7
+        },
+        {
+          "fn": "scanDocumentsForWithdrawals @ server/lib/temporal-validation.ts:1",
+          "pct": 26.4
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 8.5
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "scoreAboutness @ server/lib/aboutness.ts:1",
+          "pct": 38.2
+        },
+        {
+          "fn": "RegExp: (?:target|commitment|goal|pledge) (?:has been|was) (?:discontinued|withdrawn|removed|superseded) @ (native):0",
+          "pct": 12.1
+        }
+      ]
+    },
+    {
+      "ms": 692,
+      "topApp": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 27.8
+        },
+        {
+          "fn": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+          "pct": 13.4
+        },
+        {
+          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+          "pct": 12.6
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 14.5
+        },
+        {
+          "fn": "buildBM25Index @ server/lib/passage-retrieval.ts:1",
+          "pct": 13.4
+        }
+      ]
+    },
+    {
+      "ms": 624,
+      "topApp": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 29
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 16.4
+        },
+        {
+          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+          "pct": 11.2
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 18.1
+        },
+        {
+          "fn": "(garbage collector) @ (native):0",
+          "pct": 16.4
+        }
+      ]
+    },
+    {
+      "ms": 576,
+      "topApp": [
+        {
+          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+          "pct": 26.9
+        },
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 18.6
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 12.2
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+          "pct": 15.9
+        },
+        {
+          "fn": "(garbage collector) @ (native):0",
+          "pct": 12.2
+        }
+      ]
+    },
+    {
+      "ms": 514,
+      "topApp": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 22.7
+        },
+        {
+          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+          "pct": 21.2
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 14.5
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+          "pct": 15.1
+        },
+        {
+          "fn": "(garbage collector) @ (native):0",
+          "pct": 14.5
+        }
+      ]
+    },
+    {
+      "ms": 403,
+      "topApp": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 32.7
+        },
+        {
+          "fn": "(no app frame: (garbage collector))",
+          "pct": 13.8
+        },
+        {
+          "fn": "detectSecHeadingInFragment @ server/lib/passage-retrieval.ts:1",
+          "pct": 13.1
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 18.5
+        },
+        {
+          "fn": "(garbage collector) @ (native):0",
+          "pct": 13.8
+        }
+      ]
+    },
+    {
+      "ms": 332,
+      "topApp": [
+        {
+          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+          "pct": 27.1
+        },
+        {
+          "fn": "tokenize @ server/lib/passage-retrieval.ts:1",
+          "pct": 17.6
+        },
+        {
+          "fn": "bm25Score @ server/lib/passage-retrieval.ts:1",
+          "pct": 12.6
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "(anonymous) @ server/lib/passage-retrieval.ts:3",
+          "pct": 14.3
+        },
+        {
+          "fn": "bm25Score @ server/lib/passage-retrieval.ts:1",
+          "pct": 12.6
+        }
+      ]
+    },
+    {
+      "ms": 247,
+      "topApp": [
+        {
+          "fn": "(no app frame: internalModuleStat)",
+          "pct": 35.1
+        },
+        {
+          "fn": "(no app frame: ?)",
+          "pct": 18.7
+        },
+        {
+          "fn": "(no app frame: readFileUtf8)",
+          "pct": 13.7
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "internalModuleStat @ (native):0",
+          "pct": 35.1
+        },
+        {
+          "fn": "readFileUtf8 @ (native):0",
+          "pct": 13.7
+        }
+      ]
+    },
+    {
+      "ms": 227,
+      "topApp": [
+        {
+          "fn": "(no app frame: makeSyncRequest)",
+          "pct": 37
+        },
+        {
+          "fn": "(no app frame: waitForWorker)",
+          "pct": 25.7
+        },
+        {
+          "fn": "(no app frame: internalModuleStat)",
+          "pct": 5.1
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "makeSyncRequest @ node:internal/modules/esm/hooks:598",
+          "pct": 37
+        },
+        {
+          "fn": "waitForWorker @ node:internal/modules/esm/hooks:519",
+          "pct": 25.7
+        }
+      ]
+    },
+    {
+      "ms": 116,
+      "topApp": [
+        {
+          "fn": "looksNonEnglish @ server/lib/translation.ts:1",
+          "pct": 84.7
+        },
+        {
+          "fn": "nonEnglishRatio @ server/lib/translation.ts:1",
+          "pct": 12.5
+        },
+        {
+          "fn": "translateDocumentText @ server/lib/translation.ts:1",
+          "pct": 1.9
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "RegExp: intelligence artificielle|intelligenza artificiale|inteligencia artificial|inteligência artificial|künstliche intelligenz|kunstmatige intelligentie|artificiell intelligens|tekoäly|kunstig intelligens @ (native):0",
+          "pct": 59.4
+        },
+        {
+          "fn": "RegExp: [\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af] @ (native):0",
+          "pct": 17.5
+        }
+      ]
+    },
+    {
+      "ms": 104,
+      "topApp": [
+        {
+          "fn": "(no app frame: readFileUtf8)",
+          "pct": 48.3
+        },
+        {
+          "fn": "(no app frame: compileSourceTextModule)",
+          "pct": 19.4
+        },
+        {
+          "fn": "(no app frame: (program))",
+          "pct": 9.7
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "readFileUtf8 @ (native):0",
+          "pct": 48.3
+        },
+        {
+          "fn": "compileSourceTextModule @ node:internal/modules/esm/utils:344",
+          "pct": 19.4
+        }
+      ]
+    },
+    {
+      "ms": 89,
+      "topApp": [
+        {
+          "fn": "(no app frame: readPackageJSON)",
+          "pct": 23.3
+        },
+        {
+          "fn": "(no app frame: internalModuleStat)",
+          "pct": 22
+        },
+        {
+          "fn": "(no app frame: readFileUtf8)",
+          "pct": 19.9
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "readPackageJSON @ (native):0",
+          "pct": 23.3
+        },
+        {
+          "fn": "internalModuleStat @ (native):0",
+          "pct": 22
+        }
+      ]
+    },
+    {
+      "ms": 61,
+      "topApp": [
+        {
+          "fn": "(no app frame: compileSourceTextModule)",
+          "pct": 59.5
+        },
+        {
+          "fn": "(no app frame: lineLengths)",
+          "pct": 18.6
+        },
+        {
+          "fn": "(no app frame: oninit)",
+          "pct": 10
+        }
+      ],
+      "topLeaf": [
+        {
+          "fn": "compileSourceTextModule @ node:internal/modules/esm/utils:344",
+          "pct": 59.5
+        },
+        {
+          "fn": "lineLengths @ node:internal/source_map/source_map_cache:260",
+          "pct": 18.6
+        }
+      ]
+    }
+  ]
+}

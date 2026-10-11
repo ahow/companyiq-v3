@@ -1,0 +1,464 @@
+{
+  "concurrency": 4,
+  "corpora": [
+    "12",
+    "11",
+    "18",
+    "14"
+  ],
+  "providerLatencyMs": 400,
+  "phases": {
+    "extract": {
+      "wallMs": 1875,
+      "eld": {
+        "p50": 31,
+        "p90": 62,
+        "p99": 65,
+        "max": 65,
+        "mean": 36,
+        "count": 14
+      },
+      "pdf": [
+        {
+          "kind": "pdf",
+          "corpus": "12",
+          "bytes": 332852,
+          "pages": 133,
+          "chars": 400989,
+          "ms": 645
+        },
+        {
+          "kind": "pdf",
+          "corpus": "11",
+          "bytes": 358719,
+          "pages": 147,
+          "chars": 399494,
+          "ms": 809
+        },
+        {
+          "kind": "pdf",
+          "corpus": "11",
+          "bytes": 358541,
+          "pages": 147,
+          "chars": 399499,
+          "ms": 827
+        },
+        {
+          "kind": "pdf",
+          "corpus": "18",
+          "bytes": 223018,
+          "pages": 57,
+          "chars": 394072,
+          "ms": 308
+        },
+        {
+          "kind": "pdf",
+          "corpus": "12",
+          "bytes": 327427,
+          "pages": 128,
+          "chars": 401149,
+          "ms": 1060
+        },
+        {
+          "kind": "pdf",
+          "corpus": "18",
+          "bytes": 218031,
+          "pages": 57,
+          "chars": 403101,
+          "ms": 304
+        },
+        {
+          "kind": "pdf",
+          "corpus": "14",
+          "bytes": 268419,
+          "pages": 116,
+          "chars": 399888,
+          "ms": 425
+        },
+        {
+          "kind": "pdf",
+          "corpus": "14",
+          "bytes": 281903,
+          "pages": 96,
+          "chars": 401554,
+          "ms": 306
+        }
+      ],
+      "htmlCount": 100,
+      "htmlMaxMs": 46
+    },
+    "analyze": {
+      "wallMs": 69541,
+      "eld": {
+        "p50": 10,
+        "p90": 11,
+        "p99": 534,
+        "max": 8254,
+        "mean": 27,
+        "count": 2606
+      },
+      "perCompany": [
+        {
+          "corpus": "14",
+          "docs": 99,
+          "ms": 59757,
+          "success": false,
+          "error": "Cancelled",
+          "measures": 0,
+          "yes": 0,
+          "scoringErrors": 0
+        },
+        {
+          "corpus": "18",
+          "docs": 175,
+          "ms": 61762,
+          "success": false,
+          "error": "Cancelled",
+          "measures": 0,
+          "yes": 0,
+          "scoringErrors": 0
+        },
+        {
+          "corpus": "11",
+          "docs": 177,
+          "ms": 62557,
+          "success": false,
+          "error": "Cancelled",
+          "measures": 0,
+          "yes": 0,
+          "scoringErrors": 0
+        },
+        {
+          "corpus": "12",
+          "docs": 166,
+          "ms": 69541,
+          "success": false,
+          "error": "Cancelled",
+          "measures": 0,
+          "yes": 0,
+          "scoringErrors": 0
+        }
+      ]
+    }
+  },
+  "stalls": [
+    {
+      "at": 4493,
+      "lagMs": 2079,
+      "phase": "extract",
+      "stages": []
+    },
+    {
+      "at": 5702,
+      "lagMs": 650,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 7190,
+      "lagMs": 1438,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 8169,
+      "lagMs": 929,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 11317,
+      "lagMs": 3098,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 20003,
+      "lagMs": 8233,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 20586,
+      "lagMs": 533,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 21357,
+      "lagMs": 721,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 21919,
+      "lagMs": 513,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 22683,
+      "lagMs": 714,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 25858,
+      "lagMs": 2722,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 27162,
+      "lagMs": 494,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 27902,
+      "lagMs": 690,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 30594,
+      "lagMs": 1073,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 32301,
+      "lagMs": 496,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 32929,
+      "lagMs": 578,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 35527,
+      "lagMs": 943,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 37098,
+      "lagMs": 366,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 37732,
+      "lagMs": 584,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 44435,
+      "lagMs": 6301,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 45625,
+      "lagMs": 382,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 46794,
+      "lagMs": 1119,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 47393,
+      "lagMs": 549,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 49412,
+      "lagMs": 809,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 51636,
+      "lagMs": 613,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 53987,
+      "lagMs": 345,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 54826,
+      "lagMs": 789,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 55773,
+      "lagMs": 897,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 56637,
+      "lagMs": 814,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 57029,
+      "lagMs": 342,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 60487,
+      "lagMs": 1051,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 62051,
+      "lagMs": 308,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 62587,
+      "lagMs": 487,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 64211,
+      "lagMs": 416,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 64756,
+      "lagMs": 495,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 68319,
+      "lagMs": 300,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 68751,
+      "lagMs": 383,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    },
+    {
+      "at": 71322,
+      "lagMs": 912,
+      "phase": "analyze",
+      "stages": [
+        "analyze:-"
+      ]
+    }
+  ],
+  "stallSummary": {
+    "count": 38,
+    "totalMs": 44166,
+    "maxMs": 8233,
+    "over1s": 9,
+    "over5s": 2
+  },
+  "providerCalls": 621,
+  "sqlCount": 72,
+  "blockedNetwork": {
+    "count": 1,
+    "sample": [
+      "https.request:www.sec.gov"
+    ]
+  },
+  "rssMB": 1295
+}
