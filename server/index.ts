@@ -12,7 +12,7 @@ import frameworkBuilderV2Router from "./routes/framework-builder-v2.js";
 import { startWorker } from "./worker.js";
 import { initializeDatabase } from "./db.js";
 import { cleanupOnStartup } from "./startup-cleanup.js";
-import { startRuntimeDiag } from "./lib/runtime-diag.js";
+import { startRuntimeDiag, stopRuntimeDiag } from "./lib/runtime-diag.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,6 +67,7 @@ process.on("uncaughtException", (err: any) => {
 // Graceful shutdown so in-flight work and the worker close cleanly on deploys.
 async function gracefulShutdown(signal: string) {
   console.log(`[Server] Received ${signal} — shutting down gracefully...`);
+  stopRuntimeDiag(); // DIAGNOSTIC-ONLY: clear diag timers/listeners first (never throws)
   try {
     const { stopWorker } = await import("./worker.js");
     await stopWorker();

@@ -21,7 +21,7 @@ import crypto from "crypto";
 import { initializeDatabase } from "./db.js";
 import { startWorker, stopWorker } from "./worker.js";
 import { startReconciler, stopReconciler } from "./reconciler.js";
-import { startRuntimeDiag } from "./lib/runtime-diag.js";
+import { startRuntimeDiag, stopRuntimeDiag } from "./lib/runtime-diag.js";
 
 // ─── Log Noise Filter ───────────────────────────────────────────────────────
 // Mirror the web server's PDF.js noise filter so the worker (which does the
@@ -62,6 +62,7 @@ process.on("uncaughtException", (err: any) => {
 
 async function gracefulShutdown(signal: string) {
   console.log(`[Worker-Main] Received ${signal} — shutting down worker gracefully...`);
+  stopRuntimeDiag(); // DIAGNOSTIC-ONLY: clear diag timers/listeners first (never throws)
   try {
     stopReconciler();
     await stopWorker();
