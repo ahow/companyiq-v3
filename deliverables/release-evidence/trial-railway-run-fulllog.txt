@@ -1,0 +1,586 @@
+2026-10-11T22:44:44.750726103Z Starting Container
+2026-10-11T22:44:47.389875199Z [DB] Initializing database tables...
+2026-10-11T22:44:48.404013043Z [DIAG][db-slow-op] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"CREATE TABLE IF NOT EXISTS users ( id SERIAL PRIMARY KEY, em…","outcome":"ok","checkout_wait_ms":791,"exec_ms":190,"total_ms":981,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+2026-10-11T22:44:52.405550363Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:44:57.436389915Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:02.446848880Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:03.460035520Z [DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"7"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":1,"idle":0,"waiting":0}]}
+2026-10-11T22:45:07.480049425Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:08.560735521Z [DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"ALTER TABLE trusted_sources ADD COLUMN IF NOT EXISTS descrip…","outcome":"ok","checkout_wait_ms":0,"exec_ms":190,"total_ms":190,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+2026-10-11T22:45:12.480253303Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:14.070869876Z [DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"CREATE INDEX IF NOT EXISTS jobs_batch_idx ON analysis_jobs(b…","outcome":"ok","checkout_wait_ms":0,"exec_ms":189,"total_ms":189,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+2026-10-11T22:45:14.487931969Z [DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"CREATE INDEX IF NOT EXISTS frameworks_workspace_idx ON frame…","outcome":"ok","checkout_wait_ms":0,"exec_ms":189,"total_ms":189,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+2026-10-11T22:45:17.130958404Z [DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"insert platform_sources","outcome":"ok","checkout_wait_ms":0,"exec_ms":189,"total_ms":189,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+2026-10-11T22:45:17.483421567Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:18.474847825Z [DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"9"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":1,"idle":0,"waiting":0}]}
+2026-10-11T22:45:22.473274625Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:22.473278284Z [DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS legacy_query…","outcome":"ok","checkout_wait_ms":0,"exec_ms":189,"total_ms":189,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+2026-10-11T22:45:27.511731896Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:32.552497552Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:33.560805923Z [DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"174"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":1,"idle":0,"waiting":0}]}
+2026-10-11T22:45:34.618913974Z [DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"insert trusted_sources","outcome":"ok","checkout_wait_ms":0,"exec_ms":190,"total_ms":190,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+2026-10-11T22:45:35.190636134Z [DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"insert trusted_sources","outcome":"ok","checkout_wait_ms":0,"exec_ms":189,"total_ms":190,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+2026-10-11T22:45:37.580025362Z [DB] Default settings seeded for all workspaces
+2026-10-11T22:45:37.580032010Z [DB] All tables created successfully
+2026-10-11T22:45:37.580069400Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:45:37.580079206Z [DB] Seeded 22 trusted sources for workspace 1
+2026-10-11T22:45:38.579855521Z [INT] applied migration migrate-add-expected-yes-rate-justification.sql
+2026-10-11T22:45:38.674665526Z [INT] applied migration migrate-dedup.sql
+2026-10-11T22:45:38.872688630Z [INT] initializeDatabase OK; baseline descendants excluded: 9
+2026-10-11T22:45:48.596642566Z [DIAG][pg-activity] {"reason":"interval","backends_total":2,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":2,"max_xact_age_ms":null,"max_state_age_ms":"10781"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":1,"idle":1,"waiting":0}]}
+2026-10-11T22:46:08.282932046Z [FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+2026-10-11T22:46:08.282943336Z [DIAG][pool-state] pool=main max=20 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:46:08.282949625Z [Redis] Connected successfully
+2026-10-11T22:46:08.282955738Z [DIAG][pg-activity] {"reason":"interval","backends_total":2,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":2,"max_xact_age_ms":null,"max_state_age_ms":"1728"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":1,"idle":1,"waiting":0}]}
+2026-10-11T22:46:08.282961767Z [Worker] Started with concurrency=4, timeout=2400000ms, maxRetries=3, lockDuration=30000ms, stalledInterval=15000ms, maxStalledCount=2
+2026-10-11T22:46:08.282967345Z [INT] seeded workspace=2 framework=2 companies=5,6,7,8 docs/company=25 measures=6
+2026-10-11T22:46:08.282970455Z [Queue] Added 4 jobs for batch 2 (workspace 2, priority 0)
+2026-10-11T22:46:08.282976356Z [DIAG][bull-lock] active job=batch-2-company-5 attemptsStarted=1 stalledCounter=0
+2026-10-11T22:46:08.282982760Z [DIAG][bull-lock] active job=batch-2-company-6 attemptsStarted=1 stalledCounter=0
+2026-10-11T22:46:08.282988916Z [DIAG][bull-lock] active job=batch-2-company-7 attemptsStarted=1 stalledCounter=0
+2026-10-11T22:46:08.282994724Z [DIAG][bull-lock] active job=batch-2-company-8 attemptsStarted=1 stalledCounter=0
+2026-10-11T22:46:08.283001091Z [Worker] Processing job 5: company=5, framework=2, batch=2, workspace=2
+2026-10-11T22:46:08.283006775Z [Worker] Processing job 6: company=6, framework=2, batch=2, workspace=2
+2026-10-11T22:46:08.283012405Z [Worker] Processing job 7: company=7, framework=2, batch=2, workspace=2
+2026-10-11T22:46:08.283018490Z [Worker] Processing job 8: company=8, framework=2, batch=2, workspace=2
+2026-10-11T22:46:08.283024400Z [Worker] Job 5 claimed (attempt 1/3)
+2026-10-11T22:46:08.284618000Z [DIAG][job-transition] job=5 -> claimed batch=2 job=5 attempt_id=c3080524-00ac-4440-9fc9-25ab0936d86d attempt_n=1 company=5 stage=claimed
+2026-10-11T22:46:08.284623328Z [DIAG][pool-state] pool=main max=20 total=4 idle=0 busy=4 waiting=0
+2026-10-11T22:46:08.284627813Z [Worker] Job 7 claimed (attempt 1/3)
+2026-10-11T22:46:08.284632951Z [DIAG][job-transition] job=7 -> claimed batch=2 job=7 attempt_id=c6905562-2233-4db2-801b-c109de03f1c4 attempt_n=1 company=7 stage=claimed
+2026-10-11T22:46:08.284637674Z [Worker] Job 6 claimed (attempt 1/3)
+2026-10-11T22:46:08.284642147Z [DIAG][job-transition] job=6 -> claimed batch=2 job=6 attempt_id=f87ae572-eade-4bf2-b98e-fdbc557a4bb7 attempt_n=1 company=6 stage=claimed
+2026-10-11T22:46:08.284646863Z [Worker] Job 8 claimed (attempt 1/3)
+2026-10-11T22:46:08.284653107Z [DIAG][job-transition] job=8 -> claimed batch=2 job=8 attempt_id=a44a8561-8abe-4051-a7c6-8a47685bdd0d attempt_n=1 company=8 stage=claimed
+2026-10-11T22:46:17.783101986Z [Processor] WAF session prime for http://127.0.0.1:32977 -> no sensor cookies (continuing)
+2026-10-11T22:46:17.907810888Z [Processor] Browser-PDF fetch succeeded for http://127.0.0.1:32977/doc.pdf (27000B PDF)
+2026-10-11T22:46:17.923658096Z [INT-CHILD pid=226] browser-pdf chars=1562 ms=9129 marker=true
+2026-10-11T22:46:18.712861088Z [DIAG][pg-activity] {"reason":"interval","backends_total":5,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":5,"max_xact_age_ms":null,"max_state_age_ms":"10368"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":4,"idle":4,"waiting":0}]}
+2026-10-11T22:46:19.687279255Z [DIAG][bull-lock] locksRenewed count=4 since_last_renew=batch-2-company-5:14277ms,batch-2-company-6:14096ms,batch-2-company-7:13915ms,batch-2-company-8:13734ms
+2026-10-11T22:46:26.302215351Z [Processor] WAF session prime for http://127.0.0.1:32977 -> no sensor cookies (continuing)
+2026-10-11T22:46:26.679074869Z [Processor] Browser-PDF fetch succeeded for http://127.0.0.1:32977/doc.pdf (27000B PDF)
+2026-10-11T22:46:26.679077735Z [INT-CHILD pid=259] browser-pdf chars=1562 ms=16574 marker=true
+2026-10-11T22:46:27.278018685Z [DIAG][bull-lock] locksRenewed count=4 since_last_renew=batch-2-company-5:7682ms,batch-2-company-6:7682ms,batch-2-company-7:7682ms,batch-2-company-8:7682ms
+2026-10-11T22:46:30.132560845Z [FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+2026-10-11T22:46:30.139228880Z [DIAG][pipeline] start company="int-1791758740250 IntCo 0" opts_attempt_id=c3080524-00ac-4440-9fc9-25ab0936d86d batch=2 job=5 attempt_id=c3080524-00ac-4440-9fc9-25ab0936d86d attempt_n=1 company=5 stage=pipeline
+2026-10-11T22:46:30.139231478Z [int-1791758740250 IntCo 0] Skipping fetch phase (reusing cached documents)
+2026-10-11T22:46:31.129865814Z [DIAG][db-slow-op] {"pool":"main","pool_max":4,"total":1,"idle":1,"waiting":0,"op":"update companies","outcome":"ok","checkout_wait_ms":796,"exec_ms":193,"total_ms":990,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":5,"attempt_id":"c3080524-00ac-4440-9fc9-25ab0936d86d","attempt_n":1,"company_id":5,"stage":"pipeline"}
+2026-10-11T22:46:31.129869175Z [int-1791758740250 IntCo 0] === PHASE 2: ANALYZE ===
+2026-10-11T22:46:32.275724863Z [DIAG][db-slow-op] {"pool":"main","pool_max":4,"total":1,"idle":1,"waiting":0,"op":"select documents","outcome":"ok","checkout_wait_ms":0,"exec_ms":567,"total_ms":567,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":5,"attempt_id":"c3080524-00ac-4440-9fc9-25ab0936d86d","attempt_n":1,"company_id":5,"stage":"analyze"}
+2026-10-11T22:46:32.275729574Z [int-1791758740250 IntCo 0] Using full document pool (25 docs, no snapshot)
+2026-10-11T22:46:32.275732613Z [int-1791758740250 IntCo 0] Analyzing with 25 fetched documents
+2026-10-11T22:46:32.348573982Z [int-1791758740250 IntCo 0] R3.1: provenance running WITHOUT a confirmed company domain — failing OPEN (U17 third_party exclusion skipped for this company to avoid over-excluding issuer-site docs).
+2026-10-11T22:46:32.716010944Z [int-1791758740250 IntCo 0] ABOUTNESS corpus: rejected=0, deprioritized=25 (weight 0.5)
+2026-10-11T22:46:32.716020162Z [int-1791758740250 IntCo 0] U17 provenance filter: excluded=0, upgraded-to-issuer=0, fail-open-kept=25, kept=25
+2026-10-11T22:46:32.716024571Z [int-1791758740250 IntCo 0] Running temporal validation...
+2026-10-11T22:46:32.716028555Z [int-1791758740250 IntCo 0] Temporal validation: 0 total snippets to classify
+2026-10-11T22:46:32.931073515Z [int-1791758740250 IntCo 0] Starting analysis: 6 measures, 25 documents
+2026-10-11T22:46:32.931078753Z [int-1791758740250 IntCo 0] corpus-hygiene: no documents dropped (25 documents)
+2026-10-11T22:46:32.931082007Z [int-1791758740250 IntCo 0] Corpus source types: [none]
+2026-10-11T22:46:32.931085987Z [int-1791758740250 IntCo 0] Verdict cache: DISABLED (setting off) — fresh scoring
+2026-10-11T22:46:33.143906896Z [int-1791758740250 IntCo 0] Discovered 0 terminology terms via deepseek
+2026-10-11T22:46:33.342940498Z [int-1791758740250 IntCo 0] BM25-skip path (54600 chars < 600000) topicPrimary=0
+2026-10-11T22:46:33.715866489Z [int-1791758740250 IntCo 0] LLM rescoring: ON for 3 measures in category 'Environment'
+2026-10-11T22:46:33.715868703Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.715873277Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.715878881Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.715879844Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:33.715882689Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.715906586Z [topic-lexicon] deepseek returned zero usable terms for framework 2 (raw text len=102)
+2026-10-11T22:46:33.715913796Z [topic-lexicon] retrying with openai for framework 2
+2026-10-11T22:46:33.715918255Z [topic-lexicon] openai returned zero usable terms for framework 2 (raw text len=102)
+2026-10-11T22:46:33.715922542Z [topic-lexicon] Not persisting fallback-only lexicon for framework 2 — caller will retry next run
+2026-10-11T22:46:33.715926148Z [int-1791758740250 IntCo 0] Topic lexicon (fallback): 1 framework terms + 1 deterministic -> 1 total
+2026-10-11T22:46:33.715929512Z [int-1791758740250 IntCo 0] Corpus topic evidence: 0/25 chunks contain topic terms (0 hits)
+2026-10-11T22:46:33.715932699Z [int-1791758740250 IntCo 0] Scoring category: Environment (3 measures)
+2026-10-11T22:46:33.717042092Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.717060215Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.717070802Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.717074933Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.717078417Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.717081979Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.717087070Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.717092792Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.717096662Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.717099713Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+2026-10-11T22:46:33.718801227Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.718805395Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.718810089Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:33.718814152Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.718815656Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:33.718821231Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:33.718822376Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=32
+2026-10-11T22:46:33.718827284Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=33
+2026-10-11T22:46:33.718831235Z [int-1791758740250 IntCo 0] Scoring category: Governance (3 measures)
+2026-10-11T22:46:33.718835735Z [int-1791758740250 IntCo 0] LLM rescoring: ON for 3 measures in category 'Governance'
+2026-10-11T22:46:33.718839103Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.720392551Z [DIAG][pg-activity] {"reason":"interval","backends_total":6,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":6,"max_xact_age_ms":null,"max_state_age_ms":"25372"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":4,"idle":4,"waiting":0}]}
+2026-10-11T22:46:33.720408943Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.720412515Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.720415762Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.735846763Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:33.735851123Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.735854095Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.735856869Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.735859629Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.735862860Z [SCORING-REQ] start token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:33.757342886Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:33.757348982Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.757353036Z [SCORING-REQ] settle token=e4fecca6-5338-4620-93cc-9330ddd91e7b job=5 attempt=1 batch=2 company=5 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:33.757356407Z [int-1791758740250 IntCo 0][invariant][OK] force-include invariant satisfied (0 filing-bound measure(s) with required doc present all received forced body chunks)
+2026-10-11T22:46:33.778234813Z [int-1791758740250 IntCo 0] Scoring diagnostics: failures=0, timeouts=0, fallback=0, defaultScore=3, emptyEvidence=6
+2026-10-11T22:46:33.778240455Z [int-1791758740250 IntCo 0] Analysis complete: 0% (0/6 answered; 0 abstained of 6 total)
+2026-10-11T22:46:34.160203623Z [DIAG][score-write] company=5 rows=6 batch=2 job=5 attempt_id=c3080524-00ac-4440-9fc9-25ab0936d86d attempt_n=1 company=5 stage=score-write
+2026-10-11T22:46:34.787685064Z [Processor] WAF session prime for http://127.0.0.1:32977 -> no sensor cookies (continuing)
+2026-10-11T22:46:34.935392865Z [Processor] Browser-PDF fetch succeeded for http://127.0.0.1:32977/doc.pdf (27000B PDF)
+2026-10-11T22:46:34.937810180Z [INT-CHILD pid=264] browser-pdf chars=1562 ms=25066 marker=true
+2026-10-11T22:46:34.963371391Z [DIAG][bull-lock] locksRenewed count=4 since_last_renew=batch-2-company-5:7680ms,batch-2-company-6:7680ms,batch-2-company-7:7680ms,batch-2-company-8:7680ms
+2026-10-11T22:46:35.131782649Z [DIAG][pool-state] pool=main max=4 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:46:35.745186511Z [int-1791758740250 IntCo 0] Analysis complete: 0% (0 met / 6 answered; 0 abstained of 6 total)
+2026-10-11T22:46:35.877256395Z [int-1791758740250 IntCo 0] Persisted passage-retrieval summary for 6 measures
+2026-10-11T22:46:35.877262838Z [int-1791758740250 IntCo 0][invariant][OK] force-include satisfied for 0 filing-bound measure(s)
+2026-10-11T22:46:36.066775778Z [int-1791758740250 IntCo 0] Pipeline completed in 6s
+2026-10-11T22:46:36.687501477Z [int-1791758740250 IntCo 0] Auto-reexam SKIPPED: legitimate zero (corpusChars=54600, lowEvidence=n/a, fetchRatio=n/a, dead=n/a, firstPartyDead=0/25)
+2026-10-11T22:46:36.687510226Z [DIAG][stage-timer] {"kind":"pipeline","label":"int-1791758740250 IntCo 0","outcome":"ok","error":null,"started_at":"2026-10-11T22:46:30.134Z","attempt_wall_ms":6503,"tracked_wall_ms":4977,"other_untracked_wall_ms":1525,"busy_sum_ms_all_stages":4977,"stages":{"db_ops":{"done":20,"errors":0,"pending":0,"busy_sum_ms":4977,"union_wall_ms":4977}},"last_progress":{"stage":"db_ops","op":"select documents","atMs":6502,"ok":true},"pending_at_close_count":0,"pending_at_close":[],"batch_id":2,"job_id":5,"attempt_id":"c3080524-00ac-4440-9fc9-25ab0936d86d","attempt_n":1,"company_id":5,"stage":"pipeline"}
+2026-10-11T22:46:36.687514682Z [INT-CHILD pid=226] pipeline success=true docs=0 providerCalls=22 error=
+2026-10-11T22:46:36.718003300Z [DIAG][job-transition] job=5 pipeline-result success=true error="" batch=2 job=5 attempt_id=c3080524-00ac-4440-9fc9-25ab0936d86d attempt_n=1 company=5 stage=finalize
+2026-10-11T22:46:37.723226512Z [DIAG][job-transition] job=5 -> completed transitioned=true batch=2 job=5 attempt_id=c3080524-00ac-4440-9fc9-25ab0936d86d attempt_n=1 company=5 stage=finalize
+2026-10-11T22:46:37.723230198Z [DIAG][pool-state] pool=main max=20 total=4 idle=3 busy=1 waiting=0
+2026-10-11T22:46:37.858359192Z [Worker] Job 5 completed successfully (attempt 1)
+2026-10-11T22:46:38.715949167Z [int-1791758740250 IntCo 3] Skipping fetch phase (reusing cached documents)
+2026-10-11T22:46:38.715950114Z [FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+2026-10-11T22:46:38.715955501Z [zero-score-diag] int-1791758740250 IntCo 0 pinned=0 pinnedOk=0 hasDataDoc=true warning=none
+2026-10-11T22:46:38.715959354Z [DIAG][pipeline] start company="int-1791758740250 IntCo 3" opts_attempt_id=a44a8561-8abe-4051-a7c6-8a47685bdd0d batch=2 job=8 attempt_id=a44a8561-8abe-4051-a7c6-8a47685bdd0d attempt_n=1 company=8 stage=pipeline
+2026-10-11T22:46:38.715962798Z [zero-score-diag] int-1791758740250 IntCo 0 deadByReason={}
+2026-10-11T22:46:38.716003214Z [Worker][I45-diag] company=5 fw=2 score=0 failures=0 timeouts=0 fallback=0 defaultScore=3 emptyEvidence=6
+2026-10-11T22:46:38.716007225Z [zero-score-diag] int-1791758740250 IntCo 0 score=0 fw=2 docs=25 fetched=25 ratio=1
+2026-10-11T22:46:39.127703601Z [DIAG][db-slow-op] {"pool":"usage","pool_max":2,"total":1,"idle":1,"waiting":0,"op":"insert llm_usage_events","outcome":"ok","checkout_wait_ms":786,"exec_ms":192,"total_ms":978,"slow_threshold_ms_diagnostic":500}
+2026-10-11T22:46:39.703011903Z [DIAG][db-slow-op] {"pool":"main","pool_max":4,"total":1,"idle":1,"waiting":0,"op":"update companies","outcome":"ok","checkout_wait_ms":771,"exec_ms":193,"total_ms":964,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":8,"attempt_id":"a44a8561-8abe-4051-a7c6-8a47685bdd0d","attempt_n":1,"company_id":8,"stage":"pipeline"}
+2026-10-11T22:46:39.703015600Z [int-1791758740250 IntCo 3] === PHASE 2: ANALYZE ===
+2026-10-11T22:46:39.703018815Z [DIAG][db-slow-op] {"pool":"main","pool_max":20,"total":7,"idle":3,"waiting":0,"op":"select analysis_jobs","outcome":"ok","checkout_wait_ms":760,"exec_ms":190,"total_ms":950,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":8,"attempt_id":"a44a8561-8abe-4051-a7c6-8a47685bdd0d","attempt_n":1,"company_id":8,"stage":"pipeline"}
+2026-10-11T22:46:39.703022058Z [DIAG][db-slow-op] {"pool":"main","pool_max":20,"total":7,"idle":4,"waiting":0,"op":"update analysis_jobs","outcome":"ok","checkout_wait_ms":760,"exec_ms":191,"total_ms":951,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":8,"attempt_id":"a44a8561-8abe-4051-a7c6-8a47685bdd0d","attempt_n":1,"company_id":8,"stage":"pipeline"}
+2026-10-11T22:46:39.703025269Z [DIAG][db-slow-op] {"pool":"main","pool_max":20,"total":7,"idle":4,"waiting":0,"op":"update analysis_jobs","outcome":"ok","checkout_wait_ms":758,"exec_ms":191,"total_ms":949,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":6,"attempt_id":"f87ae572-eade-4bf2-b98e-fdbc557a4bb7","attempt_n":1,"company_id":6,"stage":"pipeline"}
+2026-10-11T22:46:39.703029105Z [DIAG][db-slow-op] {"pool":"main","pool_max":20,"total":7,"idle":4,"waiting":0,"op":"select analysis_jobs","outcome":"ok","checkout_wait_ms":759,"exec_ms":190,"total_ms":949,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":6,"attempt_id":"f87ae572-eade-4bf2-b98e-fdbc557a4bb7","attempt_n":1,"company_id":6,"stage":"pipeline"}
+2026-10-11T22:46:39.703032403Z [DIAG][db-slow-op] {"pool":"main","pool_max":20,"total":7,"idle":5,"waiting":0,"op":"select analysis_jobs","outcome":"ok","checkout_wait_ms":762,"exec_ms":192,"total_ms":954,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":7,"attempt_id":"c6905562-2233-4db2-801b-c109de03f1c4","attempt_n":1,"company_id":7,"stage":"pipeline"}
+2026-10-11T22:46:40.120574688Z [DIAG][bull-lock] completed job=batch-2-company-5 active_for=34803ms
+2026-10-11T22:46:40.120580667Z [Worker] BullMQ job batch-2-company-5 completed
+2026-10-11T22:46:40.763199700Z [DIAG][db-slow-op] {"pool":"main","pool_max":4,"total":1,"idle":1,"waiting":0,"op":"select documents","outcome":"ok","checkout_wait_ms":0,"exec_ms":569,"total_ms":570,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":8,"attempt_id":"a44a8561-8abe-4051-a7c6-8a47685bdd0d","attempt_n":1,"company_id":8,"stage":"analyze"}
+2026-10-11T22:46:40.763207332Z [int-1791758740250 IntCo 3] Using full document pool (25 docs, no snapshot)
+2026-10-11T22:46:40.763211225Z [int-1791758740250 IntCo 3] Analyzing with 25 fetched documents
+2026-10-11T22:46:40.804189022Z [int-1791758740250 IntCo 3] R3.1: provenance running WITHOUT a confirmed company domain — failing OPEN (U17 third_party exclusion skipped for this company to avoid over-excluding issuer-site docs).
+2026-10-11T22:46:41.003830413Z [int-1791758740250 IntCo 3] ABOUTNESS corpus: rejected=0, deprioritized=25 (weight 0.5)
+2026-10-11T22:46:41.003845149Z [int-1791758740250 IntCo 3] U17 provenance filter: excluded=0, upgraded-to-issuer=0, fail-open-kept=25, kept=25
+2026-10-11T22:46:41.003850960Z [int-1791758740250 IntCo 3] Running temporal validation...
+2026-10-11T22:46:41.003856142Z [int-1791758740250 IntCo 3] Temporal validation: 0 total snippets to classify
+2026-10-11T22:46:41.388936179Z [int-1791758740250 IntCo 3] Starting analysis: 6 measures, 25 documents
+2026-10-11T22:46:41.388942162Z [int-1791758740250 IntCo 3] corpus-hygiene: no documents dropped (25 documents)
+2026-10-11T22:46:41.388946130Z [int-1791758740250 IntCo 3] Corpus source types: [none]
+2026-10-11T22:46:41.388949653Z [int-1791758740250 IntCo 3] Verdict cache: DISABLED (setting off) — fresh scoring
+2026-10-11T22:46:41.725529262Z [int-1791758740250 IntCo 3] Discovered 0 terminology terms via deepseek
+2026-10-11T22:46:41.795320443Z [int-1791758740250 IntCo 3] BM25-skip path (54600 chars < 600000) topicPrimary=0
+2026-10-11T22:46:42.009999866Z [topic-lexicon] deepseek returned zero usable terms for framework 2 (raw text len=102)
+2026-10-11T22:46:42.010005059Z [topic-lexicon] retrying with openai for framework 2
+2026-10-11T22:46:42.031796274Z [topic-lexicon] openai returned zero usable terms for framework 2 (raw text len=102)
+2026-10-11T22:46:42.031800691Z [topic-lexicon] Not persisting fallback-only lexicon for framework 2 — caller will retry next run
+2026-10-11T22:46:42.031803608Z [int-1791758740250 IntCo 3] Topic lexicon (fallback): 1 framework terms + 1 deterministic -> 1 total
+2026-10-11T22:46:42.033716528Z [int-1791758740250 IntCo 3] Corpus topic evidence: 0/25 chunks contain topic terms (0 hits)
+2026-10-11T22:46:42.033720752Z [int-1791758740250 IntCo 3] Scoring category: Environment (3 measures)
+2026-10-11T22:46:42.047897876Z [int-1791758740250 IntCo 3] LLM rescoring: ON for 3 measures in category 'Environment'
+2026-10-11T22:46:42.054443274Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.054448016Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.054451032Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.075449013Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:42.075455957Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.075457615Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.075457624Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:42.075461064Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.075465697Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:42.095697379Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+2026-10-11T22:46:42.095702793Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:42.095705910Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:42.095708773Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.095711818Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.095714776Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.122610875Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:42.131019536Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=31
+2026-10-11T22:46:42.131022617Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=33
+2026-10-11T22:46:42.131025467Z [int-1791758740250 IntCo 3] Scoring category: Governance (3 measures)
+2026-10-11T22:46:42.137793756Z [int-1791758740250 IntCo 3] LLM rescoring: ON for 3 measures in category 'Governance'
+2026-10-11T22:46:42.137798091Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.137801106Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.137805273Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.160982477Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:42.160987333Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.160990028Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:42.160992819Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+2026-10-11T22:46:42.160995548Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.160998324Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.177274664Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:42.178877867Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.178882155Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:42.178885133Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:42.178888896Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.178891731Z [SCORING-REQ] start token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:42.202286499Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:42.202292251Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:42.202296028Z [SCORING-REQ] settle token=80d226cb-5604-403f-9485-73bbdad7a313 job=8 attempt=1 batch=2 company=8 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:42.202300268Z [int-1791758740250 IntCo 3][invariant][OK] force-include invariant satisfied (0 filing-bound measure(s) with required doc present all received forced body chunks)
+2026-10-11T22:46:42.222969577Z [int-1791758740250 IntCo 3] Scoring diagnostics: failures=0, timeouts=0, fallback=0, defaultScore=1, emptyEvidence=6
+2026-10-11T22:46:42.222973604Z [int-1791758740250 IntCo 3] Analysis complete: 0% (0/6 answered; 0 abstained of 6 total)
+2026-10-11T22:46:42.738937021Z [DIAG][pool-state] pool=usage max=2 total=1 idle=1 busy=0 waiting=0
+2026-10-11T22:46:42.738940521Z [DIAG][score-write] company=8 rows=6 batch=2 job=8 attempt_id=a44a8561-8abe-4051-a7c6-8a47685bdd0d attempt_n=1 company=8 stage=score-write
+2026-10-11T22:46:42.738943736Z [DIAG][bull-lock] locksRenewed count=3 since_last_renew=batch-2-company-6:7681ms,batch-2-company-7:7681ms,batch-2-company-8:7681ms
+2026-10-11T22:46:43.371626393Z [Processor] WAF session prime for http://127.0.0.1:32977 -> no sensor cookies (continuing)
+2026-10-11T22:46:43.724701679Z [Processor] Browser-PDF fetch succeeded for http://127.0.0.1:32977/doc.pdf (27000B PDF)
+2026-10-11T22:46:43.724705267Z [INT-CHILD pid=258] browser-pdf chars=1562 ms=33623 marker=true
+2026-10-11T22:46:43.724708845Z [DIAG][pool-state] pool=main max=4 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:46:43.887310042Z [int-1791758740250 IntCo 3] Analysis complete: 0% (0 met / 6 answered; 0 abstained of 6 total)
+2026-10-11T22:46:44.238536893Z [int-1791758740250 IntCo 3] Persisted passage-retrieval summary for 6 measures
+2026-10-11T22:46:44.238541809Z [int-1791758740250 IntCo 3][invariant][OK] force-include satisfied for 0 filing-bound measure(s)
+2026-10-11T22:46:44.745214817Z [int-1791758740250 IntCo 3] Pipeline completed in 6s
+2026-10-11T22:46:44.961363316Z [int-1791758740250 IntCo 3] Auto-reexam SKIPPED: legitimate zero (corpusChars=54600, lowEvidence=n/a, fetchRatio=n/a, dead=n/a, firstPartyDead=0/25)
+2026-10-11T22:46:44.961368255Z [DIAG][stage-timer] {"kind":"pipeline","label":"int-1791758740250 IntCo 3","outcome":"ok","error":null,"started_at":"2026-10-11T22:46:38.641Z","attempt_wall_ms":6309,"tracked_wall_ms":4871,"other_untracked_wall_ms":1438,"busy_sum_ms_all_stages":4871,"stages":{"db_ops":{"done":20,"errors":0,"pending":0,"busy_sum_ms":4871,"union_wall_ms":4871}},"last_progress":{"stage":"db_ops","op":"select documents","atMs":6308,"ok":true},"pending_at_close_count":0,"pending_at_close":[],"batch_id":2,"job_id":8,"attempt_id":"a44a8561-8abe-4051-a7c6-8a47685bdd0d","attempt_n":1,"company_id":8,"stage":"pipeline"}
+2026-10-11T22:46:44.961373478Z [INT-CHILD pid=259] pipeline success=true docs=0 providerCalls=22 error=
+2026-10-11T22:46:45.026566370Z [DIAG][job-transition] job=8 pipeline-result success=true error="" batch=2 job=8 attempt_id=a44a8561-8abe-4051-a7c6-8a47685bdd0d attempt_n=1 company=8 stage=finalize
+2026-10-11T22:46:45.760777286Z [DIAG][job-transition] job=8 -> completed transitioned=true batch=2 job=8 attempt_id=a44a8561-8abe-4051-a7c6-8a47685bdd0d attempt_n=1 company=8 stage=finalize
+2026-10-11T22:46:46.098471190Z [Worker] Job 8 completed successfully (attempt 1)
+2026-10-11T22:46:46.756298448Z [Worker][I45-diag] company=8 fw=2 score=0 failures=0 timeouts=0 fallback=0 defaultScore=1 emptyEvidence=6
+2026-10-11T22:46:46.805841488Z [zero-score-diag] int-1791758740250 IntCo 3 score=0 fw=2 docs=25 fetched=25 ratio=1
+2026-10-11T22:46:46.805846026Z [zero-score-diag] int-1791758740250 IntCo 3 pinned=0 pinnedOk=0 hasDataDoc=true warning=none
+2026-10-11T22:46:46.805848983Z [zero-score-diag] int-1791758740250 IntCo 3 deadByReason={}
+2026-10-11T22:46:47.149118186Z [FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+2026-10-11T22:46:47.149122038Z [DIAG][pipeline] start company="int-1791758740250 IntCo 1" opts_attempt_id=f87ae572-eade-4bf2-b98e-fdbc557a4bb7 batch=2 job=6 attempt_id=f87ae572-eade-4bf2-b98e-fdbc557a4bb7 attempt_n=1 company=6 stage=pipeline
+2026-10-11T22:46:47.149125017Z [int-1791758740250 IntCo 1] Skipping fetch phase (reusing cached documents)
+2026-10-11T22:46:47.754391440Z [DIAG][pool-state] pool=main max=20 total=7 idle=6 busy=1 waiting=0
+2026-10-11T22:46:47.881637895Z [Worker] BullMQ job batch-2-company-8 completed
+2026-10-11T22:46:47.881644639Z [DIAG][bull-lock] completed job=batch-2-company-8 active_for=42018ms
+2026-10-11T22:46:48.080640312Z [DIAG][db-slow-op] {"pool":"main","pool_max":4,"total":1,"idle":1,"waiting":0,"op":"update companies","outcome":"ok","checkout_wait_ms":748,"exec_ms":182,"total_ms":930,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":6,"attempt_id":"f87ae572-eade-4bf2-b98e-fdbc557a4bb7","attempt_n":1,"company_id":6,"stage":"pipeline"}
+2026-10-11T22:46:48.082194533Z [int-1791758740250 IntCo 1] === PHASE 2: ANALYZE ===
+2026-10-11T22:46:48.765990237Z [DIAG][pg-activity] {"reason":"interval","backends_total":10,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":10,"max_xact_age_ms":null,"max_state_age_ms":"9144"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":7,"idle":7,"waiting":0},{"pool":"usage","max":2,"total":1,"idle":1,"waiting":0}]}
+2026-10-11T22:46:49.152674828Z [DIAG][db-slow-op] {"pool":"main","pool_max":4,"total":1,"idle":1,"waiting":0,"op":"select documents","outcome":"ok","checkout_wait_ms":0,"exec_ms":531,"total_ms":531,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":6,"attempt_id":"f87ae572-eade-4bf2-b98e-fdbc557a4bb7","attempt_n":1,"company_id":6,"stage":"analyze"}
+2026-10-11T22:46:49.152677619Z [int-1791758740250 IntCo 1] Using full document pool (25 docs, no snapshot)
+2026-10-11T22:46:49.152681110Z [int-1791758740250 IntCo 1] Analyzing with 25 fetched documents
+2026-10-11T22:46:49.214073863Z [int-1791758740250 IntCo 1] R3.1: provenance running WITHOUT a confirmed company domain — failing OPEN (U17 third_party exclusion skipped for this company to avoid over-excluding issuer-site docs).
+2026-10-11T22:46:49.400474773Z [int-1791758740250 IntCo 1] ABOUTNESS corpus: rejected=0, deprioritized=25 (weight 0.5)
+2026-10-11T22:46:49.400479097Z [int-1791758740250 IntCo 1] U17 provenance filter: excluded=0, upgraded-to-issuer=0, fail-open-kept=25, kept=25
+2026-10-11T22:46:49.400482952Z [int-1791758740250 IntCo 1] Running temporal validation...
+2026-10-11T22:46:49.400487856Z [int-1791758740250 IntCo 1] Temporal validation: 0 total snippets to classify
+2026-10-11T22:46:49.763086020Z [int-1791758740250 IntCo 1] Starting analysis: 6 measures, 25 documents
+2026-10-11T22:46:49.763095153Z [int-1791758740250 IntCo 1] corpus-hygiene: no documents dropped (25 documents)
+2026-10-11T22:46:49.763100871Z [int-1791758740250 IntCo 1] Corpus source types: [none]
+2026-10-11T22:46:49.763105468Z [int-1791758740250 IntCo 1] Verdict cache: DISABLED (setting off) — fresh scoring
+2026-10-11T22:46:49.962272804Z [int-1791758740250 IntCo 1] Discovered 0 terminology terms via deepseek
+2026-10-11T22:46:50.150934610Z [int-1791758740250 IntCo 1] BM25-skip path (54600 chars < 600000) topicPrimary=0
+2026-10-11T22:46:50.318470424Z [DIAG][bull-lock] locksRenewed count=2 since_last_renew=batch-2-company-6:7683ms,batch-2-company-7:7683ms
+2026-10-11T22:46:50.346046934Z [topic-lexicon] deepseek returned zero usable terms for framework 2 (raw text len=102)
+2026-10-11T22:46:50.346052575Z [topic-lexicon] retrying with openai for framework 2
+2026-10-11T22:46:50.363776517Z [topic-lexicon] openai returned zero usable terms for framework 2 (raw text len=102)
+2026-10-11T22:46:50.363781215Z [topic-lexicon] Not persisting fallback-only lexicon for framework 2 — caller will retry next run
+2026-10-11T22:46:50.363785704Z [int-1791758740250 IntCo 1] Topic lexicon (fallback): 1 framework terms + 1 deterministic -> 1 total
+2026-10-11T22:46:50.370313508Z [int-1791758740250 IntCo 1] Corpus topic evidence: 0/25 chunks contain topic terms (0 hits)
+2026-10-11T22:46:50.370318491Z [int-1791758740250 IntCo 1] Scoring category: Environment (3 measures)
+2026-10-11T22:46:50.386023186Z [int-1791758740250 IntCo 1] LLM rescoring: ON for 3 measures in category 'Environment'
+2026-10-11T22:46:50.393303741Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.393309318Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.393314588Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.413364766Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.415317541Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.415322753Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.415343309Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.415350118Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.415353501Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.813459230Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.813461267Z [int-1791758740250 IntCo 1] LLM rescoring: ON for 3 measures in category 'Governance'
+2026-10-11T22:46:50.813466121Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.813469713Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.813475132Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.813478578Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=32
+2026-10-11T22:46:50.813482257Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=35
+2026-10-11T22:46:50.813485674Z [int-1791758740250 IntCo 1] Scoring category: Governance (3 measures)
+2026-10-11T22:46:50.813530358Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.813533729Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.813536867Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.814713961Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.814714960Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.814717915Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.814720772Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.814724041Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.814726841Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.814727355Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.814732653Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.814737113Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.814740742Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:50.816416911Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.816420566Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:50.816423762Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:50.816426788Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:50.816430177Z [int-1791758740250 IntCo 1][invariant][OK] force-include invariant satisfied (0 filing-bound measure(s) with required doc present all received forced body chunks)
+2026-10-11T22:46:50.816433562Z [int-1791758740250 IntCo 1] Scoring diagnostics: failures=0, timeouts=0, fallback=0, defaultScore=3, emptyEvidence=6
+2026-10-11T22:46:50.816461484Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:50.816465435Z [SCORING-REQ] settle token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:50.816469284Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.816473209Z [SCORING-REQ] start token=2cd33f60-2bb9-4361-bc57-686762117f7b job=6 attempt=1 batch=2 company=6 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:50.818009280Z [int-1791758740250 IntCo 1] Analysis complete: 0% (0/6 answered; 0 abstained of 6 total)
+2026-10-11T22:46:50.924254511Z [DIAG][score-write] company=6 rows=6 batch=2 job=6 attempt_id=f87ae572-eade-4bf2-b98e-fdbc557a4bb7 attempt_n=1 company=6 stage=score-write
+2026-10-11T22:46:52.143054540Z [DIAG][pool-state] pool=main max=4 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:46:52.173875271Z [int-1791758740250 IntCo 1] Analysis complete: 0% (0 met / 6 answered; 0 abstained of 6 total)
+2026-10-11T22:46:52.780537268Z [int-1791758740250 IntCo 1] Pipeline completed in 6s
+2026-10-11T22:46:52.780551407Z [int-1791758740250 IntCo 1] Persisted passage-retrieval summary for 6 measures
+2026-10-11T22:46:52.780555823Z [int-1791758740250 IntCo 1][invariant][OK] force-include satisfied for 0 filing-bound measure(s)
+2026-10-11T22:46:53.245965047Z [int-1791758740250 IntCo 1] Auto-reexam SKIPPED: legitimate zero (corpusChars=54600, lowEvidence=n/a, fetchRatio=n/a, dead=n/a, firstPartyDead=0/25)
+2026-10-11T22:46:53.245969982Z [DIAG][stage-timer] {"kind":"pipeline","label":"int-1791758740250 IntCo 1","outcome":"ok","error":null,"started_at":"2026-10-11T22:46:47.146Z","attempt_wall_ms":6097,"tracked_wall_ms":4670,"other_untracked_wall_ms":1428,"busy_sum_ms_all_stages":4670,"stages":{"db_ops":{"done":20,"errors":0,"pending":0,"busy_sum_ms":4670,"union_wall_ms":4670}},"last_progress":{"stage":"db_ops","op":"select documents","atMs":6097,"ok":true},"pending_at_close_count":0,"pending_at_close":[],"batch_id":2,"job_id":6,"attempt_id":"f87ae572-eade-4bf2-b98e-fdbc557a4bb7","attempt_n":1,"company_id":6,"stage":"pipeline"}
+2026-10-11T22:46:53.245973162Z [INT-CHILD pid=264] pipeline success=true docs=0 providerCalls=22 error=
+2026-10-11T22:46:53.327360092Z [DIAG][job-transition] job=6 pipeline-result success=true error="" batch=2 job=6 attempt_id=f87ae572-eade-4bf2-b98e-fdbc557a4bb7 attempt_n=1 company=6 stage=finalize
+2026-10-11T22:46:54.034796918Z [DIAG][job-transition] job=6 -> completed transitioned=true batch=2 job=6 attempt_id=f87ae572-eade-4bf2-b98e-fdbc557a4bb7 attempt_n=1 company=6 stage=finalize
+2026-10-11T22:46:54.395244643Z [Worker] Job 6 completed successfully (attempt 1)
+2026-10-11T22:46:54.932217694Z [Worker][I45-diag] company=6 fw=2 score=0 failures=0 timeouts=0 fallback=0 defaultScore=3 emptyEvidence=6
+2026-10-11T22:46:55.105289940Z [zero-score-diag] int-1791758740250 IntCo 1 score=0 fw=2 docs=25 fetched=25 ratio=1
+2026-10-11T22:46:55.105294059Z [zero-score-diag] int-1791758740250 IntCo 1 pinned=0 pinnedOk=0 hasDataDoc=true warning=none
+2026-10-11T22:46:55.105297044Z [zero-score-diag] int-1791758740250 IntCo 1 deadByReason={}
+2026-10-11T22:46:55.828172945Z [FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+2026-10-11T22:46:55.828176104Z [DIAG][pipeline] start company="int-1791758740250 IntCo 2" opts_attempt_id=c6905562-2233-4db2-801b-c109de03f1c4 batch=2 job=7 attempt_id=c6905562-2233-4db2-801b-c109de03f1c4 attempt_n=1 company=7 stage=pipeline
+2026-10-11T22:46:55.828179236Z [int-1791758740250 IntCo 2] Skipping fetch phase (reusing cached documents)
+2026-10-11T22:46:56.364124504Z [DIAG][bull-lock] completed job=batch-2-company-6 active_for=50859ms
+2026-10-11T22:46:56.364130394Z [Worker] BullMQ job batch-2-company-6 completed
+2026-10-11T22:46:56.803019646Z [DIAG][db-slow-op] {"pool":"main","pool_max":4,"total":1,"idle":1,"waiting":0,"op":"update companies","outcome":"ok","checkout_wait_ms":749,"exec_ms":182,"total_ms":931,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":7,"attempt_id":"c6905562-2233-4db2-801b-c109de03f1c4","attempt_n":1,"company_id":7,"stage":"pipeline"}
+2026-10-11T22:46:56.803024450Z [int-1791758740250 IntCo 2] === PHASE 2: ANALYZE ===
+2026-10-11T22:46:57.805102908Z [DIAG][db-slow-op] {"pool":"main","pool_max":4,"total":1,"idle":1,"waiting":0,"op":"select documents","outcome":"ok","checkout_wait_ms":0,"exec_ms":539,"total_ms":539,"slow_threshold_ms_diagnostic":500,"batch_id":2,"job_id":7,"attempt_id":"c6905562-2233-4db2-801b-c109de03f1c4","attempt_n":1,"company_id":7,"stage":"analyze"}
+2026-10-11T22:46:57.805107072Z [int-1791758740250 IntCo 2] Using full document pool (25 docs, no snapshot)
+2026-10-11T22:46:57.805110361Z [int-1791758740250 IntCo 2] Analyzing with 25 fetched documents
+2026-10-11T22:46:57.805113723Z [int-1791758740250 IntCo 2] R3.1: provenance running WITHOUT a confirmed company domain — failing OPEN (U17 third_party exclusion skipped for this company to avoid over-excluding issuer-site docs).
+2026-10-11T22:46:57.993640905Z [int-1791758740250 IntCo 2] ABOUTNESS corpus: rejected=0, deprioritized=25 (weight 0.5)
+2026-10-11T22:46:57.993645386Z [int-1791758740250 IntCo 2] U17 provenance filter: excluded=0, upgraded-to-issuer=0, fail-open-kept=25, kept=25
+2026-10-11T22:46:57.993648675Z [int-1791758740250 IntCo 2] Running temporal validation...
+2026-10-11T22:46:57.993651967Z [int-1791758740250 IntCo 2] Temporal validation: 0 total snippets to classify
+2026-10-11T22:46:57.999964338Z [DIAG][bull-lock] locksRenewed count=1 since_last_renew=batch-2-company-7:7681ms
+2026-10-11T22:46:58.349271655Z [int-1791758740250 IntCo 2] Starting analysis: 6 measures, 25 documents
+2026-10-11T22:46:58.349280808Z [int-1791758740250 IntCo 2] corpus-hygiene: no documents dropped (25 documents)
+2026-10-11T22:46:58.351123910Z [int-1791758740250 IntCo 2] Corpus source types: [none]
+2026-10-11T22:46:58.351128843Z [int-1791758740250 IntCo 2] Verdict cache: DISABLED (setting off) — fresh scoring
+2026-10-11T22:46:58.813062600Z [int-1791758740250 IntCo 2] BM25-skip path (54600 chars < 600000) topicPrimary=0
+2026-10-11T22:46:58.813082339Z [int-1791758740250 IntCo 2] Discovered 0 terminology terms via deepseek
+2026-10-11T22:46:58.934650263Z [topic-lexicon] deepseek returned zero usable terms for framework 2 (raw text len=102)
+2026-10-11T22:46:58.934657200Z [topic-lexicon] retrying with openai for framework 2
+2026-10-11T22:46:58.954751648Z [topic-lexicon] openai returned zero usable terms for framework 2 (raw text len=102)
+2026-10-11T22:46:58.954764388Z [topic-lexicon] Not persisting fallback-only lexicon for framework 2 — caller will retry next run
+2026-10-11T22:46:58.954769617Z [int-1791758740250 IntCo 2] Topic lexicon (fallback): 1 framework terms + 1 deterministic -> 1 total
+2026-10-11T22:46:58.961714280Z [int-1791758740250 IntCo 2] Corpus topic evidence: 0/25 chunks contain topic terms (0 hits)
+2026-10-11T22:46:58.961720781Z [int-1791758740250 IntCo 2] Scoring category: Environment (3 measures)
+2026-10-11T22:46:58.986538084Z [int-1791758740250 IntCo 2] LLM rescoring: ON for 3 measures in category 'Environment'
+2026-10-11T22:46:58.986543762Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:58.986547685Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:58.986551013Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.012164768Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:59.012169777Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:59.012173430Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+2026-10-11T22:46:59.012176681Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.012179571Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.012182129Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.026734611Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:59.026739678Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:59.026743650Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:59.026747039Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M1 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.026749953Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M2 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.026752591Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M3 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.055244438Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:59.056508374Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=32
+2026-10-11T22:46:59.058852768Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=34
+2026-10-11T22:46:59.058857655Z [int-1791758740250 IntCo 2] Scoring category: Governance (3 measures)
+2026-10-11T22:46:59.067823960Z [int-1791758740250 IntCo 2] LLM rescoring: ON for 3 measures in category 'Governance'
+2026-10-11T22:46:59.067829097Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.067833485Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.067838624Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.091879303Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:59.091883868Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:59.091887970Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:59.091891616Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.091894428Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.091897395Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.108085072Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:59.108092042Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:59.108096045Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+2026-10-11T22:46:59.108099933Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M4 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.108104436Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M5 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.108108969Z [SCORING-REQ] start token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M6 provider=deepseek role=primary#1 call=scoring
+2026-10-11T22:46:59.130129880Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:59.130134431Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:59.130137919Z [SCORING-REQ] settle token=680d407d-5fe2-439b-be18-4808c76fa441 job=7 attempt=1 batch=2 company=7 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+2026-10-11T22:46:59.130140652Z [int-1791758740250 IntCo 2][invariant][OK] force-include invariant satisfied (0 filing-bound measure(s) with required doc present all received forced body chunks)
+2026-10-11T22:46:59.157609035Z [int-1791758740250 IntCo 2] Scoring diagnostics: failures=0, timeouts=0, fallback=0, defaultScore=3, emptyEvidence=6
+2026-10-11T22:46:59.157612057Z [int-1791758740250 IntCo 2] Analysis complete: 0% (0/6 answered; 0 abstained of 6 total)
+2026-10-11T22:46:59.824938934Z [DIAG][score-write] company=7 rows=6 batch=2 job=7 attempt_id=c6905562-2233-4db2-801b-c109de03f1c4 attempt_n=1 company=7 stage=score-write
+2026-10-11T22:47:00.861023343Z [DIAG][pool-state] pool=main max=4 total=1 idle=0 busy=1 waiting=0
+2026-10-11T22:47:00.861030824Z [int-1791758740250 IntCo 2] Analysis complete: 0% (0 met / 6 answered; 0 abstained of 6 total)
+2026-10-11T22:47:01.114750850Z [int-1791758740250 IntCo 2] Persisted passage-retrieval summary for 6 measures
+2026-10-11T22:47:01.114766097Z [int-1791758740250 IntCo 2][invariant][OK] force-include satisfied for 0 filing-bound measure(s)
+2026-10-11T22:47:01.292982470Z [int-1791758740250 IntCo 2] Pipeline completed in 6s
+2026-10-11T22:47:01.834187192Z [int-1791758740250 IntCo 2] Auto-reexam SKIPPED: legitimate zero (corpusChars=54600, lowEvidence=n/a, fetchRatio=n/a, dead=n/a, firstPartyDead=0/25)
+2026-10-11T22:47:01.834191941Z [DIAG][stage-timer] {"kind":"pipeline","label":"int-1791758740250 IntCo 2","outcome":"ok","error":null,"started_at":"2026-10-11T22:46:55.732Z","attempt_wall_ms":6094,"tracked_wall_ms":4678,"other_untracked_wall_ms":1416,"busy_sum_ms_all_stages":4678,"stages":{"db_ops":{"done":20,"errors":0,"pending":0,"busy_sum_ms":4678,"union_wall_ms":4678}},"last_progress":{"stage":"db_ops","op":"select documents","atMs":6094,"ok":true},"pending_at_close_count":0,"pending_at_close":[],"batch_id":2,"job_id":7,"attempt_id":"c6905562-2233-4db2-801b-c109de03f1c4","attempt_n":1,"company_id":7,"stage":"pipeline"}
+2026-10-11T22:47:01.834196125Z [INT-CHILD pid=258] pipeline success=true docs=0 providerCalls=22 error=
+2026-10-11T22:47:01.914336415Z [DIAG][job-transition] job=7 pipeline-result success=true error="" batch=2 job=7 attempt_id=c6905562-2233-4db2-801b-c109de03f1c4 attempt_n=1 company=7 stage=finalize
+2026-10-11T22:47:02.742674154Z [DIAG][job-transition] job=7 -> completed transitioned=true batch=2 job=7 attempt_id=c6905562-2233-4db2-801b-c109de03f1c4 attempt_n=1 company=7 stage=finalize
+2026-10-11T22:47:02.742688578Z [DIAG][pool-state] pool=main max=20 total=7 idle=6 busy=1 waiting=0
+2026-10-11T22:47:02.980158010Z [Worker] Job 7 completed successfully (attempt 1)
+2026-10-11T22:47:03.885426834Z [Worker][I45-diag] company=7 fw=2 score=0 failures=0 timeouts=0 fallback=0 defaultScore=3 emptyEvidence=6
+2026-10-11T22:47:03.885429457Z [DIAG][pg-activity] {"reason":"interval","backends_total":9,"groups":[{"app":"","client":"fd12:4e7f:bf81:1:5000:e0:f316:734e","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":9,"max_xact_age_ms":null,"max_state_age_ms":"24174"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":7,"idle":6,"waiting":0},{"pool":"usage","max":2,"total":1,"idle":1,"waiting":0}]}
+2026-10-11T22:47:03.885432298Z [zero-score-diag] int-1791758740250 IntCo 2 score=0 fw=2 docs=25 fetched=25 ratio=1
+2026-10-11T22:47:03.885434957Z [zero-score-diag] int-1791758740250 IntCo 2 pinned=0 pinnedOk=0 hasDataDoc=true warning=none
+2026-10-11T22:47:03.885437617Z [zero-score-diag] int-1791758740250 IntCo 2 deadByReason={}
+2026-10-11T22:47:04.909829367Z [Worker] Batch 2 complete with no failures: 4 succeeded — finalising
+2026-10-11T22:47:04.909838591Z [LIFECYCLE] completeBatchRun batch=2 rowCount=1
+2026-10-11T22:47:05.912984436Z [DIAG][bull-lock] locksRenewed count=1 since_last_renew=batch-2-company-7:7680ms
+2026-10-11T22:47:06.249613198Z [Worker] Stopped
+2026-10-11T22:47:07.899618768Z [DIAG][pool-state] pool=main max=20 total=7 idle=6 busy=1 waiting=0
+2026-10-11T22:47:08.880238665Z [INT] summary {
+2026-10-11T22:47:08.880249131Z    "attempts": 1
+2026-10-11T22:47:08.880249403Z  "ranAt": "2026-10-11T22:47:08.583Z",
+2026-10-11T22:47:08.880249491Z   "holdMs": 12000
+2026-10-11T22:47:08.880252278Z    "last_error": null,
+2026-10-11T22:47:08.880253594Z   {
+2026-10-11T22:47:08.880259244Z    "last_error": null,
+2026-10-11T22:47:08.880259833Z   },
+2026-10-11T22:47:08.880260178Z  "node": "v22.23.3",
+2026-10-11T22:47:08.880264811Z    "id": 6,
+2026-10-11T22:47:08.880268088Z   },
+2026-10-11T22:47:08.880270877Z  },
+2026-10-11T22:47:08.880272439Z    "attempts": 1
+2026-10-11T22:47:08.880273994Z    "status": "completed",
+2026-10-11T22:47:08.880276926Z   {
+2026-10-11T22:47:08.880277081Z   {
+2026-10-11T22:47:08.880283361Z  "jobs": [
+2026-10-11T22:47:08.880285669Z    "id": 7,
+2026-10-11T22:47:08.880286161Z    "last_error": null,
+2026-10-11T22:47:08.880288175Z  "elapsedMs": 58816,
+2026-10-11T22:47:08.880293353Z   "lockDurationMs": 30000,
+2026-10-11T22:47:08.880293857Z   {
+2026-10-11T22:47:08.880294266Z  "chromium": "/usr/bin/chromium",
+2026-10-11T22:47:08.880294521Z    "status": "completed",
+2026-10-11T22:47:08.880296470Z    "status": "completed",
+2026-10-11T22:47:08.880302331Z    "id": 8,
+2026-10-11T22:47:08.880304358Z   "stalledIntervalMs": 15000,
+2026-10-11T22:47:08.880304929Z    "id": 5,
+2026-10-11T22:47:08.880305238Z    "last_error": null,
+2026-10-11T22:47:08.880308783Z  "config": {
+2026-10-11T22:47:08.880314506Z    "status": "completed",
+2026-10-11T22:47:08.880316501Z    "attempts": 1
+2026-10-11T22:47:08.880317463Z   "concurrency": 4,
+2026-10-11T22:47:08.880326018Z   },
+2026-10-11T22:47:08.881613639Z   {
+2026-10-11T22:47:08.881619977Z    "company_id": 7,
+2026-10-11T22:47:08.881620909Z   }
+2026-10-11T22:47:08.881626166Z    "n": 6,
+2026-10-11T22:47:08.881629562Z  "scores": [
+2026-10-11T22:47:08.881632094Z    "n": 6,
+2026-10-11T22:47:08.881635598Z    "yes": 0,
+2026-10-11T22:47:08.881635751Z    "attempts": 1
+2026-10-11T22:47:08.881639073Z   {
+2026-10-11T22:47:08.881643243Z    "yes": 0,
+2026-10-11T22:47:08.881643568Z    "attempts": 1
+2026-10-11T22:47:08.881646439Z   },
+2026-10-11T22:47:08.881647686Z    "company_id": 5,
+2026-10-11T22:47:08.881652773Z   {
+2026-10-11T22:47:08.881655074Z    "n": 6,
+2026-10-11T22:47:08.881658486Z    "company_id": 8,
+2026-10-11T22:47:08.881661234Z  ],
+2026-10-11T22:47:08.881663683Z    "yes": 0,
+2026-10-11T22:47:08.881667189Z  "peak": {
+2026-10-11T22:47:08.881671432Z    "attempts": 1
+2026-10-11T22:47:08.881673121Z   "at": 1791758796478,
+2026-10-11T22:47:08.881677138Z   },
+2026-10-11T22:47:08.881680569Z   {
+2026-10-11T22:47:08.881683944Z    "company_id": 6,
+2026-10-11T22:47:08.881688318Z    "n": 6,
+2026-10-11T22:47:08.881692124Z    "yes": 0,
+2026-10-11T22:47:08.881698343Z    "attempts": 1
+2026-10-11T22:47:08.881698463Z    "attempts": 1
+2026-10-11T22:47:08.881703619Z   }
+2026-10-11T22:47:08.881704565Z   },
+2026-10-11T22:47:08.881707503Z  ],
+2026-10-11T22:47:08.881710601Z  "batch": {
+2026-10-11T22:47:08.881714721Z   "status": "completed",
+2026-10-11T22:47:08.881717671Z   "completed_jobs": 4,
+2026-10-11T22:47:08.881720663Z   "failed_jobs": 0,
+2026-10-11T22:47:08.881723790Z   "total_jobs": 4
+2026-10-11T22:47:08.881726823Z  },
+2026-10-11T22:47:08.882588718Z   "descendants": 40,
+2026-10-11T22:47:08.882592968Z   "chromium": 35,
+2026-10-11T22:47:08.882596115Z   "jobChildren": 12,
+2026-10-11T22:47:08.882599122Z   "descendantRssMb": 4027,
+2026-10-11T22:47:08.882602270Z   "chromiumRssMb": 3458,
+2026-10-11T22:47:08.882605262Z   "parentRssMb": 140
+2026-10-11T22:47:08.882608787Z  },
+2026-10-11T22:47:08.882612187Z  "maxDescendantRssMb": 4027,
+2026-10-11T22:47:08.882615413Z  "maxParentRssMb": 166,
+2026-10-11T22:47:08.882619114Z  "maxConcurrentJobChildren": 12,
+2026-10-11T22:47:08.882622957Z  "lockRenewals": {
+2026-10-11T22:47:08.882627265Z   "batch-2-company-5": 3,
+2026-10-11T22:47:08.882630651Z   "batch-2-company-6": 5,
+2026-10-11T22:47:08.882634071Z   "batch-2-company-7": 7,
+2026-10-11T22:47:08.882637168Z   "batch-2-company-8": 4
+2026-10-11T22:47:08.882640384Z  },
+2026-10-11T22:47:08.882643238Z  "stalledEvents": [],
+2026-10-11T22:47:08.882646840Z  "failedEvents": [],
+2026-10-11T22:47:08.882649950Z  "completedEvents": [
+2026-10-11T22:47:08.882652811Z   "batch-2-company-5",
+2026-10-11T22:47:08.882656723Z   "batch-2-company-8",
+2026-10-11T22:47:08.882659697Z   "batch-2-company-6"
+2026-10-11T22:47:08.882662794Z  ],
+2026-10-11T22:47:08.882666266Z  "afterCompletion": {
+2026-10-11T22:47:08.882669142Z   "at": 1791758826224,
+2026-10-11T22:47:08.882672105Z   "descendants": 0,
+2026-10-11T22:47:08.882675768Z   "chromium": 0,
+2026-10-11T22:47:08.882679261Z   "jobChildren": 0,
+2026-10-11T22:47:08.882682149Z   "descendantRssMb": 0,
+2026-10-11T22:47:08.882684881Z   "chromiumRssMb": 0,
+2026-10-11T22:47:08.882687543Z   "parentRssMb": 142
+2026-10-11T22:47:08.882690501Z  },
+2026-10-11T22:47:08.883964908Z    "waiting": 0,
+2026-10-11T22:47:08.883968596Z   "maxForkMs": 4.299995000008494,
+2026-10-11T22:47:08.883973069Z    "max": 1
+2026-10-11T22:47:08.883975093Z   "messages": 439,
+2026-10-11T22:47:08.883979710Z   },
+2026-10-11T22:47:08.883979970Z   "maxHandlerMs": 0.38664300000527874,
+2026-10-11T22:47:08.883985756Z   "lateReportsDiscarded": 0,
+2026-10-11T22:47:08.883985853Z   "proc": {
+2026-10-11T22:47:08.883991488Z    "active": 0,
+2026-10-11T22:47:08.883992010Z   "quarantined": 0
+2026-10-11T22:47:08.883998578Z  },
+2026-10-11T22:47:08.883998790Z    "waiting": 0,
+2026-10-11T22:47:08.884004751Z    "max": 4
+2026-10-11T22:47:08.884004930Z  "brokerAfter": {
+2026-10-11T22:47:08.884010714Z   "llm": {
+2026-10-11T22:47:08.884014247Z    "active": 0,
+2026-10-11T22:47:08.884018146Z    "waiting": 0,
+2026-10-11T22:47:08.884021373Z    "max": 8
+2026-10-11T22:47:08.884024980Z   },
+2026-10-11T22:47:08.884028743Z   "browser": {
+2026-10-11T22:47:08.884031035Z  "afterStopWorker": {
+2026-10-11T22:47:08.884035411Z   "at": 1791758828226,
+2026-10-11T22:47:08.884038746Z    "active": 0,
+2026-10-11T22:47:08.884040663Z   "descendants": 0,
+2026-10-11T22:47:08.884043597Z   "chromium": 0,
+2026-10-11T22:47:08.884046415Z   "jobChildren": 0,
+2026-10-11T22:47:08.884049029Z   "descendantRssMb": 0,
+2026-10-11T22:47:08.884051813Z   "chromiumRssMb": 0,
+2026-10-11T22:47:08.884054396Z   "parentRssMb": 143
+2026-10-11T22:47:08.884056995Z  },
+2026-10-11T22:47:08.884059601Z  "newOrphanPuppeteerChromium": [],
+2026-10-11T22:47:08.884062398Z  "quarantined": 0,
+2026-10-11T22:47:08.884065255Z  "isolationStats": {
+2026-10-11T22:47:08.884068167Z   "forks": 4,
+2026-10-11T22:47:08.885249933Z   }
+2026-10-11T22:47:08.885253306Z  },
+2026-10-11T22:47:08.885256593Z  "samples": 122
+2026-10-11T22:47:08.885260647Z }
+2026-10-11T22:47:08.885264216Z PASS all 4 analysis_jobs completed (completed,completed,completed,completed)
+2026-10-11T22:47:08.885268043Z PASS batch counters completed=4 failed=0 (got 4/0, status=completed)
+2026-10-11T22:47:08.885270982Z PASS measure_scores persisted: 6 per company x4 ([{"company_id":5,"n":6,"yes":0,"attempts":1},{"company_id":6,"n":6,"yes":0,"attempts":1},{"company_id":7,"n":6,"yes":0,"attempts":1},{"company_id":8,"n":6,"yes":0,"attempts":1}])
+2026-10-11T22:47:08.885274399Z PASS isolated job children ran concurrently: target 4, max seen 12
+2026-10-11T22:47:08.885280636Z PASS real Chromium observed under job children (peak 35 procs, 3458 MB)
+2026-10-11T22:47:08.885284700Z PASS no BullMQ stalled events (0)
+2026-10-11T22:47:08.885287599Z PASS lock renewed at least once per job ({"batch-2-company-5":3,"batch-2-company-6":5,"batch-2-company-7":7,"batch-2-company-8":4})
+2026-10-11T22:47:08.885290458Z PASS no descendants after completion (0, chromium 0)
+2026-10-11T22:47:08.885293256Z PASS no orphaned puppeteer Chromium anywhere on host (none)
+2026-10-11T22:47:08.885296051Z PASS no quarantined children
+2026-10-11T22:47:08.885299317Z PASS broker permits all returned after completion ({"llm":{"active":0,"waiting":0,"max":8},"browser":{"active":0,"waiting":0,"max":1},"proc":{"active":0,"waiting":0,"max":4}})
+2026-10-11T22:47:08.964319211Z INTEGRATION PASS
