@@ -71,14 +71,51 @@ const LLM_MAX_CONCURRENCY = parseInt(process.env.LLM_MAX_CONCURRENCY || "8", 10)
 let llmActive = 0;
 const llmWaiters: Array<() => void> = [];
 
-async function acquireLlmSlot(): Promise<void> {
+// `signal` (scoring path only) makes a QUEUED wait cancellable: on abort the
+// waiter is removed from the queue, its listener detached, and it rejects with
+// LifecycleCancelledError without ever taking a permit. Without a signal (or
+// when it never aborts) behaviour is identical to the original semaphore.
+async function acquireLlmSlot(signal?: AbortSignal | null): Promise<void> {
+  if (signal?.aborted) throw cancellationFromSignal(signal, "llm-slot-wait");
   if (llmActive < LLM_MAX_CONCURRENCY) {
     llmActive++;
     return;
   }
-  await new Promise<void>((resolve) => llmWaiters.push(resolve));
+  if (!signal) {
+    await new Promise<void>((resolve) => llmWaiters.push(resolve));
+    llmActive++;
+    return;
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      onAbort = () => {
+        const i = llmWaiters.indexOf(resolve);
+        if (i >= 0) llmWaiters.splice(i, 1);
+        reject(cancellationFromSignal(signal, "llm-slot-wait"));
+      };
+      llmWaiters.push(resolve);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+  if (signal.aborted) {
+    // Woken by a release, but aborted before this continuation ran: do not
+    // take the permit; pass the wake-up on to the next queued waiter instead.
+    const next = llmWaiters.shift();
+    if (next) next();
+    throw cancellationFromSignal(signal, "llm-slot-wait");
+  }
   llmActive++;
 }
+
+/** Test-only: semaphore internals for leak / FIFO assertions. */
+export const __llmSlotForTests = {
+  acquire: (signal?: AbortSignal | null) => acquireLlmSlot(signal),
+  release: () => releaseLlmSlot(),
+  state: () => ({ active: llmActive, waiting: llmWaiters.length, max: LLM_MAX_CONCURRENCY }),
+};
 
 function releaseLlmSlot(): void {
   llmActive = Math.max(0, llmActive - 1);
@@ -885,6 +922,9 @@ export function __setProvidersForTests(list: AIProvider[]): () => void {
   };
 }
 
+/** TEST-ONLY: the real transport classes, for adapter-level abort tests. */
+export const __providerClassesForTests = { ClaudeProvider, OpenAICompatibleProvider, GeminiProvider };
+
 export function getAvailableProviders(): AIProvider[] {
   return Array.from(providers.values()).filter((p) => p.isAvailable());
 }
@@ -1054,7 +1094,6 @@ export async function completeScoring(
   }
 ): Promise<{ text: string; provider: string; model: string }> {
   const { signal: explicitSignal, logMeta, ...reqOpts } = opts;
-  await acquireLlmSlot();
   // Attempt-scoped cancellation. Inert (no signal, no gates, no logs) outside a
   // worker attempt, so scripts/routes keep the exact previous behaviour.
   const ctx = getDiagContext();
@@ -1068,7 +1107,12 @@ export async function completeScoring(
     if (lifecycleActive) assertDispatchAllowed(where, ctx);
     if (signal?.aborted) throw cancellationFromSignal(signal, where);
   };
+  // The slot wait is cancellable via the same signal; a waiter cancelled while
+  // queued never holds a permit, so it must not release one.
+  let slotAcquired = false;
   try {
+    await acquireLlmSlot(signal);
+    slotAcquired = true;
     gate(`scoring:dispatch ${providerName}`);
     const strict = (process.env.SCORING_STRICT_PROVIDER || "true").toLowerCase() !== "false";
     if (!strict) {
@@ -1229,7 +1273,7 @@ export async function completeScoring(
     throw new ProviderScoringError(providerName, lastFailureClass, `All scoring providers failed: ${errors.join(' | ')}`);
   } finally {
     attemptSignal?.dispose();
-    releaseLlmSlot();
+    if (slotAcquired) releaseLlmSlot();
   }
 }
 

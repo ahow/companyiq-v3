@@ -194,7 +194,11 @@ export function requestAbortSignal(
     if (parent.aborted) onParent();
     else parent.addEventListener("abort", onParent, { once: true });
   }
-  const timer = ctx ? setInterval(() => { const r = dispatchRevokedReason(ctx); if (r) fire(r); }, pollMs) : null;
+  // A noticed batch cancel / elapsed deadline revokes the SHARED attempt
+  // lifecycle (lc.abort), so every sibling in-flight request of this attempt is
+  // aborted at once, not just this one. No-op when r is null (healthy path) or
+  // the lifecycle is already revoked (revokeAttempt is idempotent).
+  const timer = ctx ? setInterval(() => { const r = dispatchRevokedReason(ctx); if (r) { revokeAttempt(ctx.lifecycle, r); fire(r); } }, pollMs) : null;
   (timer as any)?.unref?.();
   return {
     signal: ac.signal,
@@ -203,6 +207,23 @@ export function requestAbortSignal(
       parent?.removeEventListener("abort", onParent);
     },
   };
+}
+
+/**
+ * Race `work` against a watchdog timer. If the timer fires first, `onFire()`
+ * runs (side effects: flag/revoke/log) and its Error rejects the race. The
+ * timer is ALWAYS cleared in `finally` once the race settles, so a job that
+ * finishes early leaves no pending watchdog that would later revoke an
+ * already-finished lifecycle.
+ */
+export function raceWithWatchdog<T>(work: Promise<T>, ms: number, onFire: () => Error): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const watchdog = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(onFire()), ms);
+  });
+  return Promise.race([work, watchdog]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 // ─── Ownership watch (cross-replica reclaim → self-revoke) ────────────────────

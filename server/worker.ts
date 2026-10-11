@@ -32,7 +32,7 @@ import { buildGateReport, deploymentFingerprintFromEnvironment, fingerprintsEqua
 import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/adaptive-concurrency.js";
 import { runWithLlmContext } from "./lib/llm-usage.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
-import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch } from "./lib/lifecycle-fence.js";
+import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -426,7 +426,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       // if logging is disabled or context is missing, nothing breaks.
       result = await runWithLlmContext(
         { workspaceId, batchId, companyId, frameworkId, callType: "scoring" },
-        () => Promise.race([
+        () => raceWithWatchdog(
           runAnalysisPipeline({
             company,
             framework,
@@ -444,27 +444,25 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
               return batchFetchStates.get(batchId)!;
             })(),
           }),
-          new Promise<PipelineResult>((_, reject) =>
-            setTimeout(
-              () => {
-                // Fix 1: signal the orphaned pipeline to abort at its next
-                // cooperative-cancel checkpoint before we reject the race.
-                jobWatchdogFired = true;
-                // Lifecycle fence: revoke this attempt's permission to dispatch
-                // or persist (aborts in-flight HTTP via the attempt AbortSignal).
-                // Revocation path #1 of 3. Independent of #2 (pipeline.ts
-                // PIPELINE_TIMEOUT_MS, withTimeout onTimeout) and #3
-                // (discovery.ts DISCOVERY_TIMEOUT_MS timer): each revokes on its
-                // own at its own deadline; none waits for this watchdog. All
-                // three revoke before failJob/requeue below can run.
-                revokeAttempt(lifecycle, "job_watchdog_timeout");
-                console.warn(`[DIAG][job-transition] job=${jobId} watchdog-fired after ${JOB_TIMEOUT}ms ${diagTags()}`);
-                reject(new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms"));
-              },
-              JOB_TIMEOUT
-            )
-          ),
-        ])
+          JOB_TIMEOUT,
+          // Watchdog timer is cleared in raceWithWatchdog's finally once the
+          // race settles (lifecycle-fence.ts), so it cannot fire after the job.
+          () => {
+            // Fix 1: signal the orphaned pipeline to abort at its next
+            // cooperative-cancel checkpoint before we reject the race.
+            jobWatchdogFired = true;
+            // Lifecycle fence: revoke this attempt's permission to dispatch
+            // or persist (aborts in-flight HTTP via the attempt AbortSignal).
+            // Revocation path #1 of 3. Independent of #2 (pipeline.ts
+            // PIPELINE_TIMEOUT_MS, withTimeout onTimeout) and #3
+            // (discovery.ts DISCOVERY_TIMEOUT_MS timer): each revokes on its
+            // own at its own deadline; none waits for this watchdog. All
+            // three revoke before failJob/requeue below can run.
+            revokeAttempt(lifecycle, "job_watchdog_timeout");
+            console.warn(`[DIAG][job-transition] job=${jobId} watchdog-fired after ${JOB_TIMEOUT}ms ${diagTags()}`);
+            return new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms");
+          },
+        )
       );
     } finally {
       clearInterval(heartbeatTimer);
