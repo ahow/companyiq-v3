@@ -21,6 +21,7 @@ import crypto from "crypto";
 import { initializeDatabase } from "./db.js";
 import { startWorker, stopWorker } from "./worker.js";
 import { startReconciler, stopReconciler } from "./reconciler.js";
+import { startRuntimeDiag } from "./lib/runtime-diag.js";
 
 // ─── Log Noise Filter ───────────────────────────────────────────────────────
 // Mirror the web server's PDF.js noise filter so the worker (which does the
@@ -86,6 +87,7 @@ initializeDatabase().then(async () => {
   const workerId = `worker-${crypto.randomUUID().slice(0, 8)}`;
   console.log(`[Worker-Main] Starting standalone worker ${workerId} (concurrency=${process.env.WORKER_CONCURRENCY || "10"}, maxBrowsers=${process.env.MAX_CONCURRENT_BROWSER || "2"})`);
   startWorker(workerId);
+  try { startRuntimeDiag("worker"); } catch { /* diagnostics only */ }
 
   // Periodic stall reconciler — prevents companies from silently stalling as
   // incomplete (DB<->queue desync) and surfaces quality zeros for QA. Owned by

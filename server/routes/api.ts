@@ -4,6 +4,7 @@ import * as storage from "../storage.js";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { addBatchJobs, removeBatchJobs, getQueueStats } from "../queue.js";
 import { cancelBatch, enqueueReliabilityFinalizer, finalizeBatchAndSave, saveBatchSnapshot } from "../worker.js";
+import { cancelTrace } from "../lib/runtime-diag.js";
 import {
   getAllPausedProviders,
   buildOperationalStatus,
@@ -1377,14 +1378,17 @@ apiRouter.post("/batch/cancel", async (req: Request, res: Response) => {
     const batch = await storage.getActiveBatchRun(workspaceId);
     let snapshotSaved = false;
     if (batch) {
+      const diagT0 = Date.now();
       cancelBatch(batch.id);
-      await removeBatchJobs(batch.id);
+      const diagRemoved = await removeBatchJobs(batch.id);
+      cancelTrace("c", { batch: batch.id, removed: diagRemoved, note: "active jobs not swept", ms: Date.now() - diagT0 });
       // Safeguard: preserve any completed companies on the Results page before
       // cancelling, so cancellation never silently discards finished work.
       try {
         snapshotSaved = await saveBatchSnapshot(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
       } catch { /* non-fatal */ }
       await storage.cancelBatchRun(batch.id);
+      cancelTrace("a", { batch: batch.id, pg_cancel: "returned", ms_since_request: Date.now() - diagT0 });
     }
     res.json({ success: true, snapshotSaved });
   } catch (error: any) {

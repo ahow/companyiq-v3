@@ -17,6 +17,9 @@
 
 import { redis } from "./redis.js";
 import { registerBatchCancelSource } from "./lib/lifecycle-fence.js";
+import { cancelTrace, registerRedisForDiag } from "./lib/runtime-diag.js";
+
+registerRedisForDiag("singleton", redis);
 
 const KEY_PREFIX = "cancelled:batch:";
 const REDIS_TTL_SECONDS = 60 * 60; // remember a cancel for 1 hour
@@ -28,11 +31,14 @@ function key(batchId: number): string {
 
 /** Persist the cancel signal so every replica can observe it. */
 export async function markBatchCancelled(batchId: number): Promise<void> {
+  const diagT0 = Date.now();
   try {
     await redis.set(key(batchId), "1", "EX", REDIS_TTL_SECONDS);
+    cancelTrace("b", { batch: batchId, key: key(batchId), outcome: "ack", ms: Date.now() - diagT0, ttl_s: REDIS_TTL_SECONDS });
     // Update local cache immediately for the process that issued the cancel.
     cache.set(batchId, { cancelled: true, ts: Date.now() });
   } catch (err: any) {
+    cancelTrace("b", { batch: batchId, outcome: "error", ms: Date.now() - diagT0, err: String(err?.message).slice(0, 80) });
     console.error(`[Cancellation] Failed to mark batch ${batchId} cancelled: ${err.message}`);
   }
 }
@@ -42,10 +48,12 @@ export async function isBatchCancelled(batchId: number): Promise<boolean> {
   try {
     const v = await redis.get(key(batchId));
     const cancelled = v === "1";
+    if (cancelled && !cache.get(batchId)?.cancelled) cancelTrace("d", { batch: batchId, flag_read: true, src: "redis", pid: process.pid });
     cache.set(batchId, { cancelled, ts: Date.now() });
     return cancelled;
   } catch (err: any) {
     console.error(`[Cancellation] Failed to read cancel flag for batch ${batchId}: ${err.message}`);
+    cancelTrace("d", { batch: batchId, flag_read: "error", fail_open_value: cache.get(batchId)?.cancelled ?? false });
     // Fail open (treat as not cancelled) so a transient Redis blip doesn't kill a healthy run.
     return cache.get(batchId)?.cancelled ?? false;
   }

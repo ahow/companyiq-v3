@@ -100,6 +100,7 @@
 // be imported by discovery/pipeline scripts and unit tests.
 import { sql, type SQL } from "drizzle-orm";
 import { getDiagContext, type DiagContext, type AttemptLifecycleState } from "./diag-context.js";
+import { cancelTrace, maskToken } from "./runtime-diag.js";
 
 // ─── Cancellation error recognised by pipeline + worker ──────────────────────
 
@@ -152,6 +153,8 @@ export function revokeAttempt(lc: AttemptLifecycleState | null | undefined, reas
   lc.revokedReason = reason;
   try { lc.abort.abort(new LifecycleCancelledError(reason)); } catch { /* never throw */ }
   console.warn(`[LIFECYCLE-FENCE] attempt revoked reason=${reason} (job=${lc.jobId} attempt=${lc.attemptNumber} batch=${lc.batchId})`);
+  // DIAGNOSTIC-ONLY (batch-1271): step e = revoke; abort already fired above.
+  try { cancelTrace("e", { reason, batch: lc.batchId, job: lc.jobId, attempt: lc.attemptNumber, token: maskToken((lc as any).attemptToken), abort_fired: lc.abort.signal.aborted }); } catch { /* never throw */ }
 }
 
 /**

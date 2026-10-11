@@ -33,6 +33,7 @@ import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/
 import { runWithLlmContext } from "./lib/llm-usage.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
 import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
+import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -327,6 +328,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   // synchronous cache used by the pipeline's cancelCheck below.
   if (cancelledBatches.has(batchId) || (await isBatchCancelled(batchId))) {
     cancelledBatches.add(batchId);
+    cancelTrace("d", { batch: batchId, job: jobId, where: "pre-claim", flag_read: true });
     return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
@@ -585,7 +587,9 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       // untouched. If the batch row is somehow still 'running' (Redis flag
       // seen before PG cancel committed) the job goes back to 'pending' and
       // claimJob's PG fence refuses it once the cancel lands. No retry here.
-      await storage.failJob(jobId, "Cancelled (batch cancelled)", ownership);
+      cancelTrace("e", { batch: batchId, job: jobId, attempt: currentAttempt, token: maskToken(lifecycle.attemptToken), where: "pipeline-returned-cancelled", revoked_reason: lifecycle.revokedReason ?? null });
+      const _fc = await storage.failJob(jobId, "Cancelled (batch cancelled)", ownership);
+      cancelTrace("f", { batch: batchId, job: jobId, attempt: currentAttempt, token: maskToken(lifecycle.attemptToken), transitioned: (_fc as any)?.transitioned ?? null, batchTerminal: (_fc as any)?.batchTerminal ?? null });
     } else {
       // Pipeline returned a failure result
       const errorMsg = result.error || "Unknown error";
@@ -1498,6 +1502,8 @@ export async function startWorker(workerId?: string): Promise<Worker> {
       maxStalledCount: WORKER_MAX_STALLED_COUNT,
     }
   );
+  // DIAGNOSTIC-ONLY (batch-1271): listeners + ping registration; no behaviour change.
+  try { attachBullLockDiag(worker); registerRedisForDiag("bullmq-worker", connection); } catch { /* diagnostics only */ }
 
   worker.on("completed", (job) => {
     console.log("[Worker] BullMQ job " + job.id + " completed");
@@ -1604,6 +1610,7 @@ export function cancelBatch(batchId: number): void {
   // ...and a durable, cross-process signal in Redis so every worker replica
   // honors the cancel for jobs they have already pulled or have queued/delayed.
   void markBatchCancelled(batchId);
+  cancelTrace("b", { batch: batchId, outcome: "issued", mode: "fire-and-forget", pid: process.pid });
   // Clean up local memory after 1 hour (Redis key has its own TTL).
   setTimeout(() => {
     cancelledBatches.delete(batchId);

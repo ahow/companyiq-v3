@@ -12,6 +12,7 @@ import frameworkBuilderV2Router from "./routes/framework-builder-v2.js";
 import { startWorker } from "./worker.js";
 import { initializeDatabase } from "./db.js";
 import { cleanupOnStartup } from "./startup-cleanup.js";
+import { startRuntimeDiag } from "./lib/runtime-diag.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -415,6 +416,7 @@ initializeDatabase().then(async () => {
       const workerId = `worker-${crypto.randomUUID().slice(0, 8)}`;
       startWorker(workerId);
     }
+    try { startRuntimeDiag(process.env.RUN_WORKER === "false" ? "app" : "worker"); } catch { /* diagnostics only */ }
   });
 }).catch((err) => {
   console.error("[Server] Failed to initialize database:", err);
