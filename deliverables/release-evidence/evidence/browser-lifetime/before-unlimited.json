@@ -1,0 +1,8520 @@
+{
+ "label": "before-unlimited",
+ "jobs": 12,
+ "concurrency": 4,
+ "maxConcurrentBrowser": 1,
+ "holdMs": 20000,
+ "docsPerChild": 1,
+ "limits": {
+  "nproc": "Max processes 31804 31804 processes",
+  "cgroup": "/sys/fs/cgroup/system.slice/vm-computer-api.service",
+  "pidsMax": 9541
+ },
+ "peak": {
+  "liveBrowsers": 4,
+  "tasks": 538,
+  "procs": 38,
+  "rssMb": 5198
+ },
+ "bound_held": false,
+ "jobsOk": 12,
+ "jobsFailed": 0,
+ "spawn_failures": 0,
+ "firstFailureJob": null,
+ "browsersLaunched": 12,
+ "browserLifetimesMs": [
+  29043,
+  28794,
+  28787,
+  28536,
+  28777,
+  29023,
+  29039,
+  28789,
+  28781,
+  28777,
+  28787,
+  28783
+ ],
+ "finalBroker": {
+  "llm": {
+   "active": 0,
+   "waiting": 0,
+   "max": 8
+  },
+  "browser": {
+   "active": 0,
+   "waiting": 0,
+   "max": 1
+  },
+  "proc": {
+   "active": 0,
+   "waiting": 0,
+   "max": 6
+  }
+ },
+ "quarantined": 0,
+ "results": [
+  {
+   "job": 0,
+   "ok": true,
+   "startedAt": 1645,
+   "ms": 50635
+  },
+  {
+   "job": 1,
+   "ok": true,
+   "startedAt": 1650,
+   "ms": 41917
+  },
+  {
+   "job": 2,
+   "ok": true,
+   "startedAt": 1653,
+   "ms": 59317
+  },
+  {
+   "job": 3,
+   "ok": true,
+   "startedAt": 1655,
+   "ms": 33110
+  },
+  {
+   "job": 4,
+   "ok": true,
+   "startedAt": 34765,
+   "ms": 34904
+  },
+  {
+   "job": 5,
+   "ok": true,
+   "startedAt": 43567,
+   "ms": 34962
+  },
+  {
+   "job": 6,
+   "ok": true,
+   "startedAt": 52280,
+   "ms": 35069
+  },
+  {
+   "job": 7,
+   "ok": true,
+   "startedAt": 60970,
+   "ms": 35159
+  },
+  {
+   "job": 8,
+   "ok": true,
+   "startedAt": 69669,
+   "ms": 35275
+  },
+  {
+   "job": 9,
+   "ok": true,
+   "startedAt": 78529,
+   "ms": 35126
+  },
+  {
+   "job": 10,
+   "ok": true,
+   "startedAt": 87349,
+   "ms": 35079
+  },
+  {
+   "job": 11,
+   "ok": true,
+   "startedAt": 96129,
+   "ms": 35077
+  }
+ ],
+ "events": [
+  {
+   "at": 5787,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 5788,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 5895,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 5912,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 106090,
+    "ppid": 106042,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-rSjTSr "
+   }
+  },
+  {
+   "at": 6243,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 6285,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 14671,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 14671,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 14918,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 106338,
+    "ppid": 106035,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-wKHDgP "
+   }
+  },
+  {
+   "at": 23471,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 23471,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 23682,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 106588,
+    "ppid": 106034,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-ZVqWod "
+   }
+  },
+  {
+   "at": 32190,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 32190,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 32447,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 106830,
+    "ppid": 106040,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-6ZN7vO "
+   }
+  },
+  {
+   "at": 34951,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 106090,
+    "livedMs": 29043
+   }
+  },
+  {
+   "at": 36095,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 40878,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 40878,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 40959,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 107091,
+    "ppid": 107041,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-tWTBs2 "
+   }
+  },
+  {
+   "at": 43712,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 106338,
+    "livedMs": 28794
+   }
+  },
+  {
+   "at": 45122,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 49571,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 49571,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 49723,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 107347,
+    "ppid": 107294,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-YWdd77 "
+   }
+  },
+  {
+   "at": 52468,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 106588,
+    "livedMs": 28787
+   }
+  },
+  {
+   "at": 53614,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 58448,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 58448,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 58476,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 107602,
+    "ppid": 107549,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-93jCgP "
+   }
+  },
+  {
+   "at": 60983,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 106830,
+    "livedMs": 28536
+   }
+  },
+  {
+   "at": 62628,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 67261,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 67261,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 67487,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 107872,
+    "ppid": 107817,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-3oQZZB "
+   }
+  },
+  {
+   "at": 69736,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 107091,
+    "livedMs": 28777
+   }
+  },
+  {
+   "at": 71055,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 76041,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 76041,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 76259,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 108128,
+    "ppid": 108075,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-LOzHrJ "
+   }
+  },
+  {
+   "at": 78746,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 107347,
+    "livedMs": 29023
+   }
+  },
+  {
+   "at": 80055,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 84841,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 84842,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 85017,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 108409,
+    "ppid": 108354,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-RfubWA "
+   }
+  },
+  {
+   "at": 87515,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 107602,
+    "livedMs": 29039
+   }
+  },
+  {
+   "at": 88694,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 93512,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 93512,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 93770,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 108693,
+    "ppid": 108611,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-BFAcif "
+   }
+  },
+  {
+   "at": 96276,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 107872,
+    "livedMs": 28789
+   }
+  },
+  {
+   "at": 97700,
+   "ev": "permit.acquire.request",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 102311,
+   "ev": "permit.release",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 102311,
+   "ev": "permit.acquire.granted",
+   "detail": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 102539,
+   "ev": "browser.observed.launch",
+   "detail": {
+    "pid": 108954,
+    "ppid": 108904,
+    "parentComm": "node",
+    "cmd": "/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-ucvdJz "
+   }
+  },
+  {
+   "at": 105040,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 108128,
+    "livedMs": 28781
+   }
+  },
+  {
+   "at": 111102,
+   "ev": "permit.release",
+   "detail": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 113794,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 108409,
+    "livedMs": 28777
+   }
+  },
+  {
+   "at": 122557,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 108693,
+    "livedMs": 28787
+   }
+  },
+  {
+   "at": 131322,
+   "ev": "browser.observed.exit",
+   "detail": {
+    "pid": 108954,
+    "livedMs": 28783
+   }
+  }
+ ],
+ "samples": [
+  {
+   "at": 1897,
+   "liveBrowsers": 0,
+   "tasks": 44,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 455,
+   "pidsCurrent": 83,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 2147,
+   "liveBrowsers": 0,
+   "tasks": 60,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 524,
+   "pidsCurrent": 99,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 2397,
+   "liveBrowsers": 0,
+   "tasks": 60,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 582,
+   "pidsCurrent": 99,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 2649,
+   "liveBrowsers": 0,
+   "tasks": 60,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 638,
+   "pidsCurrent": 99,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 2900,
+   "liveBrowsers": 0,
+   "tasks": 62,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 663,
+   "pidsCurrent": 101,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 3155,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 712,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 3402,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 732,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 3653,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 753,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 3902,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 782,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 4153,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 811,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 4405,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 852,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 4655,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 899,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 4907,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 928,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 5158,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 946,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 5412,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 960,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 5658,
+   "liveBrowsers": 0,
+   "tasks": 64,
+   "procs": 5,
+   "jobChildren": 4,
+   "rssMb": 963,
+   "pidsCurrent": 103,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 5912,
+   "liveBrowsers": 1,
+   "tasks": 93,
+   "procs": 11,
+   "jobChildren": 4,
+   "rssMb": 1107,
+   "pidsCurrent": 136,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 6160,
+   "liveBrowsers": 1,
+   "tasks": 134,
+   "procs": 11,
+   "jobChildren": 4,
+   "rssMb": 1421,
+   "pidsCurrent": 176,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 6408,
+   "liveBrowsers": 1,
+   "tasks": 164,
+   "procs": 12,
+   "jobChildren": 4,
+   "rssMb": 1813,
+   "pidsCurrent": 206,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 6658,
+   "liveBrowsers": 1,
+   "tasks": 175,
+   "procs": 13,
+   "jobChildren": 4,
+   "rssMb": 1954,
+   "pidsCurrent": 217,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 6907,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2224,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 7157,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2251,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 7407,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2251,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 7658,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2251,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 7907,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2251,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 8158,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2251,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 8408,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2251,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 8659,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2253,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 8909,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2253,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 9158,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2254,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 9408,
+   "liveBrowsers": 1,
+   "tasks": 191,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2254,
+   "pidsCurrent": 233,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 9659,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2362,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 9909,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2362,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 10160,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2362,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 10411,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2362,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 10661,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2362,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 10911,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2362,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 11161,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2361,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 11411,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2359,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 11661,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2355,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 11912,
+   "liveBrowsers": 1,
+   "tasks": 202,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2353,
+   "pidsCurrent": 244,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 12162,
+   "liveBrowsers": 1,
+   "tasks": 179,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 1990,
+   "pidsCurrent": 221,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 12414,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2308,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 12663,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2357,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 12915,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2357,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 13164,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2357,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 13414,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2357,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 13664,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2357,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 13915,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2357,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 14167,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2357,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 14415,
+   "liveBrowsers": 1,
+   "tasks": 201,
+   "procs": 15,
+   "jobChildren": 4,
+   "rssMb": 2357,
+   "pidsCurrent": 243,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 14666,
+   "liveBrowsers": 1,
+   "tasks": 190,
+   "procs": 14,
+   "jobChildren": 4,
+   "rssMb": 2201,
+   "pidsCurrent": 234,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 3,
+    "max": 1
+   }
+  },
+  {
+   "at": 14919,
+   "liveBrowsers": 2,
+   "tasks": 243,
+   "procs": 17,
+   "jobChildren": 4,
+   "rssMb": 2432,
+   "pidsCurrent": 289,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 15167,
+   "liveBrowsers": 2,
+   "tasks": 280,
+   "procs": 20,
+   "jobChildren": 4,
+   "rssMb": 2878,
+   "pidsCurrent": 325,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 15417,
+   "liveBrowsers": 2,
+   "tasks": 282,
+   "procs": 20,
+   "jobChildren": 4,
+   "rssMb": 2912,
+   "pidsCurrent": 326,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 15668,
+   "liveBrowsers": 2,
+   "tasks": 294,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3138,
+   "pidsCurrent": 339,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 15918,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3287,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 16169,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3261,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 16420,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3259,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 16670,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3260,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 16922,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3259,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 17172,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3260,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 17420,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3261,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 17670,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3261,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 17922,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3262,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 18176,
+   "liveBrowsers": 2,
+   "tasks": 304,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 3262,
+   "pidsCurrent": 349,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 18424,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3220,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 18675,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3220,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 18925,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3215,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 19176,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3215,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 19427,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3215,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 19677,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3214,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 19929,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3212,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 20179,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3211,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 20428,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 20677,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 20927,
+   "liveBrowsers": 2,
+   "tasks": 293,
+   "procs": 22,
+   "jobChildren": 4,
+   "rssMb": 2861,
+   "pidsCurrent": 338,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 21178,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3158,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 21428,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 21680,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 21929,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 22178,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 22428,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 22679,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 22929,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 23180,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3210,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 23429,
+   "liveBrowsers": 2,
+   "tasks": 315,
+   "procs": 23,
+   "jobChildren": 4,
+   "rssMb": 3230,
+   "pidsCurrent": 360,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 2,
+    "max": 1
+   }
+  },
+  {
+   "at": 23683,
+   "liveBrowsers": 3,
+   "tasks": 354,
+   "procs": 25,
+   "jobChildren": 4,
+   "rssMb": 3264,
+   "pidsCurrent": 402,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 23932,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 4,
+   "rssMb": 3721,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 24180,
+   "liveBrowsers": 3,
+   "tasks": 407,
+   "procs": 29,
+   "jobChildren": 4,
+   "rssMb": 3905,
+   "pidsCurrent": 455,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 24430,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4091,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 24680,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4102,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 24939,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4097,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 25190,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4096,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 25439,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4096,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 25690,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4096,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 25941,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4097,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 26191,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4099,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 26441,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4099,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 26691,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4099,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 26941,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4099,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 27193,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4208,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 27445,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4208,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 27691,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4208,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 27941,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4209,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 28191,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4209,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 28442,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4209,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 28692,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4208,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 28942,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4207,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 29191,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4206,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 29442,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4203,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 29692,
+   "liveBrowsers": 3,
+   "tasks": 407,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3883,
+   "pidsCurrent": 455,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 29942,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4187,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 30193,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4206,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 30443,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4206,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 30693,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4206,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 30943,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4206,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 31194,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4206,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 31446,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4206,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 31695,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4207,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 31944,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4213,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 32196,
+   "liveBrowsers": 3,
+   "tasks": 407,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3871,
+   "pidsCurrent": 456,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 32447,
+   "liveBrowsers": 4,
+   "tasks": 475,
+   "procs": 35,
+   "jobChildren": 4,
+   "rssMb": 4298,
+   "pidsCurrent": 526,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 32695,
+   "liveBrowsers": 4,
+   "tasks": 508,
+   "procs": 36,
+   "jobChildren": 4,
+   "rssMb": 4735,
+   "pidsCurrent": 559,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 32946,
+   "liveBrowsers": 4,
+   "tasks": 520,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4912,
+   "pidsCurrent": 571,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 33196,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5124,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 33447,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5139,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 33697,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5139,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 33948,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5137,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 34199,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5137,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 34452,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5137,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 34700,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5137,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 34951,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4026,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 35199,
+   "liveBrowsers": 3,
+   "tasks": 419,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4063,
+   "pidsCurrent": 467,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 35450,
+   "liveBrowsers": 3,
+   "tasks": 419,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4101,
+   "pidsCurrent": 467,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 35702,
+   "liveBrowsers": 3,
+   "tasks": 419,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4125,
+   "pidsCurrent": 467,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 35951,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4244,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 36202,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4250,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 36452,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4250,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 36706,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4251,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 36952,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4251,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 37203,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4251,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 37454,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4248,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 37703,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4248,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 37954,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4247,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 38203,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4245,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 38453,
+   "liveBrowsers": 3,
+   "tasks": 417,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4015,
+   "pidsCurrent": 465,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 38703,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4246,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 38953,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4249,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 39203,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4249,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 39454,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4249,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 39704,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4249,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 39954,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4249,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 40207,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4249,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 40460,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 40707,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4232,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 40959,
+   "liveBrowsers": 4,
+   "tasks": 434,
+   "procs": 32,
+   "jobChildren": 4,
+   "rssMb": 3982,
+   "pidsCurrent": 484,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 41207,
+   "liveBrowsers": 4,
+   "tasks": 486,
+   "procs": 35,
+   "jobChildren": 4,
+   "rssMb": 4492,
+   "pidsCurrent": 537,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 41458,
+   "liveBrowsers": 4,
+   "tasks": 510,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4798,
+   "pidsCurrent": 561,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 41712,
+   "liveBrowsers": 4,
+   "tasks": 522,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 4999,
+   "pidsCurrent": 573,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 41959,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5144,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 42210,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5144,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 42460,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5144,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 42709,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5108,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 42959,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5108,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 43212,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5108,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 43467,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5071,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 43712,
+   "liveBrowsers": 3,
+   "tasks": 414,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3995,
+   "pidsCurrent": 462,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 43963,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4025,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 44211,
+   "liveBrowsers": 3,
+   "tasks": 419,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4047,
+   "pidsCurrent": 467,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 44462,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4178,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 44714,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4207,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 44964,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4216,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 45213,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4221,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 45464,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4222,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 45715,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4222,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 45965,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4222,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 46215,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4221,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 46465,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4220,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 46715,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4219,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 46966,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4215,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 47220,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4034,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 47465,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4227,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 47715,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4227,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 47965,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4227,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 48216,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4227,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 48466,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4228,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 48716,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4228,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 48966,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4228,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 49217,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4228,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 49466,
+   "liveBrowsers": 3,
+   "tasks": 429,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4252,
+   "pidsCurrent": 477,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 49723,
+   "liveBrowsers": 4,
+   "tasks": 441,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 4106,
+   "pidsCurrent": 500,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 49971,
+   "liveBrowsers": 4,
+   "tasks": 489,
+   "procs": 35,
+   "jobChildren": 4,
+   "rssMb": 4529,
+   "pidsCurrent": 547,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 50217,
+   "liveBrowsers": 4,
+   "tasks": 511,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4809,
+   "pidsCurrent": 562,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 50471,
+   "liveBrowsers": 4,
+   "tasks": 523,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 4967,
+   "pidsCurrent": 574,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 50718,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5154,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 50968,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5154,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 51217,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5153,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 51468,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5152,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 51718,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5152,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 51968,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5152,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 52217,
+   "liveBrowsers": 4,
+   "tasks": 533,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5153,
+   "pidsCurrent": 584,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 52468,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4080,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 52717,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4113,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 52968,
+   "liveBrowsers": 3,
+   "tasks": 419,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4144,
+   "pidsCurrent": 467,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 53220,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4283,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 53470,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4298,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 53723,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4299,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 53973,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4299,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 54221,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4300,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 54471,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4300,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 54722,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4300,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 54971,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4299,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 55223,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4298,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 55471,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4297,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 55722,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4293,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 55974,
+   "liveBrowsers": 3,
+   "tasks": 419,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4106,
+   "pidsCurrent": 467,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 56224,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4308,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 56474,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4308,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 56724,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4308,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 56975,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4308,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 57227,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4308,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 57475,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4308,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 57725,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4274,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 57976,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4274,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 58226,
+   "liveBrowsers": 3,
+   "tasks": 430,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4290,
+   "pidsCurrent": 478,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 58476,
+   "liveBrowsers": 4,
+   "tasks": 408,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3937,
+   "pidsCurrent": 456,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 58727,
+   "liveBrowsers": 4,
+   "tasks": 477,
+   "procs": 35,
+   "jobChildren": 4,
+   "rssMb": 4388,
+   "pidsCurrent": 528,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 58976,
+   "liveBrowsers": 4,
+   "tasks": 510,
+   "procs": 36,
+   "jobChildren": 4,
+   "rssMb": 4801,
+   "pidsCurrent": 561,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 59232,
+   "liveBrowsers": 4,
+   "tasks": 512,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4800,
+   "pidsCurrent": 563,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 59477,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5120,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 59726,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5170,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 59977,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5130,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 60227,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5129,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 60478,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5129,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 60728,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5128,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 60983,
+   "liveBrowsers": 3,
+   "tasks": 409,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3952,
+   "pidsCurrent": 462,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 61228,
+   "liveBrowsers": 3,
+   "tasks": 416,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4015,
+   "pidsCurrent": 464,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 61481,
+   "liveBrowsers": 3,
+   "tasks": 420,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4049,
+   "pidsCurrent": 468,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 61736,
+   "liveBrowsers": 3,
+   "tasks": 421,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4068,
+   "pidsCurrent": 469,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 61980,
+   "liveBrowsers": 3,
+   "tasks": 421,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4088,
+   "pidsCurrent": 469,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 62230,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4218,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 62481,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4231,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 62732,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4235,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 62981,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4235,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 63230,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4235,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 63481,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4235,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 63731,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4233,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 63982,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4233,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 64231,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4232,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 64481,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4230,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 64731,
+   "liveBrowsers": 3,
+   "tasks": 409,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3930,
+   "pidsCurrent": 457,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 64982,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4200,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 65230,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4231,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 65480,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4231,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 65731,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4231,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 65981,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4231,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 66231,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4231,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 66482,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4231,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 66732,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4231,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 66983,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4233,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 67234,
+   "liveBrowsers": 3,
+   "tasks": 431,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4253,
+   "pidsCurrent": 479,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 67487,
+   "liveBrowsers": 4,
+   "tasks": 471,
+   "procs": 33,
+   "jobChildren": 4,
+   "rssMb": 4301,
+   "pidsCurrent": 523,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 67734,
+   "liveBrowsers": 4,
+   "tasks": 501,
+   "procs": 36,
+   "jobChildren": 4,
+   "rssMb": 4699,
+   "pidsCurrent": 552,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 67986,
+   "liveBrowsers": 4,
+   "tasks": 523,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4921,
+   "pidsCurrent": 574,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 68235,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5098,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 68485,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5117,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 68735,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5117,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 68986,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5113,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 69236,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5113,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 69486,
+   "liveBrowsers": 4,
+   "tasks": 535,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5113,
+   "pidsCurrent": 586,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 69738,
+   "liveBrowsers": 3,
+   "tasks": 415,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3968,
+   "pidsCurrent": 463,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 69986,
+   "liveBrowsers": 3,
+   "tasks": 420,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4008,
+   "pidsCurrent": 468,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 70235,
+   "liveBrowsers": 3,
+   "tasks": 421,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4051,
+   "pidsCurrent": 469,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 70487,
+   "liveBrowsers": 3,
+   "tasks": 421,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4071,
+   "pidsCurrent": 469,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 70738,
+   "liveBrowsers": 3,
+   "tasks": 421,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4101,
+   "pidsCurrent": 469,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 70987,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4213,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 71238,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4213,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 71490,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4213,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 71739,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4214,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 71989,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4214,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 72239,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4214,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 72489,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4212,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 72739,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4212,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 72989,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4212,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 73240,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4211,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 73494,
+   "liveBrowsers": 3,
+   "tasks": 410,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3893,
+   "pidsCurrent": 458,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 73740,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4172,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 73990,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4218,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 74241,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4218,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 74491,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4218,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 74741,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4218,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 74994,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4218,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 75244,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4218,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 75493,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4181,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 75744,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4181,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 75995,
+   "liveBrowsers": 3,
+   "tasks": 432,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4203,
+   "pidsCurrent": 480,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 76259,
+   "liveBrowsers": 4,
+   "tasks": 462,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4188,
+   "pidsCurrent": 514,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 76502,
+   "liveBrowsers": 4,
+   "tasks": 503,
+   "procs": 36,
+   "jobChildren": 4,
+   "rssMb": 4606,
+   "pidsCurrent": 554,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 76748,
+   "liveBrowsers": 4,
+   "tasks": 526,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4880,
+   "pidsCurrent": 577,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 76997,
+   "liveBrowsers": 4,
+   "tasks": 528,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 4931,
+   "pidsCurrent": 579,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 77247,
+   "liveBrowsers": 4,
+   "tasks": 538,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5109,
+   "pidsCurrent": 589,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 77501,
+   "liveBrowsers": 4,
+   "tasks": 538,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5110,
+   "pidsCurrent": 589,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 77747,
+   "liveBrowsers": 4,
+   "tasks": 538,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5109,
+   "pidsCurrent": 589,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 77997,
+   "liveBrowsers": 4,
+   "tasks": 538,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5108,
+   "pidsCurrent": 589,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 78247,
+   "liveBrowsers": 4,
+   "tasks": 538,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5071,
+   "pidsCurrent": 589,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 78497,
+   "liveBrowsers": 4,
+   "tasks": 538,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5070,
+   "pidsCurrent": 589,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 78747,
+   "liveBrowsers": 3,
+   "tasks": 422,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3992,
+   "pidsCurrent": 470,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 78997,
+   "liveBrowsers": 3,
+   "tasks": 422,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4018,
+   "pidsCurrent": 470,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 79247,
+   "liveBrowsers": 3,
+   "tasks": 423,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4051,
+   "pidsCurrent": 471,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 79498,
+   "liveBrowsers": 3,
+   "tasks": 423,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4086,
+   "pidsCurrent": 471,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 79749,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4214,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 80003,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4216,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 80249,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4216,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 80500,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4216,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 80750,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4216,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 81000,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4216,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 81249,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4215,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 81500,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4215,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 81751,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4213,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 82002,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4213,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 82258,
+   "liveBrowsers": 3,
+   "tasks": 434,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4210,
+   "pidsCurrent": 482,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 82511,
+   "liveBrowsers": 3,
+   "tasks": 422,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4022,
+   "pidsCurrent": 471,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 82759,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 83010,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 83260,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 83513,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 83761,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 84013,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 84262,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 84512,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4217,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 84766,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4239,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 85017,
+   "liveBrowsers": 4,
+   "tasks": 465,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4237,
+   "pidsCurrent": 518,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 85264,
+   "liveBrowsers": 4,
+   "tasks": 511,
+   "procs": 36,
+   "jobChildren": 4,
+   "rssMb": 4727,
+   "pidsCurrent": 562,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 85515,
+   "liveBrowsers": 4,
+   "tasks": 526,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4940,
+   "pidsCurrent": 577,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 85764,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5120,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 86014,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5122,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 86264,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5121,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 86515,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5119,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 86765,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5119,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 87015,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5119,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 87264,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5118,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 87515,
+   "liveBrowsers": 3,
+   "tasks": 421,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4042,
+   "pidsCurrent": 469,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 87764,
+   "liveBrowsers": 3,
+   "tasks": 422,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4087,
+   "pidsCurrent": 470,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 88015,
+   "liveBrowsers": 3,
+   "tasks": 422,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4111,
+   "pidsCurrent": 470,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 88266,
+   "liveBrowsers": 3,
+   "tasks": 422,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4152,
+   "pidsCurrent": 470,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 88515,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4264,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 88769,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 89016,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 89266,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 89516,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4266,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 89768,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4266,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 90018,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4266,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 90268,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4263,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 90520,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4262,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 90770,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4259,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 91018,
+   "liveBrowsers": 3,
+   "tasks": 411,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3903,
+   "pidsCurrent": 459,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 91268,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4191,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 91518,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 91767,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 92019,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 92269,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 92518,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 92768,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 93019,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 93269,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4265,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 93520,
+   "liveBrowsers": 3,
+   "tasks": 411,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 3928,
+   "pidsCurrent": 462,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 93770,
+   "liveBrowsers": 4,
+   "tasks": 476,
+   "procs": 33,
+   "jobChildren": 4,
+   "rssMb": 4352,
+   "pidsCurrent": 528,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 94021,
+   "liveBrowsers": 4,
+   "tasks": 513,
+   "procs": 36,
+   "jobChildren": 4,
+   "rssMb": 4803,
+   "pidsCurrent": 564,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 94273,
+   "liveBrowsers": 4,
+   "tasks": 526,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4984,
+   "pidsCurrent": 577,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 94524,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5189,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 94773,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5198,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 95023,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5159,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 95273,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5157,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 95524,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5157,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 95774,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5156,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 96032,
+   "liveBrowsers": 4,
+   "tasks": 537,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5116,
+   "pidsCurrent": 588,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 96277,
+   "liveBrowsers": 3,
+   "tasks": 417,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4033,
+   "pidsCurrent": 465,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 96528,
+   "liveBrowsers": 3,
+   "tasks": 421,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4067,
+   "pidsCurrent": 469,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 96777,
+   "liveBrowsers": 3,
+   "tasks": 422,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4091,
+   "pidsCurrent": 470,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 97027,
+   "liveBrowsers": 3,
+   "tasks": 422,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4116,
+   "pidsCurrent": 470,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 97277,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4244,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 97527,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4253,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 97778,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4259,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 98028,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4259,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 98279,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4260,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 98530,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4259,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 98779,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4258,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 99029,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4257,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 99282,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4257,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 99532,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4256,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 99780,
+   "liveBrowsers": 3,
+   "tasks": 421,
+   "procs": 30,
+   "jobChildren": 4,
+   "rssMb": 4016,
+   "pidsCurrent": 469,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 100031,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4243,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 100281,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4262,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 100532,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4262,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 100784,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4262,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 101035,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4262,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 101283,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4262,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 101534,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4262,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 101787,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4230,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 102036,
+   "liveBrowsers": 3,
+   "tasks": 433,
+   "procs": 31,
+   "jobChildren": 4,
+   "rssMb": 4241,
+   "pidsCurrent": 481,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 102286,
+   "liveBrowsers": 3,
+   "tasks": 412,
+   "procs": 29,
+   "jobChildren": 4,
+   "rssMb": 3891,
+   "pidsCurrent": 462,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 1,
+    "max": 1
+   }
+  },
+  {
+   "at": 102539,
+   "liveBrowsers": 4,
+   "tasks": 471,
+   "procs": 36,
+   "jobChildren": 4,
+   "rssMb": 4271,
+   "pidsCurrent": 524,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 102789,
+   "liveBrowsers": 4,
+   "tasks": 511,
+   "procs": 36,
+   "jobChildren": 4,
+   "rssMb": 4730,
+   "pidsCurrent": 564,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 103038,
+   "liveBrowsers": 4,
+   "tasks": 524,
+   "procs": 37,
+   "jobChildren": 4,
+   "rssMb": 4923,
+   "pidsCurrent": 575,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 103288,
+   "liveBrowsers": 4,
+   "tasks": 536,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5141,
+   "pidsCurrent": 587,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 103539,
+   "liveBrowsers": 4,
+   "tasks": 536,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5158,
+   "pidsCurrent": 587,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 103788,
+   "liveBrowsers": 4,
+   "tasks": 536,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5158,
+   "pidsCurrent": 587,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 104039,
+   "liveBrowsers": 4,
+   "tasks": 536,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5156,
+   "pidsCurrent": 587,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 104288,
+   "liveBrowsers": 4,
+   "tasks": 536,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5157,
+   "pidsCurrent": 587,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 104538,
+   "liveBrowsers": 4,
+   "tasks": 536,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5157,
+   "pidsCurrent": 587,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 104788,
+   "liveBrowsers": 4,
+   "tasks": 536,
+   "procs": 38,
+   "jobChildren": 4,
+   "rssMb": 5157,
+   "pidsCurrent": 587,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 105040,
+   "liveBrowsers": 3,
+   "tasks": 407,
+   "procs": 29,
+   "jobChildren": 3,
+   "rssMb": 3960,
+   "pidsCurrent": 455,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 105289,
+   "liveBrowsers": 3,
+   "tasks": 407,
+   "procs": 29,
+   "jobChildren": 3,
+   "rssMb": 3961,
+   "pidsCurrent": 455,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 105539,
+   "liveBrowsers": 3,
+   "tasks": 407,
+   "procs": 29,
+   "jobChildren": 3,
+   "rssMb": 3959,
+   "pidsCurrent": 455,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 105789,
+   "liveBrowsers": 3,
+   "tasks": 407,
+   "procs": 29,
+   "jobChildren": 3,
+   "rssMb": 3959,
+   "pidsCurrent": 455,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 106039,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4068,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 106291,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4068,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 106541,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4068,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 106792,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4068,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 107041,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4068,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 107291,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4068,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 107541,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4067,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 107791,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4067,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 108040,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4066,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 108290,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4065,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 108541,
+   "liveBrowsers": 3,
+   "tasks": 396,
+   "procs": 29,
+   "jobChildren": 3,
+   "rssMb": 3758,
+   "pidsCurrent": 444,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 108790,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4044,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 109041,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4069,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 109290,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4069,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 109540,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4069,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 109791,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4069,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 110042,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4069,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 110291,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4069,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 110541,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4069,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 110791,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4073,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 111042,
+   "liveBrowsers": 3,
+   "tasks": 418,
+   "procs": 30,
+   "jobChildren": 3,
+   "rssMb": 4096,
+   "pidsCurrent": 466,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 1,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 111293,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3734,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 111541,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3734,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 111792,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3734,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 112042,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3698,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 112293,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3698,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 112544,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3661,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 112794,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3659,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 113044,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3659,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 113294,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3656,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 113543,
+   "liveBrowsers": 3,
+   "tasks": 395,
+   "procs": 28,
+   "jobChildren": 3,
+   "rssMb": 3656,
+   "pidsCurrent": 443,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 113794,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2489,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 114044,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 114297,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 114547,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 114796,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 115046,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 115298,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 115549,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 115799,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 116050,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2488,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 116300,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2486,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 116549,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2486,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 116799,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2486,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 117050,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2486,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 117300,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2485,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 117550,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2485,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 117840,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2485,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 118050,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2485,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 118301,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2485,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 118552,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2485,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 118803,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2485,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 119068,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2485,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 119305,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2445,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 119554,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2445,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 119805,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2445,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 120057,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 120307,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 120556,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 120807,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 121057,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 121306,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 121558,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 121808,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 122058,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 122309,
+   "liveBrowsers": 2,
+   "tasks": 267,
+   "procs": 19,
+   "jobChildren": 2,
+   "rssMb": 2444,
+   "pidsCurrent": 312,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 122557,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 122807,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 123058,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 123309,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 123560,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 123810,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 124060,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 124310,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 124562,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 124812,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 125062,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 125312,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 125562,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 125812,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 126064,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 126315,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 126565,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 126815,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 127065,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 127318,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 127565,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 127815,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 128065,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 128317,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 128568,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 128818,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 129070,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 129318,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 129568,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 129818,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 130069,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 130321,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 130572,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 130823,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 131072,
+   "liveBrowsers": 1,
+   "tasks": 139,
+   "procs": 10,
+   "jobChildren": 1,
+   "rssMb": 1283,
+   "pidsCurrent": 181,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 131322,
+   "liveBrowsers": 0,
+   "tasks": 12,
+   "procs": 1,
+   "jobChildren": 0,
+   "rssMb": 125,
+   "pidsCurrent": 51,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 131574,
+   "liveBrowsers": 0,
+   "tasks": 12,
+   "procs": 1,
+   "jobChildren": 0,
+   "rssMb": 125,
+   "pidsCurrent": 51,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 131825,
+   "liveBrowsers": 0,
+   "tasks": 12,
+   "procs": 1,
+   "jobChildren": 0,
+   "rssMb": 125,
+   "pidsCurrent": 51,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 132072,
+   "liveBrowsers": 0,
+   "tasks": 12,
+   "procs": 1,
+   "jobChildren": 0,
+   "rssMb": 125,
+   "pidsCurrent": 51,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 132323,
+   "liveBrowsers": 0,
+   "tasks": 12,
+   "procs": 1,
+   "jobChildren": 0,
+   "rssMb": 125,
+   "pidsCurrent": 51,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  },
+  {
+   "at": 132574,
+   "liveBrowsers": 0,
+   "tasks": 12,
+   "procs": 1,
+   "jobChildren": 0,
+   "rssMb": 125,
+   "pidsCurrent": 51,
+   "pidsMax": 9541,
+   "permit": {
+    "active": 0,
+    "waiting": 0,
+    "max": 1
+   }
+  }
+ ]
+}
