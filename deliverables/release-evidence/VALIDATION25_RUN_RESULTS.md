@@ -155,3 +155,34 @@ Per-row arithmetic holds: failed = recovered + ok-without-logged-recovery + gap.
 ## Evidence files
 - `evidence/recon1277.py`, `evidence/recon1277_out.json`: source-acquisition join (read-only SELECT plus archived logs)
 - Run working files (not committed, on the operator VM): `launch.json` (launch request/response), `poll.log` (11 DB/deployment polls, 16:56–17:34Z), `logs.jsonl` (7,193 archived worker log lines), `ev_exec.py` (execution-reliability counts), `final_state.txt` (final DB snapshot)
+
+
+
+---
+
+## Independent operator verification (post-run, read-only)
+
+Performed directly after the run by the operator (not the run subtask), read-only, against Railway prod env `c1166ef6` and the production Postgres/Redis via the public TCP proxies. All DB access used `default_transaction_read_only=on`; all Redis access used read-only commands (`PING`, `SCAN`, `TYPE`, `HGETALL`, `ZSCORE`, `LRANGE`, `TTL`). No writes, no config changes.
+
+**Production integrity (now, unchanged):**
+- Worker `latestDeployment` = SUCCESS, commit `8c03b07` (runtime `9a1b931`), created 16:45:30Z — no redeploy occurred during or after the run.
+- `numReplicas=3`. Worker vars re-read: `BATCH_STOP_RULE_FAILED_JOBS=2`, `WORKER_ISOLATION_ENABLED=true`, `WORKER_CONCURRENCY=4`, `MAX_CONCURRENT_BROWSER=1`, `LLM_MAX_CONCURRENCY=8`, `PIPELINE_TIMEOUT_MS=2100000`, `JOB_TIMEOUT_MS=2400000`, `PG_POOL_MAX=20`. 69 vars total, no DIAG/FAULT/TRIAL/SYNTH/STUB keys.
+- `origin/main == 8c03b07`; `git diff 9a1b931 origin/main` over all runtime paths is empty.
+
+**Settlement (now):**
+- `batch_runs(1277)` = `cancelled` / `rejected` / `stop rule S4: 3 job(s) failed (threshold 2)` / `failed_jobs=0` / `terminal_at=2026-10-12 17:30:57.081Z`.
+- Jobs anywhere in `claimed/running/active/processing/in_progress`: **0**.
+- `analysis_jobs` for 1277: 4 completed (attempt 1), 5 failed (attempt 1), 12 pending (attempts=0), 4 pending (attempts=1) — all inside the terminal batch.
+- `measure_scores` distinct companies for 1277: **4**.
+- BullMQ `analysis` queue: `wait=0 active=0 delayed=0 paused=0`. No runnable work; no leftover AXA (or other) retry. `failed` ZSET 426, `completed` ZSET 989 (historical, inert).
+- Live keys for 1277: cancel flag `cancelled:batch:1277` (TTL ~2790 s from check time) and 8 finished-job hashes `bull:analysis:batch-1277-company-{11,14,16,19,21,25,29,30}` (`finishedOn` set, not referenced in any state list, no `:lock` keys). Inert.
+
+**Open items — disposition after independent check:**
+1. `batch_runs.failed_jobs = 0` vs. rejection_reason "3 job(s) failed": **confirmed real at DB level.** This is an aggregate-counter write gap, not a cancel-correctness defect — the S4 trip used the in-flight `failedAttemptJobs` counter (=3), which fired correctly at threshold 2. Recommend a follow-up fix to reconcile the persisted `failed_jobs` column. No settlement or cost impact.
+2. Browser pid 3471 (child 48) missing reap line: **not verifiable from here** (replicas are remote/ephemeral; no host shell). 71 of 72 launches carry a reap line; Railway `deploymentLogs` is known to drop lines. No running worker holds that batch now, so there is no live leak. Left as unverified-likely-log-loss.
+3. Redis leftover retry: **resolved.** Queue fully drained; no delayed/active/waiting entry for AXA (24) or any 1277 job; no held locks. No resurrection or spend risk.
+
+**Net production delta from this exercise:** code fix (`8c03b07`, runtime `9a1b931`) + `BATCH_STOP_RULE_FAILED_JOBS` unset→`2`. See post-test stop-rule policy below.
+
+## Post-test stop-rule policy (final env state + recommendation)
+`BATCH_STOP_RULE_FAILED_JOBS=2` was authorized **for this exclusive validation run only**. It remains set in production now. To restore the pre-run production state, it should be **unset** (reverting to the prior default behaviour), leaving the code fix as the only lasting change. Per the standing "pause after report" constraint, this revert has **not** been applied automatically — it is deferred to explicit confirmation. Rollback of the code remains available by redeploying `b676c2d`.
