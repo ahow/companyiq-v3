@@ -1,0 +1,304 @@
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+[Redis] Connected successfully
+── S1 supersession == cancellation — REAL entry point storage.createBatchRun -> notifySupersededBatches (real Redis/BullMQ) ──
+[LIFECYCLE] batch 11 superseded -> cancelled (PG); notifying workers + purging queue
+[LIFECYCLE] batch 12 superseded -> cancelled (PG); notifying workers + purging queue
+  PASS  [spy] notifySupersededBatches calls mark + remove for every id
+[LIFECYCLE] batch 13 superseded -> cancelled (PG); notifying workers + purging queue
+[LIFECYCLE] superseded batch 13: markBatchCancelled failed (non-fatal; PG guard still fences): redis down
+[LIFECYCLE] superseded batch 13: removeBatchJobs failed (non-fatal; PG guard still fences): bull down
+  PASS  [spy] notify failures are non-fatal (PG guard remains authoritative)
+  PASS  old batch A: attempt claimed while running
+[LIFECYCLE] batch 28 superseded -> cancelled (PG); notifying workers + purging queue
+[DIAG][cancel-path] step=b batch=28 key=cancelled:batch:28 outcome=ack ms=1 ttl_s=3600 at=2026-10-12T16:12:38.409Z
+[Queue] Removed 0 pending/delayed/terminal jobs for batch 28
+  PASS  [real createBatchRun] A is cancelled in PG after supersession
+  PASS  [real createBatchRun] B is running
+  PASS  [real notifySupersededBatches] A Redis cancel flag set (durable notification)
+  PASS  [real notifySupersededBatches] A in-process cancel cache set
+  PASS  A attempt: dispatch gate now refuses (work stops)
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=47 attempt=1/t-47-1 batch=28) reason=batch_cancelled (pre-acquire)
+  PASS  A attempt: score write fenced
+  PASS  A attempt: zero score rows
+[LIFECYCLE-FENCE] stale terminal write ignored (job=47 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=47 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  A attempt: completeJob refused (0 rows)
+[DIAG][job-transition] job=47 -> failJob transitioned=true batchTerminal=true error="Cancelled (batch cancelled)" batch=- job=- attempt_id=- company=- stage=-
+  PASS  A attempt: failJob records failure as batchTerminal (no requeue)
+  PASS  A: pending job cannot be claimed (no retry)
+[LIFECYCLE] completeBatchRun batch=28 rowCount=0 (REFUSED: batch is cancelled/failed/completed or missing)
+  PASS  A: completeBatchRun refused
+[LIFECYCLE] setBatchRunStatus batch=28 -> pending_review REFUSED rowCount=0 (batch is cancelled or missing)
+  PASS  A: setBatchRunStatus(pending_review) refused
+[LIFECYCLE] finalizeBatchAndSave REFUSED batch=28 status=cancelled
+  PASS  A: finalizeBatchAndSave cannot flip cancelled -> completed
+[LIFECYCLE] completeBatchRun batch=28 rowCount=0 (REFUSED: batch is cancelled/failed/completed or missing)
+[Worker] saveAnalysisResultsForBatch: no completed companies found for batch 28 (2 jobs, 0 with completed status in this batch). Possible cause: concurrent batch reset company status.
+  PASS  A: admin recover path still never flips cancelled -> completed
+  PASS  A: reconciler fallback UPDATE matches 0 rows
+  PASS  B: claim succeeds
+  PASS  B: dispatch allowed
+  PASS  B: score write persists
+[DIAG][job-transition] job=49 -> completed transitioned=true batch=- job=- attempt_id=- company=- stage=-
+  PASS  B: completeJob transitions
+[LIFECYCLE] completeBatchRun batch=29 rowCount=1
+  PASS  B: completeBatchRun transitions running -> completed
+  PASS  S1 FINAL job 47: status=failed attempts=1
+  PASS  S1 FINAL job 48: status=pending attempts=0
+  PASS  S1 FINAL job 49: status=completed attempts=1
+  PASS  S1 FINAL batch 28: status=cancelled {"completed":0,"failed":0}
+  PASS  S1 FINAL batch 29: status=completed
+── S2 cancel while queued for a DB connection (SELF-CONFIGURED pool max=1) ──
+  PASS  self-configured fence pool: max=1 (independent of PG_POOL_MAX)
+  PASS  score write is queued waiting for a connection (ownPool.waitingCount>=1)
+[LIFECYCLE] cancelBatchRun batch=30 transitioned=true
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=50 attempt=1/t-50-1 batch=30) reason=sql_permission_denied
+  PASS  queued write refused after cancel (atomic PG guard)
+  PASS  zero score rows persisted
+  PASS  no pool leak: waitingCount=0
+  PASS  no pool leak: all clients idle
+  PASS  no connection left idle-in-transaction
+[DIAG][job-transition] job=50 -> failJob transitioned=true batchTerminal=true error="Cancelled (batch cancelled)" batch=- job=- attempt_id=- company=- stage=-
+  PASS  C: owner releases claim; batchTerminal, no requeue
+  PASS  D: write queued on fence pool
+[LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=51 attempt=1 batch=31)
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=31 job=51 attempt=1 token=d62b3470... abort_fired=true at=2026-10-12T16:12:38.537Z
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=51 attempt=1/t-51-1 batch=31) reason=pipeline_timeout (post-acquire)
+  PASS  revoked-while-queued write refused post-acquire
+[DIAG][job-transition] job=51 -> failJob transitioned=true batchTerminal=false error="Job watchdog timeout" batch=- job=- attempt_id=- company=- stage=-
+  PASS  revoked owner can still release its claim (failJob -> pending, retry allowed)
+  PASS  S2 FINAL job 50: status=failed attempts=1
+  PASS  S2 FINAL job 51: status=pending attempts=1
+  PASS  S2 FINAL batch 30: status=cancelled {"completed":0,"failed":0}
+  PASS  S2 FINAL batch 31: status=running {"completed":0,"failed":0}
+── S3 late write after deadline, before retry claims ──
+[LIFECYCLE] batch 31 superseded -> cancelled (PG); notifying workers + purging queue
+[DIAG][cancel-path] step=b batch=31 key=cancelled:batch:31 outcome=ack ms=1 ttl_s=3600 at=2026-10-12T16:12:38.553Z
+[Queue] Removed 0 pending/delayed/terminal jobs for batch 31
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"update batch_runs","outcome":"ok","checkout_wait_ms":0,"exec_ms":2,"total_ms":2,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+  PASS  job still claimed by attempt 1 (retry has not claimed)
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=52 attempt=1/t-52-1 batch=32) reason=sql_permission_denied
+  PASS  late score write refused by SQL deadline guard
+  PASS  zero score rows
+[LIFECYCLE-FENCE] stale terminal write ignored (job=52 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=52 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  late completeJob refused
+[DIAG][job-transition] job=52 -> failJob transitioned=true batchTerminal=false error="Job watchdog timeout" batch=- job=- attempt_id=- company=- stage=-
+  PASS  timeout failure recorded by owner after deadline (-> pending for retry)
+  PASS  S3 FINAL job 52: status=pending attempts=1
+  PASS  S3 FINAL batch 32: status=running {"completed":0,"failed":0}
+── S4 stale attempt #1 resumes after attempt #2 owns ──
+[LIFECYCLE] batch 32 superseded -> cancelled (PG); notifying workers + purging queue
+[DIAG][cancel-path] step=b batch=32 key=cancelled:batch:32 outcome=ack ms=1 ttl_s=3600 at=2026-10-12T16:12:38.989Z
+[Queue] Removed 0 pending/delayed/terminal jobs for batch 32
+[DIAG][job-transition] job=53 -> failJob transitioned=true batchTerminal=false error="simulated timeout release" batch=- job=- attempt_id=- company=- stage=-
+  PASS  attempt 2 owns job (attempts=2)
+  PASS  attempt 2 score write persists
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=53 attempt=1/t-53-1 batch=33) reason=sql_permission_denied
+  PASS  stale attempt 1 score write fenced
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"select measure_scores","outcome":"ok","checkout_wait_ms":0,"exec_ms":0,"total_ms":0,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+  PASS  attempt 2 scores intact (not deleted / not mixed)
+[LIFECYCLE-FENCE] stale terminal write ignored (job=53 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=53 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  stale attempt 1 completeJob ignored
+[DIAG][job-transition] job=53 -> failJob transitioned=false batchTerminal=false error="late error" batch=- job=- attempt_id=- company=- stage=-
+[LIFECYCLE-FENCE] stale terminal write ignored (job=53 attempt=1) kind=failJob
+  PASS  stale attempt 1 failJob ignored
+  PASS  job still claimed by attempt 2
+[DIAG][job-transition] job=53 -> completed transitioned=true batch=- job=- attempt_id=- company=- stage=-
+  PASS  attempt 2 completeJob transitions
+[DIAG][job-transition] job=53 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  completeJob without ownership: idempotent guard unchanged
+  PASS  S4 FINAL job 53: status=completed attempts=2
+  PASS  S4 FINAL batch 33: status=running {"failed":0}
+── S5 admin cancel ──
+[LIFECYCLE] batch 33 superseded -> cancelled (PG); notifying workers + purging queue
+[DIAG][cancel-path] step=b batch=33 key=cancelled:batch:33 outcome=ack ms=0 ttl_s=3600 at=2026-10-12T16:12:39.021Z
+[Queue] Removed 0 pending/delayed/terminal jobs for batch 33
+[LIFECYCLE] cancelBatchRun batch=34 transitioned=true
+[LIFECYCLE] cancelBatchRun batch=34 transitioned=false (already cancelled or missing — idempotent no-op)
+  PASS  claim refused on cancelled batch
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=54 attempt=1/t-54-1 batch=34) reason=sql_permission_denied
+  PASS  in-flight attempt score write fenced
+[LIFECYCLE-FENCE] stale terminal write ignored (job=54 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=54 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  completeJob refused
+[DIAG][job-transition] job=54 -> failJob transitioned=true batchTerminal=true error="Cancelled" batch=- job=- attempt_id=- company=- stage=-
+  PASS  owner can release claim (failJob) -> failed, batchTerminal, not requeued
+[LIFECYCLE] completeBatchRun batch=34 rowCount=0 (REFUSED: batch is cancelled/failed/completed or missing)
+  PASS  completeBatchRun refused
+  PASS  repeat cancel kept original reason (idempotent)
+[LIFECYCLE] completeBatchRun batch=35 rowCount=1
+  PASS  pending_review -> completed still allowed
+  PASS  S5 FINAL job 54: status=failed attempts=1
+  PASS  S5 FINAL job 55: status=pending attempts=0
+  PASS  S5 FINAL batch 34: status=cancelled {"completed":0,"failed":0}
+  PASS  S5 FINAL batch 35: status=completed
+── S6 REAL pipeline timeout revokes attempt; late synthetic LLM/pipeline response refused ──
+  PASS  S6: final attempt (3) claimed
+[FAULT-INJECT] harness ACTIVE (TEST-ONLY) batch=36 job=56: pipeline_timeout@300ms
+[DIAG][pipeline] start company="co6-lf1791821558298" opts_attempt_id=t-56-3 batch=36 job=56 attempt_id=t-56-3 attempt_n=3 company=49 stage=test
+[co6-lf1791821558298] Skipping fetch phase (reusing cached documents)
+[FAULT-INJECT] 2026-10-12T16:12:39.093Z pipeline_timeout armed at 300ms (normal 540000ms) attempt t-56-3 batch=36 job=56 attempt_id=t-56-3 attempt_n=3 company=49 stage=test
+[LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=56 attempt=3 batch=36)
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=36 job=56 attempt=3 token=2ff2c27c... abort_fired=true at=2026-10-12T16:12:39.393Z
+[DIAG][stage-timer] {"kind":"pipeline","label":"co6-lf1791821558298","outcome":"timeout","error":"[co6-lf1791821558298] pipeline timed out after 0s","started_at":"2026-10-12T16:12:39.092Z","attempt_wall_ms":301,"tracked_wall_ms":300,"other_untracked_wall_ms":1,"busy_sum_ms_all_stages":300,"stages":{"db_ops":{"done":0,"errors":0,"pending":1,"busy_sum_ms":300,"union_wall_ms":300}},"last_progress":null,"pending_at_close_count":1,"pending_at_close":[{"stage":"db_ops","op":"update companies","age_ms":300}],"batch_id":36,"job_id":56,"attempt_id":"t-56-3","attempt_n":3,"company_id":49,"stage":"test"}
+[co6-lf1791821558298] PIPELINE TIMEOUT after 0s — marking as failed; signalling orphan abort
+  PASS  S6: real pipeline timeout revoked the attempt (withTimeout timer callback)
+  PASS  S6: revoke happened BEFORE failJob/any retry (job still claimed by attempt 3)
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=56 attempt=3/t-56-3 batch=36) reason=pipeline_timeout (pre-acquire)
+  PASS  S6: late score write REFUSED after pipeline-timeout revoke
+  PASS  S6: zero score rows
+[co6-lf1791821558298] === PHASE 2: ANALYZE ===
+[DIAG][post-close-op] timer=pipeline:co6-lf1791821558298 n=1 stage=db_ops op=select workspace_settings ms_since_close=16 batch=36 job=56 attempt_id=t-56-3 attempt_n=3 company=49 stage=analyze
+[DIAG][post-close-op] timer=pipeline:co6-lf1791821558298 n=2 stage=db_ops op=update companies ms_since_close=17 batch=36 job=56 attempt_id=t-56-3 attempt_n=3 company=49 stage=analyze
+  PASS  S6: pipeline returned timeout failure
+[DIAG][post-close-op] timer=pipeline:co6-lf1791821558298 n=3 stage=db_ops op=select batch_corpus ms_since_close=22 batch=36 job=56 attempt_id=t-56-3 attempt_n=3 company=49 stage=analyze
+[DIAG][post-close-op] timer=pipeline:co6-lf1791821558298 n=4 stage=db_ops op=select documents ms_since_close=25 batch=36 job=56 attempt_id=t-56-3 attempt_n=3 company=49 stage=analyze
+[co6-lf1791821558298] Using full document pool (0 docs, no snapshot)
+[co6-lf1791821558298] No fetched documents available for analysis
+[DIAG][post-close-op] timer=pipeline:co6-lf1791821558298 n=5 stage=db_ops op=update companies ms_since_close=27 batch=36 job=56 attempt_id=t-56-3 attempt_n=3 company=49 stage=analyze
+[DIAG][job-transition] job=56 -> failJob transitioned=true batchTerminal=false error="Pipeline timed out after 0s" batch=- job=- attempt_id=- company=- stage=-
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=56 attempt=3/t-56-3 batch=36) reason=pipeline_timeout (pre-acquire)
+  PASS  S6: failJob records final timeout failure (not batchTerminal)
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=56 attempt=3/t-56-3 batch=36) reason=sql_permission_denied
+  PASS  S6: late write refused by SQL ownership guard alone (job no longer claimed)
+[LIFECYCLE-FENCE] stale terminal write ignored (job=56 attempt=3) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=56 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  S6: late completeJob refused
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+  PASS  S6: job last_error records the pipeline timeout
+  PASS  S6 FINAL job 56: status=failed attempts=3
+  PASS  S6 FINAL job 57: status=pending attempts=0
+  PASS  S6 FINAL batch 36: status=running {"completed":0,"failed":1}
+  PASS  S6: batch NOT completed
+── S7 shared lock order: both orderings, deterministic (two connections + pg_stat_activity) ──
+[LIFECYCLE] batch 36 superseded -> cancelled (PG); notifying workers + purging queue
+[DIAG][cancel-path] step=b batch=36 key=cancelled:batch:36 outcome=ack ms=0 ttl_s=3600 at=2026-10-12T16:12:39.448Z
+[Queue] Removed 0 pending/delayed/terminal jobs for batch 36
+[LIFECYCLE] cancelBatchRun batch=37 transitioned=true
+  PASS  (A) cancel committed (observer sees cancelled)
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=58 attempt=1/t-58-1 batch=37) reason=sql_permission_denied
+  PASS  (A) fenced write refused
+  PASS  (A) no scores
+[LIFECYCLE-FENCE] stale terminal write ignored (job=58 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=58 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  (A) completeJob refused
+[DIAG][job-transition] job=58 -> failJob transitioned=true batchTerminal=true error="Cancelled (batch cancelled)" batch=- job=- attempt_id=- company=- stage=-
+  PASS  (A) failJob -> failed, batchTerminal
+  PASS  S7(A) FINAL job 58: status=failed attempts=1
+  PASS  S7(A) FINAL batch 37: status=cancelled {"completed":0,"failed":0}
+  PASS  (A') fenced SELECT observed blocked on the batch row lock
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=59 attempt=1/t-59-1 batch=38) reason=sql_permission_denied
+  PASS  (A') fenced write refused after re-evaluation (EvalPlanQual)
+  PASS  (A') no scores
+[LIFECYCLE-FENCE] stale terminal write ignored (job=59 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=59 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  (A') completeJob refused
+[DIAG][job-transition] job=59 -> failJob transitioned=true batchTerminal=true error="Cancelled (batch cancelled)" batch=- job=- attempt_id=- company=- stage=-
+  PASS  (A') failJob -> failed, batchTerminal
+  PASS  S7(A') FINAL job 59: status=failed attempts=1
+  PASS  S7(A') FINAL batch 38: status=cancelled {"completed":0,"failed":0}
+  PASS  (B) cancel UPDATE observed BLOCKED while the fenced write held FOR SHARE OF b
+  PASS  (B) batch still running while the write held its lock
+  PASS  (B) fenced write succeeded (linearised before the cancel)
+[LIFECYCLE] cancelBatchRun batch=39 transitioned=true
+  PASS  (B) cancel applied after the write committed
+  PASS  (B) the pre-cancel write's 36 rows are intact
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=60 attempt=1/t-60-1 batch=39) reason=sql_permission_denied
+  PASS  (B) later stale write refused; scores unchanged
+[LIFECYCLE-FENCE] stale terminal write ignored (job=60 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=60 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  (B) completeJob after cancel refused
+[DIAG][job-transition] job=60 -> failJob transitioned=true batchTerminal=true error="Cancelled (batch cancelled)" batch=- job=- attempt_id=- company=- stage=-
+  PASS  (B) failJob -> failed, batchTerminal (no requeue)
+  PASS  S7(B) FINAL job 60: status=failed attempts=1
+  PASS  S7(B) FINAL batch 39: status=cancelled {"completed":0,"failed":0}
+── S8 ownership identity never reused across the requeue reset path (attempts -> 0) ──
+  PASS  S8: attempt A claimed (attempts=1, token minted)
+[DIAG][job-transition] job=61 -> failJob transitioned=true batchTerminal=false error="Job watchdog timeout" batch=- job=- attempt_id=- company=- stage=-
+  PASS  S8: A released by watchdog failJob (-> pending)
+  PASS  S8: batch -> pending_review
+  PASS  S8: requeueFailedJobsForBatch reset the job
+  PASS  S8: attempts reset to 0 by the real reset path
+  PASS  S8: batch -> running (re-examine)
+  PASS  S8: NEW attempt B re-issued the SAME attempt number (1)
+  PASS  S8: B has a DIFFERENT attempt_token
+  PASS  S8: WITHOUT attempt_token, A's owner/batch clause matches (reuse reproduced)
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=61 attempt=1/t-61-1 batch=40) reason=sql_permission_denied
+  PASS  S8: OLD attempt A score write REFUSED (attempt_token mismatch)
+[LIFECYCLE-FENCE] stale terminal write ignored (job=61 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=61 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  S8: OLD attempt A completeJob REFUSED
+[DIAG][job-transition] job=61 -> failJob transitioned=false batchTerminal=false error="late A error" batch=- job=- attempt_id=- company=- stage=-
+[LIFECYCLE-FENCE] stale terminal write ignored (job=61 attempt=1) kind=failJob
+  PASS  S8: OLD attempt A failJob REFUSED
+[LIFECYCLE-FENCE] stale progress ignored (job=61 attempt=1/t-61-1)
+  PASS  S8: OLD attempt A progress write ignored
+  PASS  S8: job still claimed by B (status claimed, attempts 1)
+  PASS  S8: B score write persists
+  PASS  S8: only B's rows present
+[DIAG][job-transition] job=61 -> completed transitioned=true batch=- job=- attempt_id=- company=- stage=-
+  PASS  S8: B completeJob transitions
+[LIFECYCLE] completeBatchRun batch=40 rowCount=1
+  PASS  S8: completeBatchRun transitions
+  PASS  S8 FINAL job 61: status=completed attempts=1
+  PASS  S8 FINAL batch 40: status=completed {"completed":1,"failed":0}
+── S9 ownership-conditional progress writes ──
+  PASS  S9: attempt #1 running: own progress applies
+  PASS  S9: attempt #2 claimed (attempts=2)
+  PASS  S9: #2 progress applies
+[LIFECYCLE-FENCE] stale progress ignored (job=62 attempt=1/t-62-1)
+  PASS  S9: stale #1 progress (explicit ownership) -> rowCount 0, ignored
+[LIFECYCLE-FENCE] stale progress ignored (job=62 attempt=1/t-62-1)
+  PASS  S9: stale #1 progress via attempt context default -> ignored
+  PASS  S9: last_progress_at reflects ONLY #2
+  PASS  S9: progress_detail is #2's
+[DIAG][job-transition] job=62 -> completed transitioned=true batch=- job=- attempt_id=- company=- stage=-
+  PASS  S9: #2 completeJob transitions
+  PASS  S9 FINAL job 62: status=completed attempts=2
+  PASS  S9 FINAL batch 41: status=running {"completed":0,"failed":0}
+── S10 supersession through REAL storage.createBatchRun (+ real BullMQ job for the old batch) ──
+[LIFECYCLE] batch 41 superseded -> cancelled (PG); notifying workers + purging queue
+[DIAG][cancel-path] step=b batch=41 key=cancelled:batch:41 outcome=ack ms=0 ttl_s=3600 at=2026-10-12T16:12:39.635Z
+[Queue] Removed 0 pending/delayed/terminal jobs for batch 41
+[Queue] Added 1 jobs for batch 42 (workspace 13, priority 0)
+  PASS  S10: old batch job enqueued in BullMQ
+  PASS  S10: old attempt claimed while running
+[LIFECYCLE] batch 42 superseded -> cancelled (PG); notifying workers + purging queue
+[DIAG][cancel-path] step=b batch=42 key=cancelled:batch:42 outcome=ack ms=0 ttl_s=3600 at=2026-10-12T16:12:39.649Z
+[Queue] Removed 1 pending/delayed/terminal jobs for batch 42
+  PASS  S10: OLD cancelled by createBatchRun
+  PASS  S10: NEW running
+  PASS  S10: removeBatchJobs applied (old queue job gone)
+[LIFECYCLE-FENCE] stale/cancelled score write fenced (job=63 attempt=1/t-63-1 batch=42) reason=sql_permission_denied
+  PASS  S10: OLD score write refused
+[LIFECYCLE-FENCE] stale terminal write ignored (job=63 attempt=1) kind=completeJob reason=sql_permission_denied
+[DIAG][job-transition] job=63 -> completed transitioned=false batch=- job=- attempt_id=- company=- stage=-
+  PASS  S10: OLD completeJob refused
+[LIFECYCLE] completeBatchRun batch=42 rowCount=0 (REFUSED: batch is cancelled/failed/completed or missing)
+  PASS  S10: OLD completeBatchRun refused
+[DIAG][job-transition] job=63 -> failJob transitioned=true batchTerminal=true error="Cancelled (batch superseded)" batch=- job=- attempt_id=- company=- stage=-
+  PASS  S10: OLD failJob -> failed, batchTerminal (no requeue)
+  PASS  S10: OLD retry claim refused (job 1)
+  PASS  S10: OLD claim refused (queued job 2)
+  PASS  S10: NEW claims job 65
+  PASS  S10: NEW persists scores for job 65
+[DIAG][job-transition] job=65 -> completed transitioned=true batch=- job=- attempt_id=- company=- stage=-
+  PASS  S10: NEW completeJob 65
+  PASS  S10: NEW claims job 66
+  PASS  S10: NEW persists scores for job 66
+[DIAG][job-transition] job=66 -> completed transitioned=true batch=- job=- attempt_id=- company=- stage=-
+  PASS  S10: NEW completeJob 66
+[LIFECYCLE] completeBatchRun batch=43 rowCount=1
+  PASS  S10: NEW completeBatchRun transitions
+  PASS  S10: NEW scores present for both companies
+  PASS  S10 FINAL job 63: status=failed attempts=1
+  PASS  S10 FINAL job 64: status=pending attempts=0
+  PASS  S10 FINAL job 65: status=completed attempts=1
+  PASS  S10 FINAL job 66: status=completed attempts=1
+  PASS  S10 FINAL batch 42: status=cancelled {"completed":0,"failed":0}
+  PASS  S10 FINAL batch 43: status=completed {"completed":2,"failed":0}
+
+165 passed, 0 failed
+exit=0

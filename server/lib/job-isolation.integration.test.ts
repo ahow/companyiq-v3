@@ -75,10 +75,37 @@ function descendants(root: number, t = procTable()) {
   while (q.length) { const p = q.pop()!; for (const [pid, v] of t) if (v.ppid === p) { out.push(pid); q.push(pid); } }
   return { t, pids: out };
 }
-const baselineDesc = new Set<number>(); // e.g. tsx's esbuild service — not ours to count
+/** Full identity of a process, for evidence and failure messages. */
+function identity(pid: number, t = procTable()) {
+  let exe = "?", cmdline = "?", startTicks = -1;
+  try { exe = fs.readlinkSync(`/proc/${pid}/exe`); } catch { /* gone / no perm */ }
+  try { cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean).join(" "); } catch { /* gone */ }
+  try { const st = fs.readFileSync(`/proc/${pid}/stat`, "utf8"); startTicks = Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[19]); } catch { /* gone */ }
+  const v = t.get(pid);
+  return { pid, ppid: v?.ppid ?? -1, comm: v?.comm ?? "?", state: v?.state ?? "?", rssKb: v?.rssKb ?? 0, exe, cmdline: cmdline.slice(0, 300), startTicks };
+}
+/**
+ * Explicit toolchain allowlist — exactly ONE kind of process is excluded from
+ * the descendant/child counts: tsx's esbuild transform service, i.e. a DIRECT
+ * child of this test process whose executable is an `esbuild` binary run as
+ * `esbuild --service=<ver> --ping`. tsx starts it lazily on the first TS
+ * transform after startup (so it may appear after the pre-job snapshot), it is
+ * test tooling, never application work (production runs compiled JS with no
+ * tsx). Every other descendant — including any other esbuild invocation —
+ * stays strictly counted. Evidence: TEST_RESULTS.md §"Extra integration process".
+ */
+function isToolchainHelper(pid: number, t: ReturnType<typeof procTable>): boolean {
+  if (t.get(pid)?.ppid !== process.pid) return false;
+  const id = identity(pid, t);
+  return /(^|\/)esbuild$/.test(id.exe) && /(^|\/)esbuild --service=\S+ --ping$/.test(id.cmdline);
+}
+const toolchainHelpersSeen = new Map<number, ReturnType<typeof identity>>();
 function sample() {
   const { t, pids } = descendants(process.pid);
-  const live = pids.filter((p) => t.get(p)!.state !== "Z" && !baselineDesc.has(p));
+  const nonZombie = pids.filter((p) => t.get(p)!.state !== "Z");
+  const helpers = nonZombie.filter((p) => isToolchainHelper(p, t));
+  for (const p of helpers) if (!toolchainHelpersSeen.has(p)) toolchainHelpersSeen.set(p, { ...identity(p, t), firstSeenAt: Date.now() } as any);
+  const live = nonZombie.filter((p) => !helpers.includes(p));
   const chrome = live.filter((p) => /chrom/i.test(t.get(p)!.comm));
   const jobChildren = live.filter((p) => t.get(p)!.ppid === process.pid);
   return {
@@ -86,6 +113,10 @@ function sample() {
     descendantRssMb: Math.round(live.reduce((a, p) => a + t.get(p)!.rssKb, 0) / 1024),
     chromiumRssMb: Math.round(chrome.reduce((a, p) => a + t.get(p)!.rssKb, 0) / 1024),
     parentRssMb: Math.round(process.memoryUsage().rss / 1048576),
+    toolchainHelperPids: helpers,
+    // Identity of every COUNTED direct child (job children); full identity of all counted descendants when few.
+    jobChildIds: jobChildren.map((p) => identity(p, t)),
+    countedDescendantIds: live.length <= 4 ? live.map((p) => identity(p, t)) : undefined,
   };
 }
 function orphanPuppeteerChromium(): number[] {
@@ -109,8 +140,9 @@ async function main() {
   // Production schema bootstrap (raw-SQL tables/columns beyond drizzle push).
   const { initializeDatabase } = await import("../db.js");
   await initializeDatabase();
-  for (const p of descendants(process.pid).pids) baselineDesc.add(p);
-  console.log(`[INT] initializeDatabase OK; baseline descendants excluded: ${[...baselineDesc].join(",") || "none"}`);
+  // Pre-job snapshot: identity of every descendant that exists before any job starts (recorded, NOT excluded).
+  const preJob = (() => { const { t, pids } = descendants(process.pid); return pids.map((p) => ({ ...identity(p, t), toolchainHelper: isToolchainHelper(p, t) })); })();
+  console.log(`[INT] initializeDatabase OK; pre-job descendants: ${JSON.stringify(preJob)}`);
 
   // Local PDF (real Chromium print-to-pdf) served over HTTP for the browser path.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ciq-int-"));
@@ -206,6 +238,7 @@ async function main() {
     peak, maxDescendantRssMb: maxRss, maxParentRssMb: maxParent, maxConcurrentJobChildren: maxConcurrentChildren,
     lockRenewals: Object.fromEntries(renewals), stalledEvents: stalled, failedEvents: failedEv, completedEvents: completedEv,
     afterCompletion: after, afterStopWorker: afterStop, newOrphanPuppeteerChromium: newOrphans,
+    preJobDescendants: preJob, toolchainHelpers: [...toolchainHelpersSeen.values()],
     quarantined: iso.quarantinedChildren().length, isolationStats: iso.__testing.stats(), brokerAfter: iso.__testing.brokerState(), samples: samples.length,
   };
   console.log("[INT] summary " + JSON.stringify({ ...summary, samples: samples.length }, null, 1));
@@ -213,11 +246,13 @@ async function main() {
   check(rows.length === 2 && rows.every((x) => x.status === "completed"), `both analysis_jobs completed (${rows.map((x) => x.status).join(",")})`);
   check(batchRow?.completed_jobs === 2 && batchRow?.failed_jobs === 0, `batch counters completed=2 failed=0 (got ${batchRow?.completed_jobs}/${batchRow?.failed_jobs}, status=${batchRow?.status})`);
   check(scores.length === 2 && scores.every((s: any) => s.n === MEASURES.length), `measure_scores persisted: ${MEASURES.length} per company (${JSON.stringify(scores)})`);
-  check(maxConcurrentChildren === 2, `2 isolated job children ran concurrently (max seen ${maxConcurrentChildren})`);
+  const maxSample = samples.find((x) => x.jobChildren === maxConcurrentChildren);
+  check(maxConcurrentChildren === 2, `2 isolated job children ran concurrently (max seen ${maxConcurrentChildren}; at max: ${JSON.stringify(maxSample?.jobChildIds?.map((i: any) => ({ pid: i.pid, exe: i.exe, cmd: i.cmdline.slice(0, 120) })))})`);
   check(peak.chromium > 0, `real Chromium observed under job children (peak ${peak.chromium} procs, ${peak.chromiumRssMb} MB)`);
   check(stalled.length === 0, `no BullMQ stalled events (${stalled.length})`);
   check([...renewals.values()].every((n) => n >= 1), `lock renewed at least once per job (${JSON.stringify(Object.fromEntries(renewals))})`);
-  check(after.descendants === 0, `no descendants after completion (${after.descendants}, chromium ${after.chromium})`);
+  check(after.descendants === 0, `no descendants after completion (${after.descendants}, chromium ${after.chromium}; counted: ${JSON.stringify(after.countedDescendantIds)})`);
+  check(afterStop.descendants === 0, `no descendants after stopWorker (${afterStop.descendants}; counted: ${JSON.stringify(afterStop.countedDescendantIds)})`);
   check(newOrphans.length === 0, `no orphaned puppeteer Chromium anywhere on host (${newOrphans.join(",") || "none"})`);
   check(iso.quarantinedChildren().length === 0, "no quarantined children");
   const b = summary.brokerAfter as any;
@@ -226,6 +261,8 @@ async function main() {
   fs.mkdirSync(path.dirname(EVIDENCE), { recursive: true });
   fs.writeFileSync(EVIDENCE, JSON.stringify({ ...summary, samplesData: samples, failures }, null, 1));
   await r.quit().catch(() => {}); await q.close().catch(() => {}); await c.end().catch(() => {}); srv.close();
+  console.log(`[INT] toolchain helpers (excluded by exe+cmdline allowlist): ${JSON.stringify([...toolchainHelpersSeen.values()])}`);
+  console.log(`[INT] harness pid=${process.pid} exiting; helper pids to verify gone after exit: ${[...toolchainHelpersSeen.keys()].join(",") || "none"}`);
   console.log(failures.length ? `INTEGRATION FAIL (${failures.length})` : "INTEGRATION PASS");
   process.exit(failures.length ? 1 : 0);
 }

@@ -1,0 +1,15 @@
+  [PASS] TEST 1: Stale runKey / current batchId — durable upsert
+  [PASS] TEST 2: 22/22 completeness — full snapshot accepted
+  [PASS] TEST 3: Artifact-before-acceptance ordering
+  [PASS] TEST 4: Idempotent retries — no duplicates, no overwrites
+  [PASS] TEST 5: Missing/empty snapshot rejection — null returned
+  [PASS] TEST 6: Cross-framework isolation — independent lifecycle
+  [PASS] TEST 7: Never downgrade — partial cannot overwrite complete
+  [PASS] TEST 8: Accepted snapshot from different batch is protected
+  [PASS] TEST 9: markAccepted fails when batchId doesn't match
+  [PASS] TEST 10: Full end-to-end flow (batch 1059 scenario)
+  [PASS] TEST 11: ESM runtime — crypto.createHash no ReferenceError
+  [PASS] TEST 12: acceptanceState=accepted only after snapshotSaved=true
+
+snapshot-durability tests: PASS (12/12 — stale-runKey-upsert, completeness-22, artifact-before-acceptance, idempotent-retry, empty-rejection, cross-framework-isolation, no-downgrade, accepted-protection, mismatch-rejection, e2e-1059-flow, esm-crypto-no-referror, acceptance-after-snapshot)
+exit=0

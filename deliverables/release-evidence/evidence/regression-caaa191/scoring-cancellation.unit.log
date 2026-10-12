@@ -1,0 +1,203 @@
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+── 5. abortableSleep ──
+  PASS  abortableSleep rejects promptly on abort (<200ms of a 5000ms sleep)
+  PASS  abortableSleep rejection is a LifecycleCancelledError
+  PASS  abortableSleep: timer cleared + listener removed
+  PASS  abortableSleep on already-aborted signal rejects synchronously-ish
+  PASS  abortableSleep resolves normally when not aborted; no listener left
+  PASS  abortableSleep without signal = plain sleep
+── 1/3. completeScoring: primary / retry / backoff / fallback ──
+[LIFECYCLE-FENCE] attempt revoked reason=admin_cancel_test (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=admin_cancel_test batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:36.047Z
+  PASS  revoked before dispatch → LifecycleCancelledError, zero provider calls
+[LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:36.078Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#1 call=scoring outcome=aborted ms=30 reason="pipeline_timeout"
+  PASS  in-flight primary aborted → LifecycleCancelledError(pipeline_timeout)
+  PASS  primary transport saw the abort (signal passed into .complete)
+  PASS  cancellation NOT retried (p1 called once) and NOT failed over (fb1/p2/arb uncalled)
+  PASS  cancellation is prompt (<300ms)
+  PASS  no orphan listener on attempt signal / no live timers
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#1 call=scoring outcome=error ms=0 reason="server boom"
+[AI:scoring] p1(try 1/4)[server_error]: server boom
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:36.186Z
+  PASS  abort during 500ms backoff → resolves early (<350ms) with cancellation
+  PASS  no retry dispatched after abort, no fallback
+  PASS  backoff timer + listener cleaned up
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#1 call=scoring outcome=error ms=0 reason="server boom"
+[AI:scoring] p1(try 1/4)[server_error]: server boom
+[LIFECYCLE-FENCE] attempt revoked reason=ownership_lost (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=ownership_lost batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:36.842Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#2 call=scoring outcome=aborted ms=150 reason="ownership_lost"
+  PASS  in-flight retry (try 2) aborted with cancellation
+  PASS  aborted retry not failed over
+[LIFECYCLE-FENCE] attempt revoked reason=admin_cancel_test (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=admin_cancel_test batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:36.874Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=fb1 role=fallback call=scoring outcome=aborted ms=31 reason="admin_cancel_test"
+  PASS  in-flight fallback aborted with cancellation
+  PASS  no further fallback after abort (p2/arb uncalled)
+[LIFECYCLE-FENCE] attempt revoked reason=admin_cancel_test (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=admin_cancel_test batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:36.874Z
+  PASS  revoked → fallback dispatch refused (zero calls)
+[LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:36.895Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#1 call=scoring outcome=aborted ms=81 reason="pipeline_timeout"
+  PASS  late response after revoke is DISCARDED (cancellation, no text returned)
+[LIFECYCLE-FENCE] attempt revoked reason=batch_cancelled (job=501 attempt=1 batch=4242)
+[DIAG][cancel-path] step=e reason=batch_cancelled batch=4242 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.206Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=4242 company=7 measure=- provider=p1 role=primary#1 call=scoring outcome=aborted ms=251 reason="batch_cancelled"
+  PASS  batch cancel noticed → in-flight aborted (reason batch_cancelled, ≤ ~250ms poll)
+  PASS  batch cancel: no retry / failover
+[LIFECYCLE-FENCE] attempt revoked reason=admin_cancel_test (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=admin_cancel_test batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.238Z
+  PASS  non-strict path: aborted, not failed over
+── 4. concurrent siblings (MEASURE_CONCURRENCY=5) ──
+  PASS  5 siblings in flight before revoke
+  PASS  5 per-request listeners attached to the attempt signal
+[LIFECYCLE-FENCE] attempt revoked reason=admin_cancel_test (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=admin_cancel_test batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.269Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M0 provider=p1 role=primary#1 call=scoring outcome=aborted ms=30 reason="admin_cancel_test"
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=aborted ms=30 reason="admin_cancel_test"
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M2 provider=p1 role=primary#1 call=scoring outcome=aborted ms=31 reason="admin_cancel_test"
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M3 provider=p1 role=primary#1 call=scoring outcome=aborted ms=31 reason="admin_cancel_test"
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M4 provider=p1 role=primary#1 call=scoring outcome=aborted ms=31 reason="admin_cancel_test"
+  PASS  all 5 siblings rejected with LifecycleCancelledError
+  PASS  all 5 transports aborted together (<50ms)
+  PASS  no sibling retried or failed over
+  PASS  no orphaned listeners on attempt signal
+  PASS  no orphaned timers (per-request poll intervals + backoffs cleared)
+  PASS  no in-flight mock requests remain
+── 1/3. REAL scoreWithCascade (primary + secondary + arbiter) ──
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=success ms=0
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p2 role=primary#1 call=scoring outcome=success ms=0
+  PASS  healthy cascade agreement: scored, no arbiter call
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=success ms=0
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p2 role=primary#1 call=scoring outcome=success ms=0
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=arb role=primary#1 call=scoring outcome=success ms=0
+  PASS  healthy cascade disagreement: arbiter called once and decides
+[LIFECYCLE-FENCE] attempt revoked reason=admin_cancel_test (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=admin_cancel_test batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.321Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=aborted ms=41 reason="admin_cancel_test"
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p2 role=primary#1 call=scoring outcome=aborted ms=41 reason="admin_cancel_test"
+  PASS  cascade: primary + secondary in flight both aborted
+  PASS  cascade: cancellation propagates (no score / abstain result)
+  PASS  cascade: arbiter never dispatched; no content retry, no failover
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=success ms=0
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p2 role=primary#1 call=scoring outcome=success ms=0
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.382Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=arb role=primary#1 call=scoring outcome=aborted ms=59 reason="job_watchdog_timeout"
+  PASS  cascade: in-flight arbiter aborted → cancellation, no result
+[LIFECYCLE-FENCE] attempt revoked reason=admin_cancel_test (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=admin_cancel_test batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.383Z
+[LIFECYCLE-GATE] dispatch refused at scoring:cascade p1 reason=admin_cancel_test (batch=77 job=501 attempt=1)
+[LIFECYCLE-GATE] dispatch refused at scoring:cascade p2 reason=admin_cancel_test (batch=77 job=501 attempt=1)
+  PASS  cascade: revoked before start → zero dispatches
+── 3. REAL scoreSingleMeasurePass: cancellation ≠ score/abstain ──
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=success ms=0
+[TestCo] Scoring FAILED [scoring_error/application_error] for M1 — retrying (2 attempt(s) left): Cannot read properties of null (reading 'score')
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=success ms=0
+[TestCo] Scoring FAILED [scoring_error/application_error] for M1 — retrying (1 attempt(s) left): Cannot read properties of null (reading 'score')
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=success ms=0
+[TestCo] Scoring FAILED [scoring_error/application_error] for M1 after all retries — ABSTAINING (excluded from totals), NOT converting to a substantive zero: Cannot read properties of null (reading 'score')
+  PASS  control: non-cancel content crash still content-retried (3 calls) then ABSTAINS
+[LIFECYCLE-FENCE] attempt revoked reason=admin_cancel_test (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=admin_cancel_test batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.420Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=aborted ms=31 reason="admin_cancel_test"
+  PASS  cancelled pass → throws LifecycleCancelledError (NOT abstain/zero)
+  PASS  cancelled pass → NOT content-retried (1 call)
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=success ms=61
+[TestCo] Scoring FAILED [scoring_error/application_error] for M1 — retrying (2 attempt(s) left): Cannot read properties of null (reading 'score')
+[LIFECYCLE-GATE] dispatch refused at scoring:content-retry reason=deadline_elapsed (batch=77 job=501 attempt=1)
+  PASS  content-retry gated: deadline_elapsed → cancellation, 1 call, no abstain
+── 2. ownership loss (startOwnershipWatch) ──
+[LIFECYCLE-FENCE] ownership lost token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 row_token=22222222-2222-4222-8222-222222222222 row_status=claimed
+[LIFECYCLE-FENCE] attempt revoked reason=ownership_lost (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=ownership_lost batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.521Z
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#1 call=scoring outcome=aborted ms=39 reason="ownership_lost"
+  PASS  token mismatch (reclaimed by another replica) → self-revoke ownership_lost
+  PASS  old execution's in-flight request aborted, not retried/failed over
+[LIFECYCLE-FENCE] ownership lost token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 row_token=11111111-1111-4111-8111-111111111111 row_status=failed
+[LIFECYCLE-FENCE] attempt revoked reason=ownership_lost (job=501 attempt=1 batch=77)
+[DIAG][cancel-path] step=e reason=ownership_lost batch=77 job=501 attempt=1 token=11111111... abort_fired=true at=2026-10-12T15:15:37.537Z
+  PASS  status no longer 'claimed' → ownership_lost
+[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=501 token=11111111-1111-4111-8111-111111111111: db blip
+[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=501 token=11111111-1111-4111-8111-111111111111: db blip
+[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=501 token=11111111-1111-4111-8111-111111111111: db blip
+[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=501 token=11111111-1111-4111-8111-111111111111: db blip
+[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=501 token=11111111-1111-4111-8111-111111111111: db blip
+[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=501 token=11111111-1111-4111-8111-111111111111: db blip
+[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=501 token=11111111-1111-4111-8111-111111111111: db blip
+  PASS  read error / missing row → fail-open (not revoked)
+  PASS  matching owner → not revoked; stop() halts reads and clears the timer
+  PASS  watch is a no-op for token-less lifecycles and intervalMs=0
+── logs: token-attributed [SCORING-REQ] start/settle ──
+  PASS  start log carries token/job/attempt/batch/company/measure/provider/role/call
+  PASS  settle log outcome=aborted with reason
+  PASS  settle log outcome=success
+  PASS  no [SCORING-REQ] lines outside an attempt context (4 lines total)
+── 6. healthy run: 36 measures, retry + fallback intact, inert outside attempts ──
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M0 provider=p1 role=primary#1 call=scoring outcome=error ms=0 reason="server boom"
+[AI:scoring] p1(try 1/4)[server_error]: server boom
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M1 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M2 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M3 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M4 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M0 provider=p1 role=primary#2 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M5 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M6 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M7 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M8 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M9 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M12 provider=p1 role=primary#1 call=scoring outcome=error ms=0 reason="server boom"
+[AI:scoring] p1(try 1/4)[server_error]: server boom
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M10 provider=p1 role=primary#1 call=scoring outcome=success ms=6
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M11 provider=p1 role=primary#1 call=scoring outcome=success ms=6
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M13 provider=p1 role=primary#1 call=scoring outcome=success ms=6
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M14 provider=p1 role=primary#1 call=scoring outcome=success ms=6
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M12 provider=p1 role=primary#2 call=scoring outcome=success ms=6
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M15 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M16 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M17 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M18 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M19 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M24 provider=p1 role=primary#1 call=scoring outcome=error ms=0 reason="server boom"
+[AI:scoring] p1(try 1/4)[server_error]: server boom
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M20 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M21 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M22 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M23 provider=p1 role=primary#1 call=scoring outcome=success ms=6
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M24 provider=p1 role=primary#2 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M25 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M26 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M27 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M28 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M29 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M30 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M31 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M32 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M33 provider=p1 role=primary#1 call=scoring outcome=success ms=6
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M34 provider=p1 role=primary#1 call=scoring outcome=success ms=6
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=M35 provider=p1 role=primary#1 call=scoring outcome=success ms=5
+  PASS  36/36 measures scored
+  PASS  normal retry intact: 3 transient failures retried on same provider (39 calls)
+  PASS  zero aborts, attempt not revoked
+  PASS  no orphaned listeners/timers after healthy run
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#1 call=scoring outcome=error ms=0 reason="server boom"
+[AI:scoring] p1(try 1/4)[server_error]: server boom
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#2 call=scoring outcome=error ms=0 reason="server boom"
+[AI:scoring] p1(try 2/4)[server_error]: server boom
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#3 call=scoring outcome=error ms=0 reason="server boom"
+[AI:scoring] p1(try 3/4)[server_error]: server boom
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=p1 role=primary#4 call=scoring outcome=error ms=1 reason="server boom"
+[AI:scoring] p1(try 4/4)[server_error]: server boom
+[AI:scoring] PRIMARY p1 EXHAUSTED — graded by fallback fb1 (auditable variance source)
+[SCORING-REQ] settle token=11111111-1111-4111-8111-111111111111 job=501 attempt=1 batch=77 company=7 measure=- provider=fb1 role=fallback call=scoring outcome=success ms=0
+  PASS  normal fallback intact: primary exhausted after 4 tries → fb1 grades
+  PASS  outside an attempt context: no signal passed to the transport (inert)
+  PASS  global: no live timers left behind by the scoring path
+
+60 passed, 0 failed
+exit=0

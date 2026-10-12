@@ -1,0 +1,132 @@
+[llm-usage] Failed to parse LLM_PRICE_TABLE_JSON: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+TAP version 13
+# Subtest: parseUsage parses OpenAI-compatible shape (prompt/completion/total)
+ok 1 - parseUsage parses OpenAI-compatible shape (prompt/completion/total)
+  ---
+  duration_ms: 9.800713
+  type: 'test'
+  ...
+# Subtest: parseUsage parses Anthropic shape (input/output tokens, derives total)
+ok 2 - parseUsage parses Anthropic shape (input/output tokens, derives total)
+  ---
+  duration_ms: 0.217189
+  type: 'test'
+  ...
+# Subtest: parseUsage parses Gemini shape (usageMetadata counts)
+ok 3 - parseUsage parses Gemini shape (usageMetadata counts)
+  ---
+  duration_ms: 0.128925
+  type: 'test'
+  ...
+# Subtest: parseUsage returns nulls for missing/invalid usage (never throws)
+ok 4 - parseUsage returns nulls for missing/invalid usage (never throws)
+  ---
+  duration_ms: 10.908669
+  type: 'test'
+  ...
+# Subtest: lookupPrice matches dated/versioned model names via longest substring key
+ok 5 - lookupPrice matches dated/versioned model names via longest substring key
+  ---
+  duration_ms: 0.345924
+  type: 'test'
+  ...
+# Subtest: lookupPrice is case-insensitive and exact-first
+ok 6 - lookupPrice is case-insensitive and exact-first
+  ---
+  duration_ms: 0.191469
+  type: 'test'
+  ...
+# Subtest: lookupPrice returns null for an unknown model
+ok 7 - lookupPrice returns null for an unknown model
+  ---
+  duration_ms: 0.139471
+  type: 'test'
+  ...
+# Subtest: computeCost computes USD from tokens + price table
+ok 8 - computeCost computes USD from tokens + price table
+  ---
+  duration_ms: 0.173062
+  type: 'test'
+  ...
+# Subtest: computeCost scales linearly with partial-million token counts
+ok 9 - computeCost scales linearly with partial-million token counts
+  ---
+  duration_ms: 0.219672
+  type: 'test'
+  ...
+# Subtest: computeCost returns null cost for unknown model (tokens still parsed)
+ok 10 - computeCost returns null cost for unknown model (tokens still parsed)
+  ---
+  duration_ms: 0.406495
+  type: 'test'
+  ...
+# Subtest: computeCost treats missing token counts as 0 when price is known
+ok 11 - computeCost treats missing token counts as 0 when price is known
+  ---
+  duration_ms: 12.232292
+  type: 'test'
+  ...
+# Subtest: loadPriceTable merges LLM_PRICE_TABLE_JSON over built-in defaults
+ok 12 - loadPriceTable merges LLM_PRICE_TABLE_JSON over built-in defaults
+  ---
+  duration_ms: 0.385383
+  type: 'test'
+  ...
+# Subtest: loadPriceTable ignores malformed env JSON (falls back to defaults)
+ok 13 - loadPriceTable ignores malformed env JSON (falls back to defaults)
+  ---
+  duration_ms: 0.426065
+  type: 'test'
+  ...
+# Subtest: normalizeModelName strips a single provider namespace segment
+ok 14 - normalizeModelName strips a single provider namespace segment
+  ---
+  duration_ms: 0.112861
+  type: 'test'
+  ...
+# Subtest: normalizeModelName keeps only the last segment for nested namespaces
+ok 15 - normalizeModelName keeps only the last segment for nested namespaces
+  ---
+  duration_ms: 0.213603
+  type: 'test'
+  ...
+# Subtest: normalizeModelName leaves bare model names and trims whitespace
+ok 16 - normalizeModelName leaves bare model names and trims whitespace
+  ---
+  duration_ms: 13.047435
+  type: 'test'
+  ...
+# Subtest: lookupPrice resolves provider-prefixed names via normalisation
+ok 17 - lookupPrice resolves provider-prefixed names via normalisation
+  ---
+  duration_ms: 0.208906
+  type: 'test'
+  ...
+# Subtest: loadPriceTable prices mistral-large and gpt-5 by default (incl. provider prefix)
+ok 18 - loadPriceTable prices mistral-large and gpt-5 by default (incl. provider prefix)
+  ---
+  duration_ms: 0.147593
+  type: 'test'
+  ...
+# Subtest: computeCost prices provider-prefixed production models from stored tokens
+ok 19 - computeCost prices provider-prefixed production models from stored tokens
+  ---
+  duration_ms: 0.650954
+  type: 'test'
+  ...
+# Subtest: lookupPrice resolves mistral-medium to its own price, not the generic mistral fallback
+ok 20 - lookupPrice resolves mistral-medium to its own price, not the generic mistral fallback
+  ---
+  duration_ms: 0.206292
+  type: 'test'
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 148.913664
+exit=0

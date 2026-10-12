@@ -1,0 +1,1949 @@
+From 979db793d8dcabe923bac2df4de50f7103d86994 Mon Sep 17 00:00:00 2001
+From: ahow <13916301+ahow@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 08:45:20 +0000
+Subject: [PATCH 1/4] test(browser-lifetime): repro harness + fixture; count
+ one browser per distinct puppeteer profile (exclude Chromium-forked
+ same-profile children that were double-counted)
+
+---
+ .../__fixtures__/browser-lifetime-child.ts    |  26 +++
+ server/scripts/browser-lifetime-repro.ts      | 198 ++++++++++++++++++
+ 2 files changed, 224 insertions(+)
+ create mode 100644 server/lib/__fixtures__/browser-lifetime-child.ts
+ create mode 100644 server/scripts/browser-lifetime-repro.ts
+
+diff --git a/server/lib/__fixtures__/browser-lifetime-child.ts b/server/lib/__fixtures__/browser-lifetime-child.ts
+new file mode 100644
+index 0000000..4ffe65a
+--- /dev/null
++++ b/server/lib/__fixtures__/browser-lifetime-child.ts
+@@ -0,0 +1,26 @@
++// Browser-lifetime reproduction child (loaded by job-child.ts via CIQ_CHILD_TEST_MODULE).
++// Runs inside a REAL isolated job child: the production fetchPdfViaBrowser path
++// (parent-brokered browser permit, real puppeteer-core Chromium, real pdftotext)
++// against a SAVED document served on 127.0.0.1, then a synthetic "scoring" hold
++// (REPRO_HOLD_MS, no providers called — zero paid calls) so children overlap the
++// way real jobs do (browser fetches early, long LLM phase afterwards).
++export async function run(opts: any): Promise<any> {
++  const tag = `[REPRO-CHILD pid=${process.pid} company=${opts?.company?.id ?? "-"}]`;
++  const { fetchPdfViaBrowser } = await import("../processor.js");
++  const urls = String(process.env.REPRO_DOC_URLS || "").split(",").filter(Boolean);
++  let chars = 0;
++  for (const u of urls) {
++    const t0 = Date.now();
++    try {
++      const text = await fetchPdfViaBrowser(u);
++      chars += text.length;
++      console.log(`${tag} fetch ok url=${u} chars=${text.length} ms=${Date.now() - t0}`);
++    } catch (e: any) {
++      console.log(`${tag} fetch FAILED url=${u} err=${String(e?.message || e).slice(0, 160)}`);
++    }
++  }
++  const hold = parseInt(process.env.REPRO_HOLD_MS || "15000", 10);
++  console.log(`${tag} synthetic scoring hold ${hold}ms (no provider calls)`);
++  await new Promise((r) => setTimeout(r, hold));
++  return { success: chars > 0, documentsProcessed: urls.length, scoresCreated: 0, error: chars > 0 ? undefined : "no document text" };
++}
+diff --git a/server/scripts/browser-lifetime-repro.ts b/server/scripts/browser-lifetime-repro.ts
+new file mode 100644
+index 0000000..b34386e
+--- /dev/null
++++ b/server/scripts/browser-lifetime-repro.ts
+@@ -0,0 +1,198 @@
++/**
++ * Browser-lifetime reproduction harness (worker isolation ON, zero paid calls).
++ *
++ * Drives REPRO_JOBS isolated job children through the production supervisor
++ * (runPipelineIsolated → job-child.ts) at REPRO_CONCURRENCY (default 4 =
++ * production WORKER_CONCURRENCY) with MAX_CONCURRENT_BROWSER=1 (production).
++ * Each child runs the production fetchPdfViaBrowser path against a SAVED local
++ * document, then a synthetic scoring hold (no providers). Child turnover is
++ * continuous: a new child is forked as soon as one settles.
++ *
++ * Every REPRO_SAMPLE_MS it samples /proc and logs (one JSON line, tag SAMPLE):
++ *   - limits: RLIMIT_NPROC, cgroup pids.max / pids.current (the TasksMax the
++ *     harness was started under, if any)
++ *   - live counters: harness-tree tasks (threads), processes, job children
++ *   - live browser instances (distinct puppeteer profile main processes)
++ *   - total RSS of the harness tree
++ *   - broker permit state (active / waiting / max)
++ * and logs acquire/grant/release events for the parent-side browser permit
++ * (FETCH-BROKER), launch/exit events for each Chromium instance observed in
++ * /proc (BROWSER-OBSERVED), and child stdout/stderr inline (child startup
++ * stderr appears verbatim, e.g. pthread_create / uv_thread_create aborts).
++ *
++ * Writes a JSON summary to REPRO_OUT. Exit code 0 always (it is evidence, not
++ * an assertion); the summary carries `bound_held` and `spawn_failures`.
++ *
++ *   REPRO_LABEL=before REPRO_OUT=/tmp/x.json npx tsx server/scripts/browser-lifetime-repro.ts
++ */
++import fs from "node:fs";
++import http from "node:http";
++import path from "node:path";
++import { fileURLToPath } from "node:url";
++
++const HERE = path.dirname(fileURLToPath(import.meta.url));
++const ROOT = path.resolve(HERE, "../..");
++const JOBS = parseInt(process.env.REPRO_JOBS || "16", 10);
++const CONC = parseInt(process.env.REPRO_CONCURRENCY || "4", 10);
++const SAMPLE_MS = parseInt(process.env.REPRO_SAMPLE_MS || "250", 10);
++const LABEL = process.env.REPRO_LABEL || "run";
++const OUT = process.env.REPRO_OUT || `/tmp/browser-lifetime-${LABEL}.json`;
++const DOC = process.env.REPRO_DOC || path.join(ROOT, "docs/batch-1210-mass-failure-rca.pdf");
++const DOCS_PER_CHILD = parseInt(process.env.REPRO_DOCS_PER_CHILD || "2", 10);
++
++// Test-only environment. Production values are kept for every capacity knob:
++// MAX_CONCURRENT_BROWSER=1, WORKER_CONCURRENCY=4, PG_POOL_MAX=20.
++Object.assign(process.env, {
++  WORKER_ISOLATION_ENABLED: "true",
++  CIQ_CHILD_TEST_MODULE: path.join(ROOT, "server/lib/__fixtures__/browser-lifetime-child.ts"),
++  PUPPETEER_EXECUTABLE_PATH: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/local/bin/chromium",
++  MAX_CONCURRENT_BROWSER: "1",
++  WORKER_CONCURRENCY: String(CONC),
++  PG_POOL_MAX: "20",
++  DATABASE_URL: process.env.DATABASE_URL || "postgres://ciq:ciq@127.0.0.1:55432/ciq",
++  ADAPTIVE_CONCURRENCY_ENABLED: "false",
++  CREDIT_PAUSE_ENABLED: "false",
++  REPRO_HOLD_MS: process.env.REPRO_HOLD_MS || "15000",
++});
++
++const t0 = Date.now();
++const ts = () => `+${((Date.now() - t0) / 1000).toFixed(2)}s`;
++const log = (tag: string, msg: string) => console.log(`${ts()} [${tag}] ${msg}`);
++
++// ─── /proc sampling ──────────────────────────────────────────────────────────
++interface P { pid: number; ppid: number; state: string; rssKb: number; threads: number }
++function procTable(): Map<number, P> {
++  const t = new Map<number, P>();
++  for (const d of fs.readdirSync("/proc")) {
++    if (!/^\d+$/.test(d)) continue;
++    try {
++      const s = fs.readFileSync(`/proc/${d}/stat`, "utf8");
++      const f = s.slice(s.lastIndexOf(")") + 2).split(" ");
++      t.set(+d, { pid: +d, ppid: +f[1], state: f[0], threads: +f[17], rssKb: (+f[21] * 4096) / 1024 });
++    } catch { /* exited */ }
++  }
++  return t;
++}
++function tree(t: Map<number, P>): P[] {
++  const out: P[] = []; const q = [process.pid];
++  while (q.length) { const p = q.pop()!; for (const v of t.values()) if (v.ppid === p) { out.push(v); q.push(v.pid); } }
++  return out;
++}
++const readNum = (f: string) => { try { const v = fs.readFileSync(f, "utf8").trim(); return v === "max" ? "max" : Number(v); } catch { return null; } };
++function cgroupDir(): string | null {
++  try { const rel = fs.readFileSync("/proc/self/cgroup", "utf8").trim().split("::")[1]; return `/sys/fs/cgroup${rel}`; } catch { return null; }
++}
++const CG = cgroupDir();
++function nprocLimit(): string {
++  try { const l = fs.readFileSync("/proc/self/limits", "utf8").split("\n").find((x) => x.startsWith("Max processes")); return l ? l.replace(/\s+/g, " ").trim() : "?"; } catch { return "?"; }
++}
++const comm = (p?: number) => { try { return p ? fs.readFileSync(`/proc/${p}/comm`, "utf8").trim() : "?"; } catch { return "?"; } };
++const cmdHead = (p: number) => { try { return fs.readFileSync(`/proc/${p}/cmdline`, "utf8").split("\0").filter((a) => !a.startsWith("--") || /headless|type|user-data|proxy/.test(a)).join(" ").slice(0, 300); } catch { return "?"; } };
++/** Puppeteer profile dir from a cmdline, or null if the process holds no puppeteer profile. */
++function profileOf(p: number): string | null {
++  try {
++    const args = fs.readFileSync(`/proc/${p}/cmdline`, "utf8").split("\0");
++    const a = args.find((x) => x.startsWith("--user-data-dir=") && x.includes("puppeteer_dev_chrome_profile"));
++    return a ? a.slice("--user-data-dir=".length) : null;
++  } catch { return null; }
++}
++/**
++ * Browser instances = one main process per distinct puppeteer profile.
++ * Main = holds a puppeteer profile, carries no --type= (helpers do), AND its
++ * parent does not hold the same profile. Chromium itself forks children with
++ * the same profile and no --type= (zygote-less forks/crashpad-like helpers);
++ * those were previously counted as a second browser.
++ */
++function browserMains(pids: number[], t: Map<number, P>): number[] {
++  const byProfile = new Map<string, number>();
++  for (const p of pids) {
++    const prof = profileOf(p);
++    if (!prof) continue;
++    try { if (fs.readFileSync(`/proc/${p}/cmdline`, "utf8").includes("--type=")) continue; } catch { continue; }
++    const pp = t.get(p)?.ppid;
++    if (pp && profileOf(pp) === prof) continue; // forked by the browser itself
++    if (!byProfile.has(prof)) byProfile.set(prof, p);
++  }
++  return [...byProfile.values()];
++}
++
++async function main() {
++  const { runPipelineIsolated, __testing } = await import("../lib/job-isolation.js");
++  const { processorSlotBroker } = await import("../lib/processor.js");
++
++  // Parent-side permit events (the fetch-broker permit every child must hold
++  // while it drives Chromium).
++  const b = processorSlotBroker.browser;
++  const rawAcquire = b.acquire, rawRelease = b.release;
++  const events: Array<{ at: number; ev: string; detail?: any }> = [];
++  const ev = (e: string, detail?: any) => { events.push({ at: Date.now() - t0, ev: e, detail }); log("EVENT", `${e} ${detail ? JSON.stringify(detail) : ""}`); };
++  (b as any).acquire = async () => { ev("permit.acquire.request", b.state()); await rawAcquire(); ev("permit.acquire.granted", b.state()); };
++  (b as any).release = (...a: any[]) => { const r = (rawRelease as any)(...a); ev("permit.release", b.state()); return r; };
++
++  const pdf = fs.readFileSync(DOC);
++  const srv = http.createServer((q, r) => { r.writeHead(200, { "content-type": "application/pdf", "content-length": pdf.length }); r.end(pdf); });
++  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
++  const port = (srv.address() as any).port;
++  process.env.REPRO_DOC_URLS = Array.from({ length: DOCS_PER_CHILD }, (_, i) => `http://127.0.0.1:${port}/saved-${i}.pdf`).join(",");
++  log("SETUP", `label=${LABEL} jobs=${JOBS} concurrency=${CONC} MAX_CONCURRENT_BROWSER=1 doc=${path.relative(ROOT, DOC)} (${pdf.length} B) docsPerChild=${DOCS_PER_CHILD} hold=${process.env.REPRO_HOLD_MS}ms`);
++  log("LIMITS", `${nprocLimit()} | cgroup=${CG} pids.max=${readNum(`${CG}/pids.max`)} pids.current=${readNum(`${CG}/pids.current`)}`);
++
++  const baseline = new Set(tree(procTable()).map((p) => p.pid)); // tsx/esbuild helpers already present
++  const samples: any[] = [];
++  const seenBrowsers = new Map<number, { launchedAt: number; exitedAt?: number }>();
++  let peakBrowsers = 0, peakTasks = 0, peakRssMb = 0, peakProcs = 0;
++  const sampler = setInterval(() => {
++    const t = procTable();
++    const all = tree(t).filter((p) => p.state !== "Z");
++    const ours = all.filter((p) => !baseline.has(p.pid));
++    const mains = browserMains(ours.map((p) => p.pid), t);
++    for (const m of mains) if (!seenBrowsers.has(m)) { seenBrowsers.set(m, { launchedAt: Date.now() - t0 }); ev("browser.observed.launch", { pid: m, ppid: t.get(m)?.ppid, parentComm: comm(t.get(m)?.ppid), cmd: cmdHead(m) }); }
++    for (const [m, v] of seenBrowsers) if (!v.exitedAt && !mains.includes(m) && !(t.get(m) && t.get(m)!.state !== "Z")) { v.exitedAt = Date.now() - t0; ev("browser.observed.exit", { pid: m, livedMs: v.exitedAt - v.launchedAt }); }
++    const tasks = all.reduce((a, p) => a + p.threads, 0) + (t.get(process.pid)?.threads ?? 0);
++    const rssMb = Math.round((all.reduce((a, p) => a + p.rssKb, 0) + (t.get(process.pid)?.rssKb ?? 0)) / 1024);
++    const s = {
++      at: Date.now() - t0, liveBrowsers: mains.length, tasks, procs: all.length + 1, jobChildren: __testing.liveChildren(),
++      rssMb, pidsCurrent: readNum(`${CG}/pids.current`), pidsMax: readNum(`${CG}/pids.max`), permit: b.state(),
++    };
++    peakBrowsers = Math.max(peakBrowsers, s.liveBrowsers); peakTasks = Math.max(peakTasks, tasks); peakRssMb = Math.max(peakRssMb, rssMb); peakProcs = Math.max(peakProcs, s.procs);
++    samples.push(s);
++    if (samples.length % Math.max(1, Math.round(1000 / SAMPLE_MS)) === 0) log("SAMPLE", JSON.stringify(s));
++  }, SAMPLE_MS);
++
++  const results: Array<{ job: number; ok: boolean; startedAt: number; ms: number; error?: string }> = [];
++  let next = 0;
++  const runOne = async (job: number) => {
++    const st = Date.now();
++    log("JOB", `start job=${job}`);
++    try {
++      const r: any = await runPipelineIsolated({ company: { id: 1000 + job } as any, framework: { id: 1 } as any, measures: [], workspaceId: 1 } as any);
++      results.push({ job, ok: !!r?.success, startedAt: st - t0, ms: Date.now() - st, error: r?.error });
++      log("JOB", `done job=${job} success=${r?.success} error=${r?.error ?? "-"} ms=${Date.now() - st}`);
++    } catch (e: any) {
++      results.push({ job, ok: false, startedAt: st - t0, ms: Date.now() - st, error: String(e?.message || e).slice(0, 300) });
++      log("JOB", `FAILED job=${job} err=${String(e?.message || e).slice(0, 300)}`);
++    }
++  };
++  await Promise.all(Array.from({ length: CONC }, async () => { while (next < JOBS) await runOne(next++); }));
++  await new Promise((r) => setTimeout(r, 1500));
++  clearInterval(sampler);
++  srv.close();
++
++  const spawnFailures = results.filter((r) => !r.ok && /exited unexpectedly|spawn|EAGAIN|pthread|uv_thread/i.test(r.error || "")).length;
++  const summary = {
++    label: LABEL, jobs: JOBS, concurrency: CONC, maxConcurrentBrowser: 1, holdMs: +process.env.REPRO_HOLD_MS!, docsPerChild: DOCS_PER_CHILD,
++    limits: { nproc: nprocLimit(), cgroup: CG, pidsMax: readNum(`${CG}/pids.max`) },
++    peak: { liveBrowsers: peakBrowsers, tasks: peakTasks, procs: peakProcs, rssMb: peakRssMb },
++    bound_held: peakBrowsers <= 1,
++    jobsOk: results.filter((r) => r.ok).length, jobsFailed: results.filter((r) => !r.ok).length, spawn_failures: spawnFailures,
++    firstFailureJob: results.filter((r) => !r.ok).sort((a, b) => a.job - b.job)[0]?.job ?? null,
++    browsersLaunched: seenBrowsers.size,
++    browserLifetimesMs: [...seenBrowsers.values()].map((v) => (v.exitedAt ?? Date.now() - t0) - v.launchedAt),
++    finalBroker: __testing.brokerState(), quarantined: __testing.stats().quarantined,
++    results: results.sort((a, b) => a.job - b.job), events, samples,
++  };
++  fs.writeFileSync(OUT, JSON.stringify(summary, null, 1));
++  log("SUMMARY", JSON.stringify({ ...summary, results: undefined, events: events.length, samples: samples.length, browserLifetimesMs: undefined }));
++  process.exit(0);
++}
++main().catch((e) => { console.error(e); process.exit(1); });
+-- 
+2.43.0
+
+
+From f2288cefcbe891a36f6de26f0b26b75f91b9cb20 Mon Sep 17 00:00:00 2001
+From: ahow <13916301+ahow@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 15:03:29 +0000
+Subject: [PATCH 2/4] fix(worker-isolation): close+reap the child's Chromium
+ before returning the browser permit; opt-in batch stop rule S4
+
+processor.ts (isolated children only; non-isolated path unchanged):
+- getSharedBrowser registers each launched Chromium and its process group.
+- releaseBrowserSlot -> releaseChildBrowserPermit: when the last holder in the
+  child releases, every browser is detached, closed, and its process group is
+  confirmed gone (close -> wait -> SIGKILL group -> wait) BEFORE remoteRelease.
+  Unconfirmed cleanup withholds the permit and opens the child's browser
+  circuit; the parent reaps on exit (existing quarantine path).
+- retireChildBrowser: with no pid handle only a COMPLETED close() counts;
+  a timed-out/failed close no longer releases the permit.
+- pdfRecovery: re-check the circuit after resetBrowserCircuit().
+
+worker.ts + lib/batch-stop-rule.ts: BATCH_STOP_RULE_FAILED_JOBS (unset/0 =
+inert). After failJob records a failure, count distinct failed jobs in the
+batch; at >= N (or any retry-exhausted job) run the POST /batch/cancel sequence
+(flag -> purge -> snapshot -> PG cancel) and skip the retry re-enqueue.
+
+Tests: browser-close-order.test.ts (real isolated children + Chromium; asserts
+no live Chromium at every permit return on success / failure / cancellation /
+child-death paths), batch-stop-rule.test.ts (default inert, threshold N trips,
+cancel sequence order, batch-1276 simulation).
+---
+ .../__fixtures__/browser-close-order-child.ts |  40 ++++
+ server/lib/__fixtures__/marker-pdf.ts         |  27 +++
+ server/lib/batch-stop-rule.test.ts            | 175 ++++++++++++++++++
+ server/lib/batch-stop-rule.ts                 | 137 ++++++++++++++
+ server/lib/browser-close-order.test.ts        | 150 +++++++++++++++
+ server/lib/processor.ts                       | 144 ++++++++++++--
+ server/worker.ts                              |  34 ++++
+ 7 files changed, 695 insertions(+), 12 deletions(-)
+ create mode 100644 server/lib/__fixtures__/browser-close-order-child.ts
+ create mode 100644 server/lib/__fixtures__/marker-pdf.ts
+ create mode 100644 server/lib/batch-stop-rule.test.ts
+ create mode 100644 server/lib/batch-stop-rule.ts
+ create mode 100644 server/lib/browser-close-order.test.ts
+
+diff --git a/server/lib/__fixtures__/browser-close-order-child.ts b/server/lib/__fixtures__/browser-close-order-child.ts
+new file mode 100644
+index 0000000..4ab27f7
+--- /dev/null
++++ b/server/lib/__fixtures__/browser-close-order-child.ts
+@@ -0,0 +1,40 @@
++// Close-before-release ordering child (loaded by job-child.ts via CIQ_CHILD_TEST_MODULE).
++// Drives the PRODUCTION browser call sites inside a real isolated job child
++// against a local HTTP server (CLOSE_ORDER_BASE); the parent test observes, at
++// the instant each browser permit returns to the replica broker, whether any
++// Chromium process is still alive. Zero paid calls, no external network.
++//   CLOSE_ORDER_MODE = success | failure | cancel | kill
++export async function run(_opts: any): Promise<any> {
++  const { fetchPdfViaBrowser, fetchIssuerPdfsWithPrimedSession } = await import("../processor.js");
++  const base = String(process.env.CLOSE_ORDER_BASE);
++  const mode = String(process.env.CLOSE_ORDER_MODE);
++  const out: Record<string, any> = { mode };
++  const attempt = async (name: string, f: () => Promise<any>) => {
++    const t0 = Date.now();
++    try { const v = await f(); out[name] = { ok: true, chars: typeof v === "string" ? v.length : (v?.size ?? 0), text: typeof v === "string" ? v.slice(0, 200) : "", ms: Date.now() - t0 }; }
++    catch (e: any) { out[name] = { ok: false, error: `${e?.name}: ${String(e?.message || e).slice(0, 160)}`, ms: Date.now() - t0 }; }
++  };
++  if (mode === "success") {
++    await attempt("fetchPdfViaBrowser", () => fetchPdfViaBrowser(`${base}/ok-0.pdf`));
++  } else if (mode === "failure") {
++    await attempt("fetchPdfViaBrowser", () => fetchPdfViaBrowser(`${base}/reset.pdf`));
++    await attempt("pdfRecovery", () => fetchIssuerPdfsWithPrimedSession(base, [`${base}/reset.pdf`], { overallBudgetMs: 8000, perPdfTimeoutMs: 3000 }));
++  } else if (mode === "cancel") {
++    // A holds the permit on a slow document; B queues for the permit; the parent
++    // cancels the batch while A is mid-fetch. A finishes → close+reap → release;
++    // B is granted → post-acquire refusal → release; C is refused pre-acquire.
++    const a = attempt("A_inflight", () => fetchPdfViaBrowser(`${base}/slow.pdf`));
++    await new Promise((r) => setTimeout(r, 150));
++    const b = attempt("B_postAcquire", () => fetchPdfViaBrowser(`${base}/ok-1.pdf`));
++    await Promise.all([a, b]);
++    await attempt("C_preAcquire", () => fetchPdfViaBrowser(`${base}/ok-2.pdf`));
++  } else if (mode === "kill") {
++    // Never returns: the parent's pipeline deadline SIGKILLs this child while it
++    // holds the permit and Chromium is live (child-death path).
++    await attempt("hang", () => fetchPdfViaBrowser(`${base}/hang.pdf`));
++  }
++  // The parent discards a child report that arrives after a terminal cancel
++  // decision, so the per-call outcomes are also written to CLOSE_ORDER_OUT.
++  if (process.env.CLOSE_ORDER_OUT) (await import("node:fs")).writeFileSync(process.env.CLOSE_ORDER_OUT, JSON.stringify(out));
++  return { success: true, documentsProcessed: 0, scoresCreated: 0, closeOrder: out };
++}
+diff --git a/server/lib/__fixtures__/marker-pdf.ts b/server/lib/__fixtures__/marker-pdf.ts
+new file mode 100644
+index 0000000..e76c97f
+--- /dev/null
++++ b/server/lib/__fixtures__/marker-pdf.ts
+@@ -0,0 +1,27 @@
++// Minimal single-page PDF whose extractable text is `lines` (test-only; used to
++// assert that each synthetic document's own marker survives the real browser →
++// pdftotext extraction path, not just that "some text" came back).
++export function markerPdf(lines: string[]): Buffer {
++  const esc = (s: string) => s.replace(/[\\()]/g, (c) => "\\" + c);
++  // Pad past PDF_TEXT_MIN_CHARS (100) so extraction stays on the primary
++  // pdf-parse path instead of falling through to OCR.
++  lines = [...lines, "Synthetic filing body text used only by local tests.", "No provider is called and no network leaves 127.0.0.1."];
++  const content = ["BT", "/F1 12 Tf", "72 720 Td", "14 TL", ...lines.map((l) => `(${esc(l)}) '`), "ET"].join("\n");
++  const objs = [
++    "<< /Type /Catalog /Pages 2 0 R >>",
++    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
++    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
++    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
++    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
++  ];
++  let body = "%PDF-1.4\n";
++  const offs: number[] = [];
++  objs.forEach((o, i) => { offs.push(Buffer.byteLength(body)); body += `${i + 1} 0 obj\n${o}\nendobj\n`; });
++  const xref = Buffer.byteLength(body);
++  body += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("");
++  body += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
++  return Buffer.from(body, "latin1");
++}
++
++/** Marker a given synthetic document must yield after extraction. */
++export const markerFor = (key: string) => `CIQMARKER-${key.replace(/[^A-Za-z0-9]/g, "")}`;
+diff --git a/server/lib/batch-stop-rule.test.ts b/server/lib/batch-stop-rule.test.ts
+new file mode 100644
+index 0000000..2f8b1e4
+--- /dev/null
++++ b/server/lib/batch-stop-rule.test.ts
+@@ -0,0 +1,175 @@
++/**
++ * Batch stop rule S4 tests (lib/batch-stop-rule.ts). Deterministic, no network, no paid calls.
++ * Run: npx tsx server/lib/batch-stop-rule.test.ts
++ * Optional SQL check against the local integration Postgres (read/write only to a TEMP table):
++ *   STOP_RULE_TEST_PG=postgres://ciq:ciq@127.0.0.1:55432/ciq npx tsx server/lib/batch-stop-rule.test.ts
++ */
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import {
++  readStopRuleThreshold, decideBatchStop, enforceBatchStopRule, isStopRuleFailure,
++  COUNT_BATCH_FAILURES_SQL, STOP_RULE_ENV, runStopRuleCancelSequence, type BatchFailureCounts,
++} from "./batch-stop-rule.js";
++
++const SPAWN_ABORT = "Isolated job child exited unexpectedly (code=null signal=SIGABRT stage=spawn)";
++
++test("threshold: unset / 0 / junk → disabled (legacy behaviour unchanged)", () => {
++  assert.equal(readStopRuleThreshold({}), 0);
++  assert.equal(readStopRuleThreshold({ [STOP_RULE_ENV]: "" }), 0);
++  assert.equal(readStopRuleThreshold({ [STOP_RULE_ENV]: "0" }), 0);
++  assert.equal(readStopRuleThreshold({ [STOP_RULE_ENV]: "-2" }), 0);
++  assert.equal(readStopRuleThreshold({ [STOP_RULE_ENV]: "two" }), 0);
++  assert.equal(readStopRuleThreshold({ [STOP_RULE_ENV]: "1.5" }), 0);
++  assert.equal(readStopRuleThreshold({ [STOP_RULE_ENV]: "2" }), 2);
++});
++
++test("decision: ≥ threshold failed jobs, or any retry-exhausted job, stops", () => {
++  assert.equal(decideBatchStop({ failedAttemptJobs: 5, retryExhaustedJobs: 3 }, 0).stop, false);
++  assert.equal(decideBatchStop({ failedAttemptJobs: 1, retryExhaustedJobs: 0 }, 2).stop, false);
++  assert.equal(decideBatchStop({ failedAttemptJobs: 2, retryExhaustedJobs: 0 }, 2).stop, true);
++  assert.equal(decideBatchStop({ failedAttemptJobs: 1, retryExhaustedJobs: 1 }, 2).stop, true);
++});
++
++test("cancellation and provider-quota pauses are not S4 failures", () => {
++  assert.equal(isStopRuleFailure("Cancelled (batch cancelled)"), false);
++  assert.equal(isStopRuleFailure("provider_paused:quota_exhausted:..."), false);
++  assert.equal(isStopRuleFailure(""), false);
++  assert.equal(isStopRuleFailure(SPAWN_ABORT), true);
++});
++
++test("enforce: disabled never counts or cancels", async () => {
++  let counted = 0, cancelled = 0;
++  const stopped = await enforceBatchStopRule(1, 1, SPAWN_ABORT, {
++    threshold: 0, countFailures: async () => { counted++; return { failedAttemptJobs: 99, retryExhaustedJobs: 99 }; },
++    cancelBatch: async () => { cancelled++; }, log: () => {},
++  });
++  assert.equal(stopped, false); assert.equal(counted, 0); assert.equal(cancelled, 0);
++});
++
++test("enforce: count error fails open to the legacy retry path (no cancel)", async () => {
++  let cancelled = 0; const logs: string[] = [];
++  const stopped = await enforceBatchStopRule(1, 1, SPAWN_ABORT, {
++    threshold: 2, countFailures: async () => { throw new Error("pg down"); },
++    cancelBatch: async () => { cancelled++; }, log: (l) => logs.push(l),
++  });
++  assert.equal(stopped, false); assert.equal(cancelled, 0);
++  assert.match(logs[0], /count failed/);
++});
++
++test("enforce: cancel-sequence error still suppresses the retry", async () => {
++  const stopped = await enforceBatchStopRule(1, 1, SPAWN_ABORT, {
++    threshold: 2, countFailures: async () => ({ failedAttemptJobs: 2, retryExhaustedJobs: 0 }),
++    cancelBatch: async () => { throw new Error("redis down"); }, log: () => {},
++  });
++  assert.equal(stopped, true);
++});
++
++/**
++ * Batch-1276-shaped simulation of the worker failure branch (worker.ts:
++ * failJob → [stop rule] → retry-or-final), using storage.failJob's status rule
++ * (attempts >= 3 → 'failed', else 'pending') and MAX_RETRY_ATTEMPTS = 3.
++ * 25 jobs, WORKER_CONCURRENCY-style 8 in flight across replicas, 13 jobs whose
++ * child always aborts at spawn (as observed), 12 that succeed.
++ */
++async function simulate(threshold: number) {
++  let countCalls = 0; const steps: string[] = []; let attemptsAfterTrip = 0;
++  const MAX = 3, N = 25, FAILING = new Set([1, 2, 4, 6, 7, 9, 11, 13, 15, 17, 19, 21, 23]);
++  type J = { id: number; attempts: number; status: string; lastError: string | null };
++  const jobs = new Map<number, J>(Array.from({ length: N }, (_, i) => [i, { id: i, attempts: 0, status: "pending", lastError: null }]));
++  const queue: number[] = [...jobs.keys()];
++  let cancelled = false, failedAttempts = 0, retriesEnqueued = 0, failedJobsCounter = 0;
++  const count = async (): Promise<BatchFailureCounts> => {
++    countCalls++;
++    const a = [...jobs.values()];
++    const f = (j: J) => j.lastError != null && isStopRuleFailure(j.lastError);
++    return { failedAttemptJobs: a.filter((j) => j.status !== "completed" && f(j)).length, retryExhaustedJobs: a.filter((j) => j.status === "failed" && f(j)).length };
++  };
++  while (queue.length && !cancelled) {
++    const wave = queue.splice(0, 8);
++    for (const id of wave) {
++      if (cancelled) { attemptsAfterTrip++; break; } // claimJob's PG fence refuses jobs of a cancelled batch
++      const j = jobs.get(id)!; j.attempts++;
++      if (!FAILING.has(id)) { j.status = "completed"; continue; }
++      failedAttempts++;
++      j.lastError = SPAWN_ABORT; j.status = j.attempts >= MAX ? "failed" : "pending";
++      const stopped = await enforceBatchStopRule(7, id, SPAWN_ABORT, {
++        threshold, countFailures: count, log: () => {},
++        cancelBatch: (bid, reason) => runStopRuleCancelSequence(bid, reason, {
++          flag: () => { steps.push("flag"); cancelled = true; },
++          purge: async () => { steps.push("purge"); queue.length = 0; },
++          snapshot: async () => { steps.push("snapshot"); },
++          pgCancel: async () => { steps.push("pgCancel"); },
++          log: () => {},
++        }),
++      });
++      if (stopped) continue;
++      if (j.attempts < MAX) { retriesEnqueued++; queue.push(id); } else failedJobsCounter++;
++    }
++  }
++  return { cancelled, countCalls, steps, attemptsAfterTrip, queued: queue.length, failedAttempts, retriesEnqueued, failedJobsCounter, exhausted: [...jobs.values()].filter((j) => j.status === "failed").length };
++}
++
++test("batch-1276 shape WITHOUT the rule: 13 jobs exhaust retries (39 failed attempts)", async () => {
++  const r = await simulate(0);
++  assert.equal(r.cancelled, false);
++  assert.equal(r.exhausted, 13);
++  assert.equal(r.failedAttempts, 39);
++  assert.equal(r.failedJobsCounter, 13);
++});
++
++test("batch-1276 shape WITH BATCH_STOP_RULE_FAILED_JOBS=2: stops at the 2nd failed job, before any job exhausts retries", async () => {
++  const r = await simulate(readStopRuleThreshold({ [STOP_RULE_ENV]: "2" }));
++  assert.equal(r.cancelled, true);
++  assert.equal(r.failedAttempts, 2);
++  assert.equal(r.retriesEnqueued, 1); // job #1's first failure (1 < threshold) retries; job #2 trips S4
++  assert.equal(r.exhausted, 0);
++});
++
++test("worker default (env unset): retry path byte-for-byte legacy — rule never counts, never cancels", async () => {
++  const saved = process.env[STOP_RULE_ENV]; delete process.env[STOP_RULE_ENV];
++  try {
++    const r = await simulate(readStopRuleThreshold()); // what worker.stopRuleTripped reads
++    assert.equal(r.countCalls, 0, "no DB count at threshold 0");
++    assert.deepEqual(r.steps, [], "no cancel sequence");
++    assert.equal(r.retriesEnqueued, 26); // 13 jobs × 2 retries — unchanged legacy behaviour
++    assert.equal(r.exhausted, 13);
++  } finally { if (saved !== undefined) process.env[STOP_RULE_ENV] = saved; }
++});
++
++test("threshold N=3: Nth failed job trips → batch cancelled, snapshot saved, queue purged, no further retries/claims", async () => {
++  const r = await simulate(3);
++  assert.equal(r.cancelled, true);
++  assert.equal(r.failedAttempts, 3, "stops on the 3rd failed attempt");
++  assert.deepEqual(r.steps, ["flag", "purge", "snapshot", "pgCancel"], "POST /batch/cancel order, snapshot included");
++  assert.equal(r.queued, 0, "queued jobs purged");
++  assert.equal(r.retriesEnqueued, 2, "only the 2 sub-threshold failures retried; the tripping failure is not re-enqueued");
++  assert.equal(r.exhausted, 0);
++});
++
++test("cancel sequence: purge/snapshot errors are non-fatal; PG cancel still runs", async () => {
++  const steps: string[] = []; const logs: string[] = [];
++  await runStopRuleCancelSequence(9, "stop rule S4", {
++    flag: () => { steps.push("flag"); },
++    purge: async () => { steps.push("purge"); throw new Error("redis down"); },
++    snapshot: async () => { steps.push("snapshot"); throw new Error("snapshot failed"); },
++    pgCancel: async (_b, reason) => { steps.push(`pgCancel:${reason}`); },
++    log: (l) => logs.push(l),
++  });
++  assert.deepEqual(steps, ["flag", "purge", "snapshot", "pgCancel:stop rule S4"]);
++  assert.equal(logs.length, 2);
++});
++
++test("SQL: COUNT_BATCH_FAILURES_SQL counts first failed attempts and exhaustion (optional, local PG)", { skip: !process.env.STOP_RULE_TEST_PG }, async () => {
++  const pg = (await import("pg")).default;
++  const c = new pg.Client({ connectionString: process.env.STOP_RULE_TEST_PG });
++  await c.connect();
++  try {
++    await c.query("CREATE TEMP TABLE analysis_jobs (id serial, batch_id int, status text, last_error text)");
++    await c.query(`INSERT INTO analysis_jobs (batch_id, status, last_error) VALUES
++      (7,'pending',$1), (7,'running',$1), (7,'failed',$1), (7,'completed',$1), (7,'completed',NULL),
++      (7,'failed','Cancelled (batch cancelled)'), (7,'pending','provider_paused:quota_exhausted:x'),
++      (8,'failed',$1)`, [SPAWN_ABORT]);
++    const r = await c.query(COUNT_BATCH_FAILURES_SQL, [7]);
++    assert.deepEqual(r.rows[0], { failed_attempt_jobs: 3, retry_exhausted_jobs: 1 });
++  } finally { await c.end(); }
++});
+diff --git a/server/lib/batch-stop-rule.ts b/server/lib/batch-stop-rule.ts
+new file mode 100644
+index 0000000..0713cb3
+--- /dev/null
++++ b/server/lib/batch-stop-rule.ts
+@@ -0,0 +1,137 @@
++/**
++ * Batch stop rule (validation plan deliverable 35, §7 rule S4):
++ *   "≥ 2 jobs reach `failed`, or any job exhausts retries → stop/cancel".
++ *
++ * Why this exists: S4 was only ever applied by a human watching read-only
++ * monitors. storage.failJob() parks a failed attempt back in `pending` until
++ * attempts >= 3, so `batch_runs.failed_jobs` (and status='failed') only move at
++ * retry EXHAUSTION — batch 1276 therefore let 13 jobs burn all 3 attempts each
++ * before anything looked "failed". This module counts a job as failed at its
++ * FIRST recorded failed attempt, so the worker itself can cancel the batch at
++ * the agreed threshold before any further retry is enqueued.
++ *
++ * Opt-in and inert by default: BATCH_STOP_RULE_FAILED_JOBS unset/0/invalid →
++ * disabled, worker behaviour byte-for-byte unchanged. Set it to 2 for the next
++ * validation run to enforce S4 as agreed.
++ */
++
++export const STOP_RULE_ENV = "BATCH_STOP_RULE_FAILED_JOBS";
++
++/** Errors recorded on a job that are NOT job failures for S4 purposes. */
++const NON_FAILURE_ERROR_PREFIXES = ["Cancelled", "provider_paused:"] as const;
++
++export function readStopRuleThreshold(env: NodeJS.ProcessEnv = process.env): number {
++  const raw = env[STOP_RULE_ENV];
++  if (raw == null || raw.trim() === "") return 0;
++  const n = Number(raw);
++  return Number.isInteger(n) && n > 0 ? n : 0;
++}
++
++export function isStopRuleFailure(error: string | null | undefined): boolean {
++  if (!error) return false;
++  return !NON_FAILURE_ERROR_PREFIXES.some((p) => error.startsWith(p));
++}
++
++export interface BatchFailureCounts {
++  /** Distinct jobs in the batch with ≥1 recorded failed attempt that have not since completed. */
++  failedAttemptJobs: number;
++  /** Distinct jobs in the batch that reached terminal `failed` (retries exhausted / non-retriable). */
++  retryExhaustedJobs: number;
++}
++
++export interface StopDecision {
++  stop: boolean;
++  reason: string;
++}
++
++export function decideBatchStop(counts: BatchFailureCounts, threshold: number): StopDecision {
++  if (threshold <= 0) return { stop: false, reason: "disabled" };
++  if (counts.retryExhaustedJobs >= 1) {
++    return { stop: true, reason: `S4: ${counts.retryExhaustedJobs} job(s) exhausted retries` };
++  }
++  if (counts.failedAttemptJobs >= threshold) {
++    return { stop: true, reason: `S4: ${counts.failedAttemptJobs} job(s) failed (threshold ${threshold})` };
++  }
++  return { stop: false, reason: `below threshold (${counts.failedAttemptJobs}/${threshold})` };
++}
++
++/**
++ * Read-only replica-wide count. Called right after failJob() committed this
++ * attempt's failure, so the current job is included. Cancellation and
++ * provider-quota pauses are excluded (they are not job failures).
++ */
++export const COUNT_BATCH_FAILURES_SQL = `
++  SELECT
++    count(*) FILTER (WHERE status <> 'completed' AND last_error IS NOT NULL
++                       AND last_error NOT LIKE 'Cancelled%' AND last_error NOT LIKE 'provider_paused:%')::int AS failed_attempt_jobs,
++    count(*) FILTER (WHERE status = 'failed' AND last_error IS NOT NULL
++                       AND last_error NOT LIKE 'Cancelled%' AND last_error NOT LIKE 'provider_paused:%')::int AS retry_exhausted_jobs
++  FROM analysis_jobs WHERE batch_id = $1`;
++
++export interface StopRuleDeps {
++  threshold: number;
++  countFailures: (batchId: number) => Promise<BatchFailureCounts>;
++  /** Same sequence as POST /batch/cancel: flag + queue purge + snapshot + PG cancel. */
++  cancelBatch: (batchId: number, reason: string) => Promise<void>;
++  log?: (line: string) => void;
++}
++
++/**
++ * Evaluate S4 after a job failure was recorded. Returns true when the batch was
++ * stopped, in which case the caller MUST NOT re-enqueue a retry. Never throws:
++ * a counting error leaves the legacy retry path in charge (fail-open to the
++ * pre-existing behaviour, logged).
++ */
++export async function enforceBatchStopRule(
++  batchId: number,
++  jobId: number,
++  error: string,
++  deps: StopRuleDeps,
++): Promise<boolean> {
++  const log = deps.log ?? ((l: string) => console.warn(l));
++  if (deps.threshold <= 0 || !isStopRuleFailure(error)) return false;
++  let counts: BatchFailureCounts;
++  try {
++    counts = await deps.countFailures(batchId);
++  } catch (e: any) {
++    log(`[BATCH-STOP-RULE] batch=${batchId} job=${jobId} count failed (${e?.message ?? e}) — rule not evaluated`);
++    return false;
++  }
++  const d = decideBatchStop(counts, deps.threshold);
++  if (!d.stop) return false;
++  log(`[BATCH-STOP-RULE] TRIPPED batch=${batchId} job=${jobId} failedAttemptJobs=${counts.failedAttemptJobs} retryExhaustedJobs=${counts.retryExhaustedJobs} threshold=${deps.threshold} — cancelling batch, no further retries (${d.reason})`);
++  try {
++    await deps.cancelBatch(batchId, `stop rule ${d.reason}`);
++  } catch (e: any) {
++    // The Redis/local cancel flag is set first inside cancelBatch, so even a
++    // partial failure here stops further claims; still refuse the retry.
++    log(`[BATCH-STOP-RULE] batch=${batchId} cancel sequence error (${e?.message ?? e}) — retry still suppressed`);
++  }
++  return true;
++}
++
++export interface CancelSequenceSteps {
++  /** Local + Redis cancel flag (worker.cancelBatch) — first, so no new claim starts. */
++  flag: (batchId: number) => void;
++  /** Purge the batch's still-queued BullMQ jobs (queue.removeBatchJobs). */
++  purge: (batchId: number) => Promise<void>;
++  /** saveBatchSnapshot for the batch (non-fatal, as in POST /batch/cancel). */
++  snapshot: (batchId: number) => Promise<void>;
++  /** storage.cancelBatchRun: PG batch status → cancelled (claimJob fence). */
++  pgCancel: (batchId: number, reason: string) => Promise<void>;
++  log?: (line: string) => void;
++}
++
++/**
++ * The POST /batch/cancel sequence the stop rule runs when tripped:
++ * flag → purge queue → snapshot → PG cancel. Purge and snapshot errors are
++ * logged and do not prevent the PG cancel; a PG cancel error propagates (the
++ * caller still suppresses the retry, see enforceBatchStopRule).
++ */
++export async function runStopRuleCancelSequence(batchId: number, reason: string, s: CancelSequenceSteps): Promise<void> {
++  const log = s.log ?? ((l: string) => console.warn(l));
++  s.flag(batchId);
++  await s.purge(batchId).catch((e: any) => log(`[BATCH-STOP-RULE] removeBatchJobs failed: ${e?.message ?? e}`));
++  await s.snapshot(batchId).catch((e: any) => log(`[BATCH-STOP-RULE] snapshot failed (non-fatal): ${e?.message ?? e}`));
++  await s.pgCancel(batchId, reason);
++}
+diff --git a/server/lib/browser-close-order.test.ts b/server/lib/browser-close-order.test.ts
+new file mode 100644
+index 0000000..905d4bb
+--- /dev/null
++++ b/server/lib/browser-close-order.test.ts
+@@ -0,0 +1,150 @@
++/**
++ * Close-before-release ordering (opt-in; needs a local Chromium, no DB writes,
++ * no Redis, zero paid calls).
++ *
++ * Runs REAL isolated job children (runPipelineIsolated → job-child.ts →
++ * __fixtures__/browser-close-order-child.ts) that drive the production browser
++ * call sites (fetchPdfViaBrowser, fetchIssuerPdfsWithPrimedSession) against a
++ * local HTTP server. The parent wraps the replica browser-permit broker and, at
++ * the exact instant each permit returns, scans /proc for any live (non-zombie)
++ * Chromium process holding a puppeteer profile. Invariant on every exit path:
++ *
++ *     work stopped → Chromium closed → termination confirmed → permit returned
++ *
++ * Paths: success, fetch failure (connection reset; direct + pdfRecovery),
++ * cancellation (in-flight, post-acquire refusal, pre-acquire refusal), and child
++ * death (pipeline deadline → SIGKILL → parent group reap → releaseAll).
++ *
++ *   npx tsx server/lib/browser-close-order.test.ts
++ * Skips (exit 0) when Chromium is missing unless CLOSE_ORDER_REQUIRED=1.
++ */
++import fs from "node:fs";
++import http from "node:http";
++import path from "node:path";
++import test from "node:test";
++import assert from "node:assert/strict";
++import { fileURLToPath } from "node:url";
++import { markerPdf, markerFor } from "./__fixtures__/marker-pdf.js";
++
++const HERE = path.dirname(fileURLToPath(import.meta.url));
++const CHROMIUM = process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/local/bin/chromium";
++Object.assign(process.env, {
++  WORKER_ISOLATION_ENABLED: "true",
++  CIQ_CHILD_TEST_MODULE: path.join(HERE, "__fixtures__/browser-close-order-child.ts"),
++  PUPPETEER_EXECUTABLE_PATH: CHROMIUM,
++  MAX_CONCURRENT_BROWSER: "1",
++  DATABASE_URL: process.env.DATABASE_URL || "postgres://ciq:ciq@127.0.0.1:55432/ciq",
++  ADAPTIVE_CONCURRENCY_ENABLED: "false",
++  CREDIT_PAUSE_ENABLED: "false",
++  PIPELINE_TIMEOUT_MS: "60000",
++});
++
++/** Live (non-zombie) processes holding a puppeteer profile, anywhere on the box. */
++function liveChromium(): number[] {
++  const out: number[] = [];
++  for (const d of fs.readdirSync("/proc")) {
++    if (!/^\d+$/.test(d)) continue;
++    try {
++      const st = fs.readFileSync(`/proc/${d}/stat`, "utf8");
++      if (st.slice(st.lastIndexOf(")") + 2, st.lastIndexOf(")") + 3) === "Z") continue;
++      if (fs.readFileSync(`/proc/${d}/cmdline`, "utf8").includes("puppeteer_dev_chrome_profile")) out.push(+d);
++    } catch { /* exited */ }
++  }
++  return out;
++}
++
++if (!fs.existsSync(CHROMIUM)) {
++  if (process.env.CLOSE_ORDER_REQUIRED === "1") throw new Error(`chromium missing at ${CHROMIUM}`);
++  console.log(`SKIP browser-close-order: chromium missing at ${CHROMIUM}`);
++} else {
++  const pre = liveChromium();
++  const { runPipelineIsolated, __testing } = await import("./job-isolation.js");
++  const { processorSlotBroker } = await import("./processor.js");
++
++  // ── permit instrumentation: record live Chromium at every grant / return ──
++  const b = processorSlotBroker.browser;
++  const rawAcquire = b.acquire.bind(b), rawRelease = (b.release as any).bind(b);
++  const log: Array<{ ev: "grant" | "release"; at: number; liveChromium: number[] }> = [];
++  (b as any).acquire = async () => { await rawAcquire(); log.push({ ev: "grant", at: Date.now(), liveChromium: liveChromium().filter((p) => !pre.includes(p)) }); };
++  (b as any).release = (...a: any[]) => { log.push({ ev: "release", at: Date.now(), liveChromium: liveChromium().filter((p) => !pre.includes(p)) }); return rawRelease(...a); };
++
++  // ── local server ──
++  const okPdf = (k: string) => markerPdf([markerFor(k), "close-order synthetic document"]);
++  const sockets = new Set<any>();
++  const srv = http.createServer((q, r) => {
++    const u = q.url || "/";
++    const send = (buf: Buffer) => { r.writeHead(200, { "content-type": "application/pdf", "content-length": buf.length }); r.end(buf); };
++    if (/^\/ok-\d+\.pdf/.test(u)) return send(okPdf(u.slice(1, -4)));
++    if (u.startsWith("/slow.pdf")) return void setTimeout(() => send(okPdf("slow")), 2500);
++    if (u.startsWith("/reset.pdf")) return void q.socket.destroy();
++    if (u.startsWith("/hang.pdf")) return; // never answers
++    r.writeHead(200, { "content-type": "text/html" }); r.end("<html><body>issuer home</body></html>");
++  });
++  srv.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
++  await new Promise<void>((res) => srv.listen(0, "127.0.0.1", () => res()));
++  process.env.CLOSE_ORDER_BASE = `http://127.0.0.1:${(srv.address() as any).port}`;
++
++  const runMode = async (mode: string, extra: Record<string, any> = {}) => {
++    process.env.CLOSE_ORDER_MODE = mode;
++    const from = log.length;
++    let res: any, err: any;
++    try { res = await runPipelineIsolated({ company: { id: 7000 } as any, framework: { id: 1 } as any, measures: [], workspaceId: 1, ...extra } as any); }
++    catch (e) { err = e; }
++    // permits may return asynchronously after the child settles (parent reap)
++    for (let i = 0; i < 100 && __testing.brokerState().browser?.active; i++) await new Promise((r) => setTimeout(r, 100));
++    return { res, err, events: log.slice(from) };
++  };
++  const assertCloseBeforeRelease = (events: typeof log, minReleases: number) => {
++    const rel = events.filter((e) => e.ev === "release");
++    assert.ok(rel.length >= minReleases, `expected ≥${minReleases} permit returns, got ${rel.length}`);
++    for (const e of rel) assert.deepEqual(e.liveChromium, [], `permit returned while Chromium still alive: ${e.liveChromium}`);
++    assert.equal(events.filter((e) => e.ev === "grant").length, rel.length, "every grant returned exactly once");
++    const bs = __testing.brokerState();
++    assert.equal(bs.browser?.active ?? 0, 0, `broker not drained: ${JSON.stringify(bs)}`);
++    assert.equal(__testing.stats().quarantined, 0, "no quarantine expected");
++  };
++
++  test("success path: extracted marker; Chromium gone before the permit returns", async () => {
++    const { res, err, events } = await runMode("success");
++    assert.equal(err, undefined);
++    const r = res.closeOrder.fetchPdfViaBrowser;
++    assert.equal(r.ok, true); assert.match(r.text, new RegExp(markerFor("ok-0")));
++    assertCloseBeforeRelease(events, 1);
++  });
++
++  test("fetch-failure path (connection reset; direct + pdfRecovery): close before release", async () => {
++    const { res, err, events } = await runMode("failure");
++    assert.equal(err, undefined);
++    assert.equal(res.closeOrder.fetchPdfViaBrowser.chars ?? 0, 0, "reset must not yield text");
++    assertCloseBeforeRelease(events, 2);
++  });
++
++  test("cancellation path (in-flight / post-acquire refusal / pre-acquire refusal): close before release", async () => {
++    // Cancel only once A demonstrably holds the permit (first grant + 600 ms,
++    // i.e. Chromium launched and A is waiting on the 2.5 s slow document).
++    const outFile = `/tmp/close-order-cancel-${process.pid}.json`;
++    fs.rmSync(outFile, { force: true });
++    process.env.CLOSE_ORDER_OUT = outFile;
++    const from = log.length;
++    const cancelCheck = () => { const g = log.slice(from).find((e) => e.ev === "grant"); return !!g && Date.now() - g.at > 600; };
++    const { res, err, events } = await runMode("cancel", { batchId: 990001, cancelCheck });
++    delete process.env.CLOSE_ORDER_OUT;
++    assert.ok(res || err, "settled");
++    const c = JSON.parse(fs.readFileSync(outFile, "utf8"));
++    assert.equal(c.A_inflight.ok, true, `A (in flight at cancel) completed its fetch: ${JSON.stringify(c.A_inflight)}`);
++    assert.match(String(c.B_postAcquire.error), /BrowserUnavailableError: lifecycle cancelled/, "B refused after acquiring");
++    assert.match(String(c.C_preAcquire.error), /BrowserUnavailableError: lifecycle cancelled/, "C refused before acquiring");
++    assertCloseBeforeRelease(events, 2); // A's permit + B's post-acquire permit
++  });
++
++  test("child-death path (pipeline deadline → SIGKILL while holding the permit): parent reap before release", async () => {
++    process.env.PIPELINE_TIMEOUT_MS = "6000";
++    try {
++      const { res, err, events } = await runMode("kill");
++      assert.ok(err || res?.success === false, "deadline must fail the job");
++      assertCloseBeforeRelease(events, 1);
++    } finally { process.env.PIPELINE_TIMEOUT_MS = "60000"; }
++  });
++
++  test.after(() => { for (const s of sockets) s.destroy(); srv.close(); });
++}
+diff --git a/server/lib/processor.ts b/server/lib/processor.ts
+index 74bdeb8..07fe353 100644
+--- a/server/lib/processor.ts
++++ b/server/lib/processor.ts
+@@ -6,7 +6,7 @@ import { normaliseTableHorizonMarkers } from "./table-horizon-normaliser";
+ import crypto from "crypto";
+ import puppeteer from "puppeteer-core";
+ import { spawn } from "child_process";
+-import { promises as fsp } from "fs";
++import { promises as fsp, readdirSync, readFileSync } from "fs";
+ import os from "os";
+ import path from "path";
+ import { capDocumentText } from "./doc-size-guard";
+@@ -850,6 +850,8 @@ async function acquireBrowserSlot(): Promise<void> {
+     const diagEndRemote = beginStage("browser_admission_wait", "browser_slot"); // DIAGNOSTIC-ONLY
+     await remoteAcquire("browser");
+     diagEndRemote(true);
++    childBrowserHolders++;
++    console.log(`[BROWSER-LIFECYCLE] child=${process.pid} permit acquired holders=${childBrowserHolders}`);
+     return;
+   }
+   if (activeBrowserFetches < MAX_CONCURRENT_BROWSER) {
+@@ -876,15 +878,119 @@ function browserDispatchRefused(where: string): boolean {
+   return true;
+ }
+ 
+-function releaseBrowserSlot(): void {
+-  if (isIsolatedChild()) { remoteRelease("browser"); return; }
++function releaseBrowserSlot(): Promise<void> {
++  if (isIsolatedChild()) return releaseChildBrowserPermit();
+   const next = browserWaiters.shift();
+   if (next) {
+     // Hand our slot straight to the next waiter without touching the count.
+     next();
+-    return;
++    return Promise.resolve();
+   }
+   activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
++  return Promise.resolve();
++}
++
++// ─── Isolated-child browser lifetime (replica-level live-browser bound) ──────
++// The browser permit is brokered per replica (MAX_CONCURRENT_BROWSER), but the
++// Chromium a child launches used to outlive the permit: it stayed alive until
++// the child process exited (minutes of synthetic/LLM scoring later), while the
++// permit went back to the pool after every fetch. With WORKER_CONCURRENCY
++// children each keeping their own Chromium, live browsers per replica were
++// bounded by the child count, not by MAX_CONCURRENT_BROWSER.
++// Rule enforced here: when the LAST browser permit held by this child is
++// released, every Chromium this child launched is closed AND its process group
++// confirmed gone before the permit is returned. So live Chromium instances per
++// replica ≤ browser permits granted ≤ MAX_CONCURRENT_BROWSER.
++const BROWSER_CLOSE_TIMEOUT_MS = 5000;
++const BROWSER_REAP_WINDOW_MS = 5000;
++let childBrowserHolders = 0;
++const childBrowsers = new Set<any>();
++// Set when a Chromium group could not be confirmed gone: the permit is withheld
++// (never re-granted while old processes may run) and this child stops using the
++// browser (fallbacks treat it like an open circuit) so it cannot self-deadlock.
++let childBrowserRetireFailed = false;
++
++/** Live (non-zombie) members of process group `pgid`, via /proc; kill(-pgid,0) fallback. */
++function processGroupAlive(pgid: number): boolean {
++  try {
++    for (const d of readdirSync("/proc")) {
++      if (!/^\d+$/.test(d)) continue;
++      try {
++        const s: string = readFileSync(`/proc/${d}/stat`, "utf8");
++        const f = s.slice(s.lastIndexOf(")") + 2).split(" ");
++        if (Number(f[2]) === pgid && f[0] !== "Z") return true;
++      } catch { /* exited */ }
++    }
++    return false;
++  } catch {
++    try { process.kill(-pgid, 0); return true; } catch (e: any) { return e?.code === "EPERM"; }
++  }
++}
++
++async function waitGroupGone(pgid: number, ms: number): Promise<boolean> {
++  const until = Date.now() + ms;
++  while (processGroupAlive(pgid)) {
++    if (Date.now() >= until) return false;
++    await new Promise((r) => setTimeout(r, 50));
++  }
++  return true;
++}
++
++/** Close one child-owned Chromium and confirm its process group is gone. */
++async function retireChildBrowser(b: any): Promise<boolean> {
++  const pid: number | undefined = b?.process?.()?.pid;
++  const t0 = Date.now();
++  let closed = false;
++  try {
++    closed = await Promise.race([b.close().then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), BROWSER_CLOSE_TIMEOUT_MS))]);
++  } catch { /* already disconnected / crashed: confirm via the process table below */ }
++  if (!pid) {
++    // No process handle to probe: only a COMPLETED close() counts as confirmed
++    // (a timed-out / failed close withholds the permit instead of releasing it).
++    console[closed ? "log" : "error"](`[BROWSER-LIFECYCLE] child=${process.pid} close (no pid) confirmed=${closed} ms=${Date.now() - t0}`);
++    return closed;
++  }
++  console.log(`[BROWSER-LIFECYCLE] child=${process.pid} close pid=${pid} ms=${Date.now() - t0}`);
++  let gone = await waitGroupGone(pid, BROWSER_REAP_WINDOW_MS);
++  let how = "close";
++  if (!gone) {
++    how = "SIGKILL";
++    try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
++    try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
++    gone = await waitGroupGone(pid, BROWSER_REAP_WINDOW_MS);
++  }
++  console[gone ? "log" : "error"](`[BROWSER-LIFECYCLE] child=${process.pid} ${gone ? "reaped" : "REAP-UNCONFIRMED"} pid=${pid} via=${how} ms=${Date.now() - t0}`);
++  return gone;
++}
++
++async function releaseChildBrowserPermit(): Promise<void> {
++  childBrowserHolders = Math.max(0, childBrowserHolders - 1);
++  if (childBrowserHolders > 0) {
++    // Another in-flight fetch in this child still holds a permit covering the browser.
++    remoteRelease("browser");
++    console.log(`[BROWSER-LIFECYCLE] child=${process.pid} permit released holders=${childBrowserHolders} (browser kept for in-flight fetch)`);
++    return;
++  }
++  // Detach synchronously so a fetch that acquires a new permit meanwhile launches
++  // its own (permit-covered) instance instead of reusing one being closed.
++  const retiring = [...childBrowsers];
++  childBrowsers.clear();
++  sharedBrowser = null;
++  let ok = true;
++  for (const b of retiring) ok = (await retireChildBrowser(b)) && ok;
++  if (!ok) {
++    childBrowserRetireFailed = true;
++    console.error(`[BROWSER-LIFECYCLE] child=${process.pid} browser permit WITHHELD (cleanup unconfirmed); browser disabled for this child — parent reaps on exit`);
++    return;
++  }
++  remoteRelease("browser");
++  console.log(`[BROWSER-LIFECYCLE] child=${process.pid} permit released holders=0 retired=${retiring.length}`);
++}
++
++/** Puppeteer ≥22 exposes `connected` (getter); `isConnected()` no longer exists (puppeteer-core 25.1.0). */
++function browserConnected(b: any): boolean {
++  if (typeof b?.connected === "boolean") return b.connected;
++  return typeof b?.isConnected === "function" && b.isConnected();
+ }
+ 
+ /**
+@@ -922,7 +1028,7 @@ const BROWSER_LAUNCH_COOLDOWN_MS = parseInt(process.env.BROWSER_LAUNCH_COOLDOWN_
+ let browserLaunchBlockedUntil = 0;
+ 
+ function isBrowserCircuitOpen(): boolean {
+-  return Date.now() < browserLaunchBlockedUntil;
++  return childBrowserRetireFailed || Date.now() < browserLaunchBlockedUntil;
+ }
+ 
+ function tripBrowserCircuit(reason: string): void {
+@@ -1020,7 +1126,14 @@ async function launchChromiumWithRetry(executablePath: string): Promise<any> {
+ }
+ 
+ async function getSharedBrowser(): Promise<any> {
+-  if (sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected()) {
++  // Isolated child: reuse the live instance only via the API that exists in the
++  // installed puppeteer-core (25.x has `connected`, not `isConnected()`, so the
++  // legacy check below is always false and relaunches on every call). The
++  // non-isolated path keeps its existing check unchanged (out of scope here).
++  const reusable = isIsolatedChild()
++    ? !!sharedBrowser && browserConnected(sharedBrowser)
++    : sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected();
++  if (reusable) {
+     return sharedBrowser;
+   }
+   if (sharedBrowserLaunching) return sharedBrowserLaunching;
+@@ -1033,6 +1146,10 @@ async function getSharedBrowser(): Promise<any> {
+       // Worker isolation: Chromium runs in its own process group (puppeteer
+       // detached:true); register it so the supervisor can reap it.
+       registerDescendantGroup(b.process?.()?.pid);
++      if (isIsolatedChild()) {
++        childBrowsers.add(b);
++        console.log(`[BROWSER-LIFECYCLE] child=${process.pid} launch pid=${b.process?.()?.pid} holders=${childBrowserHolders}`);
++      }
+       // If Chromium dies, clear the handle so the next call relaunches.
+       b.on("disconnected", () => {
+         if (sharedBrowser === b) sharedBrowser = null;
+@@ -1066,7 +1183,7 @@ async function fetchWithBrowser(url: string): Promise<string> {
+   }
+   if (browserDispatchRefused("processor.fetchWithBrowser:pre-acquire")) return "";
+   await acquireBrowserSlot();
+-  if (browserDispatchRefused("processor.fetchWithBrowser:post-acquire")) { releaseBrowserSlot(); return ""; }
++  if (browserDispatchRefused("processor.fetchWithBrowser:post-acquire")) { await releaseBrowserSlot(); return ""; }
+   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
+   let page: any = null;
+   try {
+@@ -1167,7 +1284,7 @@ async function fetchWithBrowser(url: string): Promise<string> {
+       }
+     }
+     diagEndBrowser();
+-    releaseBrowserSlot();
++    await releaseBrowserSlot(); // isolated child: Chromium closed + reaped before the permit returns
+   }
+ }
+ 
+@@ -1548,7 +1665,7 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
+   }
+   if (browserDispatchRefused("processor.fetchPdfViaBrowser:pre-acquire")) throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`);
+   await acquireBrowserSlot();
+-  if (browserDispatchRefused("processor.fetchPdfViaBrowser:post-acquire")) { releaseBrowserSlot(); throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`); }
++  if (browserDispatchRefused("processor.fetchPdfViaBrowser:post-acquire")) { await releaseBrowserSlot(); throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`); }
+   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
+   let page: any = null;
+   let browserLaunched = false;
+@@ -1682,7 +1799,7 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
+       try { await page.close(); } catch { /* ignore */ }
+     }
+     diagEndBrowser();
+-    releaseBrowserSlot();
++    await releaseBrowserSlot(); // isolated child: Chromium closed + reaped before the permit returns
+   }
+ }
+ 
+@@ -1754,10 +1871,13 @@ export async function fetchIssuerPdfsWithPrimedSession(
+   // Last-resort recovery: clear any stale launch-circuit cooldown left over from
+   // the main fetch phase so we actually get a browser here.
+   resetBrowserCircuit();
++  // Isolated child whose earlier Chromium cleanup was unconfirmed: its permit is
++  // withheld, so acquiring another would self-deadlock (false everywhere else).
++  if (isBrowserCircuitOpen()) return recovered;
+ 
+   if (browserDispatchRefused("processor.pdfRecovery:pre-acquire")) return recovered;
+   await acquireBrowserSlot();
+-  if (browserDispatchRefused("processor.pdfRecovery:post-acquire")) { releaseBrowserSlot(); return recovered; }
++  if (browserDispatchRefused("processor.pdfRecovery:post-acquire")) { await releaseBrowserSlot(); return recovered; }
+   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
+   let page: any = null;
+   let browserLaunched = false;
+@@ -1988,7 +2108,7 @@ export async function fetchIssuerPdfsWithPrimedSession(
+       try { await page.close(); } catch { /* ignore */ }
+     }
+     diagEndBrowser();
+-    releaseBrowserSlot();
++    await releaseBrowserSlot(); // isolated child: Chromium closed + reaped before the permit returns
+   }
+   return recovered;
+ }
+diff --git a/server/worker.ts b/server/worker.ts
+index 8e8d53f..7c72d19 100644
+--- a/server/worker.ts
++++ b/server/worker.ts
+@@ -33,6 +33,7 @@ import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/
+ import { runWithLlmContext } from "./lib/llm-usage.js";
+ import { isolationEnabled, runPipelineIsolated } from "./lib/job-isolation.js";
+ import { isRetriableError, fenceCancelledResult } from "./lib/retry-policy.js";
++import { enforceBatchStopRule, readStopRuleThreshold, runStopRuleCancelSequence, COUNT_BATCH_FAILURES_SQL } from "./lib/batch-stop-rule.js";
+ import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
+ import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
+ import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
+@@ -586,6 +587,9 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
+         // Rule (iii): failure recorded (job 'failed') but the batch is
+         // cancelled/superseded/terminal → no requeue, no failed_jobs count.
+         console.warn(`[DIAG][job-transition] job=${jobId} -> failed-batch-terminal-no-retry ${diagTags()}`);
++      } else if (await stopRuleTripped(batchId, jobId, errorMsg, frameworkId, workspaceId)) {
++        // S4 stop rule: batch cancelled; this failure is NOT re-enqueued.
++        console.warn(`[DIAG][job-transition] job=${jobId} -> stop-rule-cancelled-no-retry ${diagTags()}`);
+       } else if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(errorMsg)) {
+         // Retry: re-enqueue without incrementing batch failed
+         console.log("[Worker] Job " + jobId + " failed (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + "), will retry: " + errorMsg);
+@@ -690,6 +694,8 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
+       console.warn(`[DIAG][job-transition] job=${jobId} -> stale-attempt-no-op (after exception) ${diagTags()}`);
+     } else if (_fe.batchTerminal) {
+       console.warn(`[DIAG][job-transition] job=${jobId} -> failed-batch-terminal-no-retry (after exception) ${diagTags()}`);
++    } else if (await stopRuleTripped(batchId, jobId, String(error.message), frameworkId, workspaceId)) {
++      console.warn(`[DIAG][job-transition] job=${jobId} -> stop-rule-cancelled-no-retry (after exception) ${diagTags()}`);
+     } else if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(error.message)) {
+       // Retry: re-enqueue without incrementing batch failed
+       console.log("[Worker] Job " + jobId + " will retry after exception (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + ")");
+@@ -1587,6 +1593,34 @@ export async function startWorker(workerId?: string): Promise<Worker> {
+   }
+ }
+ 
++/**
++ * Validation stop rule S4 (lib/batch-stop-rule.ts). Inert unless
++ * BATCH_STOP_RULE_FAILED_JOBS > 0. When tripped it runs the same sequence as
++ * POST /batch/cancel and the caller skips the retry re-enqueue.
++ */
++async function stopRuleTripped(batchId: number, jobId: number, error: string, frameworkId: number, workspaceId: number): Promise<boolean> {
++  return enforceBatchStopRule(batchId, jobId, error, {
++    threshold: readStopRuleThreshold(),
++    countFailures: async (id) => {
++      const { pool } = await import("./db.js");
++      const r = await pool.query(COUNT_BATCH_FAILURES_SQL, [id]);
++      const row = r.rows[0] ?? {};
++      return { failedAttemptJobs: Number(row.failed_attempt_jobs ?? 0), retryExhaustedJobs: Number(row.retry_exhausted_jobs ?? 0) };
++    },
++    cancelBatch: (id, reason) => runStopRuleCancelSequence(id, reason, {
++      flag: cancelBatch,
++      purge: async (bid) => { const { removeBatchJobs } = await import("./queue.js"); await removeBatchJobs(bid); },
++      snapshot: async (bid) => {
++        const { pool } = await import("./db.js");
++        const b = await pool.query("SELECT list_id FROM batch_runs WHERE id = $1", [bid]);
++        const listId = b.rows[0]?.list_id != null ? Number(b.rows[0].list_id) : undefined;
++        await saveBatchSnapshot(bid, frameworkId, workspaceId, listId);
++      },
++      pgCancel: (bid, r) => storage.cancelBatchRun(bid, r).then(() => undefined),
++    }),
++  });
++}
++
+ export function cancelBatch(batchId: number): void {
+   // Local flag for this process (cheap fast-path)...
+   cancelledBatches.add(batchId);
+-- 
+2.43.0
+
+
+From caaa19114bde715a5e319f648ee41458874b9d99 Mon Sep 17 00:00:00 2001
+From: ahow <13916301+ahow@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 15:03:29 +0000
+Subject: [PATCH 3/4] test(browser-lifetime): per-document marker extraction,
+ no-skip check, admission wait / permit hold / wall time in repro summary
+
+---
+ .../__fixtures__/browser-lifetime-child.ts    | 43 +++++++++-----
+ server/scripts/browser-lifetime-repro.ts      | 58 +++++++++++++++----
+ 2 files changed, 76 insertions(+), 25 deletions(-)
+
+diff --git a/server/lib/__fixtures__/browser-lifetime-child.ts b/server/lib/__fixtures__/browser-lifetime-child.ts
+index 4ffe65a..905dbcf 100644
+--- a/server/lib/__fixtures__/browser-lifetime-child.ts
++++ b/server/lib/__fixtures__/browser-lifetime-child.ts
+@@ -1,26 +1,43 @@
+ // Browser-lifetime reproduction child (loaded by job-child.ts via CIQ_CHILD_TEST_MODULE).
+ // Runs inside a REAL isolated job child: the production fetchPdfViaBrowser path
+-// (parent-brokered browser permit, real puppeteer-core Chromium, real pdftotext)
+-// against a SAVED document served on 127.0.0.1, then a synthetic "scoring" hold
+-// (REPRO_HOLD_MS, no providers called — zero paid calls) so children overlap the
+-// way real jobs do (browser fetches early, long LLM phase afterwards).
++// (parent-brokered browser permit, real puppeteer-core Chromium, real text
++// extraction) against synthetic documents served on 127.0.0.1, then a synthetic
++// "scoring" hold (REPRO_HOLD_MS, no providers called — zero paid calls) so
++// children overlap the way real jobs do (browser fetches early, long LLM phase).
++//
++// Each job fetches its OWN documents (REPRO_DOC_BASE/job-<company>-doc-<i>.pdf);
++// every document carries a unique marker (markerFor). The job succeeds only if
++// EVERY document was fetched (no BrowserUnavailableError / silent skip) AND its
++// own marker survived extraction; per-document outcomes are returned in `docs`.
++import { markerFor } from "./marker-pdf.js";
++
+ export async function run(opts: any): Promise<any> {
+-  const tag = `[REPRO-CHILD pid=${process.pid} company=${opts?.company?.id ?? "-"}]`;
++  const company = opts?.company?.id ?? 0;
++  const tag = `[REPRO-CHILD pid=${process.pid} company=${company}]`;
+   const { fetchPdfViaBrowser } = await import("../processor.js");
+-  const urls = String(process.env.REPRO_DOC_URLS || "").split(",").filter(Boolean);
+-  let chars = 0;
+-  for (const u of urls) {
++  const base = String(process.env.REPRO_DOC_BASE || "");
++  const n = parseInt(process.env.REPRO_DOCS_PER_CHILD || "1", 10);
++  const docs: Array<{ key: string; chars: number; markerFound: boolean; skipped: boolean; error?: string; ms: number }> = [];
++  for (let i = 0; i < n; i++) {
++    const key = `job-${company}-doc-${i}`;
+     const t0 = Date.now();
+     try {
+-      const text = await fetchPdfViaBrowser(u);
+-      chars += text.length;
+-      console.log(`${tag} fetch ok url=${u} chars=${text.length} ms=${Date.now() - t0}`);
++      const text = await fetchPdfViaBrowser(`${base}/${key}.pdf`);
++      const markerFound = text.includes(markerFor(key));
++      docs.push({ key, chars: text.length, markerFound, skipped: false, ms: Date.now() - t0 });
++      console.log(`${tag} fetch ok key=${key} chars=${text.length} marker=${markerFound} ms=${Date.now() - t0}`);
+     } catch (e: any) {
+-      console.log(`${tag} fetch FAILED url=${u} err=${String(e?.message || e).slice(0, 160)}`);
++      const error = `${e?.name}: ${String(e?.message || e).slice(0, 160)}`;
++      docs.push({ key, chars: 0, markerFound: false, skipped: e?.name === "BrowserUnavailableError", error, ms: Date.now() - t0 });
++      console.log(`${tag} fetch FAILED key=${key} err=${error}`);
+     }
+   }
+   const hold = parseInt(process.env.REPRO_HOLD_MS || "15000", 10);
+   console.log(`${tag} synthetic scoring hold ${hold}ms (no provider calls)`);
+   await new Promise((r) => setTimeout(r, hold));
+-  return { success: chars > 0, documentsProcessed: urls.length, scoresCreated: 0, error: chars > 0 ? undefined : "no document text" };
++  const allOk = docs.length === n && docs.every((d) => d.markerFound);
++  return {
++    success: allOk, documentsProcessed: docs.filter((d) => d.markerFound).length, scoresCreated: 0, docs,
++    error: allOk ? undefined : docs.every((d) => d.chars === 0) ? "no document text" : "document marker missing",
++  };
+ }
+diff --git a/server/scripts/browser-lifetime-repro.ts b/server/scripts/browser-lifetime-repro.ts
+index b34386e..df2c07d 100644
+--- a/server/scripts/browser-lifetime-repro.ts
++++ b/server/scripts/browser-lifetime-repro.ts
+@@ -4,9 +4,12 @@
+  * Drives REPRO_JOBS isolated job children through the production supervisor
+  * (runPipelineIsolated → job-child.ts) at REPRO_CONCURRENCY (default 4 =
+  * production WORKER_CONCURRENCY) with MAX_CONCURRENT_BROWSER=1 (production).
+- * Each child runs the production fetchPdfViaBrowser path against a SAVED local
+- * document, then a synthetic scoring hold (no providers). Child turnover is
+- * continuous: a new child is forked as soon as one settles.
++ * Each child runs the production fetchPdfViaBrowser path against its OWN
++ * synthetic marker PDFs served on 127.0.0.1, then a synthetic scoring hold (no
++ * providers). Child turnover is continuous: a new child is forked as soon as
++ * one settles. The summary asserts per-document extraction (every expected
++ * document requested, no BrowserUnavailableError skip, its marker extracted)
++ * and reports wall time, browser admission wait and permit hold time.
+  *
+  * Every REPRO_SAMPLE_MS it samples /proc and logs (one JSON line, tag SAMPLE):
+  *   - limits: RLIMIT_NPROC, cgroup pids.max / pids.current (the TasksMax the
+@@ -37,7 +40,6 @@ const CONC = parseInt(process.env.REPRO_CONCURRENCY || "4", 10);
+ const SAMPLE_MS = parseInt(process.env.REPRO_SAMPLE_MS || "250", 10);
+ const LABEL = process.env.REPRO_LABEL || "run";
+ const OUT = process.env.REPRO_OUT || `/tmp/browser-lifetime-${LABEL}.json`;
+-const DOC = process.env.REPRO_DOC || path.join(ROOT, "docs/batch-1210-mass-failure-rca.pdf");
+ const DOCS_PER_CHILD = parseInt(process.env.REPRO_DOCS_PER_CHILD || "2", 10);
+ 
+ // Test-only environment. Production values are kept for every capacity knob:
+@@ -53,6 +55,7 @@ Object.assign(process.env, {
+   ADAPTIVE_CONCURRENCY_ENABLED: "false",
+   CREDIT_PAUSE_ENABLED: "false",
+   REPRO_HOLD_MS: process.env.REPRO_HOLD_MS || "15000",
++  REPRO_DOCS_PER_CHILD: String(DOCS_PER_CHILD),
+ });
+ 
+ const t0 = Date.now();
+@@ -129,12 +132,20 @@ async function main() {
+   (b as any).acquire = async () => { ev("permit.acquire.request", b.state()); await rawAcquire(); ev("permit.acquire.granted", b.state()); };
+   (b as any).release = (...a: any[]) => { const r = (rawRelease as any)(...a); ev("permit.release", b.state()); return r; };
+ 
+-  const pdf = fs.readFileSync(DOC);
+-  const srv = http.createServer((q, r) => { r.writeHead(200, { "content-type": "application/pdf", "content-length": pdf.length }); r.end(pdf); });
++  // Every job/document gets its own synthetic PDF carrying a unique marker; the
++  // server records which documents were actually requested (no silent skip).
++  const { markerPdf, markerFor } = await import("../lib/__fixtures__/marker-pdf.js");
++  const served = new Map<string, number>();
++  const srv = http.createServer((q, r) => {
++    const m = /^\/(job-\d+-doc-\d+)\.pdf/.exec(q.url || "");
++    if (!m) { r.writeHead(200, { "content-type": "text/html" }); r.end("<html><body>issuer home</body></html>"); return; } // origin page (WAF prime)
++    served.set(m[1], (served.get(m[1]) ?? 0) + 1);
++    const pdf = markerPdf([markerFor(m[1]), `Synthetic annual report for ${m[1]}.`]);
++    r.writeHead(200, { "content-type": "application/pdf", "content-length": pdf.length }); r.end(pdf);
++  });
+   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+-  const port = (srv.address() as any).port;
+-  process.env.REPRO_DOC_URLS = Array.from({ length: DOCS_PER_CHILD }, (_, i) => `http://127.0.0.1:${port}/saved-${i}.pdf`).join(",");
+-  log("SETUP", `label=${LABEL} jobs=${JOBS} concurrency=${CONC} MAX_CONCURRENT_BROWSER=1 doc=${path.relative(ROOT, DOC)} (${pdf.length} B) docsPerChild=${DOCS_PER_CHILD} hold=${process.env.REPRO_HOLD_MS}ms`);
++  process.env.REPRO_DOC_BASE = `http://127.0.0.1:${(srv.address() as any).port}`;
++  log("SETUP", `label=${LABEL} jobs=${JOBS} concurrency=${CONC} MAX_CONCURRENT_BROWSER=1 synthetic marker PDFs docsPerChild=${DOCS_PER_CHILD} hold=${process.env.REPRO_HOLD_MS}ms`);
+   log("LIMITS", `${nprocLimit()} | cgroup=${CG} pids.max=${readNum(`${CG}/pids.max`)} pids.current=${readNum(`${CG}/pids.current`)}`);
+ 
+   const baseline = new Set(tree(procTable()).map((p) => p.pid)); // tsx/esbuild helpers already present
+@@ -159,14 +170,14 @@ async function main() {
+     if (samples.length % Math.max(1, Math.round(1000 / SAMPLE_MS)) === 0) log("SAMPLE", JSON.stringify(s));
+   }, SAMPLE_MS);
+ 
+-  const results: Array<{ job: number; ok: boolean; startedAt: number; ms: number; error?: string }> = [];
++  const results: Array<{ job: number; ok: boolean; startedAt: number; ms: number; error?: string; docs?: any[] }> = [];
+   let next = 0;
+   const runOne = async (job: number) => {
+     const st = Date.now();
+     log("JOB", `start job=${job}`);
+     try {
+       const r: any = await runPipelineIsolated({ company: { id: 1000 + job } as any, framework: { id: 1 } as any, measures: [], workspaceId: 1 } as any);
+-      results.push({ job, ok: !!r?.success, startedAt: st - t0, ms: Date.now() - st, error: r?.error });
++      results.push({ job, ok: !!r?.success, startedAt: st - t0, ms: Date.now() - st, error: r?.error, docs: r?.docs });
+       log("JOB", `done job=${job} success=${r?.success} error=${r?.error ?? "-"} ms=${Date.now() - st}`);
+     } catch (e: any) {
+       results.push({ job, ok: false, startedAt: st - t0, ms: Date.now() - st, error: String(e?.message || e).slice(0, 300) });
+@@ -178,6 +189,28 @@ async function main() {
+   clearInterval(sampler);
+   srv.close();
+ 
++  const wallMs = Date.now() - t0 - 1500;
++  // Per-document extraction: every expected document must have been requested
++  // from the server, fetched without BrowserUnavailableError, and yield its marker.
++  const expected = results.flatMap((r) => Array.from({ length: DOCS_PER_CHILD }, (_, i) => `job-${1000 + r.job}-doc-${i}`));
++  const docRows = results.flatMap((r) => r.docs ?? []);
++  const perDoc = expected.map((k) => { const d = docRows.find((x) => x.key === k); return { key: k, served: served.get(k) ?? 0, chars: d?.chars ?? 0, markerFound: !!d?.markerFound, skipped: d ? !!d.skipped : true, error: d?.error, fetchMs: d?.ms ?? null }; });
++  const extraction = {
++    expected: expected.length, markerFound: perDoc.filter((d) => d.markerFound).length,
++    neverRequested: perDoc.filter((d) => d.served === 0).map((d) => d.key),
++    skippedBrowserUnavailable: perDoc.filter((d) => d.skipped).map((d) => d.key),
++    missingMarker: perDoc.filter((d) => !d.markerFound).map((d) => d.key),
++  };
++  // Browser admission wait (permit request → grant, parent broker) and permit
++  // hold (grant → release: launch + fetch + close/reap inside the child).
++  const stats = (xs: number[]) => { const a = [...xs].sort((p, q) => p - q); const pick = (f: number) => a.length ? a[Math.min(a.length - 1, Math.floor(f * a.length))] : null; return { n: a.length, mean: a.length ? Math.round(a.reduce((p, q) => p + q, 0) / a.length) : null, p50: pick(0.5), p95: pick(0.95), max: a.length ? a[a.length - 1] : null, total: a.reduce((p, q) => p + q, 0) }; };
++  const waits: number[] = [], holds: number[] = []; const pend: number[] = []; let grantAt: number[] = [];
++  for (const e of events) {
++    if (e.ev === "permit.acquire.request") pend.push(e.at);
++    else if (e.ev === "permit.acquire.granted") { const r = pend.shift(); if (r != null) waits.push(e.at - r); grantAt.push(e.at); }
++    else if (e.ev === "permit.release") { const g = grantAt.shift(); if (g != null) holds.push(e.at - g); }
++  }
++  const timing = { wallMs, admissionWaitMs: stats(waits), permitHoldMs: stats(holds), perDocFetchMs: stats(perDoc.map((d) => d.fetchMs ?? 0).filter((x) => x > 0)) };
+   const spawnFailures = results.filter((r) => !r.ok && /exited unexpectedly|spawn|EAGAIN|pthread|uv_thread/i.test(r.error || "")).length;
+   const summary = {
+     label: LABEL, jobs: JOBS, concurrency: CONC, maxConcurrentBrowser: 1, holdMs: +process.env.REPRO_HOLD_MS!, docsPerChild: DOCS_PER_CHILD,
+@@ -186,7 +219,8 @@ async function main() {
+     bound_held: peakBrowsers <= 1,
+     jobsOk: results.filter((r) => r.ok).length, jobsFailed: results.filter((r) => !r.ok).length, spawn_failures: spawnFailures,
+     firstFailureJob: results.filter((r) => !r.ok).sort((a, b) => a.job - b.job)[0]?.job ?? null,
+-    browsersLaunched: seenBrowsers.size,
++    browsersLaunched: seenBrowsers.size, extraction, timing, perDoc,
++    all_documents_extracted: extraction.markerFound === extraction.expected && extraction.skippedBrowserUnavailable.length === 0,
+     browserLifetimesMs: [...seenBrowsers.values()].map((v) => (v.exitedAt ?? Date.now() - t0) - v.launchedAt),
+     finalBroker: __testing.brokerState(), quarantined: __testing.stats().quarantined,
+     results: results.sort((a, b) => a.job - b.job), events, samples,
+-- 
+2.43.0
+
+
+From 9a1b931e40d0d621f41caa65e6d4714291466994 Mon Sep 17 00:00:00 2001
+From: ahow <13916301+ahow@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 16:12:51 +0000
+Subject: [PATCH 4/4] fix(stop-rule): durable-first cancel with bounded
+ purge/snapshot; mark stop-rule snapshot cancelled/partial
+
+- runStopRuleCancelSequence: flag sync, PG cancel + Redis/local notify committed
+  promptly and concurrently with a time-bounded queue purge; snapshot only by the
+  path that transitioned the batch, bounded, never gating the cancel
+- cancelBatchRun returns whether it transitioned (idempotent no-op => false)
+- stop-rule snapshot rows rejected as 'cancelled/partial ... not comprehensive'
+- tests: never-resolving purge/snapshot fakes; real local-PG stop-rule + race test
+- integration: identify every descendant; allowlist only tsx's esbuild --service
+  helper by exe+cmdline; zero-descendant checks unchanged (+ after-stop check)
+---
+ server/lib/batch-stop-rule.db.test.ts        | 159 +++++++++++++++++++
+ server/lib/batch-stop-rule.test.ts           |  71 ++++++++-
+ server/lib/batch-stop-rule.ts                |  75 +++++++--
+ server/lib/job-isolation.integration.test.ts |  49 +++++-
+ server/lib/lifecycle-fence.db.test.ts        |   2 +-
+ server/storage.ts                            |   6 +-
+ server/worker.ts                             |  28 +++-
+ 7 files changed, 355 insertions(+), 35 deletions(-)
+ create mode 100644 server/lib/batch-stop-rule.db.test.ts
+
+diff --git a/server/lib/batch-stop-rule.db.test.ts b/server/lib/batch-stop-rule.db.test.ts
+new file mode 100644
+index 0000000..706d152
+--- /dev/null
++++ b/server/lib/batch-stop-rule.db.test.ts
+@@ -0,0 +1,159 @@
++/**
++ * Batch stop rule S4 against a REAL, DISPOSABLE local Postgres (+ local Redis).
++ * Never run against production or the org-shared hosted DB: the target must be
++ * a loopback host, and the test runs inside a throwaway database cloned from it
++ * (CREATE DATABASE stoprule_<ts> TEMPLATE <base>) that is DROPPED at the end.
++ *
++ * Run (docker ciq-int-pg / ciq-int-redis, schema already pushed into `ciq`):
++ *   STOP_RULE_TEST_PG=postgres://ciq:ciq@127.0.0.1:55432/ciq REDIS_URL=redis://127.0.0.1:56379 \
++ *     npx tsx server/lib/batch-stop-rule.db.test.ts
++ *
++ * Exercises, with the real worker wiring (worker.stopRuleTripped):
++ *   1. COUNT_BATCH_FAILURES_SQL on real analysis_jobs rows written by the real storage.failJob
++ *   2. the real cancel path: cancelBatch flag (Redis) → storage.cancelBatchRun (PG) →
++ *      queue.removeBatchJobs (BullMQ) → saveStopRuleSnapshot
++ *   3. two failure paths racing: batch durably cancelled once, exactly one snapshot,
++ *      marked rejected "cancelled/partial", never accepted; no retry enqueued; the
++ *      PG claim fence refuses the failed jobs afterwards
++ */
++import pg from "pg";
++
++process.exitCode = 1; // premature exit must not look like success
++let passed = 0, failed = 0;
++function check(name: string, cond: boolean, detail?: unknown) {
++  if (cond) { passed++; console.log(`  PASS  ${name}`); }
++  else { failed++; console.error(`  FAIL  ${name}${detail !== undefined ? ` :: ${JSON.stringify(detail)}` : ""}`); }
++}
++
++const BASE = process.env.STOP_RULE_TEST_PG;
++if (!BASE) { console.log("SKIP: STOP_RULE_TEST_PG not set"); process.exit(0); }
++const baseUrl = new URL(BASE);
++if (!["127.0.0.1", "localhost", "::1"].includes(baseUrl.hostname) || /companyiq/i.test(baseUrl.pathname)) {
++  console.error(`REFUSING: ${baseUrl.hostname}${baseUrl.pathname} is not a disposable loopback test database`);
++  process.exit(2);
++}
++const throwaway = `stoprule_${Date.now()}`;
++const testUrl = new URL(BASE); testUrl.pathname = `/${throwaway}`;
++const admin = () => { const u = new URL(BASE); u.pathname = "/postgres"; return new pg.Client({ connectionString: u.toString() }); };
++
++async function main() {
++  const a = admin(); await a.connect();
++  await a.query(`CREATE DATABASE ${throwaway} TEMPLATE ${baseUrl.pathname.slice(1)}`);
++  await a.end();
++  console.log(`[STOP-RULE-DB] throwaway database ${throwaway} created (template ${baseUrl.pathname.slice(1)} on ${baseUrl.host})`);
++  Object.assign(process.env, { DATABASE_URL: testUrl.toString(), BATCH_STOP_RULE_FAILED_JOBS: "2" });
++
++  const logs: string[] = [];
++  const origWarn = console.warn; const origLog = console.log;
++  const tap = (orig: (...x: any[]) => void) => (...x: any[]) => { logs.push(x.map(String).join(" ")); orig(...x); };
++  console.warn = tap(origWarn); console.log = tap(origLog);
++
++  const c = new pg.Client({ connectionString: testUrl.toString() }); await c.connect();
++  let teardown = async () => {};
++  try {
++    const storage = await import("../storage.js");
++    const { addBatchJobs, getQueue } = await import("../queue.js");
++    const { stopRuleTripped } = await import("../worker.js");
++    const { pool } = await import("../db.js");
++    const { redis } = await import("../redis.js");
++    const { COUNT_BATCH_FAILURES_SQL } = await import("./batch-stop-rule.js");
++    let batchIdForCleanup = 0;
++    teardown = async () => {
++      // The throwaway DB reuses the template's id sequences, so leaving the Redis
++      // cancel flag behind would cancel an unrelated later batch with the same id
++      // on this local Redis (observed once: it cancelled the next integration run).
++      if (batchIdForCleanup) await redis.del(`cancelled:batch:${batchIdForCleanup}`).catch(() => {});
++      await getQueue().close().catch(() => {}); await pool.end().catch(() => {}); redis.disconnect();
++    };
++
++    // ─── Seed: 1 completed company (scored) + 3 jobs that fail ──────────────
++    const tag = `stoprule-${Date.now()}`;
++    const u = (await c.query("insert into users(email,password_hash,name) values($1,'x','t') returning id", [`${tag}@test.local`])).rows[0].id;
++    const ws = (await c.query("insert into workspaces(name,slug,owner_id) values($1,$1,$2) returning id", [tag, u])).rows[0].id;
++    const fw = (await c.query("insert into frameworks(workspace_id,name,is_active) values($1,$2,true) returning id", [ws, `${tag}-fw`])).rows[0].id;
++    await c.query(`insert into framework_measures(framework_id,measure_id,category,category_number,title,definition,scoring_guidance,evidence_keywords,display_order)
++      values($1,'M1','Environment',1,'Climate targets','Discloses climate targets.','Yes if disclosed.','["climate"]',0)`, [fw]);
++    const cos: number[] = [];
++    for (const n of ["Done", "FailA", "FailB", "FailC"]) cos.push((await c.query("insert into companies(workspace_id,name) values($1,$2) returning id", [ws, `${tag} ${n}`])).rows[0].id);
++    await c.query(`insert into measure_scores(company_id,framework_id,measure_id,category,category_number,title,score,confidence,verdict)
++      values($1,$2,'M1','Environment',1,'Climate targets',1,'High','Yes')`, [cos[0], fw]);
++    const batch: any = await storage.createBatchRun(ws, fw, cos.length);
++    const jobs: any[] = await storage.createAnalysisJobs(cos.map((co, i) => ({ workspaceId: ws, batchId: batch.id, companyId: co, companyName: `${tag} ${i}`, frameworkId: fw })));
++    const [done, jA, jB, jC] = jobs;
++    batchIdForCleanup = batch.id;
++    await c.query("update analysis_jobs set status='completed', attempts=1, completed_at=now() where id=$1", [done.id]);
++    await c.query("update analysis_jobs set attempts=1 where id = any($1)", [[jA.id, jB.id, jC.id]]);
++    await c.query("update companies set analysis_status='completed' where id=$1", [cos[0]]).catch(() => {});
++    // jC stays queued in BullMQ (never started) so the real purge has work.
++    await addBatchJobs([{ jobId: jC.id, companyId: cos[3], frameworkId: fw, batchId: batch.id, workspaceId: ws, skipFetch: true, skipDiscovery: true }] as any, ws, batch.id);
++    const queuedBefore = (await getQueue().getJobs(["waiting", "prioritized", "delayed"])).filter((j) => j?.data?.batchId === batch.id).length;
++    console.log(`[STOP-RULE-DB] seeded ws=${ws} fw=${fw} batch=${batch.id} jobs=${jobs.map((j) => j.id).join(",")} queued=${queuedBefore}`);
++
++    // ─── 1. COUNT_BATCH_FAILURES_SQL on rows written by the real failJob ────
++    const ERR = "Isolated job child exited unexpectedly (code=null signal=SIGABRT stage=spawn)";
++    await storage.failJob(jA.id, ERR);
++    const c1 = (await c.query(COUNT_BATCH_FAILURES_SQL, [batch.id])).rows[0];
++    check("SQL: one failed attempt counted, none exhausted", c1.failed_attempt_jobs === 1 && c1.retry_exhausted_jobs === 0, c1);
++    const belowStopped = await stopRuleTripped(batch.id, jA.id, ERR, fw, ws);
++    check("below threshold (1/2): not stopped, legacy retry path stays in charge", belowStopped === false);
++    check("below threshold: batch still running", (await c.query("select status from batch_runs where id=$1", [batch.id])).rows[0].status === "running");
++
++    // ─── 2+3. Two failure paths race to the threshold ───────────────────────
++    await Promise.all([storage.failJob(jB.id, ERR), storage.failJob(jC.id, ERR)]);
++    const c2 = (await c.query(COUNT_BATCH_FAILURES_SQL, [batch.id])).rows[0];
++    check("SQL: three failed-attempt jobs counted (cancel/provider_paused excluded by construction)", c2.failed_attempt_jobs === 3 && c2.retry_exhausted_jobs === 0, c2);
++    let retriesEnqueued = 0;
++    const onFailure = async (jobId: number) => { const stopped = await stopRuleTripped(batch.id, jobId, ERR, fw, ws); if (!stopped) retriesEnqueued++; return stopped; };
++    const t0 = Date.now();
++    const [sB, sC] = await Promise.all([onFailure(jB.id), onFailure(jC.id)]);
++    const raceMs = Date.now() - t0;
++    check("race: both failure paths report stopped (each suppresses its retry)", sB === true && sC === true, { sB, sC });
++    check("race: zero retries enqueued", retriesEnqueued === 0, retriesEnqueued);
++
++    const br = (await c.query("select status, acceptance_state, rejection_reason, terminal_at from batch_runs where id=$1", [batch.id])).rows[0];
++    check("durable: batch_runs.status = cancelled, acceptance rejected", br.status === "cancelled" && br.acceptance_state === "rejected" && br.terminal_at != null, br);
++    const transitions = logs.filter((l) => l.includes(`cancelBatchRun batch=${batch.id} transitioned=true`)).length;
++    const noops = logs.filter((l) => l.includes(`cancelBatchRun batch=${batch.id} transitioned=false`)).length;
++    check("durable: exactly one PG transition, the racing cancel was the idempotent no-op", transitions === 1 && noops === 1, { transitions, noops });
++    check("race: losing path logged 'snapshot left to that path'", logs.some((l) => l.includes(`batch=${batch.id} already cancelled by another path`)));
++
++    const snaps = (await c.query("select id, acceptance_state, rejection_reason, companies_count from analysis_results where batch_id=$1", [batch.id])).rows;
++    check("snapshot: exactly one row for the batch (no duplicate)", snaps.length === 1, snaps);
++    check("snapshot: holds only the completed company", snaps[0]?.companies_count === 1, snaps[0]);
++    check("snapshot: marked rejected 'cancelled/partial … not comprehensive', never accepted",
++      snaps.length === 1 && snaps[0].acceptance_state === "rejected" && /cancelled\/partial snapshot .*not comprehensive/.test(snaps[0].rejection_reason ?? ""), snaps[0]);
++
++    const queuedAfter = (await getQueue().getJobs(["waiting", "prioritized", "delayed"])).filter((j) => j?.data?.batchId === batch.id).length;
++    check("purge: queued BullMQ job for the batch removed", queuedBefore === 1 && queuedAfter === 0, { queuedBefore, queuedAfter });
++    const flag = await redis.get(`cancelled:batch:${batch.id}`).catch(() => null); // cancellation.ts KEY_PREFIX
++    check("flag: Redis cross-replica cancel notification set", flag === "1", flag);
++
++    const jobRows = (await c.query("select id, status, attempts from analysis_jobs where batch_id=$1 order by id", [batch.id])).rows;
++    const claims = await Promise.all([jA.id, jB.id, jC.id].map((id) => storage.claimJob(id)));
++    check("fence: no failed job can be re-claimed (no uncontrolled retry)", claims.every((r) => r == null), claims.map((r) => r?.id ?? null));
++    const jobRows2 = (await c.query("select id, status, attempts from analysis_jobs where batch_id=$1 order by id", [batch.id])).rows;
++    check("fence: attempts unchanged by refused claims", JSON.stringify(jobRows) === JSON.stringify(jobRows2), { jobRows, jobRows2 });
++
++    // A third, late failure path after the cancel: still suppressed, still one snapshot.
++    const late = await onFailure(jA.id);
++    const snaps2 = (await c.query("select count(*)::int n from analysis_results where batch_id=$1", [batch.id])).rows[0].n;
++    check("late failure after cancel: stopped, still exactly one snapshot, still zero retries", late === true && snaps2 === 1 && retriesEnqueued === 0, { late, snaps2, retriesEnqueued });
++    console.log(`[STOP-RULE-DB] race completed in ${raceMs}ms; final jobs=${JSON.stringify(jobRows2)}`);
++  } finally {
++    console.warn = origWarn; console.log = origLog;
++    await c.end().catch(() => {});
++    await teardown();
++    const d = admin(); await d.connect();
++    await d.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, [throwaway]);
++    await d.query(`DROP DATABASE IF EXISTS ${throwaway}`);
++    const left = (await d.query("select count(*)::int n from pg_database where datname=$1", [throwaway])).rows[0].n;
++    await d.end();
++    console.log(`[STOP-RULE-DB] teardown: DROP DATABASE ${throwaway} → remaining=${left}; Redis cancel flag removed`);
++  }
++}
++
++main().then(() => {
++  console.log(`\nbatch-stop-rule.db: ${passed} passed, ${failed} failed`);
++  process.exitCode = failed === 0 ? 0 : 1;
++  setTimeout(() => process.exit(process.exitCode as number), 200).unref();
++}, (e) => { console.error("FATAL", e); process.exit(1); });
+diff --git a/server/lib/batch-stop-rule.test.ts b/server/lib/batch-stop-rule.test.ts
+index 2f8b1e4..6488127 100644
+--- a/server/lib/batch-stop-rule.test.ts
++++ b/server/lib/batch-stop-rule.test.ts
+@@ -98,7 +98,7 @@ async function simulate(threshold: number) {
+           flag: () => { steps.push("flag"); cancelled = true; },
+           purge: async () => { steps.push("purge"); queue.length = 0; },
+           snapshot: async () => { steps.push("snapshot"); },
+-          pgCancel: async () => { steps.push("pgCancel"); },
++          pgCancel: async () => { steps.push("pgCancel"); return true; },
+           log: () => {},
+         }),
+       });
+@@ -140,7 +140,7 @@ test("threshold N=3: Nth failed job trips → batch cancelled, snapshot saved, q
+   const r = await simulate(3);
+   assert.equal(r.cancelled, true);
+   assert.equal(r.failedAttempts, 3, "stops on the 3rd failed attempt");
+-  assert.deepEqual(r.steps, ["flag", "purge", "snapshot", "pgCancel"], "POST /batch/cancel order, snapshot included");
++  assert.deepEqual(r.steps, ["flag", "pgCancel", "purge", "snapshot"], "durable PG cancel issued before purge; snapshot only after PG cancel committed");
+   assert.equal(r.queued, 0, "queued jobs purged");
+   assert.equal(r.retriesEnqueued, 2, "only the 2 sub-threshold failures retried; the tripping failure is not re-enqueued");
+   assert.equal(r.exhausted, 0);
+@@ -152,13 +152,76 @@ test("cancel sequence: purge/snapshot errors are non-fatal; PG cancel still runs
+     flag: () => { steps.push("flag"); },
+     purge: async () => { steps.push("purge"); throw new Error("redis down"); },
+     snapshot: async () => { steps.push("snapshot"); throw new Error("snapshot failed"); },
+-    pgCancel: async (_b, reason) => { steps.push(`pgCancel:${reason}`); },
++    pgCancel: async (_b, reason) => { steps.push(`pgCancel:${reason}`); return true; },
+     log: (l) => logs.push(l),
+   });
+-  assert.deepEqual(steps, ["flag", "purge", "snapshot", "pgCancel:stop rule S4"]);
++  assert.deepEqual(steps, ["flag", "pgCancel:stop rule S4", "purge", "snapshot"]);
+   assert.equal(logs.length, 2);
+ });
+ 
++/** Promise that never settles (a hung Redis/BullMQ purge or a hung snapshot query). */
++const never = () => new Promise<void>(() => {});
++/** Resolves with the elapsed ms when `p` settles, or rejects if it does not settle within `ms`. */
++async function settlesWithin(p: Promise<unknown>, ms: number, what: string): Promise<number> {
++  const t0 = Date.now(); let timer: NodeJS.Timeout | undefined;
++  await Promise.race([p, new Promise((_r, rej) => { timer = setTimeout(() => rej(new Error(`${what} did not settle within ${ms}ms`)), ms); })]);
++  clearTimeout(timer); return Date.now() - t0;
++}
++
++for (const [label, purge, snapshot] of [
++  ["HANGING purge", never, async () => {}],
++  ["HANGING snapshot", async () => {}, never],
++  ["HANGING purge AND snapshot", never, never],
++  ["FAILING purge AND snapshot", async () => { throw new Error("redis down"); }, async () => { throw new Error("pg snapshot error"); }],
++  ["HANGING purge, FAILING snapshot", never, async () => { throw new Error("pg snapshot error"); }],
++] as const) {
++  test(`durable cancel: ${label} cannot delay the PG cancel; sequence completes in bounded time`, async () => {
++    let pgCommittedAt = 0; let flagged = false; const t0 = Date.now(); const logs: string[] = [];
++    const seq = runStopRuleCancelSequence(5, "stop rule S4", {
++      flag: () => { flagged = true; },
++      purge, snapshot,
++      pgCancel: async () => { await new Promise((r) => setTimeout(r, 5)); pgCommittedAt = Date.now() - t0; return true; },
++      log: (l) => logs.push(l), purgeTimeoutMs: 300, snapshotTimeoutMs: 300,
++    });
++    assert.equal(flagged, true, "local/Redis cancel flag issued synchronously, before anything is awaited");
++    await settlesWithin(seq, 2000, "cancel sequence");
++    assert.ok(pgCommittedAt > 0 && pgCommittedAt < 100, `PG cancel committed promptly (${pgCommittedAt}ms), not after the ${label}`);
++    assert.ok(logs.length >= 1, "the hang/failure is logged");
++  });
++}
++
++test("durable cancel: PG cancel resolves while the purge is still hung (observed mid-flight)", async () => {
++  let pgDone = false; let purgeSettled = false;
++  const seq = runStopRuleCancelSequence(6, "stop rule S4", {
++    flag: () => {}, snapshot: never,
++    purge: () => never().finally(() => { purgeSettled = true; }),
++    pgCancel: async () => { pgDone = true; return true; },
++    log: () => {}, purgeTimeoutMs: 200, snapshotTimeoutMs: 200,
++  });
++  await new Promise((r) => setTimeout(r, 20));
++  assert.equal(pgDone, true, "PG cancel already committed");
++  assert.equal(purgeSettled, false, "purge still hanging");
++  await seq;
++});
++
++test("durable cancel: PG cancel error propagates after the bounded purge; no snapshot", async () => {
++  const steps: string[] = [];
++  await assert.rejects(runStopRuleCancelSequence(7, "r", {
++    flag: () => {}, purge: never, snapshot: async () => { steps.push("snapshot"); },
++    pgCancel: async () => { throw new Error("pg down"); }, log: () => {}, purgeTimeoutMs: 100,
++  }), /pg down/);
++  assert.deepEqual(steps, []);
++});
++
++test("durable cancel: already-cancelled batch (pgCancel → false) takes no second snapshot", async () => {
++  const steps: string[] = [];
++  await runStopRuleCancelSequence(8, "r", {
++    flag: () => {}, purge: async () => { steps.push("purge"); }, snapshot: async () => { steps.push("snapshot"); },
++    pgCancel: async () => false, log: () => {},
++  });
++  assert.deepEqual(steps, ["purge"]);
++});
++
+ test("SQL: COUNT_BATCH_FAILURES_SQL counts first failed attempts and exhaustion (optional, local PG)", { skip: !process.env.STOP_RULE_TEST_PG }, async () => {
+   const pg = (await import("pg")).default;
+   const c = new pg.Client({ connectionString: process.env.STOP_RULE_TEST_PG });
+diff --git a/server/lib/batch-stop-rule.ts b/server/lib/batch-stop-rule.ts
+index 0713cb3..1ad228c 100644
+--- a/server/lib/batch-stop-rule.ts
++++ b/server/lib/batch-stop-rule.ts
+@@ -71,7 +71,7 @@ export const COUNT_BATCH_FAILURES_SQL = `
+ export interface StopRuleDeps {
+   threshold: number;
+   countFailures: (batchId: number) => Promise<BatchFailureCounts>;
+-  /** Same sequence as POST /batch/cancel: flag + queue purge + snapshot + PG cancel. */
++  /** Durable-first cancel (runStopRuleCancelSequence): flag + PG cancel, bounded purge, cancelled/partial snapshot. */
+   cancelBatch: (batchId: number, reason: string) => Promise<void>;
+   log?: (line: string) => void;
+ }
+@@ -110,28 +110,75 @@ export async function enforceBatchStopRule(
+   return true;
+ }
+ 
++/** Upper bound on the queue purge inside the stop-rule cancel sequence. */
++export const STOP_RULE_PURGE_TIMEOUT_MS = 10_000;
++/** Upper bound the cancel sequence waits for the (cancelled/partial) snapshot. */
++export const STOP_RULE_SNAPSHOT_TIMEOUT_MS = 30_000;
++
+ export interface CancelSequenceSteps {
+-  /** Local + Redis cancel flag (worker.cancelBatch) — first, so no new claim starts. */
++  /** Local + Redis cancel flag (worker.cancelBatch) — synchronous, first, so no new claim starts. */
+   flag: (batchId: number) => void;
+-  /** Purge the batch's still-queued BullMQ jobs (queue.removeBatchJobs). */
++  /** Purge the batch's still-queued BullMQ jobs (queue.removeBatchJobs). Bounded by purgeTimeoutMs. */
+   purge: (batchId: number) => Promise<void>;
+-  /** saveBatchSnapshot for the batch (non-fatal, as in POST /batch/cancel). */
+-  snapshot: (batchId: number) => Promise<void>;
+-  /** storage.cancelBatchRun: PG batch status → cancelled (claimJob fence). */
+-  pgCancel: (batchId: number, reason: string) => Promise<void>;
++  /**
++   * Save a snapshot of completed companies, explicitly marked cancelled/partial
++   * (never accepted/comprehensive). Only run by the caller whose pgCancel
++   * actually transitioned the batch; bounded by snapshotTimeoutMs; non-fatal.
++   */
++  snapshot: (batchId: number, reason: string) => Promise<void>;
++  /**
++   * storage.cancelBatchRun: durable PG batch status → cancelled (claimJob
++   * fence). Returns true when THIS call transitioned the row, false when it was
++   * already cancelled (idempotent no-op).
++   */
++  pgCancel: (batchId: number, reason: string) => Promise<boolean>;
+   log?: (line: string) => void;
++  purgeTimeoutMs?: number;
++  snapshotTimeoutMs?: number;
++}
++
++/** Await `p` for at most `ms`; never rejects. Resolves "ok" | "failed" | "timeout". */
++async function bounded(p: () => Promise<unknown>, ms: number, what: string, log: (l: string) => void): Promise<"ok" | "failed" | "timeout"> {
++  let timer: NodeJS.Timeout | undefined;
++  const timeout = new Promise<"timeout">((r) => { timer = setTimeout(() => r("timeout"), ms); });
++  const work = Promise.resolve().then(p).then(
++    () => "ok" as const,
++    (e: any) => { log(`[BATCH-STOP-RULE] ${what} failed (non-fatal): ${e?.message ?? e}`); return "failed" as const; },
++  );
++  const out = await Promise.race([work, timeout]);
++  clearTimeout(timer);
++  if (out === "timeout") log(`[BATCH-STOP-RULE] ${what} still pending after ${ms}ms — abandoned (non-fatal)`);
++  return out;
+ }
+ 
+ /**
+- * The POST /batch/cancel sequence the stop rule runs when tripped:
+- * flag → purge queue → snapshot → PG cancel. Purge and snapshot errors are
+- * logged and do not prevent the PG cancel; a PG cancel error propagates (the
+- * caller still suppresses the retry, see enforceBatchStopRule).
++ * Cancel sequence the stop rule runs when tripped. Durable cancel first:
++ *   1. flag (local + Redis notification, synchronous fire-and-forget)
++ *   2. PG cancel and queue purge start together; the PG cancel is never gated
++ *      behind the purge, and the purge is bounded by purgeTimeoutMs
++ *   3. only after the PG cancel committed AND transitioned the batch: a bounded
++ *      snapshot, marked cancelled/partial by the snapshot step
++ * Purge/snapshot errors or hangs are logged and never block or undo the PG
++ * cancel; a PG cancel error propagates (the caller still suppresses the retry,
++ * see enforceBatchStopRule). Total time is bounded by the PG cancel plus the
++ * two timeouts.
+  */
+ export async function runStopRuleCancelSequence(batchId: number, reason: string, s: CancelSequenceSteps): Promise<void> {
+   const log = s.log ?? ((l: string) => console.warn(l));
+   s.flag(batchId);
+-  await s.purge(batchId).catch((e: any) => log(`[BATCH-STOP-RULE] removeBatchJobs failed: ${e?.message ?? e}`));
+-  await s.snapshot(batchId).catch((e: any) => log(`[BATCH-STOP-RULE] snapshot failed (non-fatal): ${e?.message ?? e}`));
+-  await s.pgCancel(batchId, reason);
++  const pg = Promise.resolve().then(() => s.pgCancel(batchId, reason));
++  const purge = bounded(() => s.purge(batchId), s.purgeTimeoutMs ?? STOP_RULE_PURGE_TIMEOUT_MS, "removeBatchJobs", log);
++  let transitioned: boolean;
++  try {
++    transitioned = await pg;
++  } catch (e) {
++    await purge;
++    throw e;
++  }
++  if (transitioned) {
++    await Promise.all([purge, bounded(() => s.snapshot(batchId, reason), s.snapshotTimeoutMs ?? STOP_RULE_SNAPSHOT_TIMEOUT_MS, "cancelled/partial snapshot", log)]);
++  } else {
++    log(`[BATCH-STOP-RULE] batch=${batchId} already cancelled by another path — snapshot left to that path`);
++    await purge;
++  }
+ }
+diff --git a/server/lib/job-isolation.integration.test.ts b/server/lib/job-isolation.integration.test.ts
+index 238c41a..6031340 100644
+--- a/server/lib/job-isolation.integration.test.ts
++++ b/server/lib/job-isolation.integration.test.ts
+@@ -75,10 +75,37 @@ function descendants(root: number, t = procTable()) {
+   while (q.length) { const p = q.pop()!; for (const [pid, v] of t) if (v.ppid === p) { out.push(pid); q.push(pid); } }
+   return { t, pids: out };
+ }
+-const baselineDesc = new Set<number>(); // e.g. tsx's esbuild service — not ours to count
++/** Full identity of a process, for evidence and failure messages. */
++function identity(pid: number, t = procTable()) {
++  let exe = "?", cmdline = "?", startTicks = -1;
++  try { exe = fs.readlinkSync(`/proc/${pid}/exe`); } catch { /* gone / no perm */ }
++  try { cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean).join(" "); } catch { /* gone */ }
++  try { const st = fs.readFileSync(`/proc/${pid}/stat`, "utf8"); startTicks = Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[19]); } catch { /* gone */ }
++  const v = t.get(pid);
++  return { pid, ppid: v?.ppid ?? -1, comm: v?.comm ?? "?", state: v?.state ?? "?", rssKb: v?.rssKb ?? 0, exe, cmdline: cmdline.slice(0, 300), startTicks };
++}
++/**
++ * Explicit toolchain allowlist — exactly ONE kind of process is excluded from
++ * the descendant/child counts: tsx's esbuild transform service, i.e. a DIRECT
++ * child of this test process whose executable is an `esbuild` binary run as
++ * `esbuild --service=<ver> --ping`. tsx starts it lazily on the first TS
++ * transform after startup (so it may appear after the pre-job snapshot), it is
++ * test tooling, never application work (production runs compiled JS with no
++ * tsx). Every other descendant — including any other esbuild invocation —
++ * stays strictly counted. Evidence: TEST_RESULTS.md §"Extra integration process".
++ */
++function isToolchainHelper(pid: number, t: ReturnType<typeof procTable>): boolean {
++  if (t.get(pid)?.ppid !== process.pid) return false;
++  const id = identity(pid, t);
++  return /(^|\/)esbuild$/.test(id.exe) && /(^|\/)esbuild --service=\S+ --ping$/.test(id.cmdline);
++}
++const toolchainHelpersSeen = new Map<number, ReturnType<typeof identity>>();
+ function sample() {
+   const { t, pids } = descendants(process.pid);
+-  const live = pids.filter((p) => t.get(p)!.state !== "Z" && !baselineDesc.has(p));
++  const nonZombie = pids.filter((p) => t.get(p)!.state !== "Z");
++  const helpers = nonZombie.filter((p) => isToolchainHelper(p, t));
++  for (const p of helpers) if (!toolchainHelpersSeen.has(p)) toolchainHelpersSeen.set(p, { ...identity(p, t), firstSeenAt: Date.now() } as any);
++  const live = nonZombie.filter((p) => !helpers.includes(p));
+   const chrome = live.filter((p) => /chrom/i.test(t.get(p)!.comm));
+   const jobChildren = live.filter((p) => t.get(p)!.ppid === process.pid);
+   return {
+@@ -86,6 +113,10 @@ function sample() {
+     descendantRssMb: Math.round(live.reduce((a, p) => a + t.get(p)!.rssKb, 0) / 1024),
+     chromiumRssMb: Math.round(chrome.reduce((a, p) => a + t.get(p)!.rssKb, 0) / 1024),
+     parentRssMb: Math.round(process.memoryUsage().rss / 1048576),
++    toolchainHelperPids: helpers,
++    // Identity of every COUNTED direct child (job children); full identity of all counted descendants when few.
++    jobChildIds: jobChildren.map((p) => identity(p, t)),
++    countedDescendantIds: live.length <= 4 ? live.map((p) => identity(p, t)) : undefined,
+   };
+ }
+ function orphanPuppeteerChromium(): number[] {
+@@ -109,8 +140,9 @@ async function main() {
+   // Production schema bootstrap (raw-SQL tables/columns beyond drizzle push).
+   const { initializeDatabase } = await import("../db.js");
+   await initializeDatabase();
+-  for (const p of descendants(process.pid).pids) baselineDesc.add(p);
+-  console.log(`[INT] initializeDatabase OK; baseline descendants excluded: ${[...baselineDesc].join(",") || "none"}`);
++  // Pre-job snapshot: identity of every descendant that exists before any job starts (recorded, NOT excluded).
++  const preJob = (() => { const { t, pids } = descendants(process.pid); return pids.map((p) => ({ ...identity(p, t), toolchainHelper: isToolchainHelper(p, t) })); })();
++  console.log(`[INT] initializeDatabase OK; pre-job descendants: ${JSON.stringify(preJob)}`);
+ 
+   // Local PDF (real Chromium print-to-pdf) served over HTTP for the browser path.
+   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ciq-int-"));
+@@ -206,6 +238,7 @@ async function main() {
+     peak, maxDescendantRssMb: maxRss, maxParentRssMb: maxParent, maxConcurrentJobChildren: maxConcurrentChildren,
+     lockRenewals: Object.fromEntries(renewals), stalledEvents: stalled, failedEvents: failedEv, completedEvents: completedEv,
+     afterCompletion: after, afterStopWorker: afterStop, newOrphanPuppeteerChromium: newOrphans,
++    preJobDescendants: preJob, toolchainHelpers: [...toolchainHelpersSeen.values()],
+     quarantined: iso.quarantinedChildren().length, isolationStats: iso.__testing.stats(), brokerAfter: iso.__testing.brokerState(), samples: samples.length,
+   };
+   console.log("[INT] summary " + JSON.stringify({ ...summary, samples: samples.length }, null, 1));
+@@ -213,11 +246,13 @@ async function main() {
+   check(rows.length === 2 && rows.every((x) => x.status === "completed"), `both analysis_jobs completed (${rows.map((x) => x.status).join(",")})`);
+   check(batchRow?.completed_jobs === 2 && batchRow?.failed_jobs === 0, `batch counters completed=2 failed=0 (got ${batchRow?.completed_jobs}/${batchRow?.failed_jobs}, status=${batchRow?.status})`);
+   check(scores.length === 2 && scores.every((s: any) => s.n === MEASURES.length), `measure_scores persisted: ${MEASURES.length} per company (${JSON.stringify(scores)})`);
+-  check(maxConcurrentChildren === 2, `2 isolated job children ran concurrently (max seen ${maxConcurrentChildren})`);
++  const maxSample = samples.find((x) => x.jobChildren === maxConcurrentChildren);
++  check(maxConcurrentChildren === 2, `2 isolated job children ran concurrently (max seen ${maxConcurrentChildren}; at max: ${JSON.stringify(maxSample?.jobChildIds?.map((i: any) => ({ pid: i.pid, exe: i.exe, cmd: i.cmdline.slice(0, 120) })))})`);
+   check(peak.chromium > 0, `real Chromium observed under job children (peak ${peak.chromium} procs, ${peak.chromiumRssMb} MB)`);
+   check(stalled.length === 0, `no BullMQ stalled events (${stalled.length})`);
+   check([...renewals.values()].every((n) => n >= 1), `lock renewed at least once per job (${JSON.stringify(Object.fromEntries(renewals))})`);
+-  check(after.descendants === 0, `no descendants after completion (${after.descendants}, chromium ${after.chromium})`);
++  check(after.descendants === 0, `no descendants after completion (${after.descendants}, chromium ${after.chromium}; counted: ${JSON.stringify(after.countedDescendantIds)})`);
++  check(afterStop.descendants === 0, `no descendants after stopWorker (${afterStop.descendants}; counted: ${JSON.stringify(afterStop.countedDescendantIds)})`);
+   check(newOrphans.length === 0, `no orphaned puppeteer Chromium anywhere on host (${newOrphans.join(",") || "none"})`);
+   check(iso.quarantinedChildren().length === 0, "no quarantined children");
+   const b = summary.brokerAfter as any;
+@@ -226,6 +261,8 @@ async function main() {
+   fs.mkdirSync(path.dirname(EVIDENCE), { recursive: true });
+   fs.writeFileSync(EVIDENCE, JSON.stringify({ ...summary, samplesData: samples, failures }, null, 1));
+   await r.quit().catch(() => {}); await q.close().catch(() => {}); await c.end().catch(() => {}); srv.close();
++  console.log(`[INT] toolchain helpers (excluded by exe+cmdline allowlist): ${JSON.stringify([...toolchainHelpersSeen.values()])}`);
++  console.log(`[INT] harness pid=${process.pid} exiting; helper pids to verify gone after exit: ${[...toolchainHelpersSeen.keys()].join(",") || "none"}`);
+   console.log(failures.length ? `INTEGRATION FAIL (${failures.length})` : "INTEGRATION PASS");
+   process.exit(failures.length ? 1 : 0);
+ }
+diff --git a/server/lib/lifecycle-fence.db.test.ts b/server/lib/lifecycle-fence.db.test.ts
+index 085962f..0aed956 100644
+--- a/server/lib/lifecycle-fence.db.test.ts
++++ b/server/lib/lifecycle-fence.db.test.ts
+@@ -414,7 +414,7 @@ async function s7LockOrder() {
+   {
+     const B7 = (await storage.createBatchRun(wsId, fwId, 1)) as any; const cid = companyIds[10];
+     const jB = await newJob(B7.id, cid); const att = (await claimAttempt(jB, B7.id, cid))!;
+-    let cancelP: Promise<void> | null = null;
++    let cancelP: Promise<boolean> | null = null;
+     let cancelBlocked = false, runningWhileHeld = false;
+     const wrote = await runFencedWrite(fenceDb, att.own, async (tx) => {
+       // Canonical lock is held here (connection 2). Issue the real cancel (connection 1).
+diff --git a/server/storage.ts b/server/storage.ts
+index 0638a1a..94dd90a 100644
+--- a/server/storage.ts
++++ b/server/storage.ts
+@@ -1747,7 +1747,8 @@ export async function requeueFailedJobsForBatch(
+   }));
+ }
+ 
+-export async function cancelBatchRun(batchId: number, reason = "cancelled by user") {
++/** Returns true when this call transitioned the batch to cancelled, false on the idempotent no-op. */
++export async function cancelBatchRun(batchId: number, reason = "cancelled by user"): Promise<boolean> {
+   const [batch] = await db.select().from(schema.batchRuns).where(eq(schema.batchRuns.id, batchId)).limit(1);
+   const now = new Date();
+   // Rule (iv) cancellation cleanup — authoritative PG write, idempotent: a
+@@ -1762,7 +1763,7 @@ export async function cancelBatchRun(batchId: number, reason = "cancelled by use
+     .where(and(eq(schema.batchRuns.id, batchId), sql`${schema.batchRuns.status} <> 'cancelled'`))
+     .returning({ id: schema.batchRuns.id });
+   console.warn(`[LIFECYCLE] cancelBatchRun batch=${batchId} transitioned=${transitioned.length > 0}${transitioned.length === 0 ? " (already cancelled or missing — idempotent no-op)" : ""}`);
+-  if (transitioned.length === 0) return;
++  if (transitioned.length === 0) return false;
+   const run = await getReliabilityRunForBatch(batchId);
+   if (run) {
+     await db.execute(sql`UPDATE analysis_results SET acceptance_state = 'rejected', rejection_reason = ${reason} WHERE batch_id = ${batchId} AND immutable_snapshot = TRUE`);
+@@ -1778,6 +1779,7 @@ export async function cancelBatchRun(batchId: number, reason = "cancelled by use
+       reason,
+     });
+   }
++  return true;
+ }
+ 
+ // ─── Job Queue Operations ───────────────────────────────────────────────────
+diff --git a/server/worker.ts b/server/worker.ts
+index 7c72d19..fa7ff7e 100644
+--- a/server/worker.ts
++++ b/server/worker.ts
+@@ -1598,7 +1598,7 @@ export async function startWorker(workerId?: string): Promise<Worker> {
+  * BATCH_STOP_RULE_FAILED_JOBS > 0. When tripped it runs the same sequence as
+  * POST /batch/cancel and the caller skips the retry re-enqueue.
+  */
+-async function stopRuleTripped(batchId: number, jobId: number, error: string, frameworkId: number, workspaceId: number): Promise<boolean> {
++export async function stopRuleTripped(batchId: number, jobId: number, error: string, frameworkId: number, workspaceId: number): Promise<boolean> {
+   return enforceBatchStopRule(batchId, jobId, error, {
+     threshold: readStopRuleThreshold(),
+     countFailures: async (id) => {
+@@ -1610,17 +1610,29 @@ async function stopRuleTripped(batchId: number, jobId: number, error: string, fr
+     cancelBatch: (id, reason) => runStopRuleCancelSequence(id, reason, {
+       flag: cancelBatch,
+       purge: async (bid) => { const { removeBatchJobs } = await import("./queue.js"); await removeBatchJobs(bid); },
+-      snapshot: async (bid) => {
+-        const { pool } = await import("./db.js");
+-        const b = await pool.query("SELECT list_id FROM batch_runs WHERE id = $1", [bid]);
+-        const listId = b.rows[0]?.list_id != null ? Number(b.rows[0].list_id) : undefined;
+-        await saveBatchSnapshot(bid, frameworkId, workspaceId, listId);
+-      },
+-      pgCancel: (bid, r) => storage.cancelBatchRun(bid, r).then(() => undefined),
++      snapshot: (bid, r) => saveStopRuleSnapshot(bid, frameworkId, workspaceId, r),
++      pgCancel: (bid, r) => storage.cancelBatchRun(bid, r),
+     }),
+   });
+ }
+ 
++/**
++ * Stop-rule snapshot: preserves completed companies like POST /batch/cancel,
++ * then marks every snapshot row of the batch rejected with an explicit
++ * "cancelled/partial" reason so it can never read as an accepted or
++ * comprehensive result. Exported for the real-Postgres stop-rule test.
++ */
++export async function saveStopRuleSnapshot(batchId: number, frameworkId: number, workspaceId: number, reason: string): Promise<void> {
++  const { pool } = await import("./db.js");
++  const b = await pool.query("SELECT list_id FROM batch_runs WHERE id = $1", [batchId]);
++  const listId = b.rows[0]?.list_id != null ? Number(b.rows[0].list_id) : undefined;
++  await saveBatchSnapshot(batchId, frameworkId, workspaceId, listId);
++  await pool.query(
++    "UPDATE analysis_results SET acceptance_state = 'rejected', accepted_at = NULL, rejection_reason = $2 WHERE batch_id = $1",
++    [batchId, `cancelled/partial snapshot — batch stopped by ${reason}; not comprehensive`],
++  );
++}
++
+ export function cancelBatch(batchId: number): void {
+   // Local flag for this process (cheap fast-path)...
+   cancelledBatches.add(batchId);
+-- 
+2.43.0
+

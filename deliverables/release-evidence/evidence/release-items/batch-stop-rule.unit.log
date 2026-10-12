@@ -1,0 +1,131 @@
+TAP version 13
+# Subtest: threshold: unset / 0 / junk → disabled (legacy behaviour unchanged)
+ok 1 - threshold: unset / 0 / junk → disabled (legacy behaviour unchanged)
+  ---
+  duration_ms: 0.942251
+  type: 'test'
+  ...
+# Subtest: decision: ≥ threshold failed jobs, or any retry-exhausted job, stops
+ok 2 - decision: ≥ threshold failed jobs, or any retry-exhausted job, stops
+  ---
+  duration_ms: 0.189166
+  type: 'test'
+  ...
+# Subtest: cancellation and provider-quota pauses are not S4 failures
+ok 3 - cancellation and provider-quota pauses are not S4 failures
+  ---
+  duration_ms: 0.118148
+  type: 'test'
+  ...
+# Subtest: enforce: disabled never counts or cancels
+ok 4 - enforce: disabled never counts or cancels
+  ---
+  duration_ms: 0.181484
+  type: 'test'
+  ...
+# Subtest: enforce: count error fails open to the legacy retry path (no cancel)
+ok 5 - enforce: count error fails open to the legacy retry path (no cancel)
+  ---
+  duration_ms: 0.264128
+  type: 'test'
+  ...
+# Subtest: enforce: cancel-sequence error still suppresses the retry
+ok 6 - enforce: cancel-sequence error still suppresses the retry
+  ---
+  duration_ms: 0.174944
+  type: 'test'
+  ...
+# Subtest: batch-1276 shape WITHOUT the rule: 13 jobs exhaust retries (39 failed attempts)
+ok 7 - batch-1276 shape WITHOUT the rule: 13 jobs exhaust retries (39 failed attempts)
+  ---
+  duration_ms: 0.566264
+  type: 'test'
+  ...
+# Subtest: batch-1276 shape WITH BATCH_STOP_RULE_FAILED_JOBS=2: stops at the 2nd failed job, before any job exhausts retries
+ok 8 - batch-1276 shape WITH BATCH_STOP_RULE_FAILED_JOBS=2: stops at the 2nd failed job, before any job exhausts retries
+  ---
+  duration_ms: 0.663551
+  type: 'test'
+  ...
+# Subtest: worker default (env unset): retry path byte-for-byte legacy — rule never counts, never cancels
+ok 9 - worker default (env unset): retry path byte-for-byte legacy — rule never counts, never cancels
+  ---
+  duration_ms: 1.002633
+  type: 'test'
+  ...
+# Subtest: threshold N=3: Nth failed job trips → batch cancelled, snapshot saved, queue purged, no further retries/claims
+ok 10 - threshold N=3: Nth failed job trips → batch cancelled, snapshot saved, queue purged, no further retries/claims
+  ---
+  duration_ms: 2.029201
+  type: 'test'
+  ...
+# Subtest: cancel sequence: purge/snapshot errors are non-fatal; PG cancel still runs
+ok 11 - cancel sequence: purge/snapshot errors are non-fatal; PG cancel still runs
+  ---
+  duration_ms: 0.317338
+  type: 'test'
+  ...
+# Subtest: durable cancel: HANGING purge cannot delay the PG cancel; sequence completes in bounded time
+ok 12 - durable cancel: HANGING purge cannot delay the PG cancel; sequence completes in bounded time
+  ---
+  duration_ms: 301.338579
+  type: 'test'
+  ...
+# Subtest: durable cancel: HANGING snapshot cannot delay the PG cancel; sequence completes in bounded time
+ok 13 - durable cancel: HANGING snapshot cannot delay the PG cancel; sequence completes in bounded time
+  ---
+  duration_ms: 305.96175
+  type: 'test'
+  ...
+# Subtest: durable cancel: HANGING purge AND snapshot cannot delay the PG cancel; sequence completes in bounded time
+ok 14 - durable cancel: HANGING purge AND snapshot cannot delay the PG cancel; sequence completes in bounded time
+  ---
+  duration_ms: 305.837477
+  type: 'test'
+  ...
+# Subtest: durable cancel: FAILING purge AND snapshot cannot delay the PG cancel; sequence completes in bounded time
+ok 15 - durable cancel: FAILING purge AND snapshot cannot delay the PG cancel; sequence completes in bounded time
+  ---
+  duration_ms: 5.971538
+  type: 'test'
+  ...
+# Subtest: durable cancel: HANGING purge, FAILING snapshot cannot delay the PG cancel; sequence completes in bounded time
+ok 16 - durable cancel: HANGING purge, FAILING snapshot cannot delay the PG cancel; sequence completes in bounded time
+  ---
+  duration_ms: 300.513084
+  type: 'test'
+  ...
+# Subtest: durable cancel: PG cancel resolves while the purge is still hung (observed mid-flight)
+ok 17 - durable cancel: PG cancel resolves while the purge is still hung (observed mid-flight)
+  ---
+  duration_ms: 200.425607
+  type: 'test'
+  ...
+# Subtest: durable cancel: PG cancel error propagates after the bounded purge; no snapshot
+ok 18 - durable cancel: PG cancel error propagates after the bounded purge; no snapshot
+  ---
+  duration_ms: 101.671326
+  type: 'test'
+  ...
+# Subtest: durable cancel: already-cancelled batch (pgCancel → false) takes no second snapshot
+ok 19 - durable cancel: already-cancelled batch (pgCancel → false) takes no second snapshot
+  ---
+  duration_ms: 0.299622
+  type: 'test'
+  ...
+# Subtest: SQL: COUNT_BATCH_FAILURES_SQL counts first failed attempts and exhaustion (optional, local PG)
+ok 20 - SQL: COUNT_BATCH_FAILURES_SQL counts first failed attempts and exhaustion (optional, local PG)
+  ---
+  duration_ms: 94.59952
+  type: 'test'
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1629.517982
+exit=0

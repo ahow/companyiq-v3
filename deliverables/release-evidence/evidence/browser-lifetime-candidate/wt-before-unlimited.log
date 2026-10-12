@@ -1,0 +1,281 @@
+worktree=/tmp/wt-base head=b676c2ddf37512dad0e18c6e812a4dc7e58a12a2 tasksmax=0
++1.82s [SETUP] label=wt-before-unlimited jobs=12 concurrency=4 MAX_CONCURRENT_BROWSER=1 synthetic marker PDFs docsPerChild=1 hold=20000ms
++1.82s [LIMITS] Max processes 31804 31804 processes | cgroup=/sys/fs/cgroup/system.slice/vm-computer-api.service pids.max=9541 pids.current=57
++1.82s [JOB] start job=0
++1.83s [JOB] start job=1
++1.83s [JOB] start job=2
++1.83s [JOB] start job=3
++2.82s [SAMPLE] {"at":2822,"liveBrowsers":0,"tasks":86,"procs":10,"jobChildren":4,"rssMb":670,"pidsCurrent":125,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++3.83s [SAMPLE] {"at":3826,"liveBrowsers":0,"tasks":90,"procs":10,"jobChildren":4,"rssMb":836,"pidsCurrent":129,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++4.83s [SAMPLE] {"at":4826,"liveBrowsers":0,"tasks":90,"procs":10,"jobChildren":4,"rssMb":955,"pidsCurrent":129,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++5.83s [SAMPLE] {"at":5827,"liveBrowsers":0,"tasks":90,"procs":10,"jobChildren":4,"rssMb":1045,"pidsCurrent":129,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++6.30s [EVENT] permit.acquire.request {"active":0,"waiting":0,"max":1}
++6.30s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++6.50s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++6.58s [EVENT] browser.observed.launch {"pid":121045,"ppid":120963,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-qRFwwn "}
++6.70s [EVENT] permit.acquire.request {"active":1,"waiting":1,"max":1}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++6.83s [SAMPLE] {"at":6827,"liveBrowsers":1,"tasks":160,"procs":16,"jobChildren":4,"rssMb":1533,"pidsCurrent":202,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
++6.87s [EVENT] permit.acquire.request {"active":1,"waiting":2,"max":1}
++7.83s [SAMPLE] {"at":7828,"liveBrowsers":1,"tasks":195,"procs":17,"jobChildren":4,"rssMb":1973,"pidsCurrent":237,"pidsMax":9541,"permit":{"active":1,"waiting":3,"max":1}}
++8.83s [SAMPLE] {"at":8829,"liveBrowsers":1,"tasks":195,"procs":17,"jobChildren":4,"rssMb":1917,"pidsCurrent":237,"pidsMax":9541,"permit":{"active":1,"waiting":3,"max":1}}
++9.83s [SAMPLE] {"at":9831,"liveBrowsers":1,"tasks":195,"procs":17,"jobChildren":4,"rssMb":1918,"pidsCurrent":237,"pidsMax":9541,"permit":{"active":1,"waiting":3,"max":1}}
++10.83s [SAMPLE] {"at":10833,"liveBrowsers":1,"tasks":206,"procs":18,"jobChildren":4,"rssMb":2027,"pidsCurrent":248,"pidsMax":9541,"permit":{"active":1,"waiting":3,"max":1}}
++11.84s [SAMPLE] {"at":11840,"liveBrowsers":1,"tasks":206,"procs":18,"jobChildren":4,"rssMb":2028,"pidsCurrent":248,"pidsMax":9541,"permit":{"active":1,"waiting":3,"max":1}}
++12.84s [SAMPLE] {"at":12839,"liveBrowsers":1,"tasks":206,"procs":18,"jobChildren":4,"rssMb":2021,"pidsCurrent":248,"pidsMax":9541,"permit":{"active":1,"waiting":3,"max":1}}
++13.85s [SAMPLE] {"at":13845,"liveBrowsers":1,"tasks":206,"procs":18,"jobChildren":4,"rssMb":2021,"pidsCurrent":248,"pidsMax":9541,"permit":{"active":1,"waiting":3,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
++14.84s [SAMPLE] {"at":14843,"liveBrowsers":1,"tasks":206,"procs":18,"jobChildren":4,"rssMb":2028,"pidsCurrent":248,"pidsMax":9541,"permit":{"active":1,"waiting":3,"max":1}}
+[Processor] PDF parse error: Illegal character: 41 — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1001-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=120963 company=1001] fetch ok key=job-1001-doc-0 chars=176 marker=true ms=8636
+[REPRO-CHILD pid=120963 company=1001] synthetic scoring hold 20000ms (no provider calls)
++14.94s [EVENT] permit.release {"active":1,"waiting":2,"max":1}
++14.94s [EVENT] permit.acquire.granted {"active":1,"waiting":2,"max":1}
++15.10s [EVENT] browser.observed.launch {"pid":121259,"ppid":120971,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-YKYYh9 "}
++15.84s [SAMPLE] {"at":15841,"liveBrowsers":2,"tasks":310,"procs":25,"jobChildren":4,"rssMb":2944,"pidsCurrent":355,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++16.84s [SAMPLE] {"at":16842,"liveBrowsers":2,"tasks":310,"procs":25,"jobChildren":4,"rssMb":2902,"pidsCurrent":355,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
++17.85s [SAMPLE] {"at":17846,"liveBrowsers":2,"tasks":310,"procs":25,"jobChildren":4,"rssMb":2904,"pidsCurrent":355,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
++18.85s [SAMPLE] {"at":18851,"liveBrowsers":2,"tasks":321,"procs":26,"jobChildren":4,"rssMb":2938,"pidsCurrent":366,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
++19.85s [SAMPLE] {"at":19850,"liveBrowsers":2,"tasks":321,"procs":26,"jobChildren":4,"rssMb":2936,"pidsCurrent":366,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
++20.85s [SAMPLE] {"at":20852,"liveBrowsers":2,"tasks":321,"procs":26,"jobChildren":4,"rssMb":2935,"pidsCurrent":366,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
++21.85s [SAMPLE] {"at":21854,"liveBrowsers":2,"tasks":321,"procs":26,"jobChildren":4,"rssMb":2933,"pidsCurrent":366,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
++22.86s [SAMPLE] {"at":22857,"liveBrowsers":2,"tasks":321,"procs":26,"jobChildren":4,"rssMb":2933,"pidsCurrent":366,"pidsMax":9541,"permit":{"active":1,"waiting":2,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1003-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=120971 company=1003] fetch ok key=job-1003-doc-0 chars=175 marker=true ms=16731
+[REPRO-CHILD pid=120971 company=1003] synthetic scoring hold 20000ms (no provider calls)
++23.23s [EVENT] permit.release {"active":1,"waiting":1,"max":1}
++23.23s [EVENT] permit.acquire.granted {"active":1,"waiting":1,"max":1}
++23.36s [EVENT] browser.observed.launch {"pid":121450,"ppid":120962,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-FnFXvv "}
++23.86s [SAMPLE] {"at":23857,"liveBrowsers":3,"tasks":414,"procs":33,"jobChildren":4,"rssMb":3766,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++24.86s [SAMPLE] {"at":24860,"liveBrowsers":3,"tasks":424,"procs":33,"jobChildren":4,"rssMb":3861,"pidsCurrent":472,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++25.86s [SAMPLE] {"at":25861,"liveBrowsers":3,"tasks":424,"procs":33,"jobChildren":4,"rssMb":3860,"pidsCurrent":472,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++26.86s [SAMPLE] {"at":26862,"liveBrowsers":3,"tasks":424,"procs":33,"jobChildren":4,"rssMb":3787,"pidsCurrent":472,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++27.86s [SAMPLE] {"at":27863,"liveBrowsers":3,"tasks":435,"procs":34,"jobChildren":4,"rssMb":3893,"pidsCurrent":483,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++28.86s [SAMPLE] {"at":28863,"liveBrowsers":3,"tasks":435,"procs":34,"jobChildren":4,"rssMb":3894,"pidsCurrent":483,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++29.86s [SAMPLE] {"at":29864,"liveBrowsers":3,"tasks":435,"procs":34,"jobChildren":4,"rssMb":3891,"pidsCurrent":483,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++30.87s [SAMPLE] {"at":30867,"liveBrowsers":3,"tasks":435,"procs":34,"jobChildren":4,"rssMb":3890,"pidsCurrent":483,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1000-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=120962 company=1000] fetch ok key=job-1000-doc-0 chars=175 marker=true ms=24852
+[REPRO-CHILD pid=120962 company=1000] synthetic scoring hold 20000ms (no provider calls)
++31.55s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++31.55s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++31.62s [EVENT] browser.observed.launch {"pid":121639,"ppid":120969,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-p2i6eL "}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++31.87s [SAMPLE] {"at":31871,"liveBrowsers":4,"tasks":504,"procs":39,"jobChildren":4,"rssMb":4347,"pidsCurrent":556,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++32.87s [SAMPLE] {"at":32868,"liveBrowsers":4,"tasks":538,"procs":41,"jobChildren":4,"rssMb":4809,"pidsCurrent":590,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++33.87s [SAMPLE] {"at":33869,"liveBrowsers":4,"tasks":538,"procs":41,"jobChildren":4,"rssMb":4809,"pidsCurrent":591,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++34.87s [SAMPLE] {"at":34873,"liveBrowsers":4,"tasks":538,"procs":41,"jobChildren":4,"rssMb":4769,"pidsCurrent":589,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++35.05s [JOB] done job=1 success=true error=- ms=33224
++35.05s [JOB] start job=4
++35.12s [EVENT] browser.observed.exit {"pid":121045,"livedMs":28543}
++35.87s [SAMPLE] {"at":35873,"liveBrowsers":3,"tasks":428,"procs":33,"jobChildren":4,"rssMb":3824,"pidsCurrent":476,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++36.80s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++36.87s [SAMPLE] {"at":36874,"liveBrowsers":3,"tasks":428,"procs":33,"jobChildren":4,"rssMb":3873,"pidsCurrent":476,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++37.87s [SAMPLE] {"at":37873,"liveBrowsers":3,"tasks":428,"procs":33,"jobChildren":4,"rssMb":3871,"pidsCurrent":476,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++38.88s [SAMPLE] {"at":38875,"liveBrowsers":3,"tasks":428,"procs":33,"jobChildren":4,"rssMb":3869,"pidsCurrent":476,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
++39.88s [SAMPLE] {"at":39875,"liveBrowsers":3,"tasks":428,"procs":33,"jobChildren":4,"rssMb":3841,"pidsCurrent":476,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] PDF parse error: Command token too long: 128 — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1002-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=120969 company=1002] fetch ok key=job-1002-doc-0 chars=176 marker=true ms=33122
++39.99s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
+[REPRO-CHILD pid=120969 company=1002] synthetic scoring hold 20000ms (no provider calls)
++39.99s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++40.13s [EVENT] browser.observed.launch {"pid":121956,"ppid":121930,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-LpJJTP "}
++40.88s [SAMPLE] {"at":40877,"liveBrowsers":4,"tasks":531,"procs":40,"jobChildren":4,"rssMb":4765,"pidsCurrent":582,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++41.88s [SAMPLE] {"at":41878,"liveBrowsers":4,"tasks":531,"procs":40,"jobChildren":4,"rssMb":4765,"pidsCurrent":582,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++42.88s [SAMPLE] {"at":42878,"liveBrowsers":4,"tasks":531,"procs":40,"jobChildren":4,"rssMb":4766,"pidsCurrent":582,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++43.32s [JOB] done job=3 success=true error=- ms=41483
++43.32s [JOB] start job=5
++43.38s [EVENT] browser.observed.exit {"pid":121259,"livedMs":28284}
++43.88s [SAMPLE] {"at":43879,"liveBrowsers":3,"tasks":422,"procs":32,"jobChildren":4,"rssMb":3768,"pidsCurrent":470,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++44.62s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++44.88s [SAMPLE] {"at":44883,"liveBrowsers":3,"tasks":422,"procs":32,"jobChildren":4,"rssMb":3834,"pidsCurrent":470,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++45.88s [SAMPLE] {"at":45883,"liveBrowsers":3,"tasks":422,"procs":32,"jobChildren":4,"rssMb":3833,"pidsCurrent":470,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++46.88s [SAMPLE] {"at":46883,"liveBrowsers":3,"tasks":422,"procs":32,"jobChildren":4,"rssMb":3831,"pidsCurrent":470,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++47.88s [SAMPLE] {"at":47883,"liveBrowsers":3,"tasks":422,"procs":32,"jobChildren":4,"rssMb":3830,"pidsCurrent":470,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1004-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=121930 company=1004] fetch ok key=job-1004-doc-0 chars=175 marker=true ms=11342
+[REPRO-CHILD pid=121930 company=1004] synthetic scoring hold 20000ms (no provider calls)
++48.14s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++48.14s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++48.38s [EVENT] browser.observed.launch {"pid":122161,"ppid":122134,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-XxtS2b "}
++48.88s [SAMPLE] {"at":48885,"liveBrowsers":4,"tasks":526,"procs":39,"jobChildren":4,"rssMb":4741,"pidsCurrent":577,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++49.88s [SAMPLE] {"at":49885,"liveBrowsers":4,"tasks":526,"procs":39,"jobChildren":4,"rssMb":4742,"pidsCurrent":577,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++50.89s [SAMPLE] {"at":50886,"liveBrowsers":4,"tasks":526,"procs":39,"jobChildren":4,"rssMb":4742,"pidsCurrent":577,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++51.65s [EVENT] browser.observed.exit {"pid":121450,"livedMs":28291}
++51.79s [JOB] done job=0 success=true error=- ms=49967
++51.79s [JOB] start job=6
++51.89s [SAMPLE] {"at":51892,"liveBrowsers":3,"tasks":413,"procs":31,"jobChildren":4,"rssMb":3755,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++52.89s [SAMPLE] {"at":52894,"liveBrowsers":3,"tasks":418,"procs":31,"jobChildren":4,"rssMb":3837,"pidsCurrent":466,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++53.76s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++53.89s [SAMPLE] {"at":53892,"liveBrowsers":3,"tasks":418,"procs":31,"jobChildren":4,"rssMb":3882,"pidsCurrent":466,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++54.89s [SAMPLE] {"at":54894,"liveBrowsers":3,"tasks":418,"procs":31,"jobChildren":4,"rssMb":3880,"pidsCurrent":466,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++55.90s [SAMPLE] {"at":55895,"liveBrowsers":3,"tasks":418,"procs":31,"jobChildren":4,"rssMb":3880,"pidsCurrent":466,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1005-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=122134 company=1005] fetch ok key=job-1005-doc-0 chars=175 marker=true ms=11738
+[REPRO-CHILD pid=122134 company=1005] synthetic scoring hold 20000ms (no provider calls)
++56.35s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++56.35s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++56.40s [EVENT] browser.observed.launch {"pid":122366,"ppid":122351,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-7YJPSb "}
++56.90s [SAMPLE] {"at":56896,"liveBrowsers":4,"tasks":511,"procs":38,"jobChildren":4,"rssMb":4652,"pidsCurrent":562,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++57.90s [SAMPLE] {"at":57898,"liveBrowsers":4,"tasks":521,"procs":38,"jobChildren":4,"rssMb":4808,"pidsCurrent":572,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++58.90s [SAMPLE] {"at":58896,"liveBrowsers":4,"tasks":521,"procs":38,"jobChildren":4,"rssMb":4807,"pidsCurrent":572,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++59.90s [SAMPLE] {"at":59899,"liveBrowsers":4,"tasks":521,"procs":38,"jobChildren":4,"rssMb":4693,"pidsCurrent":572,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++60.09s [JOB] done job=2 success=true error=- ms=58265
++60.09s [JOB] start job=7
++60.15s [EVENT] browser.observed.exit {"pid":121639,"livedMs":28528}
++60.91s [SAMPLE] {"at":60909,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3749,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++61.75s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++61.91s [SAMPLE] {"at":61909,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3803,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++62.91s [SAMPLE] {"at":62911,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3801,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++63.91s [SAMPLE] {"at":63912,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3800,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1006-doc-0.pdf (766B PDF)
++64.64s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++64.64s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
+[REPRO-CHILD pid=122351 company=1006] fetch ok key=job-1006-doc-0 chars=175 marker=true ms=10889
+[REPRO-CHILD pid=122351 company=1006] synthetic scoring hold 20000ms (no provider calls)
++64.66s [EVENT] browser.observed.launch {"pid":122570,"ppid":122555,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-50J9rJ "}
++64.92s [SAMPLE] {"at":64917,"liveBrowsers":4,"tasks":483,"procs":36,"jobChildren":4,"rssMb":4277,"pidsCurrent":534,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++65.92s [SAMPLE] {"at":65915,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4726,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++66.92s [SAMPLE] {"at":66918,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4726,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++67.92s [SAMPLE] {"at":67921,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4727,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++68.24s [JOB] done job=4 success=true error=- ms=33189
++68.24s [JOB] start job=8
++68.42s [EVENT] browser.observed.exit {"pid":121956,"livedMs":28298}
++68.92s [SAMPLE] {"at":68923,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3814,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++69.92s [SAMPLE] {"at":69924,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3871,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++69.98s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++70.92s [SAMPLE] {"at":70924,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3868,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++71.92s [SAMPLE] {"at":71924,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3868,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] PDF parse error: Illegal character: 41 — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1007-doc-0.pdf (766B PDF)
++72.93s [SAMPLE] {"at":72928,"liveBrowsers":3,"tasks":415,"procs":31,"jobChildren":4,"rssMb":3889,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[REPRO-CHILD pid=122555 company=1007] fetch ok key=job-1007-doc-0 chars=176 marker=true ms=11196
++72.95s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
+[REPRO-CHILD pid=122555 company=1007] synthetic scoring hold 20000ms (no provider calls)
++72.95s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++73.18s [EVENT] browser.observed.launch {"pid":122785,"ppid":122769,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-W47a0w "}
++73.93s [SAMPLE] {"at":73931,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4796,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++74.93s [SAMPLE] {"at":74926,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4796,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++75.93s [SAMPLE] {"at":75927,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4797,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++76.45s [JOB] done job=5 success=true error=- ms=33136
++76.45s [JOB] start job=9
++76.68s [EVENT] browser.observed.exit {"pid":122161,"livedMs":28296}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++76.93s [SAMPLE] {"at":76930,"liveBrowsers":3,"tasks":412,"procs":30,"jobChildren":4,"rssMb":3746,"pidsCurrent":460,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++77.93s [SAMPLE] {"at":77930,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3835,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++78.63s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++78.93s [SAMPLE] {"at":78930,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3839,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++79.93s [SAMPLE] {"at":79931,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3837,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++80.94s [SAMPLE] {"at":80935,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3837,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1008-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=122769 company=1008] fetch ok key=job-1008-doc-0 chars=175 marker=true ms=11213
+[REPRO-CHILD pid=122769 company=1008] synthetic scoring hold 20000ms (no provider calls)
++81.20s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++81.20s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++81.44s [EVENT] browser.observed.launch {"pid":122990,"ppid":122964,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-wmfmi6 "}
++81.93s [SAMPLE] {"at":81932,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4758,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++82.93s [SAMPLE] {"at":82933,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4759,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++83.93s [SAMPLE] {"at":83932,"liveBrowsers":4,"tasks":517,"procs":37,"jobChildren":4,"rssMb":4759,"pidsCurrent":568,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++84.73s [JOB] done job=6 success=true error=- ms=32942
++84.73s [JOB] start job=10
++84.93s [EVENT] browser.observed.exit {"pid":122366,"livedMs":28532}
++84.93s [SAMPLE] {"at":84932,"liveBrowsers":3,"tasks":413,"procs":30,"jobChildren":4,"rssMb":3764,"pidsCurrent":461,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++85.94s [SAMPLE] {"at":85935,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3856,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++86.47s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++86.94s [SAMPLE] {"at":86936,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3878,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++87.94s [SAMPLE] {"at":87938,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3876,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++88.94s [SAMPLE] {"at":88941,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3876,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1009-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=122964 company=1009] fetch ok key=job-1009-doc-0 chars=175 marker=true ms=10788
+[REPRO-CHILD pid=122964 company=1009] synthetic scoring hold 20000ms (no provider calls)
++89.41s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++89.42s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++89.44s [EVENT] browser.observed.launch {"pid":123194,"ppid":123169,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-GAh9ed "}
++89.94s [SAMPLE] {"at":89944,"liveBrowsers":4,"tasks":508,"procs":37,"jobChildren":4,"rssMb":4640,"pidsCurrent":559,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++90.94s [SAMPLE] {"at":90943,"liveBrowsers":4,"tasks":518,"procs":37,"jobChildren":4,"rssMb":4774,"pidsCurrent":569,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++91.95s [SAMPLE] {"at":91947,"liveBrowsers":4,"tasks":518,"procs":37,"jobChildren":4,"rssMb":4774,"pidsCurrent":569,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++92.95s [SAMPLE] {"at":92948,"liveBrowsers":4,"tasks":518,"procs":37,"jobChildren":4,"rssMb":4739,"pidsCurrent":569,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++93.10s [JOB] done job=7 success=true error=- ms=33003
++93.10s [JOB] start job=11
++93.20s [EVENT] browser.observed.exit {"pid":122570,"livedMs":28538}
++93.97s [SAMPLE] {"at":93966,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3831,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++94.97s [SAMPLE] {"at":94969,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3886,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++95.42s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++95.97s [SAMPLE] {"at":95965,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3892,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
++96.97s [SAMPLE] {"at":96967,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3891,"pidsCurrent":462,"pidsMax":9541,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] PDF parse error: bad XRef entry — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1010-doc-0.pdf (766B PDF)
++97.96s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++97.96s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
+[REPRO-CHILD pid=123169 company=1010] fetch ok key=job-1010-doc-0 chars=176 marker=true ms=11497
+[REPRO-CHILD pid=123169 company=1010] synthetic scoring hold 20000ms (no provider calls)
++97.97s [SAMPLE] {"at":97972,"liveBrowsers":3,"tasks":414,"procs":30,"jobChildren":4,"rssMb":3915,"pidsCurrent":463,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++98.23s [EVENT] browser.observed.launch {"pid":123412,"ppid":123387,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-gcQpBU "}
++98.97s [SAMPLE] {"at":98970,"liveBrowsers":4,"tasks":518,"procs":37,"jobChildren":4,"rssMb":4814,"pidsCurrent":569,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++99.97s [SAMPLE] {"at":99972,"liveBrowsers":4,"tasks":518,"procs":37,"jobChildren":4,"rssMb":4814,"pidsCurrent":569,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++100.97s [SAMPLE] {"at":100972,"liveBrowsers":4,"tasks":518,"procs":37,"jobChildren":4,"rssMb":4816,"pidsCurrent":569,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++101.30s [JOB] done job=8 success=true error=- ms=33057
++101.48s [EVENT] browser.observed.exit {"pid":122785,"livedMs":28299}
++101.97s [SAMPLE] {"at":101974,"liveBrowsers":3,"tasks":402,"procs":29,"jobChildren":3,"rssMb":3659,"pidsCurrent":450,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++102.98s [SAMPLE] {"at":102976,"liveBrowsers":3,"tasks":402,"procs":29,"jobChildren":3,"rssMb":3657,"pidsCurrent":450,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++103.98s [SAMPLE] {"at":103980,"liveBrowsers":3,"tasks":402,"procs":29,"jobChildren":3,"rssMb":3655,"pidsCurrent":450,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++104.98s [SAMPLE] {"at":104985,"liveBrowsers":3,"tasks":402,"procs":29,"jobChildren":3,"rssMb":3655,"pidsCurrent":450,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
++105.98s [SAMPLE] {"at":105981,"liveBrowsers":3,"tasks":402,"procs":29,"jobChildren":3,"rssMb":3654,"pidsCurrent":450,"pidsMax":9541,"permit":{"active":1,"waiting":0,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:41463 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:41463/job-1011-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=123387 company=1011] fetch ok key=job-1011-doc-0 chars=175 marker=true ms=10779
+[REPRO-CHILD pid=123387 company=1011] synthetic scoring hold 20000ms (no provider calls)
++106.19s [EVENT] permit.release {"active":0,"waiting":0,"max":1}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++106.98s [SAMPLE] {"at":106981,"liveBrowsers":3,"tasks":402,"procs":29,"jobChildren":3,"rssMb":3679,"pidsCurrent":450,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++107.99s [SAMPLE] {"at":107986,"liveBrowsers":3,"tasks":402,"procs":29,"jobChildren":3,"rssMb":3679,"pidsCurrent":450,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++108.99s [SAMPLE] {"at":108987,"liveBrowsers":3,"tasks":402,"procs":29,"jobChildren":3,"rssMb":3677,"pidsCurrent":450,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++109.49s [EVENT] browser.observed.exit {"pid":122990,"livedMs":28055}
++109.53s [JOB] done job=9 success=true error=- ms=33077
++109.99s [SAMPLE] {"at":109987,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2477,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++110.99s [SAMPLE] {"at":110992,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2477,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++111.99s [SAMPLE] {"at":111993,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2475,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++112.99s [SAMPLE] {"at":112994,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2475,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++114.00s [SAMPLE] {"at":113995,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2475,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++115.00s [SAMPLE] {"at":114998,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2475,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++116.00s [SAMPLE] {"at":115999,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2475,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++117.00s [SAMPLE] {"at":117001,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2475,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++118.00s [SAMPLE] {"at":118001,"liveBrowsers":2,"tasks":274,"procs":20,"jobChildren":2,"rssMb":2475,"pidsCurrent":319,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++118.06s [JOB] done job=10 success=true error=- ms=33327
++118.25s [EVENT] browser.observed.exit {"pid":123194,"livedMs":28812}
++119.00s [SAMPLE] {"at":119002,"liveBrowsers":1,"tasks":146,"procs":11,"jobChildren":1,"rssMb":1324,"pidsCurrent":188,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++120.00s [SAMPLE] {"at":120003,"liveBrowsers":1,"tasks":146,"procs":11,"jobChildren":1,"rssMb":1324,"pidsCurrent":188,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++121.01s [SAMPLE] {"at":121006,"liveBrowsers":1,"tasks":146,"procs":11,"jobChildren":1,"rssMb":1324,"pidsCurrent":188,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++122.00s [SAMPLE] {"at":122005,"liveBrowsers":1,"tasks":146,"procs":11,"jobChildren":1,"rssMb":1324,"pidsCurrent":188,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++123.01s [SAMPLE] {"at":123007,"liveBrowsers":1,"tasks":146,"procs":11,"jobChildren":1,"rssMb":1325,"pidsCurrent":188,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++124.01s [SAMPLE] {"at":124008,"liveBrowsers":1,"tasks":146,"procs":11,"jobChildren":1,"rssMb":1324,"pidsCurrent":188,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++125.01s [SAMPLE] {"at":125010,"liveBrowsers":1,"tasks":146,"procs":11,"jobChildren":1,"rssMb":1324,"pidsCurrent":188,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++126.01s [SAMPLE] {"at":126011,"liveBrowsers":1,"tasks":146,"procs":11,"jobChildren":1,"rssMb":1285,"pidsCurrent":188,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++126.26s [EVENT] browser.observed.exit {"pid":123412,"livedMs":28034}
++126.31s [JOB] done job=11 success=true error=- ms=33217
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++127.01s [SAMPLE] {"at":127012,"liveBrowsers":0,"tasks":18,"procs":2,"jobChildren":0,"rssMb":138,"pidsCurrent":57,"pidsMax":9541,"permit":{"active":0,"waiting":0,"max":1}}
++127.82s [SUMMARY] {"label":"wt-before-unlimited","jobs":12,"concurrency":4,"maxConcurrentBrowser":1,"holdMs":20000,"docsPerChild":1,"limits":{"nproc":"Max processes 31804 31804 processes","cgroup":"/sys/fs/cgroup/system.slice/vm-computer-api.service","pidsMax":9541},"peak":{"liveBrowsers":4,"tasks":550,"procs":42,"rssMb":4941},"bound_held":false,"jobsOk":12,"jobsFailed":0,"spawn_failures":0,"firstFailureJob":null,"browsersLaunched":12,"extraction":{"expected":12,"markerFound":12,"neverRequested":[],"skippedBrowserUnavailable":[],"missingMarker":[]},"timing":{"wallMs":126315,"admissionWaitMs":{"n":12,"mean":6074,"p50":2963,"p95":24678,"max":24678,"total":72883},"permitHoldMs":{"n":12,"mean":8324,"p50":8292,"p95":8634,"max":8634,"total":99890},"perDocFetchMs":{"n":12,"mean":14399,"p50":11342,"p95":33122,"max":33122,"total":172783}},"perDoc":[{"key":"job-1001-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":8636},{"key":"job-1003-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":16731},{"key":"job-1000-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":24852},{"key":"job-1002-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":33122},{"key":"job-1004-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":11342},{"key":"job-1005-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":11738},{"key":"job-1006-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":10889},{"key":"job-1007-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":11196},{"key":"job-1008-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":11213},{"key":"job-1009-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":10788},{"key":"job-1010-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":11497},{"key":"job-1011-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":10779}],"all_documents_extracted":true,"finalBroker":{"llm":{"active":0,"waiting":0,"max":8},"browser":{"active":0,"waiting":0,"max":1},"proc":{"active":0,"waiting":0,"max":6}},"quarantined":0,"events":60,"samples":503}
+exit=0

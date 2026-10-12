@@ -1,0 +1,143 @@
+
+═ TEST 1: Failure Classification ═
+  PASS  HTTP 402 -> quota_exhausted
+  PASS  response.status 402 -> quota_exhausted
+  PASS  insufficient balance message -> quota_exhausted
+  PASS  payment required text -> quota_exhausted
+  PASS  quota exceeded body -> quota_exhausted
+  PASS  HTTP 401 -> authentication
+  PASS  HTTP 403 -> authentication
+  PASS  HTTP 429 -> rate_limited
+  PASS  rate limit message -> rate_limited
+  PASS  HTTP 500 -> server_error
+  PASS  HTTP 502 -> server_error
+  PASS  HTTP 503 -> server_error
+  PASS  ETIMEDOUT -> timeout
+  PASS  ECONNABORTED -> timeout
+  PASS  socket hang up -> timeout
+  PASS  timeout message -> timeout
+  PASS  JSON parse failure -> malformed_output
+  PASS  generic error -> application_error
+  PASS  null -> application_error
+
+═ TEST 2: Retriable/Fallback/Pause Behavior ═
+  PASS  quota_exhausted is NOT retriable
+  PASS  authentication is NOT retriable
+  PASS  rate_limited IS retriable
+  PASS  server_error IS retriable
+  PASS  timeout IS retriable
+  PASS  malformed_output IS retriable
+  PASS  quota_exhausted should fallback
+  PASS  authentication should fallback
+  PASS  timeout should fallback
+  PASS  rate_limited should NOT fallback
+  PASS  quota_exhausted should pause scoring
+  PASS  authentication should NOT pause scoring
+  PASS  rate_limited should NOT pause scoring
+
+═ TEST 3: Quota Pause/Resume Lifecycle ═
+  PASS  provider not paused initially
+  PASS  getAllPausedProviders empty initially
+  PASS  provider is paused after pauseProvider
+  PASS  pause state has correct provider
+  PASS  pause state has correct failureClass
+  PASS  pause state has affected jobs
+  PASS  pause state has affected batches
+  PASS  pause state retryAfter > pausedAt
+  PASS  getAllPausedProviders returns 1
+  PASS  retry NOT due immediately after pause
+  PASS  resumeProvider returns true when paused
+  PASS  provider not paused after resume
+  PASS  getAllPausedProviders empty after resume
+  PASS  resumeProvider returns false when not paused (idempotent)
+
+═ TEST 4: Fallback Ordering ═
+  PASS  default order has at least 3 providers
+  PASS  default order is deterministic
+  PASS  primary is first in chain
+  PASS  chain includes configured fallbacks
+  PASS  tripped provider excluded from chain
+  PASS  primary still included even if tripped (for probe)
+  PASS  custom env order respected
+
+═ TEST 5: No-Zero-On-Provider-Failure ═
+  PASS  ProviderScoringError has correct name
+  PASS  ProviderScoringError has provider
+  PASS  ProviderScoringError has failureClass
+  PASS  ProviderScoringError is an Error
+  PASS  generic error is NOT ProviderScoringError
+  PASS  ProviderScoringError IS instanceof Error
+  PASS  PSE message includes provider info
+  PASS  PSE failureClass is quota_exhausted
+
+═ TEST 6: Job Retry Idempotence ═
+  PASS  quota-pause job ID targets same batch
+  PASS  quota-pause job ID targets same company
+  PASS  requeue targets same batch (structural contract)
+
+═ TEST 7: Pinned Corpus Preservation ═
+  PASS  replay guard rejects fetch during replay
+  PASS  replay guard requires skipFetch=true
+  PASS  re-enqueued job preserves skipFetch
+  PASS  re-enqueued job preserves sourceBatchId
+
+═ TEST 8: Backoff Growth and Cap ═
+  PASS  first pause uses default backoff (120000ms)
+  PASS  second pause doubles backoff
+  PASS  backoff is capped at MAX_BACKOFF_MS
+
+═ TEST 9: Operational Status Builder ═
+  PASS  status has 3 providers
+  PASS  deepseek status is paused
+  PASS  deepseek has failureClass
+  PASS  deepseek has pausedAt
+  PASS  deepseek has retryAfter
+  PASS  deepseek has affected jobs
+  PASS  openrouter status is healthy
+
+═ TEST 10: Failure Record Builder ═
+  PASS  record has correct provider
+  PASS  record has correct model
+  PASS  record has correct failureClass
+  PASS  record has httpStatus
+  PASS  record has jobId
+  PASS  record has batchId
+  PASS  record has measureId
+  PASS  record has ISO timestamp
+
+═ TEST 11: Credit Breaker Integration ═
+  PASS  isCreditExhaustionError agrees with classifyProviderError for 402
+  PASS  429 is NOT credit exhaustion
+  PASS  429 IS rate_limited
+  PASS  credit breaker trips at threshold
+  PASS  isProviderTripped after trip
+  PASS  provider is paused after pauseProvider
+  PASS  provider not paused after resume
+  PASS  credit breaker cleared after reset
+
+═ TEST 12: Failure Persistence Contract ═
+  PASS  persistence record has provider
+  PASS  persistence record has model
+  PASS  persistence record failureClass is quota_exhausted
+  PASS  persistence record has httpStatus 402
+  PASS  persistence record has jobId
+  PASS  persistence record has batchId 1049
+  PASS  persistence record has measureId
+  PASS  persistence record errorMessage is non-empty
+  PASS  persistence record timestamp is ISO
+  PASS  persistence record has all required columns
+  PASS  transient record failureClass is timeout
+  PASS  transient record httpStatus is null (no HTTP status)
+  PASS  transient record measureId is null when not provided
+
+═ TEST 13: Authentication Failure Behavior ═
+  PASS  authentication should NOT pause scoring
+  PASS  authentication should trigger fallback
+  PASS  authentication is NOT retriable
+  PASS  402 with billing message -> quota_exhausted (not auth)
+  PASS  pure 403 -> authentication
+
+══════════════════
+112 passed, 0 failed
+
+exit=0

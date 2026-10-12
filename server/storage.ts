@@ -1747,7 +1747,8 @@ export async function requeueFailedJobsForBatch(
   }));
 }
 
-export async function cancelBatchRun(batchId: number, reason = "cancelled by user") {
+/** Returns true when this call transitioned the batch to cancelled, false on the idempotent no-op. */
+export async function cancelBatchRun(batchId: number, reason = "cancelled by user"): Promise<boolean> {
   const [batch] = await db.select().from(schema.batchRuns).where(eq(schema.batchRuns.id, batchId)).limit(1);
   const now = new Date();
   // Rule (iv) cancellation cleanup — authoritative PG write, idempotent: a
@@ -1762,7 +1763,7 @@ export async function cancelBatchRun(batchId: number, reason = "cancelled by use
     .where(and(eq(schema.batchRuns.id, batchId), sql`${schema.batchRuns.status} <> 'cancelled'`))
     .returning({ id: schema.batchRuns.id });
   console.warn(`[LIFECYCLE] cancelBatchRun batch=${batchId} transitioned=${transitioned.length > 0}${transitioned.length === 0 ? " (already cancelled or missing — idempotent no-op)" : ""}`);
-  if (transitioned.length === 0) return;
+  if (transitioned.length === 0) return false;
   const run = await getReliabilityRunForBatch(batchId);
   if (run) {
     await db.execute(sql`UPDATE analysis_results SET acceptance_state = 'rejected', rejection_reason = ${reason} WHERE batch_id = ${batchId} AND immutable_snapshot = TRUE`);
@@ -1778,6 +1779,7 @@ export async function cancelBatchRun(batchId: number, reason = "cancelled by use
       reason,
     });
   }
+  return true;
 }
 
 // ─── Job Queue Operations ───────────────────────────────────────────────────

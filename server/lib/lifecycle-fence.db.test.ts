@@ -414,7 +414,7 @@ async function s7LockOrder() {
   {
     const B7 = (await storage.createBatchRun(wsId, fwId, 1)) as any; const cid = companyIds[10];
     const jB = await newJob(B7.id, cid); const att = (await claimAttempt(jB, B7.id, cid))!;
-    let cancelP: Promise<void> | null = null;
+    let cancelP: Promise<boolean> | null = null;
     let cancelBlocked = false, runningWhileHeld = false;
     const wrote = await runFencedWrite(fenceDb, att.own, async (tx) => {
       // Canonical lock is held here (connection 2). Issue the real cancel (connection 1).

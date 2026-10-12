@@ -1,0 +1,77 @@
+── 1A. OpenAI-compatible (raw axios, real http adapter) ──
+  PASS  1A explicit: signal handed to axios === caller's signal (identity)
+  PASS  1A explicit: transport signal aborted with LifecycleCancelledError(admin_cancel)
+  PASS  1A explicit: in-flight call rejected with LifecycleCancelledError(admin_cancel) promptly
+  PASS  1A explicit: exactly 1 HTTP request, socket closed by abort, no key rotation/retry, fallback 0
+[LIFECYCLE-FENCE] attempt revoked reason=ownership_lost (job=601 attempt=1 batch=88)
+[DIAG][cancel-path] step=e reason=ownership_lost batch=88 job=601 attempt=1 token=22222222... abort_fired=true at=2026-10-12T15:15:34.473Z
+  PASS  1A attempt: signal handed to axios is the attempt-derived per-request signal (child of lc.abort), live before revoke
+  PASS  1A attempt: transport signal aborted with LifecycleCancelledError(ownership_lost)
+  PASS  1A attempt: in-flight call rejected with LifecycleCancelledError(ownership_lost) promptly
+  PASS  1A attempt: exactly 1 HTTP request, socket closed by abort, no key rotation/retry, fallback 0
+  PASS  1A pre-aborted: rejected before dispatch, 0 HTTP requests, fallback 0
+  PASS  1A healthy: same real transport returns the response when not aborted
+── 1B. Anthropic SDK (messages.create / messages.stream → fetch) ──
+  PASS  1B create: signal handed to SDK messages.create === caller's signal (identity)
+  PASS  1B create: SDK's fetch signal (internal, linked) aborted
+  PASS  1B create: in-flight call rejected with LifecycleCancelledError(admin_cancel)
+  PASS  1B create: 1 fetch / 1 HTTP request (SDK maxRetries=3 not used, no key rotation), fallback 0
+  PASS  1B stream: SDK MessageStream subscribed to caller's signal (abort listener attached) and passed its own linked signal to create
+  PASS  1B stream: SDK's fetch signal (internal, linked) aborted
+  PASS  1B stream: in-flight call rejected with LifecycleCancelledError(admin_cancel)
+  PASS  1B stream: 1 fetch / 1 HTTP request (SDK maxRetries=3 not used, no key rotation), fallback 0
+[LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=601 attempt=1 batch=88)
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=88 job=601 attempt=1 token=22222222... abort_fired=true at=2026-10-12T15:15:34.567Z
+  PASS  1B attempt ctx: revoke aborts the SDK request via the attempt-derived signal
+  PASS  1B healthy: same real SDK transport returns the response when not aborted
+── 1C. Gemini (raw axios; stub adapter, URL not redirectable) ──
+  PASS  1C gemini: signal handed to axios adapter === caller's signal (identity)
+  PASS  1C gemini: abort rejects with LifecycleCancelledError, 1 adapter call, fallback 0
+── 1D. Unsupported-abort fallbacks ──
+  PASS  1D signal-ignoring axios adapter: late response discarded by axios post-adapter check → cancellation, 1 dispatch, fallback 0
+  PASS  1D signal-ignoring provider: response after abort DISCARDED by completeScoring late-response check, 1 dispatch, fallback 0
+  PASS  1D completeWithFallback (non-scoring): NO signal reaches axios (documented: not abortable)
+── 2. Cancellation-aware LLM slot ──
+  PASS  2 precondition: pool idle
+  PASS  2 three waiters queued behind a full pool
+  PASS  2a aborted queued waiter rejects promptly with LifecycleCancelledError
+  PASS  2c aborted waiter: queue entry removed, abort listener removed, no permit taken
+  PASS  2b/2d capacity returns → next NON-cancelled waiter (B) acquires; A never dispatches
+  PASS  2d FIFO preserved for remaining waiter (C), its listener removed on acquire
+  PASS  2c permits return exactly to 0 (no leak)
+  PASS  2 race (wake then abort): D rejects, wake-up passed to E, active stays == max (no double count, no loss)
+  PASS  2 pre-aborted: rejects without taking a permit or queueing
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=601 attempt=1 batch=88)
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=88 job=601 attempt=1 token=22222222... abort_fired=true at=2026-10-12T15:15:34.655Z
+  PASS  2 completeScoring queued for a slot: revoke rejects it (LifecycleCancelledError), provider never called
+  PASS  2 completeScoring cancelled-in-queue did NOT release a permit it never held (active still == max)
+  PASS  2 healthy completeScoring afterwards: acquires, scores, releases (active back to 0)
+── 3. Admin cancel aborts the shared attempt controller ──
+[LIFECYCLE-FENCE] attempt revoked reason=batch_cancelled (job=601 attempt=1 batch=4242)
+[DIAG][cancel-path] step=e reason=batch_cancelled batch=4242 job=601 attempt=1 token=22222222... abort_fired=true at=2026-10-12T15:15:34.907Z
+  PASS  3 both provider calls pending before cancel
+  PASS  3 SHARED lc.abort fired (lc.revoked, revokedReason=batch_cancelled)
+  PASS  3 both transport signals aborted with batch_cancelled
+  PASS  3 both pending calls rejected mid-flight with LifecycleCancelledError(batch_cancelled) within one poll (<1000ms)
+  PASS  3 no retry / fallback after admin cancel; sockets closed
+── 3b. Ownership watch shutdown ──
+  PASS  3b mismatch: overlap guard — no second read while first pending
+  PASS  3b mismatch: watch timer is unref'd
+  PASS  3b mismatch: poll settling after stop() → no revoke, no further reads, timer cleared
+[LIFECYCLE-FENCE] ownership watch read failed (fail-open) job=601 token=22222222-2222-4222-8222-222222222222: db down
+  PASS  3b reject: overlap guard — no second read while first pending
+  PASS  3b reject: watch timer is unref'd
+  PASS  3b reject: poll settling after stop() → no revoke, no further reads, timer cleared
+  PASS  3b no unhandled rejections
+── A. Job watchdog timer cleared in finally ──
+  PASS  A work settles first → resolves and watchdog timer is cleared immediately
+  PASS  A cleared watchdog never fires after the job settled
+  PASS  A work rejects → same rejection, timer cleared, watchdog not fired
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=601 attempt=1 batch=88)
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=88 job=601 attempt=1 token=22222222... abort_fired=true at=2026-10-12T15:15:35.480Z
+  PASS  A hung work → watchdog fires once, onFire side effects run (revoke), race rejects with its Error
+  PASS  global: no live timers left behind
+  PASS  global: no unhandled rejections
+
+55 passed, 0 failed
+exit=0

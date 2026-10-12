@@ -1,0 +1,80 @@
+TAP version 13
+[BROWSER-LIFECYCLE] child=141217 permit acquired holders=1
+[BROWSER-LIFECYCLE] child=141217 launch pid=141246 holders=1
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
+[Processor] WAF session prime for http://127.0.0.1:34133 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:34133/ok-0.pdf (745B PDF)
+[BROWSER-LIFECYCLE] child=141217 close pid=141246 ms=124
+[BROWSER-LIFECYCLE] child=141217 reaped pid=141246 via=close ms=127
+[BROWSER-LIFECYCLE] child=141217 permit released holders=0 retired=1
+# Subtest: success path: extracted marker; Chromium gone before the permit returns
+ok 1 - success path: extracted marker; Chromium gone before the permit returns
+  ---
+  duration_ms: 10899.975613
+  type: 'test'
+  ...
+[BROWSER-LIFECYCLE] child=141470 permit acquired holders=1
+[BROWSER-LIFECYCLE] child=141470 launch pid=141484 holders=1
+[Processor] Browser-PDF direct nav did not yield bytes for http://127.0.0.1:34133/reset.pdf (net::ERR_EMPTY_RESPONSE at http://127.0.0.1:34133/reset.pdf) — trying in-page fetch
+[DIAG][pg-activity] sample failed (ignored): connect ECONNREFUSED 127.0.0.1:1
+[Processor] WAF session prime for http://127.0.0.1:34133 -> no sensor cookies (continuing)
+[Processor] Browser-PDF in-page fetch returned no bytes for http://127.0.0.1:34133/reset.pdf
+[BROWSER-LIFECYCLE] child=141470 close pid=141484 ms=193
+[BROWSER-LIFECYCLE] child=141470 reaped pid=141484 via=close ms=196
+[BROWSER-LIFECYCLE] child=141470 permit released holders=0 retired=1
+[BROWSER-LIFECYCLE] child=141470 permit acquired holders=1
+[BROWSER-LIFECYCLE] child=141470 launch pid=141821 holders=1
+[DIAG][pg-activity] sample failed (ignored): connect ECONNREFUSED 127.0.0.1:1
+[Processor] PDF-recovery: primed WAF for http://127.0.0.1:34133 -> no sensor cookies (continuing); 1 candidate PDF(s)
+[Processor] PDF-recovery: overall budget (8s) exhausted for http://127.0.0.1:34133 — stopping with 0 recovered; marking 1 remaining URL(s) as budget_exhausted
+[BROWSER-LIFECYCLE] child=141470 close pid=141821 ms=175
+[BROWSER-LIFECYCLE] child=141470 reaped pid=141821 via=close ms=177
+[BROWSER-LIFECYCLE] child=141470 permit released holders=0 retired=1
+# Subtest: fetch-failure path (connection reset; direct + pdfRecovery): close before release
+ok 2 - fetch-failure path (connection reset; direct + pdfRecovery): close before release
+  ---
+  duration_ms: 25647.116094
+  type: 'test'
+  ...
+[BROWSER-LIFECYCLE] child=142039 permit acquired holders=1
+[BROWSER-LIFECYCLE] child=142039 launch pid=142065 holders=1
+[DIAG][pg-activity] sample failed (ignored): connect ECONNREFUSED 127.0.0.1:1
+[Processor] WAF session prime for http://127.0.0.1:34133 -> no sensor cookies (continuing)
+[WORKER-ISOLATION] child pid=142039 still alive 10000ms after cancel → SIGTERM groups
+[Processor] Browser-PDF fetch failed for http://127.0.0.1:34133/slow.pdf: Protocol error (Runtime.callFunctionOn): Target closed
+[BROWSER-LIFECYCLE] child=142039 close pid=142065 ms=16
+[BROWSER-LIFECYCLE] child=142039 reaped pid=142065 via=close ms=18
+[BROWSER-LIFECYCLE] child=142039 permit released holders=0 retired=1
+[BROWSER-LIFECYCLE] child=142039 permit acquired holders=1
+[LIFECYCLE-GATE] dispatch refused at processor.fetchPdfViaBrowser:post-acquire reason=batch_cancelled
+[BROWSER-LIFECYCLE] child=142039 permit released holders=0 retired=0
+[LIFECYCLE-GATE] dispatch refused at processor.fetchPdfViaBrowser:pre-acquire reason=batch_cancelled
+[WORKER-ISOLATION] child pid=142039 reported AFTER terminal decision cancel → discarded (diagnostic only: success=true error=-)
+# Subtest: cancellation path (in-flight / post-acquire refusal / pre-acquire refusal): close before release
+ok 3 - cancellation path (in-flight / post-acquire refusal / pre-acquire refusal): close before release
+  ---
+  duration_ms: 12741.27023
+  type: 'test'
+  ...
+[BROWSER-LIFECYCLE] child=142352 permit acquired holders=1
+[BROWSER-LIFECYCLE] child=142352 launch pid=142380 holders=1
+[WORKER-ISOLATION] pipeline_deadline reached for child pid=142352 (stage=pipeline) → revoke + SIGKILL groups
+# Subtest: child-death path (pipeline deadline → SIGKILL while holding the permit): parent reap before release
+ok 4 - child-death path (pipeline deadline → SIGKILL while holding the permit): parent reap before release
+  ---
+  duration_ms: 6133.87617
+  type: 'test'
+  ...
+[DIAG][db-error] {"pool":"main","pool_max":20,"total":0,"idle":0,"waiting":0,"op":"update companies","outcome":"acquire_error","checkout_wait_ms":2,"exec_ms":null,"total_ms":2,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null,"error":{"message":"connect ECONNREFUSED 127.0.0.1:1","code":"ECONNREFUSED","cause":null,"cause_code":null,"stack":"Error: connect ECONNREFUSED 127.0.0.1:1\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16)"}}
+[WORKER-ISOLATION] pipeline-timeout bookkeeping failed: connect ECONNREFUSED 127.0.0.1:1
+[DIAG][pg-activity] sample failed (ignored): connect ECONNREFUSED 127.0.0.1:1
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 55460.661783
+exit=0

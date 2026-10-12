@@ -33,6 +33,7 @@ import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/
 import { runWithLlmContext } from "./lib/llm-usage.js";
 import { isolationEnabled, runPipelineIsolated } from "./lib/job-isolation.js";
 import { isRetriableError, fenceCancelledResult } from "./lib/retry-policy.js";
+import { enforceBatchStopRule, readStopRuleThreshold, runStopRuleCancelSequence, COUNT_BATCH_FAILURES_SQL } from "./lib/batch-stop-rule.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
 import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
 import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
@@ -586,6 +587,9 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
         // Rule (iii): failure recorded (job 'failed') but the batch is
         // cancelled/superseded/terminal → no requeue, no failed_jobs count.
         console.warn(`[DIAG][job-transition] job=${jobId} -> failed-batch-terminal-no-retry ${diagTags()}`);
+      } else if (await stopRuleTripped(batchId, jobId, errorMsg, frameworkId, workspaceId)) {
+        // S4 stop rule: batch cancelled; this failure is NOT re-enqueued.
+        console.warn(`[DIAG][job-transition] job=${jobId} -> stop-rule-cancelled-no-retry ${diagTags()}`);
       } else if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(errorMsg)) {
         // Retry: re-enqueue without incrementing batch failed
         console.log("[Worker] Job " + jobId + " failed (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + "), will retry: " + errorMsg);
@@ -690,6 +694,8 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       console.warn(`[DIAG][job-transition] job=${jobId} -> stale-attempt-no-op (after exception) ${diagTags()}`);
     } else if (_fe.batchTerminal) {
       console.warn(`[DIAG][job-transition] job=${jobId} -> failed-batch-terminal-no-retry (after exception) ${diagTags()}`);
+    } else if (await stopRuleTripped(batchId, jobId, String(error.message), frameworkId, workspaceId)) {
+      console.warn(`[DIAG][job-transition] job=${jobId} -> stop-rule-cancelled-no-retry (after exception) ${diagTags()}`);
     } else if (currentAttempt < MAX_RETRY_ATTEMPTS && isRetriableError(error.message)) {
       // Retry: re-enqueue without incrementing batch failed
       console.log("[Worker] Job " + jobId + " will retry after exception (attempt " + currentAttempt + "/" + MAX_RETRY_ATTEMPTS + ")");
@@ -1585,6 +1591,46 @@ export async function startWorker(workerId?: string): Promise<Worker> {
   } finally {
     workerStarting = false;
   }
+}
+
+/**
+ * Validation stop rule S4 (lib/batch-stop-rule.ts). Inert unless
+ * BATCH_STOP_RULE_FAILED_JOBS > 0. When tripped it runs the same sequence as
+ * POST /batch/cancel and the caller skips the retry re-enqueue.
+ */
+export async function stopRuleTripped(batchId: number, jobId: number, error: string, frameworkId: number, workspaceId: number): Promise<boolean> {
+  return enforceBatchStopRule(batchId, jobId, error, {
+    threshold: readStopRuleThreshold(),
+    countFailures: async (id) => {
+      const { pool } = await import("./db.js");
+      const r = await pool.query(COUNT_BATCH_FAILURES_SQL, [id]);
+      const row = r.rows[0] ?? {};
+      return { failedAttemptJobs: Number(row.failed_attempt_jobs ?? 0), retryExhaustedJobs: Number(row.retry_exhausted_jobs ?? 0) };
+    },
+    cancelBatch: (id, reason) => runStopRuleCancelSequence(id, reason, {
+      flag: cancelBatch,
+      purge: async (bid) => { const { removeBatchJobs } = await import("./queue.js"); await removeBatchJobs(bid); },
+      snapshot: (bid, r) => saveStopRuleSnapshot(bid, frameworkId, workspaceId, r),
+      pgCancel: (bid, r) => storage.cancelBatchRun(bid, r),
+    }),
+  });
+}
+
+/**
+ * Stop-rule snapshot: preserves completed companies like POST /batch/cancel,
+ * then marks every snapshot row of the batch rejected with an explicit
+ * "cancelled/partial" reason so it can never read as an accepted or
+ * comprehensive result. Exported for the real-Postgres stop-rule test.
+ */
+export async function saveStopRuleSnapshot(batchId: number, frameworkId: number, workspaceId: number, reason: string): Promise<void> {
+  const { pool } = await import("./db.js");
+  const b = await pool.query("SELECT list_id FROM batch_runs WHERE id = $1", [batchId]);
+  const listId = b.rows[0]?.list_id != null ? Number(b.rows[0].list_id) : undefined;
+  await saveBatchSnapshot(batchId, frameworkId, workspaceId, listId);
+  await pool.query(
+    "UPDATE analysis_results SET acceptance_state = 'rejected', accepted_at = NULL, rejection_reason = $2 WHERE batch_id = $1",
+    [batchId, `cancelled/partial snapshot — batch stopped by ${reason}; not comprehensive`],
+  );
 }
 
 export function cancelBatch(batchId: number): void {

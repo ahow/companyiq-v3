@@ -1,0 +1,5078 @@
+{
+ "ranAt": "2026-10-12T16:08:39.615Z",
+ "node": "v22.23.2",
+ "chromium": "/usr/local/bin/chromium",
+ "config": {
+  "concurrency": 2,
+  "lockDurationMs": 30000,
+  "stalledIntervalMs": 15000,
+  "holdMs": 20000
+ },
+ "elapsedMs": 46093,
+ "jobs": [
+  {
+   "id": 25,
+   "status": "completed",
+   "last_error": null,
+   "attempts": 1
+  },
+  {
+   "id": 26,
+   "status": "completed",
+   "last_error": null,
+   "attempts": 1
+  }
+ ],
+ "batch": {
+  "status": "completed",
+  "completed_jobs": 2,
+  "failed_jobs": 0,
+  "total_jobs": 2
+ },
+ "scores": [
+  {
+   "company_id": 25,
+   "n": 6,
+   "yes": 0,
+   "attempts": 1
+  },
+  {
+   "company_id": 26,
+   "n": 6,
+   "yes": 0,
+   "attempts": 1
+  }
+ ],
+ "peak": {
+  "at": 1791821284037,
+  "descendants": 14,
+  "chromium": 10,
+  "jobChildren": 2,
+  "descendantRssMb": 1826,
+  "chromiumRssMb": 1373,
+  "parentRssMb": 231,
+  "toolchainHelperPids": [
+   139834
+  ],
+  "jobChildIds": [
+   {
+    "pid": 140110,
+    "ppid": 139822,
+    "comm": "node",
+    "state": "S",
+    "rssKb": 214472,
+    "exe": "/usr/bin/node",
+    "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+    "startTicks": 11316222
+   },
+   {
+    "pid": 140116,
+    "ppid": 139822,
+    "comm": "node",
+    "state": "S",
+    "rssKb": 216908,
+    "exe": "/usr/bin/node",
+    "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+    "startTicks": 11316224
+   }
+  ]
+ },
+ "maxDescendantRssMb": 1826,
+ "maxParentRssMb": 265,
+ "maxConcurrentJobChildren": 2,
+ "lockRenewals": {
+  "batch-11-company-25": 5,
+  "batch-11-company-26": 3
+ },
+ "stalledEvents": [],
+ "failedEvents": [],
+ "completedEvents": [
+  "batch-11-company-26",
+  "batch-11-company-25"
+ ],
+ "afterCompletion": {
+  "at": 1791821317604,
+  "descendants": 0,
+  "chromium": 0,
+  "jobChildren": 0,
+  "descendantRssMb": 0,
+  "chromiumRssMb": 0,
+  "parentRssMb": 248,
+  "toolchainHelperPids": [
+   139834
+  ],
+  "jobChildIds": [],
+  "countedDescendantIds": []
+ },
+ "afterStopWorker": {
+  "at": 1791821319609,
+  "descendants": 0,
+  "chromium": 0,
+  "jobChildren": 0,
+  "descendantRssMb": 0,
+  "chromiumRssMb": 0,
+  "parentRssMb": 248,
+  "toolchainHelperPids": [
+   139834
+  ],
+  "jobChildIds": [],
+  "countedDescendantIds": []
+ },
+ "newOrphanPuppeteerChromium": [],
+ "preJobDescendants": [
+  {
+   "pid": 139834,
+   "ppid": 139822,
+   "comm": "esbuild",
+   "state": "S",
+   "rssKb": 15440,
+   "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+   "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+   "startTicks": 11315643,
+   "toolchainHelper": true
+  }
+ ],
+ "toolchainHelpers": [
+  {
+   "pid": 139834,
+   "ppid": 139822,
+   "comm": "esbuild",
+   "state": "S",
+   "rssKb": 11628,
+   "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+   "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+   "startTicks": 11315643,
+   "firstSeenAt": 1791821269027
+  }
+ ],
+ "quarantined": 0,
+ "isolationStats": {
+  "forks": 2,
+  "maxForkMs": 7.577068000000509,
+  "messages": 375,
+  "maxHandlerMs": 1.972262000000228,
+  "lateReportsDiscarded": 0,
+  "quarantined": 0
+ },
+ "brokerAfter": {
+  "llm": {
+   "active": 0,
+   "waiting": 0,
+   "max": 8
+  },
+  "browser": {
+   "active": 0,
+   "waiting": 0,
+   "max": 1
+  },
+  "proc": {
+   "active": 0,
+   "waiting": 0,
+   "max": 6
+  }
+ },
+ "samples": 98,
+ "samplesData": [
+  {
+   "at": 1791821269028,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 215,
+   "chromiumRssMb": 0,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 95888,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 92512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 95888,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 92512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 15780,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 15936,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821269522,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 302,
+   "chromiumRssMb": 0,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 136772,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 140096,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 136772,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 140096,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16144,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16220,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821270023,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 357,
+   "chromiumRssMb": 0,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 165104,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 168120,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 165104,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 168120,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16144,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16220,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821270521,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 396,
+   "chromiumRssMb": 0,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 186800,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 184948,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 186800,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 184948,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821271022,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 440,
+   "chromiumRssMb": 0,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 214520,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 202484,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 214520,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 202484,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821271523,
+   "descendants": 12,
+   "chromium": 4,
+   "jobChildren": 2,
+   "descendantRssMb": 868,
+   "chromiumRssMb": 420,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203380,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821272024,
+   "descendants": 12,
+   "chromium": 8,
+   "jobChildren": 2,
+   "descendantRssMb": 1458,
+   "chromiumRssMb": 1015,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821272525,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1712,
+   "chromiumRssMb": 1270,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821273025,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1712,
+   "chromiumRssMb": 1270,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821273526,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1712,
+   "chromiumRssMb": 1270,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821274028,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1714,
+   "chromiumRssMb": 1271,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821274527,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1715,
+   "chromiumRssMb": 1272,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821275028,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1824,
+   "chromiumRssMb": 1381,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821275529,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1824,
+   "chromiumRssMb": 1381,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821276031,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1824,
+   "chromiumRssMb": 1381,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821276529,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1824,
+   "chromiumRssMb": 1381,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821277030,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1822,
+   "chromiumRssMb": 1379,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203892,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821277531,
+   "descendants": 12,
+   "chromium": 8,
+   "jobChildren": 2,
+   "descendantRssMb": 1466,
+   "chromiumRssMb": 1024,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216116,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203140,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821278030,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1823,
+   "chromiumRssMb": 1382,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 215384,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 203268,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821278530,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1820,
+   "chromiumRssMb": 1382,
+   "parentRssMb": 265,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 213704,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 201620,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821279034,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1820,
+   "chromiumRssMb": 1382,
+   "parentRssMb": 230,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 213704,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 201620,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821279535,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1820,
+   "chromiumRssMb": 1382,
+   "parentRssMb": 230,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 213704,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 201620,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821280031,
+   "descendants": 12,
+   "chromium": 7,
+   "jobChildren": 2,
+   "descendantRssMb": 1419,
+   "chromiumRssMb": 922,
+   "parentRssMb": 230,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 213704,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216652,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821280535,
+   "descendants": 10,
+   "chromium": 6,
+   "jobChildren": 2,
+   "descendantRssMb": 1107,
+   "chromiumRssMb": 654,
+   "parentRssMb": 230,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 213960,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821281032,
+   "descendants": 12,
+   "chromium": 8,
+   "jobChildren": 2,
+   "descendantRssMb": 1513,
+   "chromiumRssMb": 1059,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 214472,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821281534,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1715,
+   "chromiumRssMb": 1261,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 214472,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821282035,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1715,
+   "chromiumRssMb": 1261,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 214472,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821282534,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1715,
+   "chromiumRssMb": 1261,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 214472,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821283036,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1717,
+   "chromiumRssMb": 1263,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 214472,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821283535,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1717,
+   "chromiumRssMb": 1263,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 214472,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821284037,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1826,
+   "chromiumRssMb": 1373,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 214472,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821284536,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1826,
+   "chromiumRssMb": 1373,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 214472,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 216908,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821285036,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1750,
+   "chromiumRssMb": 1373,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 174340,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 177884,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821285534,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1750,
+   "chromiumRssMb": 1373,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 174340,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 177884,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821286034,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1745,
+   "chromiumRssMb": 1372,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 172756,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821286535,
+   "descendants": 13,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1545,
+   "chromiumRssMb": 1171,
+   "parentRssMb": 231,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 172756,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821287037,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1754,
+   "chromiumRssMb": 1381,
+   "parentRssMb": 180,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 172884,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821287538,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1754,
+   "chromiumRssMb": 1381,
+   "parentRssMb": 180,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 172884,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821288037,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1754,
+   "chromiumRssMb": 1381,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 172884,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821288538,
+   "descendants": 14,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1755,
+   "chromiumRssMb": 1381,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 172884,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821289040,
+   "descendants": 9,
+   "chromium": 5,
+   "jobChildren": 2,
+   "descendantRssMb": 969,
+   "chromiumRssMb": 583,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185384,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ]
+  },
+  {
+   "at": 1791821289538,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 386,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176388,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821290039,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 386,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821290540,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 386,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821291042,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 386,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821291542,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 386,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821292041,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 386,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821292542,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 386,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821293043,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 386,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 185512,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 176516,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821293543,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 327,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150052,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150052,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821294042,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821294543,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821295044,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821295545,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821296046,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821296546,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821297048,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821297549,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821298049,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821298549,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821299050,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821299549,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821300050,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 326,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 148640,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17040,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821300551,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 380,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 198156,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 198156,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 22612,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821301054,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 407,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 223292,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 223292,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 25684,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821301555,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 449,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 266676,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 151628,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 266676,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 25684,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821302054,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 512,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 332208,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 332208,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 25684,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821302554,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 555,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 376524,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 376524,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 25684,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821303055,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 603,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 425096,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 425096,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 25684,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821303555,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 631,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 453968,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 453968,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 25684,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821304061,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 558,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 378672,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 378672,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 25940,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821304556,
+   "descendants": 4,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 569,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 390088,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140116,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 390088,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316224
+    },
+    {
+     "pid": 140135,
+     "ppid": 140116,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 25940,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821305056,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821305559,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150220,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821306056,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821306556,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821307058,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821307558,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821308058,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821308559,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 177,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821309059,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 163,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 150348,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 16232,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821309562,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 216,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 203380,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 203380,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17976,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821310061,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 230,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 218204,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 218204,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17208,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821310561,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 288,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 277248,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 277248,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17208,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821311063,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 350,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 341052,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "S",
+     "rssKb": 341052,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17208,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821311563,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 398,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 390256,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 390256,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17208,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821312063,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 439,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 431848,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 431848,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17208,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821312569,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 465,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 458972,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 458972,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17208,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821313065,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 478,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 472436,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 472436,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17208,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821313565,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 406,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 398144,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    }
+   ],
+   "countedDescendantIds": [
+    {
+     "pid": 140110,
+     "ppid": 139822,
+     "comm": "node",
+     "state": "R",
+     "rssKb": 398144,
+     "exe": "/usr/bin/node",
+     "cmdline": "/usr/bin/node --import tsx /home/ubuntu/github_repos/companyiq-v3/server/lib/job-child.ts",
+     "startTicks": 11316222
+    },
+    {
+     "pid": 140134,
+     "ppid": 140110,
+     "comm": "esbuild",
+     "state": "S",
+     "rssKb": 17208,
+     "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+     "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+     "startTicks": 11316250
+    }
+   ]
+  },
+  {
+   "at": 1791821314065,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 178,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [],
+   "countedDescendantIds": []
+  },
+  {
+   "at": 1791821314565,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 247,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [],
+   "countedDescendantIds": []
+  },
+  {
+   "at": 1791821315064,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 247,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [],
+   "countedDescendantIds": []
+  },
+  {
+   "at": 1791821315566,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 247,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [],
+   "countedDescendantIds": []
+  },
+  {
+   "at": 1791821316068,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 247,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [],
+   "countedDescendantIds": []
+  },
+  {
+   "at": 1791821316568,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 248,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [],
+   "countedDescendantIds": []
+  },
+  {
+   "at": 1791821317070,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 248,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [],
+   "countedDescendantIds": []
+  },
+  {
+   "at": 1791821317568,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 248,
+   "toolchainHelperPids": [
+    139834
+   ],
+   "jobChildIds": [],
+   "countedDescendantIds": []
+  }
+ ],
+ "failures": []
+}
