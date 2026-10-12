@@ -4,9 +4,12 @@
  * Drives REPRO_JOBS isolated job children through the production supervisor
  * (runPipelineIsolated → job-child.ts) at REPRO_CONCURRENCY (default 4 =
  * production WORKER_CONCURRENCY) with MAX_CONCURRENT_BROWSER=1 (production).
- * Each child runs the production fetchPdfViaBrowser path against a SAVED local
- * document, then a synthetic scoring hold (no providers). Child turnover is
- * continuous: a new child is forked as soon as one settles.
+ * Each child runs the production fetchPdfViaBrowser path against its OWN
+ * synthetic marker PDFs served on 127.0.0.1, then a synthetic scoring hold (no
+ * providers). Child turnover is continuous: a new child is forked as soon as
+ * one settles. The summary asserts per-document extraction (every expected
+ * document requested, no BrowserUnavailableError skip, its marker extracted)
+ * and reports wall time, browser admission wait and permit hold time.
  *
  * Every REPRO_SAMPLE_MS it samples /proc and logs (one JSON line, tag SAMPLE):
  *   - limits: RLIMIT_NPROC, cgroup pids.max / pids.current (the TasksMax the
@@ -37,7 +40,6 @@ const CONC = parseInt(process.env.REPRO_CONCURRENCY || "4", 10);
 const SAMPLE_MS = parseInt(process.env.REPRO_SAMPLE_MS || "250", 10);
 const LABEL = process.env.REPRO_LABEL || "run";
 const OUT = process.env.REPRO_OUT || `/tmp/browser-lifetime-${LABEL}.json`;
-const DOC = process.env.REPRO_DOC || path.join(ROOT, "docs/batch-1210-mass-failure-rca.pdf");
 const DOCS_PER_CHILD = parseInt(process.env.REPRO_DOCS_PER_CHILD || "2", 10);
 
 // Test-only environment. Production values are kept for every capacity knob:
@@ -53,6 +55,7 @@ Object.assign(process.env, {
   ADAPTIVE_CONCURRENCY_ENABLED: "false",
   CREDIT_PAUSE_ENABLED: "false",
   REPRO_HOLD_MS: process.env.REPRO_HOLD_MS || "15000",
+  REPRO_DOCS_PER_CHILD: String(DOCS_PER_CHILD),
 });
 
 const t0 = Date.now();
@@ -129,12 +132,20 @@ async function main() {
   (b as any).acquire = async () => { ev("permit.acquire.request", b.state()); await rawAcquire(); ev("permit.acquire.granted", b.state()); };
   (b as any).release = (...a: any[]) => { const r = (rawRelease as any)(...a); ev("permit.release", b.state()); return r; };
 
-  const pdf = fs.readFileSync(DOC);
-  const srv = http.createServer((q, r) => { r.writeHead(200, { "content-type": "application/pdf", "content-length": pdf.length }); r.end(pdf); });
+  // Every job/document gets its own synthetic PDF carrying a unique marker; the
+  // server records which documents were actually requested (no silent skip).
+  const { markerPdf, markerFor } = await import("../lib/__fixtures__/marker-pdf.js");
+  const served = new Map<string, number>();
+  const srv = http.createServer((q, r) => {
+    const m = /^\/(job-\d+-doc-\d+)\.pdf/.exec(q.url || "");
+    if (!m) { r.writeHead(200, { "content-type": "text/html" }); r.end("<html><body>issuer home</body></html>"); return; } // origin page (WAF prime)
+    served.set(m[1], (served.get(m[1]) ?? 0) + 1);
+    const pdf = markerPdf([markerFor(m[1]), `Synthetic annual report for ${m[1]}.`]);
+    r.writeHead(200, { "content-type": "application/pdf", "content-length": pdf.length }); r.end(pdf);
+  });
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
-  const port = (srv.address() as any).port;
-  process.env.REPRO_DOC_URLS = Array.from({ length: DOCS_PER_CHILD }, (_, i) => `http://127.0.0.1:${port}/saved-${i}.pdf`).join(",");
-  log("SETUP", `label=${LABEL} jobs=${JOBS} concurrency=${CONC} MAX_CONCURRENT_BROWSER=1 doc=${path.relative(ROOT, DOC)} (${pdf.length} B) docsPerChild=${DOCS_PER_CHILD} hold=${process.env.REPRO_HOLD_MS}ms`);
+  process.env.REPRO_DOC_BASE = `http://127.0.0.1:${(srv.address() as any).port}`;
+  log("SETUP", `label=${LABEL} jobs=${JOBS} concurrency=${CONC} MAX_CONCURRENT_BROWSER=1 synthetic marker PDFs docsPerChild=${DOCS_PER_CHILD} hold=${process.env.REPRO_HOLD_MS}ms`);
   log("LIMITS", `${nprocLimit()} | cgroup=${CG} pids.max=${readNum(`${CG}/pids.max`)} pids.current=${readNum(`${CG}/pids.current`)}`);
 
   const baseline = new Set(tree(procTable()).map((p) => p.pid)); // tsx/esbuild helpers already present
@@ -159,14 +170,14 @@ async function main() {
     if (samples.length % Math.max(1, Math.round(1000 / SAMPLE_MS)) === 0) log("SAMPLE", JSON.stringify(s));
   }, SAMPLE_MS);
 
-  const results: Array<{ job: number; ok: boolean; startedAt: number; ms: number; error?: string }> = [];
+  const results: Array<{ job: number; ok: boolean; startedAt: number; ms: number; error?: string; docs?: any[] }> = [];
   let next = 0;
   const runOne = async (job: number) => {
     const st = Date.now();
     log("JOB", `start job=${job}`);
     try {
       const r: any = await runPipelineIsolated({ company: { id: 1000 + job } as any, framework: { id: 1 } as any, measures: [], workspaceId: 1 } as any);
-      results.push({ job, ok: !!r?.success, startedAt: st - t0, ms: Date.now() - st, error: r?.error });
+      results.push({ job, ok: !!r?.success, startedAt: st - t0, ms: Date.now() - st, error: r?.error, docs: r?.docs });
       log("JOB", `done job=${job} success=${r?.success} error=${r?.error ?? "-"} ms=${Date.now() - st}`);
     } catch (e: any) {
       results.push({ job, ok: false, startedAt: st - t0, ms: Date.now() - st, error: String(e?.message || e).slice(0, 300) });
@@ -178,6 +189,28 @@ async function main() {
   clearInterval(sampler);
   srv.close();
 
+  const wallMs = Date.now() - t0 - 1500;
+  // Per-document extraction: every expected document must have been requested
+  // from the server, fetched without BrowserUnavailableError, and yield its marker.
+  const expected = results.flatMap((r) => Array.from({ length: DOCS_PER_CHILD }, (_, i) => `job-${1000 + r.job}-doc-${i}`));
+  const docRows = results.flatMap((r) => r.docs ?? []);
+  const perDoc = expected.map((k) => { const d = docRows.find((x) => x.key === k); return { key: k, served: served.get(k) ?? 0, chars: d?.chars ?? 0, markerFound: !!d?.markerFound, skipped: d ? !!d.skipped : true, error: d?.error, fetchMs: d?.ms ?? null }; });
+  const extraction = {
+    expected: expected.length, markerFound: perDoc.filter((d) => d.markerFound).length,
+    neverRequested: perDoc.filter((d) => d.served === 0).map((d) => d.key),
+    skippedBrowserUnavailable: perDoc.filter((d) => d.skipped).map((d) => d.key),
+    missingMarker: perDoc.filter((d) => !d.markerFound).map((d) => d.key),
+  };
+  // Browser admission wait (permit request → grant, parent broker) and permit
+  // hold (grant → release: launch + fetch + close/reap inside the child).
+  const stats = (xs: number[]) => { const a = [...xs].sort((p, q) => p - q); const pick = (f: number) => a.length ? a[Math.min(a.length - 1, Math.floor(f * a.length))] : null; return { n: a.length, mean: a.length ? Math.round(a.reduce((p, q) => p + q, 0) / a.length) : null, p50: pick(0.5), p95: pick(0.95), max: a.length ? a[a.length - 1] : null, total: a.reduce((p, q) => p + q, 0) }; };
+  const waits: number[] = [], holds: number[] = []; const pend: number[] = []; let grantAt: number[] = [];
+  for (const e of events) {
+    if (e.ev === "permit.acquire.request") pend.push(e.at);
+    else if (e.ev === "permit.acquire.granted") { const r = pend.shift(); if (r != null) waits.push(e.at - r); grantAt.push(e.at); }
+    else if (e.ev === "permit.release") { const g = grantAt.shift(); if (g != null) holds.push(e.at - g); }
+  }
+  const timing = { wallMs, admissionWaitMs: stats(waits), permitHoldMs: stats(holds), perDocFetchMs: stats(perDoc.map((d) => d.fetchMs ?? 0).filter((x) => x > 0)) };
   const spawnFailures = results.filter((r) => !r.ok && /exited unexpectedly|spawn|EAGAIN|pthread|uv_thread/i.test(r.error || "")).length;
   const summary = {
     label: LABEL, jobs: JOBS, concurrency: CONC, maxConcurrentBrowser: 1, holdMs: +process.env.REPRO_HOLD_MS!, docsPerChild: DOCS_PER_CHILD,
@@ -186,7 +219,8 @@ async function main() {
     bound_held: peakBrowsers <= 1,
     jobsOk: results.filter((r) => r.ok).length, jobsFailed: results.filter((r) => !r.ok).length, spawn_failures: spawnFailures,
     firstFailureJob: results.filter((r) => !r.ok).sort((a, b) => a.job - b.job)[0]?.job ?? null,
-    browsersLaunched: seenBrowsers.size,
+    browsersLaunched: seenBrowsers.size, extraction, timing, perDoc,
+    all_documents_extracted: extraction.markerFound === extraction.expected && extraction.skippedBrowserUnavailable.length === 0,
     browserLifetimesMs: [...seenBrowsers.values()].map((v) => (v.exitedAt ?? Date.now() - t0) - v.launchedAt),
     finalBroker: __testing.brokerState(), quarantined: __testing.stats().quarantined,
     results: results.sort((a, b) => a.job - b.job), events, samples,
