@@ -1,9 +1,13 @@
-# Browser lifetime + stop rule: test results
+# Browser lifetime + stop rule: test results (release candidate `9a1b931`)
 
 - Branch: `fix/browser-lifetime-and-stop-rule`, base `b676c2d`
-- Fix commit: `f2288ce`. Tests and harness commit: `caaa191`. Both are pushed to origin.
+- **Release candidate: `9a1b931`** (code + tests). It is built from the fix commit `f2288ce`, the tests/harness commit `caaa191`, and the release-item commit `9a1b931`, all pushed to origin.
+- The §1 repro and the close-order mutation check were measured at `f2288ce`/`caaa191`; `9a1b931` does not touch `processor.ts`. All test suites in §2–§5 were re-run on `9a1b931`.
 - Run on 2026-10-12, on this VM (2 vCPU). No Railway run, no paid run, no real LLM calls.
-- Evidence files: `evidence/browser-lifetime-candidate/` (repro JSON and logs) and `evidence/regression-caaa191/` (suite logs, tsc output and integration JSON).
+- Evidence files:
+  - `evidence/browser-lifetime-candidate/`: repro JSON and logs.
+  - `evidence/regression-caaa191/`: previous candidate's suite logs and tsc.
+  - `evidence/release-items/`: stop-rule unit + real-PG logs, integration identity runs, `tsc.txt`, and `regression/` with every suite log on `9a1b931`.
 
 ## 1. Before/after repro (server/scripts/browser-lifetime-repro.ts)
 
@@ -31,12 +35,12 @@
 
 **Reading the table**
 
-- **Unlimited.** The base keeps one Chromium alive per child until that child exits. That gives 4 live browsers with 1 permit. The candidate never has more than 1. Threads fall by about 63% (550 → 205) and summed RSS by about 59%. Wall time, admission wait and permit hold are unchanged: closing the browser before releasing the permit adds no measurable latency here (permit hold 8.3 s vs 8.4 s).
+- **Unlimited.** The base keeps one Chromium alive per child until that child exits. That gives 4 live browsers with 1 permit. The candidate never has more than 1. Threads fall by about 63% (550 → 205) and summed RSS by about 59%. Wall time, admission wait and permit hold are unchanged. In **this** workload (1 document per child, local PDFs, 1 permit), closing the browser before releasing the permit added no measurable latency (permit hold 8.3 s vs 8.4 s). That is not a general zero-overhead claim: a relaunch per permit cycle has a cost that depends on fetch mix and concurrency, and it was not measured at production settings.
 - **TasksMax=400.** This cgroup pids limit makes the base fail the same way production does, as browser-launch failures:
   - Puppeteer printed 6 "Failed to launch the browser process … Code: null" lines and 3 "Network.enable timed out" lines, and one fetch hit "Timed out after waiting 30000ms".
   - 4/12 jobs ended with `no document text`. Their PDFs were never requested (`neverRequested` = job-1002/1005/1008/1011). Admission wait rose to a mean of 93 s, and the run took 3.9× as long.
   - The candidate under the same limit stays at 1 browser, 180 tasks and 12/12 jobs, the same as its unlimited run.
-- **Caveat.** The production SIGABRT signature was **not** reproduced locally. What reproduced is the launch-failure / starvation mode under a task cap. The harness labels a failed fetch "fetch ok … chars=0 marker=false" in the child log line. The summary `extraction` block is the authoritative per-document check.
+- **Caveat.** The production SIGABRT signature was **not** reproduced locally. What reproduced is the launch-failure / starvation mode under a task cap. The fix removes the demonstrated browser accumulation and the extraction failures that came with it in this constrained repro. Production must still show whether it eliminates the child-start failures. The harness labels a failed fetch "fetch ok … chars=0 marker=false" in the child log line. The summary `extraction` block is the authoritative per-document check.
 
 The earlier repro evidence in `evidence/browser-lifetime/` was made in the main checkout before the worktree method, with the old counter. It is superseded by this table.
 
@@ -45,13 +49,14 @@ The earlier repro evidence in `evidence/browser-lifetime/` was made in the main 
 | Suite | Result | What it proves |
 |---|---|---|
 | `server/lib/browser-close-order.test.ts` | **4/4 pass** (56 s) | On the success, fetch-failure (direct + pdfRecovery), cancellation (in-flight / post-acquire refusal / pre-acquire refusal) and child-death paths, the child's Chromium process group is gone **before** the browser permit returns to the parent broker. On the child-death path, the parent reaps before it releases. |
-| `server/lib/batch-stop-rule.test.ts` | **11/12 pass, 1 skipped** | The skipped test is optional: SQL against a local PG. See §4. |
+| `server/lib/batch-stop-rule.test.ts` | **20/20 pass** with `STOP_RULE_TEST_PG` (disposable local PG); 19 + 1 skip without it | Rule logic, gating, the batch-1276 shape, and the durable-first cancel sequence with never-resolving and failing purge/snapshot fakes (§4). Log: `evidence/release-items/batch-stop-rule.unit.log` |
+| `server/lib/batch-stop-rule.db.test.ts` | **17/17 pass** | Real-PG stop rule and concurrent-failure race on a throwaway DB (§4). Log: `evidence/release-items/batch-stop-rule.db.log` |
 
 **Mutation check (from the earlier session, same code).** Releasing the permit before the reap check makes the close-order tests fail: more than one live Chromium at permit return. So the ordering is what the tests detect, not an accident.
 
 ## 3. Regression suites
 
-Each suite runs with `DATABASE_URL=postgres://stub:stub@127.0.0.1:1/stub npx tsx server/lib/<suite>.test.ts` at `caaa191`. The 11 stub suites ran in parallel, then browser-close-order and job-isolation ran together after the repro runs had finished.
+Each suite runs with `DATABASE_URL=postgres://stub:stub@127.0.0.1:1/stub npx tsx server/lib/<suite>.test.ts`, re-run on `9a1b931`. Logs are in `evidence/release-items/regression/`; the previous run at `caaa191` is in `evidence/regression-caaa191/`.
 
 | Suite | Result | Exit |
 |---|---|---|
@@ -67,9 +72,12 @@ Each suite runs with `DATABASE_URL=postgres://stub:stub@127.0.0.1:1/stub npx tsx
 | provider-resilience | 112/112 | 0 |
 | transport-abort.unit | 55/55 | 0 |
 | browser-close-order (new) | 4/4 | 0 |
-| batch-stop-rule (new) | 11/11 + 1 skip | 0 |
+| snapshot-durability | 12/12 | 0 |
+| lifecycle-fence.db (real local PG/Redis; includes S7B concurrent `cancelBatchRun`) | 165/165 | 0 |
+| batch-stop-rule (new) | 20/20 (with local PG) | 0 |
+| batch-stop-rule.db (new, real local PG/Redis) | 17/17 | 0 |
 
-These counts match the previous branch baseline (`TEST_RESULTS` for `fix/worker-isolation`) for every existing suite.
+The counts for existing suites match the previous branch baseline (`TEST_RESULTS` for `fix/worker-isolation`).
 
 ### Integration suite (opt-in, real Postgres/Redis/BullMQ/Chromium)
 
@@ -77,23 +85,38 @@ These counts match the previous branch baseline (`TEST_RESULTS` for `fix/worker-
 
 | Run | Result | Peak Chromium under job children |
 |---|---|---|
-| Base `b676c2d` (worktree) | PASS 11/11 | 18 procs, 2,398 MB |
-| Candidate run 1 | **FAIL 2/11** | 10 procs, 1,381 MB |
-| Candidate run 2 | PASS 11/11 | 10 procs, 1,377 MB |
+| Base `b676c2d` (worktree, previous session) | PASS 11/11 | 18 procs, 2,398 MB |
+| `caaa191` run 1 (previous session) | **FAIL 2/11** (extra process, unidentified then) | 10 procs, 1,381 MB |
+| `caaa191` run 2 (previous session) | PASS 11/11 | 10 procs, 1,377 MB |
+| `9a1b931` attempt 1 | **FAIL 6/12**: not a product failure, see below | 0 (no job ran) |
+| `9a1b931` attempt 2 (warm tsx cache) | PASS 12/12 | see log |
+| `9a1b931` attempt 3 (`TSX_DISABLE_CACHE=1`, **final**) | **PASS 12/12** | 10 procs, 1,373 MB |
 
-**Candidate run 1 failures**
+**Identity of the extra process (release item 2).** The integration test now records exe (readlink `/proc/<pid>/exe`), cmdline, ppid, comm, start time and RSS for every descendant. It does this before the jobs start, in every sample, and in every failure message. The previous "baseline descendants excluded" mechanism was removed. In the final run (`evidence/release-items/integration-identity.{log,json}`), the extra process was:
 
-- "2 isolated job children ran concurrently (max seen 3)".
-- "no descendants after completion (1, chromium 0)".
+| Field | Value |
+|---|---|
+| exe | `node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild` (in the repo) |
+| cmdline | `<exe> --service=0.28.0 --ping` |
+| parent | the test harness process itself (pid 139822; the helper is pid 139834) |
+| existed before the jobs? | **Yes.** It appears in the pre-job descendant snapshot taken right after `initializeDatabase` and before any job was enqueued, and in all 98 samples. |
+| app work or toolchain? | **Toolchain.** It is tsx's esbuild transform service, which tsx spawns lazily the first time it must compile uncached TypeScript. With a warm tsx cache (attempt 2) it was never spawned (pre-job descendants `[]`). With the cache disabled (attempt 3) it was. Production runs compiled JS without tsx. The job children are separate: 2 × `/usr/bin/node --import tsx …/server/lib/job-child.ts` at peak. |
+| exits with the harness? | **Yes.** The post-exit check found "pid 139834 gone; any `esbuild --service` processes on host: none". |
+| ~RSS | 12–15 MB, steady |
 
-In both, the extra process was one direct child of the test process, at a steady ~14 MB. It was present from the first sample to after `stopWorker()`, and it was not Chromium.
+This is consistent with `caaa191` run 1: one non-Chromium direct child of the test process at ~14 MB, present from the first sample through `stopWorker`. In that run the helper was evidently spawned after the baseline snapshot, so the timing-sensitive baseline exclusion missed it. The identity was not recorded in run 1 itself; it is attributed from the matching footprint and from the identities recorded in this session's runs.
 
-**Likely cause (hypothesis, not proven).** The extra process is tsx's `esbuild --service` helper, started after the test took its baseline snapshot.
+**Fix in the test: explicit allowlist. The check was not relaxed.**
 
-- In the base run, a `ps --ppid` snapshot showed exactly this process (esbuild, ~15 MB) as a direct child. It was present at baseline there, so it was excluded.
-- In run 1 the log says "baseline descendants excluded: none".
+- A descendant is excluded only if all of these hold: it is a direct child of the test pid, its exe basename is `esbuild`, and its cmdline matches `esbuild --service=<ver> --ping`. Each exclusion is recorded in `toolchainHelpers` and printed.
+- Every other descendant is still counted. All zero-descendant assertions are unchanged ("no descendants after completion", "no descendants after stopWorker", "no orphaned puppeteer Chromium anywhere on host"). The concurrent-children check still requires exactly 2.
 
-The test's own accounting is timing-sensitive: it counts every direct child as a job child. Product code is not involved: all job, batch, score, permit, orphan and quarantine checks passed in run 1. Run 2 passed every check. Not yet done: a run that records the process name of the extra child in run 1's situation.
+**`9a1b931` attempt 1 (FAIL 6/12): self-inflicted, not a product failure.**
+
+- My first version of `batch-stop-rule.db.test.ts` left its Redis cross-replica cancel flag `cancelled:batch:9` behind. The throwaway DB is cloned from the same template, so the next integration run also got batch id 9.
+- The worker therefore treated that batch as cancelled and never claimed its jobs. The six failing checks are job/batch/score/children/Chromium/lock-renewal (`pending,pending`, `max seen 0`). The process-hygiene checks passed.
+- The flag was deleted, and the db test's teardown now deletes it and verifies that the throwaway DB is gone.
+- Log: `evidence/release-items/integration-identity-attempt1-redis-polluted.log`. It also records the same esbuild helper as a pre-job descendant (pid 138434).
 
 The fix also shows in the integration run: peak Chromium under 2 concurrent children fell from 18 to 10 processes (one browser at a time instead of one per child). Summed RSS fell from 2,398 to ~1,380 MB.
 
@@ -111,18 +134,58 @@ Other behaviour:
 
 - Cancellations and provider-quota pauses do not count as S4 failures.
 - If the failure count errors, the rule fails open to the legacy retry path.
-- The cancel sequence runs in this order: flag, then purge, then snapshot, then PG cancel. Purge and snapshot errors are not fatal. A cancel-sequence error still suppresses the retry.
+- A cancel-sequence error still suppresses the retry.
+
+**Durable-first cancel (release item 1).** The sequence runs in this order:
+
+1. The flag (local + Redis notification), synchronously.
+2. The PG cancel and the queue purge start together. The purge is bounded at 10 s.
+3. Only if the PG cancel committed and transitioned the batch: a snapshot bounded at 30 s, marked `rejected` / "cancelled/partial … not comprehensive".
+
+Unit tests 12–19 use never-resolving and rejecting fakes, with 300 ms bounds:
+
+| Fake purge / snapshot | PG cancel committed | Sequence settles |
+|---|---|---|
+| hangs / ok | < 100 ms | within the bound (< 2 s) |
+| ok / hangs | < 100 ms | within the bound |
+| hangs / hangs | < 100 ms | within the bound |
+| rejects / rejects | < 100 ms | within the bound |
+| hangs / rejects | < 100 ms | within the bound |
+
+- Test 17 observes the PG cancel resolved while the purge is still hung.
+- Test 18: a PG-cancel error propagates after the bounded purge, and no snapshot is taken.
+- Test 19: an already-cancelled batch (`cancelBatchRun` → false) takes no second snapshot.
+- In all of these the flag is set synchronously, before any await.
+
+**Real-PG stop-rule test (release item 3), `server/lib/batch-stop-rule.db.test.ts`: 17/17 PASS.**
+
+- **Safety.** The test refuses to run unless the host is loopback and the database name does not contain "companyiq". It ran against a throwaway database `stoprule_<ts>` created from the template `ciq` on the disposable docker PG at 127.0.0.1:55432 (Redis at 127.0.0.1:56379), with `BATCH_STOP_RULE_FAILED_JOBS=2`. Production `companyiq_v3` and the hosted `default` DB were not used.
+- **Seed.** 1 completed company with scores and 3 jobs that fail; one of them is still queued in BullMQ.
+- **Below threshold.** The real `failJob` writes the first failure. `COUNT_BATCH_FAILURES_SQL` counts 1 failed job, 0 exhausted. The rule does not trip, and the batch is still running.
+- **Concurrent race.** Two failures, then two `stopRuleTripped` calls run concurrently:
+  - Both report stopped, so each suppresses its retry. 0 retries were enqueued.
+  - `batch_runs.status='cancelled'` and the acceptance state is rejected.
+  - There was exactly one PG transition; the other `cancelBatchRun` was the idempotent no-op, and the losing path logged "snapshot left to that path".
+  - Exactly **one** snapshot row exists. It holds only the completed company and is `rejected` with "cancelled/partial … not comprehensive". There is no duplicate accepted snapshot.
+  - The queued BullMQ job was purged, and the Redis cross-replica flag was set.
+  - `claimJob` refuses every failed job, and their attempts are unchanged, so there is no uncontrolled retry.
+- **Late failure after cancel.** A third failure is still stopped, there is still one snapshot, and still zero retries.
+- **Teardown.** Deletes the Redis flag, terminates backends, drops the DB, and checks that 0 matching DBs remain. The docker containers `ciq-int-pg` / `ciq-int-redis` are disposable local instances and were left running.
 
 ## 5. tsc
 
-`npx tsc --noEmit -p .` gives 62 errors on the candidate and 62 on the base worktree. The sorted error lists match once line/column numbers are removed (`diff` empty). The only processor.ts entry is the existing `pdf-parse` TS7016, which is present on the base too. The branch adds no new type errors.
+`npx tsc --noEmit -p .` on `9a1b931` gives 62 errors, the same as the base worktree. The sorted error lists match once line/column numbers are removed (`diff` empty; output in `evidence/release-items/tsc.txt`).
+
+- The only processor.ts entry is the existing `pdf-parse` TS7016, which is present on the base too.
+- Before commit, a first check showed 63. The extra error was `lifecycle-fence.db.test.ts` typing a variable as `Promise<void>` for `cancelBatchRun`, which now returns `Promise<boolean>`. The annotation was fixed, and `lifecycle-fence.db` was re-run: 165/165.
 
 ## 6. Not verified
 
 - **Production SIGABRT.** Not reproduced locally. The link between the browser-lifetime defect and the production failures is inferred from:
   - the local launch-failure mode under TasksMax=400;
   - the batch 1276 URL reconciliation: Southern lost 37% of its URLs, all with browser-launch failures (see `evidence/batch1276-url-reconciliation.md`).
-- **Not tested on Railway** or at production settings. `WORKER_ISOLATION_ENABLED` stays **off** by default, so the fix is inactive in production until isolation is enabled. The stop rule is inactive until `BATCH_STOP_RULE_FAILED_JOBS` is set.
+- **Not tested on Railway** or at production settings. Production already runs with `WORKER_ISOLATION_ENABLED=true`, so **deploying activates the browser fix immediately**; there is no separate switch for it. Only the stop rule is inert, until `BATCH_STOP_RULE_FAILED_JOBS` is set to N > 0. Rollback means redeploying the previous image/commit (`b676c2d` / the prior production deploy), not disabling isolation (see REVIEW_PACKAGE "Rollback procedure").
+- **Whether the fix eliminates production child-start failures** is not shown. It removes the browser accumulation and the related extraction failures in the constrained local repro.
 - **No real web fetches or LLM providers.** Repro and integration use locally served PDFs and stubbed providers.
 - **Unconfirmed-close path.** The permit is withheld and the browser circuit opened. This is covered by unit logic only; it did not occur in any run (quarantined 0).
-- **Stop-rule SQL** (`COUNT_BATCH_FAILURES_SQL`) was not run against a real PG in this session (optional test skipped).
+- **Stop-rule SQL and the cancel path** were run against a disposable local PG only (§4), not against a production-like dataset or at production concurrency.

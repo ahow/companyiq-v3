@@ -1,0 +1,90 @@
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+── discovery dispatch gates (O1) ──
+  PASS  no attempt context: withBucket runs fn unchanged
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=101 job=1 attempt=1)
+  PASS  pre-cancel: LifecycleCancelledError thrown
+  PASS  pre-cancel: provider fn never dispatched
+  PASS  pre-cancel: bucket never acquired
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:post-acquire reason=batch_cancelled (batch=102 job=1 attempt=1)
+  PASS  cancel during bucket wait: refused post-acquire
+  PASS  cancel during bucket wait: provider fn never dispatched
+  PASS  cancel during bucket wait: token released (no leak)
+[LIFECYCLE-FENCE] attempt revoked reason=batch_cancelled (job=1 attempt=1 batch=103)
+[DIAG][cancel-path] step=e reason=batch_cancelled batch=103 job=1 attempt=1 token=null abort_fired=true at=2026-10-12T16:09:03.807Z
+  PASS  in-flight cancel: request AbortSignal fired
+  PASS  in-flight cancel: surfaced as LifecycleCancelledError
+  PASS  in-flight cancel: token released
+[LIFECYCLE-FENCE] attempt revoked reason=job_watchdog_timeout (job=1 attempt=1 batch=104)
+[DIAG][cancel-path] step=e reason=job_watchdog_timeout batch=104 job=1 attempt=1 token=null abort_fired=true at=2026-10-12T16:09:03.822Z
+  PASS  revoke: in-flight aborted with reason
+  PASS  revoke: abort latency < 200ms (event-driven)
+[LIFECYCLE-GATE] dispatch refused at x reason=job_watchdog_timeout (batch=104 job=1 attempt=1)
+  PASS  revoke: subsequent dispatch refused
+  PASS  deadline elapsed: dispatchRevokedReason=deadline_elapsed
+  PASS  deadline in future + not cancelled: allowed
+[LIFECYCLE-FENCE] attempt revoked reason=pipeline_timeout (job=1 attempt=1 batch=107)
+[DIAG][cancel-path] step=e reason=pipeline_timeout batch=107 job=1 attempt=1 token=null abort_fired=true at=2026-10-12T16:09:03.822Z
+  PASS  requestAbortSignal: pre-revoked parent -> aborted
+── REAL discovery search path, cancel flips mid-loop (O1 realism) ──
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-loop-1791821343824-3 acmezzz annual report": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-loop-1791821343824-4 acmezzz annual report": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-loop-1791821343824-5 acmezzz annual report": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-loop-1791821343824-6 acmezzz annual report": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-loop-1791821343824-7 acmezzz annual report": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[LIFECYCLE-GATE] dispatch refused at discovery.withBucket:pre-acquire reason=batch_cancelled (batch=120 job=1 attempt=1)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-wave-1791821343824-0 acmezzz": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-wave-1791821343825-1 acmezzz": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-wave-1791821343825-2 acmezzz": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-wave-1791821343825-3 acmezzz": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+[Acmezzz Holdings] Targeted disclosure query failed for "unit-wave-1791821343825-4 acmezzz": Cancelled (batch_cancelled at discovery.withBucket:pre-acquire)
+    real-loop dispatch: pre-cancel=3 post-cancel=0 perQuery=[1,1,1,0,0,0,0,0]
+  PASS  real loop: pre-cancel dispatches recorded separately = 3
+  PASS  real loop: ZERO provider dispatches after the cancel source flipped (sequential + parallel wave)
+  PASS  real loop: every pre-cancel iteration dispatched exactly once
+  PASS  real loop: every post-cancel iteration dispatched nothing
+── fault-inject FAIL-CLOSED (companyId-only spec, no batch/job) ──
+[FAULT-INJECT] REFUSING TO ARM — fail-closed: DIAG_FAULT_INJECT is set but neither DIAG_FAULT_BATCH nor DIAG_FAULT_JOB is a valid id. NO faults will be injected (a companyId in the spec is not a target). Set DIAG_FAULT_BATCH or DIAG_FAULT_JOB.
+  PASS  fail-closed: companyId-only parse -> zero specs
+  PASS  fail-closed: companyId-only parse -> no target
+[FAULT-INJECT] REFUSING TO ARM — fail-closed: DIAG_FAULT_INJECT is set but neither DIAG_FAULT_BATCH nor DIAG_FAULT_JOB is a valid id. NO faults will be injected (a companyId in the spec is not a target). Set DIAG_FAULT_BATCH or DIAG_FAULT_JOB.
+  PASS  fail-closed: non-numeric DIAG_FAULT_BATCH -> inert
+[FAULT-INJECT] REFUSING TO ARM — fail-closed: DIAG_FAULT_INJECT is set but neither DIAG_FAULT_BATCH nor DIAG_FAULT_JOB is a valid id. NO faults will be injected (a companyId in the spec is not a target). Set DIAG_FAULT_BATCH or DIAG_FAULT_JOB.
+  PASS  fail-closed: isFaultInjectActive() false
+  PASS  fail-closed: getFaultSpec(pipeline_timeout) null even for matching company
+  PASS  fail-closed: getFaultSpec(discovery_timeout) null
+  PASS  fail-closed: faultTimeoutMs returns the normal deadline
+  PASS  fail-closed: maybeFireCancel resolves and fires nothing (no cancel recorded)
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+── fault-inject re-keyed on batch/job ──
+[FAULT-INJECT] REFUSING TO ARM — fail-closed: DIAG_FAULT_INJECT is set but neither DIAG_FAULT_BATCH nor DIAG_FAULT_JOB is a valid id. NO faults will be injected (a companyId in the spec is not a target). Set DIAG_FAULT_BATCH or DIAG_FAULT_JOB.
+  PASS  no DIAG_FAULT_BATCH/JOB -> inert
+[FAULT-INJECT] harness ACTIVE (TEST-ONLY) batch=900 job=*: pipeline_timeout@50ms
+  PASS  targeted batch matches
+  PASS  other batch, same company, does NOT match
+  PASS  faultTimeoutMs untargeted -> normal
+[FAULT-INJECT] harness ACTIVE (TEST-ONLY) batch=900 job=33: discovery_timeout@70ms[company=5]
+  PASS  batch+job+company all match
+  PASS  wrong job does not match
+  PASS  companyId only an extra filter
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+── ownership identity (attempt_token) + fail-closed batch writes (Items 1/4) ──
+  PASS  ownershipFromContext carries attemptToken
+  PASS  ownerPredicate keys on attempt_token (IS NOT DISTINCT FROM, bound param)
+  PASS  ownerPredicate still matches attempts + status='claimed'
+  PASS  token-less ownership binds NULL (matches only legacy NULL-token rows)
+[LIFECYCLE-FENCE] batch score write refused: no attempt ownership in context (batch=42) at pipeline.score-write
+  PASS  batch write without ownership context -> LifecycleCancelledError(ownership_context_missing)
+  PASS  batch-less direct call (scripts) -> null, unfenced path allowed
+  PASS  inside an attempt context -> returns that ownership
+
+42 passed, 0 failed
+exit=0

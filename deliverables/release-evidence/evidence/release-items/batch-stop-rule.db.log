@@ -1,0 +1,51 @@
+[STOP-RULE-DB] throwaway database stoprule_1791821184735 created (template ciq on 127.0.0.1:55432)
+[Redis] Connected successfully
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+[Queue] Added 1 jobs for batch 10 (workspace 10, priority 0)
+[STOP-RULE-DB] seeded ws=10 fw=10 batch=10 jobs=23,24,25,26 queued=1
+[DIAG][job-transition] job=24 -> failJob transitioned=true batchTerminal=false error="Isolated job child exited unexpectedly (code=null signal=SIGABRT stage=spawn)" batch=- job=- attempt_id=- company=- stage=-
+  PASS  SQL: one failed attempt counted, none exhausted
+  PASS  below threshold (1/2): not stopped, legacy retry path stays in charge
+  PASS  below threshold: batch still running
+[DIAG][job-transition] job=25 -> failJob transitioned=true batchTerminal=false error="Isolated job child exited unexpectedly (code=null signal=SIGABRT stage=spawn)" batch=- job=- attempt_id=- company=- stage=-
+[DIAG][job-transition] job=26 -> failJob transitioned=true batchTerminal=false error="Isolated job child exited unexpectedly (code=null signal=SIGABRT stage=spawn)" batch=- job=- attempt_id=- company=- stage=-
+  PASS  SQL: three failed-attempt jobs counted (cancel/provider_paused excluded by construction)
+[BATCH-STOP-RULE] TRIPPED batch=10 job=26 failedAttemptJobs=3 retryExhaustedJobs=0 threshold=2 — cancelling batch, no further retries (S4: 3 job(s) failed (threshold 2))
+[DIAG][cancel-path] step=b batch=10 outcome=issued mode=fire-and-forget pid=138862 at=2026-10-12T16:06:28.083Z
+[BATCH-STOP-RULE] TRIPPED batch=10 job=25 failedAttemptJobs=3 retryExhaustedJobs=0 threshold=2 — cancelling batch, no further retries (S4: 3 job(s) failed (threshold 2))
+[DIAG][cancel-path] step=b batch=10 outcome=issued mode=fire-and-forget pid=138862 at=2026-10-12T16:06:28.085Z
+[DIAG][cancel-path] step=b batch=10 key=cancelled:batch:10 outcome=ack ms=3 ttl_s=3600 at=2026-10-12T16:06:28.086Z
+[DIAG][cancel-path] step=b batch=10 key=cancelled:batch:10 outcome=ack ms=2 ttl_s=3600 at=2026-10-12T16:06:28.086Z
+[Queue] Removed 1 pending/delayed/terminal jobs for batch 10
+[LIFECYCLE] cancelBatchRun batch=10 transitioned=true
+[LIFECYCLE] cancelBatchRun batch=10 transitioned=false (already cancelled or missing — idempotent no-op)
+[BATCH-STOP-RULE] batch=10 already cancelled by another path — snapshot left to that path
+[Queue] Removed 1 pending/delayed/terminal jobs for batch 10
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":2,"idle":2,"waiting":0,"op":"select batch_runs","outcome":"ok","checkout_wait_ms":0,"exec_ms":1,"total_ms":1,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+[Worker] Snapshot companiesCount mismatch for batch 10: persisted=1 expected=4
+[Worker] Saved analysis results for batch 10 (1 companies, avg 100%, acceptance=rejected)
+[Reconcile] batch 10: total=4 saved=1 failed=0 open=3 | saved+failed=1 MISMATCH | measures/company=1 incomplete=0 OK
+  PASS  race: both failure paths report stopped (each suppresses its retry)
+  PASS  race: zero retries enqueued
+  PASS  durable: batch_runs.status = cancelled, acceptance rejected
+  PASS  durable: exactly one PG transition, the racing cancel was the idempotent no-op
+  PASS  race: losing path logged 'snapshot left to that path'
+  PASS  snapshot: exactly one row for the batch (no duplicate)
+  PASS  snapshot: holds only the completed company
+  PASS  snapshot: marked rejected 'cancelled/partial … not comprehensive', never accepted
+  PASS  purge: queued BullMQ job for the batch removed
+  PASS  flag: Redis cross-replica cancel notification set
+  PASS  fence: no failed job can be re-claimed (no uncontrolled retry)
+  PASS  fence: attempts unchanged by refused claims
+[BATCH-STOP-RULE] TRIPPED batch=10 job=24 failedAttemptJobs=3 retryExhaustedJobs=0 threshold=2 — cancelling batch, no further retries (S4: 3 job(s) failed (threshold 2))
+[DIAG][cancel-path] step=b batch=10 outcome=issued mode=fire-and-forget pid=138862 at=2026-10-12T16:06:28.164Z
+[DIAG][cancel-path] step=b batch=10 key=cancelled:batch:10 outcome=ack ms=1 ttl_s=3600 at=2026-10-12T16:06:28.165Z
+[Queue] Removed 0 pending/delayed/terminal jobs for batch 10
+[LIFECYCLE] cancelBatchRun batch=10 transitioned=false (already cancelled or missing — idempotent no-op)
+[BATCH-STOP-RULE] batch=10 already cancelled by another path — snapshot left to that path
+  PASS  late failure after cancel: stopped, still exactly one snapshot, still zero retries
+[STOP-RULE-DB] race completed in 63ms; final jobs=[{"id":23,"status":"completed","attempts":1},{"id":24,"status":"pending","attempts":1},{"id":25,"status":"pending","attempts":1},{"id":26,"status":"pending","attempts":1}]
+[STOP-RULE-DB] teardown: DROP DATABASE stoprule_1791821184735 → remaining=0; Redis cancel flag removed
+
+batch-stop-rule.db: 17 passed, 0 failed
+exit=0

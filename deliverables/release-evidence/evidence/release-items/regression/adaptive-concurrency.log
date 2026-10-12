@@ -1,0 +1,89 @@
+TAP version 13
+# Subtest: A: sustained back-pressure scales concurrency down by decreaseFactor
+ok 1 - A: sustained back-pressure scales concurrency down by decreaseFactor
+  ---
+  duration_ms: 20.288426
+  type: 'test'
+  ...
+# Subtest: B: back-pressure never scales below min
+ok 2 - B: back-pressure never scales below min
+  ---
+  duration_ms: 3.818005
+  type: 'test'
+  ...
+# Subtest: C: at min under back-pressure holds at min
+ok 3 - C: at min under back-pressure holds at min
+  ---
+  duration_ms: 0.158099
+  type: 'test'
+  ...
+# Subtest: D: no back-pressure with traffic ramps up by step
+ok 4 - D: no back-pressure with traffic ramps up by step
+  ---
+  duration_ms: 8.508248
+  type: 'test'
+  ...
+# Subtest: E: ramp up never exceeds max
+ok 5 - E: ramp up never exceeds max
+  ---
+  duration_ms: 0.262407
+  type: 'test'
+  ...
+# Subtest: F: no traffic holds current
+ok 6 - F: no traffic holds current
+  ---
+  duration_ms: 0.13876
+  type: 'test'
+  ...
+# Subtest: G: rate-limited below threshold holds
+ok 7 - G: rate-limited below threshold holds
+  ---
+  duration_ms: 0.166091
+  type: 'test'
+  ...
+# Subtest: H: full cycle — back off on sustained 429s then ramp back up when subsided
+ok 8 - H: full cycle — back off on sustained 429s then ramp back up when subsided
+  ---
+  duration_ms: 0.153262
+  type: 'test'
+  ...
+# Subtest: I: defensive clamp when current is out of bounds
+ok 9 - I: defensive clamp when current is out of bounds
+  ---
+  duration_ms: 0.247073
+  type: 'test'
+  ...
+# Subtest: J: signal window counts events and respects window cutoff
+ok 10 - J: signal window counts events and respects window cutoff
+  ---
+  duration_ms: 0.488348
+  type: 'test'
+  ...
+# Subtest: K: events outside window are excluded
+ok 11 - K: events outside window are excluded
+  ---
+  duration_ms: 0.120141
+  type: 'test'
+  ...
+# Subtest: L: kill-switch disables via env
+ok 12 - L: kill-switch disables via env
+  ---
+  duration_ms: 0.196207
+  type: 'test'
+  ...
+# Subtest: M: min never exceeds max even if misconfigured
+ok 13 - M: min never exceeds max even if misconfigured
+  ---
+  duration_ms: 0.190188
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 134.707548
+exit=0

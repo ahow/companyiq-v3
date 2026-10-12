@@ -1,5 +1,7 @@
 # Batch 1276 — failed source URLs vs recovered content (12 completed companies)
 
+> **Status (added 2026-10-12): batch 1276 is a failed/degraded run.** It ended with **49 failed source URLs never recovered** (12.5% of the attempted corpus), including **10 of Southern's 27**. Its 12 "completed" companies were scored on a corpus with these gaps. They must **not** be treated as confirmed-comprehensive results, and their scores should not be used as the reference for coverage or quality comparisons. A complete set of 36 score rows per company does not change this (see "What it does NOT show" below).
+
 Generated read-only: `documents` rows (SELECT in a `readonly` transaction) for the 12 completed company ids, joined by URL to the saved worker logs `/tmp/wklogs_{w1,w2,cf79e5a7,w4}.json` (merged, de-duplicated on (timestamp,message), clipped to the batch window 01:24:46–02:18:04 UTC). Scripts: `recon_db2.py` (DB snapshot), `recon_analyze.py` (join). No writes.
 
 Definitions: **failed URL (log)** = URL with ≥1 browser-launch failure / browser-unavailable / fetch-timeout / HTTP-failure line in the window. **Recovered via fallback** = a failed URL that also has a Firecrawl, deferred-retry or browser-PDF recovery line. **ok in DB w/o logged recovery** = failed in logs, `fetch_status='ok'` with content now (recovered by a path that does not log a recovery line, e.g. later strategy in the same fetch chain). **Remaining gap** = failed URL with no recovery and not ok in DB. **dead (DB)** = `fetch_status='dead'` rows created/fetched in the batch window. `ok` = rows with `fetch_status='ok'` — equals the corpus counts in deliverable 36 for every company.
@@ -46,6 +48,7 @@ Arithmetic per row: **failed URLs (log) = recovered via logged fallback + ok in 
 - **A recovered URL may hold less content than the browser would have produced.** Firecrawl or deferred-retry text for a PDF/viewer URL can be partial. This analysis checks that content exists (`content_length > 0`), not that it is equivalent.
 - **Attribution is heuristic.** Failures and recoveries are matched to companies by URL; truncated URLs in logs are matched by prefix if longer than 40 characters. URLs that failed without any matching log line are not counted as "failed" here. They appear only in the `dead` list below: 57 dead rows in total, which overlap with but are not the same set as the 49 residual-gap URLs.
 - **Southern (37% gap) is the clearest coverage loss.** All 11 of its failed URLs hit browser launch failures. The residual gap is the likely mechanism by which the browser-lifetime defect (fixed on `fix/browser-lifetime-and-stop-rule`) reduced corpus quality even for jobs that "completed". This is an inference from the log tags, not a measured causal link.
+- **Consequence for using batch 1276.** Because of the 49 unrecovered URLs (Southern 10/27), batch 1276 is classified as a **failed/degraded run**. None of its completed companies, Southern least of all, counts as confirmed-comprehensive.
 
 ## Remaining-gap URLs per company (failed in batch window, no recovery, not ok in DB)
 

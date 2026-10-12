@@ -1,0 +1,2 @@
+reliability acceptance tests: PASS (duplicate-create, heartbeat, provenance, fingerprint, finalizer, corpus-replay, framework-scoped-ab-delta, deterministic-corpusHash, I45-deterministic-replay, I45-workspace-isolation, I45-structured-output, cross-framework-isolation, terminal-snapshot-persistence, idempotent-finalization, mixed-pending-rejection, per-framework-selection, batch-scoped-snapshot, artifact-before-acceptance, idempotent-retry, concurrent-framework-isolation)
+exit=0

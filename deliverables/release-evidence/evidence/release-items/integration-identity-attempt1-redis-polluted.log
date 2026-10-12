@@ -1,0 +1,210 @@
+[DB] Initializing database tables...
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS averag…","outcome":"ok","checkout_wait_ms":0,"exec_ms":2,"total_ms":2,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"insert platform_sources","outcome":"ok","checkout_wait_ms":0,"exec_ms":0,"total_ms":0,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"ALTER TABLE documents ALTER COLUMN failure_reason SET DEFAUL…","outcome":"ok","checkout_wait_ms":0,"exec_ms":2,"total_ms":2,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"insert workspace_settings","outcome":"ok","checkout_wait_ms":0,"exec_ms":0,"total_ms":0,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"insert workspace_settings","outcome":"ok","checkout_wait_ms":0,"exec_ms":0,"total_ms":0,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+[DB] Seeded 22 trusted sources for workspace 8
+[DB] Default settings seeded for all workspaces
+[DB] All tables created successfully
+[INT] initializeDatabase OK; pre-job descendants: [{"pid":138434,"ppid":138422,"comm":"esbuild","state":"S","rssKb":11932,"exe":"/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild","cmdline":"/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping","startTicks":11280607,"toolchainHelper":true}]
+[INT] seeded workspace=9 framework=9 companies=21,22 docs/company=25 measures=6
+[Redis] Connected successfully
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+[Worker] Started with concurrency=2, timeout=600000ms, maxRetries=3, lockDuration=30000ms, stalledInterval=15000ms, maxStalledCount=2
+[Queue] Added 2 jobs for batch 9 (workspace 9, priority 0)
+[DIAG][bull-lock] active job=batch-9-company-21 attemptsStarted=1 stalledCounter=0
+[DIAG][bull-lock] active job=batch-9-company-22 attemptsStarted=1 stalledCounter=0
+[Worker] Processing job 21: company=21, framework=9, batch=9, workspace=9
+[Worker] Processing job 22: company=22, framework=9, batch=9, workspace=9
+[DIAG][cancel-path] step=d batch=9 flag_read=true src=redis pid=138422 at=2026-10-12T16:01:57.680Z
+[DIAG][cancel-path] step=d batch=9 job=22 where=pre-claim flag_read=true at=2026-10-12T16:01:57.680Z
+[DIAG][bull-lock] completed job=batch-9-company-22 active_for=4ms
+[Worker] BullMQ job batch-9-company-22 completed
+[DIAG][cancel-path] step=d batch=9 job=21 where=pre-claim flag_read=true at=2026-10-12T16:01:57.702Z
+[DIAG][bull-lock] completed job=batch-9-company-21 active_for=27ms
+[Worker] BullMQ job batch-9-company-21 completed
+[DIAG][pool-state] pool=main max=20 total=1 idle=1 busy=0 waiting=0
+[DIAG][pg-activity] {"reason":"interval","backends_total":2,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":2,"max_xact_age_ms":null,"max_state_age_ms":"10556"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":1,"idle":1,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":2,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":2,"max_xact_age_ms":null,"max_state_age_ms":"25553"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":1,"idle":1,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"515"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"499"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"477"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"456"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"449"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"424"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"393"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"378"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"356"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"340"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"320"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"298"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"278"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pg-activity] {"reason":"interval","backends_total":1,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":1,"max_xact_age_ms":null,"max_state_age_ms":"258"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
+[Worker] Stopped
+[INT] summary {
+ "ranAt": "2026-10-12T16:06:03.036Z",
+ "node": "v22.23.2",
+ "chromium": "/usr/local/bin/chromium",
+ "config": {
+  "concurrency": 2,
+  "lockDurationMs": 30000,
+  "stalledIntervalMs": 15000,
+  "holdMs": 20000
+ },
+ "elapsedMs": 240348,
+ "jobs": [
+  {
+   "id": 21,
+   "status": "pending",
+   "last_error": null,
+   "attempts": 0
+  },
+  {
+   "id": 22,
+   "status": "pending",
+   "last_error": null,
+   "attempts": 0
+  }
+ ],
+ "batch": {
+  "status": "running",
+  "completed_jobs": 0,
+  "failed_jobs": 0,
+  "total_jobs": 2
+ },
+ "scores": [],
+ "peak": {
+  "at": 1791820918176,
+  "descendants": 0,
+  "chromium": 0,
+  "jobChildren": 0,
+  "descendantRssMb": 0,
+  "chromiumRssMb": 0,
+  "parentRssMb": 242,
+  "toolchainHelperPids": [
+   138434
+  ],
+  "jobChildIds": [],
+  "countedDescendantIds": []
+ },
+ "maxDescendantRssMb": 0,
+ "maxParentRssMb": 242,
+ "maxConcurrentJobChildren": 0,
+ "lockRenewals": {
+  "batch-9-company-21": 0,
+  "batch-9-company-22": 0
+ },
+ "stalledEvents": [],
+ "failedEvents": [],
+ "completedEvents": [
+  "batch-9-company-22",
+  "batch-9-company-21"
+ ],
+ "afterCompletion": {
+  "at": 1791821161020,
+  "descendants": 0,
+  "chromium": 0,
+  "jobChildren": 0,
+  "descendantRssMb": 0,
+  "chromiumRssMb": 0,
+  "parentRssMb": 177,
+  "toolchainHelperPids": [
+   138434
+  ],
+  "jobChildIds": [],
+  "countedDescendantIds": []
+ },
+ "afterStopWorker": {
+  "at": 1791821163026,
+  "descendants": 0,
+  "chromium": 0,
+  "jobChildren": 0,
+  "descendantRssMb": 0,
+  "chromiumRssMb": 0,
+  "parentRssMb": 177,
+  "toolchainHelperPids": [
+   138434
+  ],
+  "jobChildIds": [],
+  "countedDescendantIds": []
+ },
+ "newOrphanPuppeteerChromium": [],
+ "preJobDescendants": [
+  {
+   "pid": 138434,
+   "ppid": 138422,
+   "comm": "esbuild",
+   "state": "S",
+   "rssKb": 11932,
+   "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+   "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+   "startTicks": 11280607,
+   "toolchainHelper": true
+  }
+ ],
+ "toolchainHelpers": [
+  {
+   "pid": 138434,
+   "ppid": 138422,
+   "comm": "esbuild",
+   "state": "S",
+   "rssKb": 11932,
+   "exe": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+   "cmdline": "/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping",
+   "startTicks": 11280607,
+   "firstSeenAt": 1791820918176
+  }
+ ],
+ "quarantined": 0,
+ "isolationStats": {
+  "forks": 0,
+  "maxForkMs": 0,
+  "messages": 0,
+  "maxHandlerMs": 0,
+  "lateReportsDiscarded": 0,
+  "quarantined": 0
+ },
+ "brokerAfter": {
+  "llm": {
+   "active": 0,
+   "waiting": 0,
+   "max": 8
+  },
+  "browser": {
+   "active": 0,
+   "waiting": 0,
+   "max": 1
+  },
+  "proc": {
+   "active": 0,
+   "waiting": 0,
+   "max": 6
+  }
+ },
+ "samples": 486
+}
+FAIL both analysis_jobs completed (pending,pending)
+FAIL batch counters completed=2 failed=0 (got 0/0, status=running)
+FAIL measure_scores persisted: 6 per company ([])
+FAIL 2 isolated job children ran concurrently (max seen 0; at max: [])
+FAIL real Chromium observed under job children (peak 0 procs, 0 MB)
+PASS no BullMQ stalled events (0)
+FAIL lock renewed at least once per job ({"batch-9-company-21":0,"batch-9-company-22":0})
+PASS no descendants after completion (0, chromium 0; counted: [])
+PASS no descendants after stopWorker (0; counted: [])
+PASS no orphaned puppeteer Chromium anywhere on host (none)
+PASS no quarantined children
+PASS broker permits all returned after completion ({"llm":{"active":0,"waiting":0,"max":8},"browser":{"active":0,"waiting":0,"max":1},"proc":{"active":0,"waiting":0,"max":6}})
+[INT] toolchain helpers (excluded by exe+cmdline allowlist): [{"pid":138434,"ppid":138422,"comm":"esbuild","state":"S","rssKb":11932,"exe":"/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild","cmdline":"/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.0 --ping","startTicks":11280607,"firstSeenAt":1791820918176}]
+[INT] harness pid=138422 exiting; helper pids to verify gone after exit: 138434
+INTEGRATION FAIL (6)
+exit=1
+post-exit check at 2026-10-12T16:06:05Z: helper pids=[138434]
+pid 138434 gone
+any esbuild --service processes on host now:
+  none

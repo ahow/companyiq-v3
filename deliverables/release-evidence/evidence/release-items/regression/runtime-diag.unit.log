@@ -1,0 +1,24 @@
+  PASS  started with 2 timers + histogram
+  PASS  hung client: exactly ONE ping sent across ~8 sweeps
+  PASS  first sweep logged timeout
+  PASS  later sweeps logged skipped_prev_pending
+  PASS  pingOutstanding bounded at 1
+  PASS  non-ready client never pinged
+  PASS  late reply clears outstanding flag
+  PASS  after late reply the client is pinged again (exactly one new PING)
+  PASS  healthy ping logs outcome=ok
+  PASS  rej client: one ping, timed out
+  PASS  late rejection clears outstanding flag
+  PASS  late rejection: no unhandledRejection
+  PASS  attach adds 6 listeners
+  PASS  re-attach same worker is idempotent
+  PASS  job tracked
+  PASS  attach new worker detaches old (0 on w1, 6 on w2, stale job ids dropped)
+  PASS  stop: timers=0, histogram off, listeners=0, clients=0, started=false
+  PASS  after stop: no further pings or log lines
+  PASS  restart after stop works
+  PASS  disabled: all exports no-op (no timers/listeners/clients/log lines)
+  PASS  no unhandled rejections overall
+
+runtime-diag.unit: 21 passed, 0 failed
+exit=0
