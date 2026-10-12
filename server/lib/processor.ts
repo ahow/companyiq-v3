@@ -6,7 +6,7 @@ import { normaliseTableHorizonMarkers } from "./table-horizon-normaliser";
 import crypto from "crypto";
 import puppeteer from "puppeteer-core";
 import { spawn } from "child_process";
-import { promises as fsp } from "fs";
+import { promises as fsp, readdirSync, readFileSync } from "fs";
 import os from "os";
 import path from "path";
 import { capDocumentText } from "./doc-size-guard";
@@ -850,6 +850,8 @@ async function acquireBrowserSlot(): Promise<void> {
     const diagEndRemote = beginStage("browser_admission_wait", "browser_slot"); // DIAGNOSTIC-ONLY
     await remoteAcquire("browser");
     diagEndRemote(true);
+    childBrowserHolders++;
+    console.log(`[BROWSER-LIFECYCLE] child=${process.pid} permit acquired holders=${childBrowserHolders}`);
     return;
   }
   if (activeBrowserFetches < MAX_CONCURRENT_BROWSER) {
@@ -876,15 +878,119 @@ function browserDispatchRefused(where: string): boolean {
   return true;
 }
 
-function releaseBrowserSlot(): void {
-  if (isIsolatedChild()) { remoteRelease("browser"); return; }
+function releaseBrowserSlot(): Promise<void> {
+  if (isIsolatedChild()) return releaseChildBrowserPermit();
   const next = browserWaiters.shift();
   if (next) {
     // Hand our slot straight to the next waiter without touching the count.
     next();
-    return;
+    return Promise.resolve();
   }
   activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
+  return Promise.resolve();
+}
+
+// ─── Isolated-child browser lifetime (replica-level live-browser bound) ──────
+// The browser permit is brokered per replica (MAX_CONCURRENT_BROWSER), but the
+// Chromium a child launches used to outlive the permit: it stayed alive until
+// the child process exited (minutes of synthetic/LLM scoring later), while the
+// permit went back to the pool after every fetch. With WORKER_CONCURRENCY
+// children each keeping their own Chromium, live browsers per replica were
+// bounded by the child count, not by MAX_CONCURRENT_BROWSER.
+// Rule enforced here: when the LAST browser permit held by this child is
+// released, every Chromium this child launched is closed AND its process group
+// confirmed gone before the permit is returned. So live Chromium instances per
+// replica ≤ browser permits granted ≤ MAX_CONCURRENT_BROWSER.
+const BROWSER_CLOSE_TIMEOUT_MS = 5000;
+const BROWSER_REAP_WINDOW_MS = 5000;
+let childBrowserHolders = 0;
+const childBrowsers = new Set<any>();
+// Set when a Chromium group could not be confirmed gone: the permit is withheld
+// (never re-granted while old processes may run) and this child stops using the
+// browser (fallbacks treat it like an open circuit) so it cannot self-deadlock.
+let childBrowserRetireFailed = false;
+
+/** Live (non-zombie) members of process group `pgid`, via /proc; kill(-pgid,0) fallback. */
+function processGroupAlive(pgid: number): boolean {
+  try {
+    for (const d of readdirSync("/proc")) {
+      if (!/^\d+$/.test(d)) continue;
+      try {
+        const s: string = readFileSync(`/proc/${d}/stat`, "utf8");
+        const f = s.slice(s.lastIndexOf(")") + 2).split(" ");
+        if (Number(f[2]) === pgid && f[0] !== "Z") return true;
+      } catch { /* exited */ }
+    }
+    return false;
+  } catch {
+    try { process.kill(-pgid, 0); return true; } catch (e: any) { return e?.code === "EPERM"; }
+  }
+}
+
+async function waitGroupGone(pgid: number, ms: number): Promise<boolean> {
+  const until = Date.now() + ms;
+  while (processGroupAlive(pgid)) {
+    if (Date.now() >= until) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return true;
+}
+
+/** Close one child-owned Chromium and confirm its process group is gone. */
+async function retireChildBrowser(b: any): Promise<boolean> {
+  const pid: number | undefined = b?.process?.()?.pid;
+  const t0 = Date.now();
+  let closed = false;
+  try {
+    closed = await Promise.race([b.close().then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), BROWSER_CLOSE_TIMEOUT_MS))]);
+  } catch { /* already disconnected / crashed: confirm via the process table below */ }
+  if (!pid) {
+    // No process handle to probe: only a COMPLETED close() counts as confirmed
+    // (a timed-out / failed close withholds the permit instead of releasing it).
+    console[closed ? "log" : "error"](`[BROWSER-LIFECYCLE] child=${process.pid} close (no pid) confirmed=${closed} ms=${Date.now() - t0}`);
+    return closed;
+  }
+  console.log(`[BROWSER-LIFECYCLE] child=${process.pid} close pid=${pid} ms=${Date.now() - t0}`);
+  let gone = await waitGroupGone(pid, BROWSER_REAP_WINDOW_MS);
+  let how = "close";
+  if (!gone) {
+    how = "SIGKILL";
+    try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
+    try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+    gone = await waitGroupGone(pid, BROWSER_REAP_WINDOW_MS);
+  }
+  console[gone ? "log" : "error"](`[BROWSER-LIFECYCLE] child=${process.pid} ${gone ? "reaped" : "REAP-UNCONFIRMED"} pid=${pid} via=${how} ms=${Date.now() - t0}`);
+  return gone;
+}
+
+async function releaseChildBrowserPermit(): Promise<void> {
+  childBrowserHolders = Math.max(0, childBrowserHolders - 1);
+  if (childBrowserHolders > 0) {
+    // Another in-flight fetch in this child still holds a permit covering the browser.
+    remoteRelease("browser");
+    console.log(`[BROWSER-LIFECYCLE] child=${process.pid} permit released holders=${childBrowserHolders} (browser kept for in-flight fetch)`);
+    return;
+  }
+  // Detach synchronously so a fetch that acquires a new permit meanwhile launches
+  // its own (permit-covered) instance instead of reusing one being closed.
+  const retiring = [...childBrowsers];
+  childBrowsers.clear();
+  sharedBrowser = null;
+  let ok = true;
+  for (const b of retiring) ok = (await retireChildBrowser(b)) && ok;
+  if (!ok) {
+    childBrowserRetireFailed = true;
+    console.error(`[BROWSER-LIFECYCLE] child=${process.pid} browser permit WITHHELD (cleanup unconfirmed); browser disabled for this child — parent reaps on exit`);
+    return;
+  }
+  remoteRelease("browser");
+  console.log(`[BROWSER-LIFECYCLE] child=${process.pid} permit released holders=0 retired=${retiring.length}`);
+}
+
+/** Puppeteer ≥22 exposes `connected` (getter); `isConnected()` no longer exists (puppeteer-core 25.1.0). */
+function browserConnected(b: any): boolean {
+  if (typeof b?.connected === "boolean") return b.connected;
+  return typeof b?.isConnected === "function" && b.isConnected();
 }
 
 /**
@@ -922,7 +1028,7 @@ const BROWSER_LAUNCH_COOLDOWN_MS = parseInt(process.env.BROWSER_LAUNCH_COOLDOWN_
 let browserLaunchBlockedUntil = 0;
 
 function isBrowserCircuitOpen(): boolean {
-  return Date.now() < browserLaunchBlockedUntil;
+  return childBrowserRetireFailed || Date.now() < browserLaunchBlockedUntil;
 }
 
 function tripBrowserCircuit(reason: string): void {
@@ -1020,7 +1126,14 @@ async function launchChromiumWithRetry(executablePath: string): Promise<any> {
 }
 
 async function getSharedBrowser(): Promise<any> {
-  if (sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected()) {
+  // Isolated child: reuse the live instance only via the API that exists in the
+  // installed puppeteer-core (25.x has `connected`, not `isConnected()`, so the
+  // legacy check below is always false and relaunches on every call). The
+  // non-isolated path keeps its existing check unchanged (out of scope here).
+  const reusable = isIsolatedChild()
+    ? !!sharedBrowser && browserConnected(sharedBrowser)
+    : sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected();
+  if (reusable) {
     return sharedBrowser;
   }
   if (sharedBrowserLaunching) return sharedBrowserLaunching;
@@ -1033,6 +1146,10 @@ async function getSharedBrowser(): Promise<any> {
       // Worker isolation: Chromium runs in its own process group (puppeteer
       // detached:true); register it so the supervisor can reap it.
       registerDescendantGroup(b.process?.()?.pid);
+      if (isIsolatedChild()) {
+        childBrowsers.add(b);
+        console.log(`[BROWSER-LIFECYCLE] child=${process.pid} launch pid=${b.process?.()?.pid} holders=${childBrowserHolders}`);
+      }
       // If Chromium dies, clear the handle so the next call relaunches.
       b.on("disconnected", () => {
         if (sharedBrowser === b) sharedBrowser = null;
@@ -1066,7 +1183,7 @@ async function fetchWithBrowser(url: string): Promise<string> {
   }
   if (browserDispatchRefused("processor.fetchWithBrowser:pre-acquire")) return "";
   await acquireBrowserSlot();
-  if (browserDispatchRefused("processor.fetchWithBrowser:post-acquire")) { releaseBrowserSlot(); return ""; }
+  if (browserDispatchRefused("processor.fetchWithBrowser:post-acquire")) { await releaseBrowserSlot(); return ""; }
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   try {
@@ -1167,7 +1284,7 @@ async function fetchWithBrowser(url: string): Promise<string> {
       }
     }
     diagEndBrowser();
-    releaseBrowserSlot();
+    await releaseBrowserSlot(); // isolated child: Chromium closed + reaped before the permit returns
   }
 }
 
@@ -1548,7 +1665,7 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
   }
   if (browserDispatchRefused("processor.fetchPdfViaBrowser:pre-acquire")) throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`);
   await acquireBrowserSlot();
-  if (browserDispatchRefused("processor.fetchPdfViaBrowser:post-acquire")) { releaseBrowserSlot(); throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`); }
+  if (browserDispatchRefused("processor.fetchPdfViaBrowser:post-acquire")) { await releaseBrowserSlot(); throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`); }
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;
@@ -1682,7 +1799,7 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
       try { await page.close(); } catch { /* ignore */ }
     }
     diagEndBrowser();
-    releaseBrowserSlot();
+    await releaseBrowserSlot(); // isolated child: Chromium closed + reaped before the permit returns
   }
 }
 
@@ -1754,10 +1871,13 @@ export async function fetchIssuerPdfsWithPrimedSession(
   // Last-resort recovery: clear any stale launch-circuit cooldown left over from
   // the main fetch phase so we actually get a browser here.
   resetBrowserCircuit();
+  // Isolated child whose earlier Chromium cleanup was unconfirmed: its permit is
+  // withheld, so acquiring another would self-deadlock (false everywhere else).
+  if (isBrowserCircuitOpen()) return recovered;
 
   if (browserDispatchRefused("processor.pdfRecovery:pre-acquire")) return recovered;
   await acquireBrowserSlot();
-  if (browserDispatchRefused("processor.pdfRecovery:post-acquire")) { releaseBrowserSlot(); return recovered; }
+  if (browserDispatchRefused("processor.pdfRecovery:post-acquire")) { await releaseBrowserSlot(); return recovered; }
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;
@@ -1988,7 +2108,7 @@ export async function fetchIssuerPdfsWithPrimedSession(
       try { await page.close(); } catch { /* ignore */ }
     }
     diagEndBrowser();
-    releaseBrowserSlot();
+    await releaseBrowserSlot(); // isolated child: Chromium closed + reaped before the permit returns
   }
   return recovered;
 }
