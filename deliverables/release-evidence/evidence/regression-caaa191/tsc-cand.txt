@@ -1,0 +1,111 @@
+server/lib/processor.ts(4,22): error TS7016: Could not find a declaration file for module 'pdf-parse'. '/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/pdf-parse@1.1.4/node_modules/pdf-parse/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/pdf-parse` if it exists or add a new declaration (.d.ts) file containing `declare module 'pdf-parse';`
+server/lib/r6-discovery.test.ts(1,53): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+server/lib/r6-discovery.test.ts(259,42): error TS7006: Parameter 'c' implicitly has an 'any' type.
+server/lib/r6-discovery.test.ts(260,22): error TS7006: Parameter 'u' implicitly has an 'any' type.
+server/lib/r6-discovery.test.ts(261,22): error TS7006: Parameter 'u' implicitly has an 'any' type.
+server/lib/terminology-discovery.ts(37,76): error TS2345: Argument of type '{}' is not assignable to parameter of type 'TerminologyMap'.
+  Type '{}' is missing the following properties from type 'TerminologyMap': committees, roles, programmes, productsAndPolicies, otherTerms
+server/lib/terminology-discovery.ts(38,5): error TS2739: Type '{}' is missing the following properties from type 'TerminologyMap': committees, roles, programmes, productsAndPolicies, otherTerms
+server/lib/terminology-discovery.ts(61,7): error TS2353: Object literal may only specify known properties, and 'modelUsed' does not exist in type '{ companyId: number; frameworkId: number; terms: any; sourceDocCount?: number | undefined; status?: string | undefined; }'.
+server/lib/terminology-discovery.ts(119,7): error TS2353: Object literal may only specify known properties, and 'modelUsed' does not exist in type '{ companyId: number; frameworkId: number; terms: any; sourceDocCount?: number | undefined; status?: string | undefined; }'.
+server/lib/terminology-discovery.ts(138,7): error TS2353: Object literal may only specify known properties, and 'modelUsed' does not exist in type '{ companyId: number; frameworkId: number; terms: any; sourceDocCount?: number | undefined; status?: string | undefined; }'.
+server/routes/api.ts(93,59): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(173,58): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(183,42): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(194,32): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(209,29): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(234,32): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(251,29): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(306,29): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(319,63): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(328,45): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(537,63): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(571,47): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(580,34): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(608,34): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(700,34): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1585,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1598,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1618,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1636,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1645,33): error TS2307: Cannot find module './db.js' or its corresponding type declarations.
+server/routes/api.ts(1816,35): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1845,35): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1892,48): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1902,48): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1934,49): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1944,49): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1975,49): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1984,49): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(1995,66): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2005,53): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2027,32): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2090,34): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2109,46): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2120,32): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2132,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2144,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2158,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2170,29): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2182,29): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2183,32): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2238,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2249,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2342,26): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2364,55): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/api.ts(2375,29): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes/framework-builder.ts(237,38): error TS7016: Could not find a declaration file for module 'pdf-parse'. '/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/pdf-parse@1.1.4/node_modules/pdf-parse/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/pdf-parse` if it exists or add a new declaration (.d.ts) file containing `declare module 'pdf-parse';`
+server/routes/framework-builder.ts(262,38): error TS2307: Cannot find module 'mammoth' or its corresponding type declarations.
+server/scripts/coststsplit_run.ts(182,32): error TS18046: 'summ' is of type 'unknown'.
+server/scripts/coststsplit_run.ts(206,26): error TS18046: 'summ' is of type 'unknown'.
+server/scripts/coststsplit_run.ts(207,28): error TS18046: 'summ' is of type 'unknown'.
+server/scripts/coststsplit_run.ts(215,54): error TS18046: 'summ' is of type 'unknown'.
+server/scripts/profile-worker-blocking.ts(66,32): error TS7016: Could not find a declaration file for module 'pdf-parse'. '/home/ubuntu/github_repos/companyiq-v3/node_modules/.pnpm/pdf-parse@1.1.4/node_modules/pdf-parse/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/pdf-parse` if it exists or add a new declaration (.d.ts) file containing `declare module 'pdf-parse';`
+exit=2

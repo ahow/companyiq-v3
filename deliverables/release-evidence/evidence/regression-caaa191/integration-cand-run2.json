@@ -1,0 +1,981 @@
+{
+ "ranAt": "2026-10-12T15:24:17.234Z",
+ "node": "v22.23.2",
+ "chromium": "/usr/local/bin/chromium",
+ "config": {
+  "concurrency": 2,
+  "lockDurationMs": 30000,
+  "stalledIntervalMs": 15000,
+  "holdMs": 20000
+ },
+ "elapsedMs": 45109,
+ "jobs": [
+  {
+   "id": 19,
+   "status": "completed",
+   "last_error": null,
+   "attempts": 1
+  },
+  {
+   "id": 20,
+   "status": "completed",
+   "last_error": null,
+   "attempts": 1
+  }
+ ],
+ "batch": {
+  "status": "completed",
+  "completed_jobs": 2,
+  "failed_jobs": 0,
+  "total_jobs": 2
+ },
+ "scores": [
+  {
+   "company_id": 19,
+   "n": 6,
+   "yes": 0,
+   "attempts": 1
+  },
+  {
+   "company_id": 20,
+   "n": 6,
+   "yes": 0,
+   "attempts": 1
+  }
+ ],
+ "peak": {
+  "at": 1791818622617,
+  "descendants": 12,
+  "chromium": 10,
+  "jobChildren": 2,
+  "descendantRssMb": 1798,
+  "chromiumRssMb": 1377,
+  "parentRssMb": 228
+ },
+ "maxDescendantRssMb": 1798,
+ "maxParentRssMb": 259,
+ "maxConcurrentJobChildren": 2,
+ "lockRenewals": {
+  "batch-8-company-19": 3,
+  "batch-8-company-20": 5
+ },
+ "stalledEvents": [],
+ "failedEvents": [],
+ "completedEvents": [
+  "batch-8-company-19",
+  "batch-8-company-20"
+ ],
+ "afterCompletion": {
+  "at": 1791818655213,
+  "descendants": 0,
+  "chromium": 0,
+  "jobChildren": 0,
+  "descendantRssMb": 0,
+  "chromiumRssMb": 0,
+  "parentRssMb": 241
+ },
+ "afterStopWorker": {
+  "at": 1791818657224,
+  "descendants": 0,
+  "chromium": 0,
+  "jobChildren": 0,
+  "descendantRssMb": 0,
+  "chromiumRssMb": 0,
+  "parentRssMb": 241
+ },
+ "newOrphanPuppeteerChromium": [],
+ "quarantined": 0,
+ "isolationStats": {
+  "forks": 2,
+  "maxForkMs": 5.294643000000178,
+  "messages": 374,
+  "maxHandlerMs": 0.44773799999984476,
+  "lateReportsDiscarded": 0,
+  "quarantined": 0
+ },
+ "brokerAfter": {
+  "llm": {
+   "active": 0,
+   "waiting": 0,
+   "max": 8
+  },
+  "browser": {
+   "active": 0,
+   "waiting": 0,
+   "max": 1
+  },
+  "proc": {
+   "active": 0,
+   "waiting": 0,
+   "max": 6
+  }
+ },
+ "samples": 96,
+ "samplesData": [
+  {
+   "at": 1791818607608,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 223,
+   "chromiumRssMb": 0,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818608107,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 278,
+   "chromiumRssMb": 0,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818608608,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 317,
+   "chromiumRssMb": 0,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818609108,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 368,
+   "chromiumRssMb": 0,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818609608,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 388,
+   "chromiumRssMb": 0,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818610112,
+   "descendants": 8,
+   "chromium": 6,
+   "jobChildren": 2,
+   "descendantRssMb": 1094,
+   "chromiumRssMb": 699,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818610609,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1594,
+   "chromiumRssMb": 1198,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818611109,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1664,
+   "chromiumRssMb": 1268,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818611612,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1664,
+   "chromiumRssMb": 1268,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818612110,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1664,
+   "chromiumRssMb": 1268,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818612610,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1667,
+   "chromiumRssMb": 1270,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818613111,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1667,
+   "chromiumRssMb": 1270,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818613614,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1775,
+   "chromiumRssMb": 1379,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818614115,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1775,
+   "chromiumRssMb": 1379,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818614613,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1776,
+   "chromiumRssMb": 1379,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818615114,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1776,
+   "chromiumRssMb": 1379,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818615614,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1774,
+   "chromiumRssMb": 1377,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818616114,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1581,
+   "chromiumRssMb": 1185,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818616614,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1773,
+   "chromiumRssMb": 1378,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818617116,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1774,
+   "chromiumRssMb": 1378,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818617614,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1774,
+   "chromiumRssMb": 1378,
+   "parentRssMb": 259
+  },
+  {
+   "at": 1791818618114,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1774,
+   "chromiumRssMb": 1378,
+   "parentRssMb": 229
+  },
+  {
+   "at": 1791818618615,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 419,
+   "chromiumRssMb": 0,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818619117,
+   "descendants": 9,
+   "chromium": 7,
+   "jobChildren": 2,
+   "descendantRssMb": 1241,
+   "chromiumRssMb": 821,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818619617,
+   "descendants": 11,
+   "chromium": 8,
+   "jobChildren": 2,
+   "descendantRssMb": 1505,
+   "chromiumRssMb": 1081,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818620116,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1686,
+   "chromiumRssMb": 1265,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818620616,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1686,
+   "chromiumRssMb": 1265,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818621116,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1686,
+   "chromiumRssMb": 1265,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818621618,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1689,
+   "chromiumRssMb": 1268,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818622117,
+   "descendants": 11,
+   "chromium": 9,
+   "jobChildren": 2,
+   "descendantRssMb": 1689,
+   "chromiumRssMb": 1268,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818622617,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1798,
+   "chromiumRssMb": 1377,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818623117,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1798,
+   "chromiumRssMb": 1377,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818623618,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1760,
+   "chromiumRssMb": 1377,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818624118,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1759,
+   "chromiumRssMb": 1377,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818624621,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1758,
+   "chromiumRssMb": 1377,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818625120,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1669,
+   "chromiumRssMb": 1290,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818625622,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1761,
+   "chromiumRssMb": 1382,
+   "parentRssMb": 228
+  },
+  {
+   "at": 1791818626127,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1761,
+   "chromiumRssMb": 1382,
+   "parentRssMb": 187
+  },
+  {
+   "at": 1791818626625,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1761,
+   "chromiumRssMb": 1382,
+   "parentRssMb": 187
+  },
+  {
+   "at": 1791818627128,
+   "descendants": 12,
+   "chromium": 10,
+   "jobChildren": 2,
+   "descendantRssMb": 1761,
+   "chromiumRssMb": 1382,
+   "parentRssMb": 186
+  },
+  {
+   "at": 1791818627629,
+   "descendants": 6,
+   "chromium": 4,
+   "jobChildren": 2,
+   "descendantRssMb": 902,
+   "chromiumRssMb": 511,
+   "parentRssMb": 187
+  },
+  {
+   "at": 1791818628126,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 391,
+   "chromiumRssMb": 0,
+   "parentRssMb": 187
+  },
+  {
+   "at": 1791818628629,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 391,
+   "chromiumRssMb": 0,
+   "parentRssMb": 187
+  },
+  {
+   "at": 1791818629130,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 391,
+   "chromiumRssMb": 0,
+   "parentRssMb": 187
+  },
+  {
+   "at": 1791818629629,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 391,
+   "chromiumRssMb": 0,
+   "parentRssMb": 188
+  },
+  {
+   "at": 1791818630130,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 391,
+   "chromiumRssMb": 0,
+   "parentRssMb": 188
+  },
+  {
+   "at": 1791818630631,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 391,
+   "chromiumRssMb": 0,
+   "parentRssMb": 188
+  },
+  {
+   "at": 1791818631132,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 391,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818631633,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 391,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818632133,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 353,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818632633,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 352,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818633134,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 352,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818633633,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 352,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818634134,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 352,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818634635,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 352,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818635135,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 352,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818635637,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 321,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818636137,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 321,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818636636,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 320,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818637139,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 320,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818637637,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 320,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818638153,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 320,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818638638,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 320,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818639138,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 354,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818639639,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 384,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818640147,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 428,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818640644,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 428,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818641148,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 486,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818641646,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 516,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818642145,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 543,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818642646,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 560,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818643146,
+   "descendants": 2,
+   "chromium": 0,
+   "jobChildren": 2,
+   "descendantRssMb": 580,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818643648,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818644146,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818644646,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818645148,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818645647,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818646149,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818646649,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818647149,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818647649,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 140,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818648148,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 188,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818648648,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 254,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818649149,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 318,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818649650,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 331,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818650150,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 400,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818650650,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 433,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818651152,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 363,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818651652,
+   "descendants": 1,
+   "chromium": 0,
+   "jobChildren": 1,
+   "descendantRssMb": 363,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818652156,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 189
+  },
+  {
+   "at": 1791818652654,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 240
+  },
+  {
+   "at": 1791818653156,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 240
+  },
+  {
+   "at": 1791818653655,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 240
+  },
+  {
+   "at": 1791818654156,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 241
+  },
+  {
+   "at": 1791818654657,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 241
+  },
+  {
+   "at": 1791818655160,
+   "descendants": 0,
+   "chromium": 0,
+   "jobChildren": 0,
+   "descendantRssMb": 0,
+   "chromiumRssMb": 0,
+   "parentRssMb": 241
+  }
+ ],
+ "failures": []
+}
