@@ -1,0 +1,394 @@
+[DB] Initializing database tables...
+[DIAG][db-op-sample] {"pool":"main","pool_max":20,"total":1,"idle":1,"waiting":0,"op":"ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS deploy…","outcome":"ok","checkout_wait_ms":0,"exec_ms":1,"total_ms":1,"slow_threshold_ms_diagnostic":500,"batch_id":null,"job_id":null,"attempt_id":null,"attempt_n":null,"company_id":null,"stage":null}
+[DB] Seeded 22 trusted sources for workspace 5
+[DB] Default settings seeded for all workspaces
+[DB] All tables created successfully
+[INT] initializeDatabase OK; baseline descendants excluded: none
+[INT] seeded workspace=6 framework=6 companies=15,16 docs/company=25 measures=6
+[Redis] Connected successfully
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+[Worker] Started with concurrency=2, timeout=600000ms, maxRetries=3, lockDuration=30000ms, stalledInterval=15000ms, maxStalledCount=2
+[Queue] Added 2 jobs for batch 6 (workspace 6, priority 0)
+[DIAG][bull-lock] active job=batch-6-company-15 attemptsStarted=1 stalledCounter=0
+[DIAG][bull-lock] active job=batch-6-company-16 attemptsStarted=1 stalledCounter=0
+[Worker] Processing job 15: company=15, framework=6, batch=6, workspace=6
+[Worker] Processing job 16: company=16, framework=6, batch=6, workspace=6
+[Worker] Job 16 claimed (attempt 1/3)
+[DIAG][job-transition] job=16 -> claimed batch=6 job=16 attempt_id=49d0c646-1687-48fa-b942-65693b01d30c attempt_n=1 company=16 stage=claimed
+[Worker] Job 15 claimed (attempt 1/3)
+[DIAG][job-transition] job=15 -> claimed batch=6 job=15 attempt_id=04e27ea0-8494-49fa-a3f4-e5213d17e49e attempt_n=1 company=15 stage=claimed
+[DIAG][pool-state] pool=main max=20 total=2 idle=2 busy=0 waiting=0
+[BROWSER-LIFECYCLE] child=134717 permit acquired holders=1
+[BROWSER-LIFECYCLE] child=134717 launch pid=134741 holders=1
+[DIAG][pg-activity] {"reason":"interval","backends_total":3,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":3,"max_xact_age_ms":null,"max_state_age_ms":"10245"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":2,"idle":2,"waiting":0}]}
+[Processor] WAF session prime for http://127.0.0.1:42113 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:42113/doc.pdf (24173B PDF)
+[BROWSER-LIFECYCLE] child=134717 close pid=134741 ms=163
+[BROWSER-LIFECYCLE] child=134717 reaped pid=134741 via=close ms=166
+[BROWSER-LIFECYCLE] child=134717 permit released holders=0 retired=1
+[INT-CHILD pid=134717] browser-pdf chars=1561 ms=9018 marker=true
+[BROWSER-LIFECYCLE] child=134711 permit acquired holders=1
+[BROWSER-LIFECYCLE] child=134711 launch pid=135006 holders=1
+[DIAG][bull-lock] locksRenewed count=2 since_last_renew=batch-6-company-15:14996ms,batch-6-company-16:14995ms
+[Processor] WAF session prime for http://127.0.0.1:42113 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:42113/doc.pdf (24173B PDF)
+[BROWSER-LIFECYCLE] child=134711 close pid=135006 ms=246
+[BROWSER-LIFECYCLE] child=134711 reaped pid=135006 via=close ms=248
+[BROWSER-LIFECYCLE] child=134711 permit released holders=0 retired=1
+[INT-CHILD pid=134711] browser-pdf chars=1561 ms=17933 marker=true
+[DIAG][bull-lock] locksRenewed count=2 since_last_renew=batch-6-company-15:7502ms,batch-6-company-16:7502ms
+[DIAG][pg-activity] {"reason":"interval","backends_total":3,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":3,"max_xact_age_ms":null,"max_state_age_ms":"25243"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":2,"idle":2,"waiting":0}]}
+[DIAG][bull-lock] locksRenewed count=2 since_last_renew=batch-6-company-15:7502ms,batch-6-company-16:7502ms
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+[DIAG][pipeline] start company="int-1791818459775 IntCo Alpha" opts_attempt_id=04e27ea0-8494-49fa-a3f4-e5213d17e49e batch=6 job=15 attempt_id=04e27ea0-8494-49fa-a3f4-e5213d17e49e attempt_n=1 company=15 stage=pipeline
+[int-1791818459775 IntCo Alpha] Skipping fetch phase (reusing cached documents)
+[int-1791818459775 IntCo Alpha] === PHASE 2: ANALYZE ===
+[int-1791818459775 IntCo Alpha] Using full document pool (25 docs, no snapshot)
+[int-1791818459775 IntCo Alpha] Analyzing with 25 fetched documents
+[int-1791818459775 IntCo Alpha] R3.1: provenance running WITHOUT a confirmed company domain — failing OPEN (U17 third_party exclusion skipped for this company to avoid over-excluding issuer-site docs).
+[int-1791818459775 IntCo Alpha] ABOUTNESS excluded doc 364: https://www.bhp.com/-/media/bhp/regulatory-information-media/coal/bma/saraji-east/saraji-east-mining-lease-project-eis-2024/semlp_eis_06_terrestrial-ecology_v3.pdf (about bm alliance coal operations pty×68, target×0)
+[int-1791818459775 IntCo Alpha] ABOUTNESS corpus: rejected=1, deprioritized=24 (weight 0.5)
+[int-1791818459775 IntCo Alpha] U17 provenance filter: excluded=0, upgraded-to-issuer=0, fail-open-kept=24, kept=24
+[int-1791818459775 IntCo Alpha] Running temporal validation...
+[int-1791818459775 IntCo Alpha] Temporal validation: 0 total snippets to classify
+[int-1791818459775 IntCo Alpha] Starting analysis: 6 measures, 24 documents
+[int-1791818459775 IntCo Alpha] corpus-hygiene: no documents dropped (24 documents)
+[int-1791818459775 IntCo Alpha] Corpus source types: [20-F, regulatory-filing, regulatory-filing-by-issuer, annual-report, press-release, investor-relations, policy]
+[int-1791818459775 IntCo Alpha] Verdict cache: DISABLED (setting off) — fresh scoring
+[int-1791818459775 IntCo Alpha] Multilingual: translated 1/24 document(s) to English (120000 chars via DeepSeek)
+[int-1791818459775 IntCo Alpha] Discovered 0 terminology terms via deepseek
+[int-1791818459775 IntCo Alpha] Document priority ordering (top 5):
+  [regulatory] score=100000 https://www.sec.gov/Archives/edgar/data/811809/0001193125263
+  [other] score=1004 https://www.bhp.com/-/media/documents/investors/annual-repor
+  [other] score=1000 https://www.bhp.com/-/media/documents/investors/annual-repor
+  [other] score=1000 https://www.bhp.com/-/media/documents/investors/annual-repor
+  [other] score=1000 https://www.bhp.com/-/media/documents/investors/annual-repor
+[int-1791818459775 IntCo Alpha] topic-primary docs: 0 URLs (fed to per-measure retrieval)
+[int-1791818459775 IntCo Alpha] Approach 3c: stripped 2100 repeated structural line(s) across 341 pattern(s)
+[int-1791818459775 IntCo Alpha] [item1a-reserve] no genuine Item 1A body chunks found among annual filings
+[int-1791818459775 IntCo Alpha] [topic-primary-reserve] no topic-primary docs available (framework.requiredDocTypes did not match any doc URL/title)
+[int-1791818459775 IntCo Alpha] Header-preserving retrieval corpus: 560389 chars (BM25-selected from 2050292 total, 212 chunks)
+[int-1791818459775 IntCo Alpha] Summarized via bm25-headers-v3l-topicaware (560389 chars) topicPrimary=0
+[topic-lexicon] deepseek returned zero usable terms for framework 6 (raw text len=102)
+[topic-lexicon] retrying with openai for framework 6
+[topic-lexicon] openai returned zero usable terms for framework 6 (raw text len=102)
+[topic-lexicon] Not persisting fallback-only lexicon for framework 6 — caller will retry next run
+[int-1791818459775 IntCo Alpha] Topic lexicon (fallback): 1 framework terms + 1 deterministic -> 1 total
+[int-1791818459775 IntCo Alpha] Corpus topic evidence: 0/268 chunks contain topic terms (0 hits)
+[int-1791818459775 IntCo Alpha] Scoring category: Environment (3 measures)
+[bm25-reserve] M1: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=4.5 of max=10.0) on dedicated budget
+[bm25-reserve] M2: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=4.1 of max=9.1) on dedicated budget
+[bm25-reserve] M3: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=5.2 of max=11.5) on dedicated budget
+[int-1791818459775 IntCo Alpha] LLM rescoring: ON for 3 measures in category 'Environment'
+[llm-rescore] M2: LLM returned no parseable scores (raw 264 chars); falling back to BM25
+[llm-rescore] M1: LLM returned no parseable scores (raw 409 chars); falling back to BM25
+[llm-rescore] M3: LLM returned no parseable scores (raw 442 chars); falling back to BM25
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M1 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M2 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M3 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=23
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M1 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M2 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M3 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M1 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M2 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M3 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=33
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=36
+[int-1791818459775 IntCo Alpha] Scoring category: Governance (3 measures)
+[bm25-reserve] M4: guaranteed 6/6 pure-BM25 chunks (11k chars, floor=3.4 of max=7.6) on dedicated budget
+[bm25-reserve] M5: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=2.7 of max=5.9) on dedicated budget
+[bm25-reserve] M6: guaranteed 3/6 pure-BM25 chunks (6k chars, floor=5.8 of max=12.9) on dedicated budget
+[int-1791818459775 IntCo Alpha] LLM rescoring: ON for 3 measures in category 'Governance'
+[llm-rescore] M5: LLM returned no parseable scores (raw 351 chars); falling back to BM25
+[llm-rescore] M4: LLM returned no parseable scores (raw 266 chars); falling back to BM25
+[llm-rescore] M6: LLM returned no parseable scores (raw 382 chars); falling back to BM25
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M4 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M5 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M6 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M4 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M5 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M6 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M4 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M5 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M6 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=19
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+[SCORING-REQ] settle token=bc0efde3-1a19-49b9-af5f-b94595ec3661 job=15 attempt=1 batch=6 company=15 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=20
+[int-1791818459775 IntCo Alpha][invariant][OK] force-include invariant satisfied (0 filing-bound measure(s) with required doc present all received forced body chunks)
+[int-1791818459775 IntCo Alpha] Scoring diagnostics: failures=0, timeouts=0, fallback=0, defaultScore=0, emptyEvidence=6
+[int-1791818459775 IntCo Alpha] Analysis complete: 0% (0/6 answered; 0 abstained of 6 total)
+[DIAG][score-write] company=15 rows=6 batch=6 job=15 attempt_id=04e27ea0-8494-49fa-a3f4-e5213d17e49e attempt_n=1 company=15 stage=score-write
+[int-1791818459775 IntCo Alpha] Analysis complete: 0% (0 met / 6 answered; 0 abstained of 6 total)
+[int-1791818459775 IntCo Alpha] Persisted passage-retrieval summary for 6 measures
+[int-1791818459775 IntCo Alpha][invariant][OK] force-include satisfied for 0 filing-bound measure(s)
+[int-1791818459775 IntCo Alpha] Pipeline completed in 4s
+[int-1791818459775 IntCo Alpha] Auto-reexam SKIPPED: legitimate zero (corpusChars=12230229, lowEvidence=n/a, fetchRatio=n/a, dead=n/a, firstPartyDead=0/25)
+[DIAG][stage-timer] {"kind":"pipeline","label":"int-1791818459775 IntCo Alpha","outcome":"ok","error":null,"started_at":"2026-10-12T15:21:35.549Z","attempt_wall_ms":3943,"tracked_wall_ms":446,"other_untracked_wall_ms":3496,"busy_sum_ms_all_stages":446,"stages":{"db_ops":{"done":22,"errors":0,"pending":0,"busy_sum_ms":446,"union_wall_ms":446}},"last_progress":{"stage":"db_ops","op":"select documents","atMs":3942,"ok":true},"pending_at_close_count":0,"pending_at_close":[],"batch_id":6,"job_id":15,"attempt_id":"04e27ea0-8494-49fa-a3f4-e5213d17e49e","attempt_n":1,"company_id":15,"stage":"pipeline"}
+[INT-CHILD pid=134717] pipeline success=true docs=0 providerCalls=48 error=
+[DIAG][job-transition] job=15 pipeline-result success=true error="" batch=6 job=15 attempt_id=04e27ea0-8494-49fa-a3f4-e5213d17e49e attempt_n=1 company=15 stage=finalize
+[DIAG][job-transition] job=15 -> completed transitioned=true batch=6 job=15 attempt_id=04e27ea0-8494-49fa-a3f4-e5213d17e49e attempt_n=1 company=15 stage=finalize
+[Worker] Job 15 completed successfully (attempt 1)
+[Worker][I45-diag] company=15 fw=6 score=0 failures=0 timeouts=0 fallback=0 defaultScore=0 emptyEvidence=6
+[zero-score-diag] int-1791818459775 IntCo Alpha score=0 fw=6 docs=25 fetched=25 ratio=1
+[zero-score-diag] int-1791818459775 IntCo Alpha pinned=0 pinnedOk=0 hasDataDoc=true warning=none
+[zero-score-diag] int-1791818459775 IntCo Alpha deadByReason={}
+[DIAG][bull-lock] completed job=batch-6-company-15 active_for=36434ms
+[Worker] BullMQ job batch-6-company-15 completed
+[DIAG][bull-lock] locksRenewed count=1 since_last_renew=batch-6-company-16:7502ms
+[DIAG][pool-state] pool=usage max=2 total=1 idle=1 busy=0 waiting=0
+[DIAG][pg-activity] {"reason":"interval","backends_total":5,"groups":[{"app":"","client":"172.17.0.1","state":"idle","wait_type":"Client","wait_event":"ClientRead","n":5,"max_xact_age_ms":null,"max_state_age_ms":"10222"}],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":3,"idle":3,"waiting":0},{"pool":"usage","max":2,"total":1,"idle":1,"waiting":0}]}
+[FAULT-INJECT] harness INACTIVE (DIAG_FAULT_INJECT unset)
+[DIAG][pipeline] start company="int-1791818459775 IntCo Beta" opts_attempt_id=49d0c646-1687-48fa-b942-65693b01d30c batch=6 job=16 attempt_id=49d0c646-1687-48fa-b942-65693b01d30c attempt_n=1 company=16 stage=pipeline
+[int-1791818459775 IntCo Beta] Skipping fetch phase (reusing cached documents)
+[int-1791818459775 IntCo Beta] === PHASE 2: ANALYZE ===
+[int-1791818459775 IntCo Beta] Using full document pool (25 docs, no snapshot)
+[int-1791818459775 IntCo Beta] Analyzing with 25 fetched documents
+[int-1791818459775 IntCo Beta] R3.1: provenance running WITHOUT a confirmed company domain — failing OPEN (U17 third_party exclusion skipped for this company to avoid over-excluding issuer-site docs).
+[int-1791818459775 IntCo Beta] ABOUTNESS excluded doc 389: https://www.bhp.com/-/media/bhp/regulatory-information-media/coal/bma/saraji-east/saraji-east-mining-lease-project-eis-2024/semlp_eis_06_terrestrial-ecology_v3.pdf (about bm alliance coal operations pty×68, target×0)
+[int-1791818459775 IntCo Beta] ABOUTNESS corpus: rejected=1, deprioritized=24 (weight 0.5)
+[int-1791818459775 IntCo Beta] U17 provenance filter: excluded=0, upgraded-to-issuer=0, fail-open-kept=24, kept=24
+[int-1791818459775 IntCo Beta] Running temporal validation...
+[int-1791818459775 IntCo Beta] Temporal validation: 0 total snippets to classify
+[int-1791818459775 IntCo Beta] Starting analysis: 6 measures, 24 documents
+[int-1791818459775 IntCo Beta] corpus-hygiene: no documents dropped (24 documents)
+[int-1791818459775 IntCo Beta] Corpus source types: [20-F, regulatory-filing, regulatory-filing-by-issuer, annual-report, press-release, investor-relations, policy]
+[int-1791818459775 IntCo Beta] Verdict cache: DISABLED (setting off) — fresh scoring
+[int-1791818459775 IntCo Beta] Multilingual: translated 1/24 document(s) to English (120000 chars via DeepSeek)
+[int-1791818459775 IntCo Beta] Discovered 0 terminology terms via deepseek
+[int-1791818459775 IntCo Beta] Document priority ordering (top 5):
+  [regulatory] score=100000 https://www.sec.gov/Archives/edgar/data/811809/0001193125263
+  [other] score=1004 https://www.bhp.com/-/media/documents/investors/annual-repor
+  [other] score=1000 https://www.bhp.com/-/media/documents/investors/annual-repor
+  [other] score=1000 https://www.bhp.com/-/media/documents/investors/annual-repor
+  [other] score=1000 https://www.bhp.com/-/media/documents/investors/annual-repor
+[int-1791818459775 IntCo Beta] topic-primary docs: 0 URLs (fed to per-measure retrieval)
+[int-1791818459775 IntCo Beta] Approach 3c: stripped 2100 repeated structural line(s) across 341 pattern(s)
+[int-1791818459775 IntCo Beta] [item1a-reserve] no genuine Item 1A body chunks found among annual filings
+[int-1791818459775 IntCo Beta] [topic-primary-reserve] no topic-primary docs available (framework.requiredDocTypes did not match any doc URL/title)
+[int-1791818459775 IntCo Beta] Header-preserving retrieval corpus: 560389 chars (BM25-selected from 2050292 total, 212 chunks)
+[int-1791818459775 IntCo Beta] Summarized via bm25-headers-v3l-topicaware (560389 chars) topicPrimary=0
+[topic-lexicon] deepseek returned zero usable terms for framework 6 (raw text len=102)
+[topic-lexicon] retrying with openai for framework 6
+[topic-lexicon] openai returned zero usable terms for framework 6 (raw text len=102)
+[topic-lexicon] Not persisting fallback-only lexicon for framework 6 — caller will retry next run
+[int-1791818459775 IntCo Beta] Topic lexicon (fallback): 1 framework terms + 1 deterministic -> 1 total
+[int-1791818459775 IntCo Beta] Corpus topic evidence: 0/268 chunks contain topic terms (0 hits)
+[int-1791818459775 IntCo Beta] Scoring category: Environment (3 measures)
+[bm25-reserve] M1: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=4.5 of max=10.0) on dedicated budget
+[bm25-reserve] M2: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=4.1 of max=9.1) on dedicated budget
+[bm25-reserve] M3: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=5.2 of max=11.5) on dedicated budget
+[int-1791818459775 IntCo Beta] LLM rescoring: ON for 3 measures in category 'Environment'
+[llm-rescore] M2: LLM returned no parseable scores (raw 264 chars); falling back to BM25
+[llm-rescore] M1: LLM returned no parseable scores (raw 409 chars); falling back to BM25
+[llm-rescore] M3: LLM returned no parseable scores (raw 442 chars); falling back to BM25
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M1 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M2 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M3 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M1 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M2 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M3 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M1 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M2 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M3 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M1 provider=deepseek role=primary#1 call=scoring outcome=success ms=23
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M2 provider=deepseek role=primary#1 call=scoring outcome=success ms=42
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M3 provider=deepseek role=primary#1 call=scoring outcome=success ms=45
+[int-1791818459775 IntCo Beta] Scoring category: Governance (3 measures)
+[bm25-reserve] M4: guaranteed 6/6 pure-BM25 chunks (11k chars, floor=3.4 of max=7.6) on dedicated budget
+[bm25-reserve] M5: guaranteed 6/6 pure-BM25 chunks (12k chars, floor=2.7 of max=5.9) on dedicated budget
+[bm25-reserve] M6: guaranteed 3/6 pure-BM25 chunks (6k chars, floor=5.8 of max=12.9) on dedicated budget
+[int-1791818459775 IntCo Beta] LLM rescoring: ON for 3 measures in category 'Governance'
+[DIAG][bull-lock] locksRenewed count=1 since_last_renew=batch-6-company-16:7502ms
+[llm-rescore] M5: LLM returned no parseable scores (raw 351 chars); falling back to BM25
+[llm-rescore] M4: LLM returned no parseable scores (raw 266 chars); falling back to BM25
+[llm-rescore] M6: LLM returned no parseable scores (raw 382 chars); falling back to BM25
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M4 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M5 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M6 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M4 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M5 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M6 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M4 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M5 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] start token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M6 provider=deepseek role=primary#1 call=scoring
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M4 provider=deepseek role=primary#1 call=scoring outcome=success ms=21
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M5 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[SCORING-REQ] settle token=45571c5a-ed08-40f3-9434-45d1c4784f90 job=16 attempt=1 batch=6 company=16 measure=M6 provider=deepseek role=primary#1 call=scoring outcome=success ms=22
+[int-1791818459775 IntCo Beta][invariant][OK] force-include invariant satisfied (0 filing-bound measure(s) with required doc present all received forced body chunks)
+[int-1791818459775 IntCo Beta] Scoring diagnostics: failures=0, timeouts=0, fallback=0, defaultScore=0, emptyEvidence=6
+[int-1791818459775 IntCo Beta] Analysis complete: 0% (0/6 answered; 0 abstained of 6 total)
+[DIAG][db-op-sample] {"pool":"main","pool_max":8,"total":1,"idle":1,"waiting":0,"op":"select documents","outcome":"ok","checkout_wait_ms":0,"exec_ms":1,"total_ms":2,"slow_threshold_ms_diagnostic":500,"batch_id":6,"job_id":16,"attempt_id":"49d0c646-1687-48fa-b942-65693b01d30c","attempt_n":1,"company_id":16,"stage":"analyze"}
+[DIAG][score-write] company=16 rows=6 batch=6 job=16 attempt_id=49d0c646-1687-48fa-b942-65693b01d30c attempt_n=1 company=16 stage=score-write
+[int-1791818459775 IntCo Beta] Analysis complete: 0% (0 met / 6 answered; 0 abstained of 6 total)
+[int-1791818459775 IntCo Beta] Persisted passage-retrieval summary for 6 measures
+[int-1791818459775 IntCo Beta][invariant][OK] force-include satisfied for 0 filing-bound measure(s)
+[int-1791818459775 IntCo Beta] Pipeline completed in 4s
+[int-1791818459775 IntCo Beta] Auto-reexam SKIPPED: legitimate zero (corpusChars=12230229, lowEvidence=n/a, fetchRatio=n/a, dead=n/a, firstPartyDead=0/25)
+[DIAG][stage-timer] {"kind":"pipeline","label":"int-1791818459775 IntCo Beta","outcome":"ok","error":null,"started_at":"2026-10-12T15:21:44.475Z","attempt_wall_ms":4067,"tracked_wall_ms":375,"other_untracked_wall_ms":3693,"busy_sum_ms_all_stages":375,"stages":{"db_ops":{"done":22,"errors":0,"pending":0,"busy_sum_ms":375,"union_wall_ms":375}},"last_progress":{"stage":"db_ops","op":"select documents","atMs":4067,"ok":true},"pending_at_close_count":0,"pending_at_close":[],"batch_id":6,"job_id":16,"attempt_id":"49d0c646-1687-48fa-b942-65693b01d30c","attempt_n":1,"company_id":16,"stage":"pipeline"}
+[INT-CHILD pid=134711] pipeline success=true docs=0 providerCalls=48 error=
+[DIAG][job-transition] job=16 pipeline-result success=true error="" batch=6 job=16 attempt_id=49d0c646-1687-48fa-b942-65693b01d30c attempt_n=1 company=16 stage=finalize
+[DIAG][job-transition] job=16 -> completed transitioned=true batch=6 job=16 attempt_id=49d0c646-1687-48fa-b942-65693b01d30c attempt_n=1 company=16 stage=finalize
+[Worker] Job 16 completed successfully (attempt 1)
+[Worker][I45-diag] company=16 fw=6 score=0 failures=0 timeouts=0 fallback=0 defaultScore=0 emptyEvidence=6
+[zero-score-diag] int-1791818459775 IntCo Beta score=0 fw=6 docs=25 fetched=25 ratio=1
+[zero-score-diag] int-1791818459775 IntCo Beta pinned=0 pinnedOk=0 hasDataDoc=true warning=none
+[zero-score-diag] int-1791818459775 IntCo Beta deadByReason={}
+[Worker] Batch 6 complete with no failures: 2 succeeded — finalising
+[LIFECYCLE] completeBatchRun batch=6 rowCount=1
+[Worker] Saved analysis results for batch 6 (2 companies, avg 0%, acceptance=accepted)
+[Reconcile] batch 6: total=2 saved=2 failed=0 open=0 | saved+failed=2 OK | measures/company=6 incomplete=0 OK
+[DIAG][bull-lock] completed job=batch-6-company-16 active_for=45908ms
+[Worker] BullMQ job batch-6-company-16 completed
+[Worker] Stopped
+[INT] summary {
+ "ranAt": "2026-10-12T15:21:54.314Z",
+ "node": "v22.23.2",
+ "chromium": "/usr/local/bin/chromium",
+ "config": {
+  "concurrency": 2,
+  "lockDurationMs": 30000,
+  "stalledIntervalMs": 15000,
+  "holdMs": 20000
+ },
+ "elapsedMs": 46106,
+ "jobs": [
+  {
+   "id": 15,
+   "status": "completed",
+   "last_error": null,
+   "attempts": 1
+  },
+  {
+   "id": 16,
+   "status": "completed",
+   "last_error": null,
+   "attempts": 1
+  }
+ ],
+ "batch": {
+  "status": "completed",
+  "completed_jobs": 2,
+  "failed_jobs": 0,
+  "total_jobs": 2
+ },
+ "scores": [
+  {
+   "company_id": 15,
+   "n": 6,
+   "yes": 0,
+   "attempts": 1
+  },
+  {
+   "company_id": 16,
+   "n": 6,
+   "yes": 0,
+   "attempts": 1
+  }
+ ],
+ "peak": {
+  "at": 1791818470705,
+  "descendants": 13,
+  "chromium": 10,
+  "jobChildren": 3,
+  "descendantRssMb": 1798,
+  "chromiumRssMb": 1381,
+  "parentRssMb": 246
+ },
+ "maxDescendantRssMb": 1798,
+ "maxParentRssMb": 252,
+ "maxConcurrentJobChildren": 3,
+ "lockRenewals": {
+  "batch-6-company-15": 3,
+  "batch-6-company-16": 5
+ },
+ "stalledEvents": [],
+ "failedEvents": [],
+ "completedEvents": [
+  "batch-6-company-15",
+  "batch-6-company-16"
+ ],
+ "afterCompletion": {
+  "at": 1791818512302,
+  "descendants": 1,
+  "chromium": 0,
+  "jobChildren": 1,
+  "descendantRssMb": 14,
+  "chromiumRssMb": 0,
+  "parentRssMb": 252
+ },
+ "afterStopWorker": {
+  "at": 1791818514308,
+  "descendants": 1,
+  "chromium": 0,
+  "jobChildren": 1,
+  "descendantRssMb": 14,
+  "chromiumRssMb": 0,
+  "parentRssMb": 252
+ },
+ "newOrphanPuppeteerChromium": [],
+ "quarantined": 0,
+ "isolationStats": {
+  "forks": 2,
+  "maxForkMs": 7.274868000000424,
+  "messages": 374,
+  "maxHandlerMs": 0.463251000001037,
+  "lateReportsDiscarded": 0,
+  "quarantined": 0
+ },
+ "brokerAfter": {
+  "llm": {
+   "active": 0,
+   "waiting": 0,
+   "max": 8
+  },
+  "browser": {
+   "active": 0,
+   "waiting": 0,
+   "max": 1
+  },
+  "proc": {
+   "active": 0,
+   "waiting": 0,
+   "max": 6
+  }
+ },
+ "samples": 98
+}
+PASS both analysis_jobs completed (completed,completed)
+PASS batch counters completed=2 failed=0 (got 2/0, status=completed)
+PASS measure_scores persisted: 6 per company ([{"company_id":15,"n":6,"yes":0,"attempts":1},{"company_id":16,"n":6,"yes":0,"attempts":1}])
+FAIL 2 isolated job children ran concurrently (max seen 3)
+PASS real Chromium observed under job children (peak 10 procs, 1381 MB)
+PASS no BullMQ stalled events (0)
+PASS lock renewed at least once per job ({"batch-6-company-15":3,"batch-6-company-16":5})
+FAIL no descendants after completion (1, chromium 0)
+PASS no orphaned puppeteer Chromium anywhere on host (none)
+PASS no quarantined children
+PASS broker permits all returned after completion ({"llm":{"active":0,"waiting":0,"max":8},"browser":{"active":0,"waiting":0,"max":1},"proc":{"active":0,"waiting":0,"max":6}})
+INTEGRATION FAIL (2)
+exit=1

@@ -1,0 +1,83 @@
+TAP version 13
+# Subtest: threshold: unset / 0 / junk → disabled (legacy behaviour unchanged)
+ok 1 - threshold: unset / 0 / junk → disabled (legacy behaviour unchanged)
+  ---
+  duration_ms: 0.871558
+  type: 'test'
+  ...
+# Subtest: decision: ≥ threshold failed jobs, or any retry-exhausted job, stops
+ok 2 - decision: ≥ threshold failed jobs, or any retry-exhausted job, stops
+  ---
+  duration_ms: 0.187564
+  type: 'test'
+  ...
+# Subtest: cancellation and provider-quota pauses are not S4 failures
+ok 3 - cancellation and provider-quota pauses are not S4 failures
+  ---
+  duration_ms: 0.125139
+  type: 'test'
+  ...
+# Subtest: enforce: disabled never counts or cancels
+ok 4 - enforce: disabled never counts or cancels
+  ---
+  duration_ms: 0.19814
+  type: 'test'
+  ...
+# Subtest: enforce: count error fails open to the legacy retry path (no cancel)
+ok 5 - enforce: count error fails open to the legacy retry path (no cancel)
+  ---
+  duration_ms: 0.25783
+  type: 'test'
+  ...
+# Subtest: enforce: cancel-sequence error still suppresses the retry
+ok 6 - enforce: cancel-sequence error still suppresses the retry
+  ---
+  duration_ms: 0.17852
+  type: 'test'
+  ...
+# Subtest: batch-1276 shape WITHOUT the rule: 13 jobs exhaust retries (39 failed attempts)
+ok 7 - batch-1276 shape WITHOUT the rule: 13 jobs exhaust retries (39 failed attempts)
+  ---
+  duration_ms: 37.119817
+  type: 'test'
+  ...
+# Subtest: batch-1276 shape WITH BATCH_STOP_RULE_FAILED_JOBS=2: stops at the 2nd failed job, before any job exhausts retries
+ok 8 - batch-1276 shape WITH BATCH_STOP_RULE_FAILED_JOBS=2: stops at the 2nd failed job, before any job exhausts retries
+  ---
+  duration_ms: 0.756214
+  type: 'test'
+  ...
+# Subtest: worker default (env unset): retry path byte-for-byte legacy — rule never counts, never cancels
+ok 9 - worker default (env unset): retry path byte-for-byte legacy — rule never counts, never cancels
+  ---
+  duration_ms: 17.175954
+  type: 'test'
+  ...
+# Subtest: threshold N=3: Nth failed job trips → batch cancelled, snapshot saved, queue purged, no further retries/claims
+ok 10 - threshold N=3: Nth failed job trips → batch cancelled, snapshot saved, queue purged, no further retries/claims
+  ---
+  duration_ms: 18.024098
+  type: 'test'
+  ...
+# Subtest: cancel sequence: purge/snapshot errors are non-fatal; PG cancel still runs
+ok 11 - cancel sequence: purge/snapshot errors are non-fatal; PG cancel still runs
+  ---
+  duration_ms: 0.367556
+  type: 'test'
+  ...
+# Subtest: SQL: COUNT_BATCH_FAILURES_SQL counts first failed attempts and exhaustion (optional, local PG)
+ok 12 - SQL: COUNT_BATCH_FAILURES_SQL counts first failed attempts and exhaustion (optional, local PG) # SKIP
+  ---
+  duration_ms: 0.072189
+  type: 'test'
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 170.435375
+exit=0

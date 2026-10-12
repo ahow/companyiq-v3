@@ -1,0 +1,723 @@
+worktree=/tmp/wt-base head=b676c2ddf37512dad0e18c6e812a4dc7e58a12a2 tasksmax=400
++1.76s [SETUP] label=wt-before-tasksmax400 jobs=12 concurrency=4 MAX_CONCURRENT_BROWSER=1 synthetic marker PDFs docsPerChild=1 hold=20000ms
++1.76s [LIMITS] Max processes 65536 65536 processes | cgroup=/sys/fs/cgroup/system.slice/ciq-repro-wt-before-tasksmax400-126309.scope pids.max=400 pids.current=36
++1.76s [JOB] start job=0
++1.77s [JOB] start job=1
++1.78s [JOB] start job=2
++1.80s [JOB] start job=3
++2.77s [SAMPLE] {"at":2770,"liveBrowsers":0,"tasks":60,"procs":5,"jobChildren":4,"rssMb":660,"pidsCurrent":84,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++3.78s [SAMPLE] {"at":3781,"liveBrowsers":0,"tasks":64,"procs":5,"jobChildren":4,"rssMb":777,"pidsCurrent":88,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++4.77s [SAMPLE] {"at":4773,"liveBrowsers":0,"tasks":64,"procs":5,"jobChildren":4,"rssMb":880,"pidsCurrent":88,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++5.78s [SAMPLE] {"at":5777,"liveBrowsers":0,"tasks":64,"procs":5,"jobChildren":4,"rssMb":991,"pidsCurrent":88,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++6.48s [EVENT] permit.acquire.request {"active":0,"waiting":0,"max":1}
++6.48s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
++6.53s [EVENT] browser.observed.launch {"pid":126407,"ppid":126352,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-eY3Ach "}
++6.72s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++6.72s [EVENT] permit.acquire.request {"active":1,"waiting":1,"max":1}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++6.78s [SAMPLE] {"at":6784,"liveBrowsers":1,"tasks":117,"procs":17,"jobChildren":4,"rssMb":1351,"pidsCurrent":152,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++6.79s [EVENT] permit.acquire.request {"active":1,"waiting":2,"max":1}
++7.78s [SAMPLE] {"at":7780,"liveBrowsers":1,"tasks":167,"procs":12,"jobChildren":4,"rssMb":1921,"pidsCurrent":194,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++8.78s [SAMPLE] {"at":8783,"liveBrowsers":1,"tasks":167,"procs":12,"jobChildren":4,"rssMb":1922,"pidsCurrent":194,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++9.78s [SAMPLE] {"at":9783,"liveBrowsers":1,"tasks":167,"procs":12,"jobChildren":4,"rssMb":1924,"pidsCurrent":194,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++10.79s [SAMPLE] {"at":10785,"liveBrowsers":1,"tasks":178,"procs":13,"jobChildren":4,"rssMb":2033,"pidsCurrent":205,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++11.79s [SAMPLE] {"at":11786,"liveBrowsers":1,"tasks":178,"procs":13,"jobChildren":4,"rssMb":2031,"pidsCurrent":205,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++12.79s [SAMPLE] {"at":12787,"liveBrowsers":1,"tasks":178,"procs":13,"jobChildren":4,"rssMb":2025,"pidsCurrent":205,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++13.79s [SAMPLE] {"at":13791,"liveBrowsers":1,"tasks":178,"procs":13,"jobChildren":4,"rssMb":2024,"pidsCurrent":205,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:40907 -> no sensor cookies (continuing)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:40907/job-1001-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=126352 company=1001] fetch ok key=job-1001-doc-0 chars=175 marker=true ms=8262
+[REPRO-CHILD pid=126352 company=1001] synthetic scoring hold 20000ms (no provider calls)
++14.74s [EVENT] permit.release {"active":1,"waiting":2,"max":1}
++14.74s [EVENT] permit.acquire.granted {"active":1,"waiting":2,"max":1}
++14.79s [EVENT] browser.observed.launch {"pid":126605,"ppid":126364,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-Taeuuo "}
++14.79s [SAMPLE] {"at":14791,"liveBrowsers":2,"tasks":180,"procs":14,"jobChildren":4,"rssMb":2124,"pidsCurrent":210,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++15.79s [SAMPLE] {"at":15793,"liveBrowsers":2,"tasks":281,"procs":20,"jobChildren":4,"rssMb":2945,"pidsCurrent":311,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++16.79s [SAMPLE] {"at":16793,"liveBrowsers":2,"tasks":281,"procs":20,"jobChildren":4,"rssMb":2885,"pidsCurrent":311,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++17.79s [SAMPLE] {"at":17794,"liveBrowsers":2,"tasks":281,"procs":20,"jobChildren":4,"rssMb":2886,"pidsCurrent":311,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++18.79s [SAMPLE] {"at":18794,"liveBrowsers":2,"tasks":292,"procs":21,"jobChildren":4,"rssMb":2882,"pidsCurrent":322,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++19.79s [SAMPLE] {"at":19794,"liveBrowsers":2,"tasks":292,"procs":21,"jobChildren":4,"rssMb":2881,"pidsCurrent":322,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++20.80s [SAMPLE] {"at":20795,"liveBrowsers":2,"tasks":292,"procs":21,"jobChildren":4,"rssMb":2880,"pidsCurrent":322,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++21.81s [SAMPLE] {"at":21811,"liveBrowsers":2,"tasks":292,"procs":21,"jobChildren":4,"rssMb":2880,"pidsCurrent":322,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:40907 -> no sensor cookies (continuing)
+[Processor] PDF parse error: Illegal character: 41 — trying pdftotext fallback
++22.80s [SAMPLE] {"at":22799,"liveBrowsers":2,"tasks":293,"procs":22,"jobChildren":4,"rssMb":2902,"pidsCurrent":323,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:40907/job-1003-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=126364 company=1003] fetch ok key=job-1003-doc-0 chars=176 marker=true ms=16105
+[REPRO-CHILD pid=126364 company=1003] synthetic scoring hold 20000ms (no provider calls)
++22.82s [EVENT] permit.release {"active":1,"waiting":1,"max":1}
++22.82s [EVENT] permit.acquire.granted {"active":1,"waiting":1,"max":1}
++23.05s [EVENT] browser.observed.launch {"pid":126814,"ppid":126358,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-SwN5iX "}
++23.80s [SAMPLE] {"at":23800,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3398,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++24.80s [SAMPLE] {"at":24802,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3365,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++25.81s [SAMPLE] {"at":25806,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3359,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++26.80s [SAMPLE] {"at":26804,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3322,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++27.80s [SAMPLE] {"at":27804,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3321,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++28.81s [SAMPLE] {"at":28806,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3319,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++29.81s [SAMPLE] {"at":29810,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3317,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++30.81s [SAMPLE] {"at":30811,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3317,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++31.81s [SAMPLE] {"at":31814,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3317,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++32.81s [SAMPLE] {"at":32814,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3317,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++33.81s [SAMPLE] {"at":33814,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3318,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++34.82s [EVENT] browser.observed.exit {"pid":126407,"livedMs":28287}
++34.82s [SAMPLE] {"at":34816,"liveBrowsers":2,"tasks":238,"procs":17,"jobChildren":4,"rssMb":2285,"pidsCurrent":277,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++34.83s [JOB] done job=1 success=true error=- ms=33057
++34.83s [JOB] start job=4
++35.82s [SAMPLE] {"at":35818,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2298,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++36.12s [EVENT] permit.acquire.request {"active":1,"waiting":1,"max":1}
++36.82s [SAMPLE] {"at":36820,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2310,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++37.82s [SAMPLE] {"at":37818,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2310,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++38.82s [SAMPLE] {"at":38821,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2310,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++39.82s [SAMPLE] {"at":39820,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2310,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++40.82s [SAMPLE] {"at":40821,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2310,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++41.82s [SAMPLE] {"at":41823,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2310,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++42.83s [SAMPLE] {"at":42825,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2310,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++42.98s [JOB] done job=3 success=true error=- ms=41186
++42.98s [JOB] start job=5
++43.08s [EVENT] browser.observed.exit {"pid":126605,"livedMs":28284}
++43.83s [SAMPLE] {"at":43826,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1157,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++44.70s [EVENT] permit.acquire.request {"active":1,"waiting":2,"max":1}
++44.83s [SAMPLE] {"at":44828,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1200,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++45.83s [SAMPLE] {"at":45830,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1200,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++46.83s [SAMPLE] {"at":46831,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1200,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++47.83s [SAMPLE] {"at":47833,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1200,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++48.83s [SAMPLE] {"at":48834,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1200,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++49.84s [SAMPLE] {"at":49835,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1200,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++50.84s [SAMPLE] {"at":50839,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1200,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++51.84s [SAMPLE] {"at":51837,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1130,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++52.84s [SAMPLE] {"at":52840,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1125,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++53.84s [SAMPLE] {"at":53843,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++54.84s [SAMPLE] {"at":54843,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++55.85s [SAMPLE] {"at":55847,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++56.85s [SAMPLE] {"at":56849,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++57.85s [SAMPLE] {"at":57848,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++58.85s [SAMPLE] {"at":58850,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++59.85s [SAMPLE] {"at":59850,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++60.85s [SAMPLE] {"at":60852,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++61.86s [SAMPLE] {"at":61856,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++62.85s [SAMPLE] {"at":62855,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++63.86s [SAMPLE] {"at":63856,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++64.86s [SAMPLE] {"at":64858,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++65.86s [SAMPLE] {"at":65859,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++66.86s [SAMPLE] {"at":66860,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1128,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++67.86s [SAMPLE] {"at":67860,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1091,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++68.86s [SAMPLE] {"at":68863,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++69.86s [SAMPLE] {"at":69865,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++70.87s [SAMPLE] {"at":70867,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++71.87s [SAMPLE] {"at":71871,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++72.87s [SAMPLE] {"at":72868,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++73.87s [SAMPLE] {"at":73871,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++74.87s [SAMPLE] {"at":74873,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++75.87s [SAMPLE] {"at":75874,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++76.88s [SAMPLE] {"at":76876,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++77.88s [SAMPLE] {"at":77876,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++78.88s [SAMPLE] {"at":78878,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++79.88s [SAMPLE] {"at":79880,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++80.88s [SAMPLE] {"at":80883,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++81.89s [SAMPLE] {"at":81885,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++82.89s [SAMPLE] {"at":82884,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++83.88s [SAMPLE] {"at":83884,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++84.89s [SAMPLE] {"at":84886,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++85.89s [SAMPLE] {"at":85886,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++86.89s [SAMPLE] {"at":86886,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++87.89s [SAMPLE] {"at":87887,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++88.89s [SAMPLE] {"at":88890,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++89.89s [SAMPLE] {"at":89893,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++90.89s [SAMPLE] {"at":90895,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++91.89s [SAMPLE] {"at":91895,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++92.90s [SAMPLE] {"at":92898,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++93.90s [SAMPLE] {"at":93902,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++94.90s [SAMPLE] {"at":94902,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++95.90s [SAMPLE] {"at":95902,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++96.90s [SAMPLE] {"at":96903,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++97.90s [SAMPLE] {"at":97904,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++98.91s [SAMPLE] {"at":98907,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++99.91s [SAMPLE] {"at":99910,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++100.91s [SAMPLE] {"at":100911,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++101.92s [SAMPLE] {"at":101915,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++102.91s [SAMPLE] {"at":102913,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++103.91s [SAMPLE] {"at":103913,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++104.91s [SAMPLE] {"at":104913,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++105.92s [SAMPLE] {"at":105918,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1094,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++106.92s [SAMPLE] {"at":106917,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++107.92s [SAMPLE] {"at":107920,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++108.92s [SAMPLE] {"at":108920,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++109.92s [SAMPLE] {"at":109920,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++110.92s [SAMPLE] {"at":110920,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++111.92s [SAMPLE] {"at":111923,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++112.92s [SAMPLE] {"at":112925,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++113.92s [SAMPLE] {"at":113924,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++114.92s [SAMPLE] {"at":114925,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++115.93s [SAMPLE] {"at":115930,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++116.93s [SAMPLE] {"at":116929,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++117.93s [SAMPLE] {"at":117932,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++118.93s [SAMPLE] {"at":118932,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++119.94s [SAMPLE] {"at":119935,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++120.94s [SAMPLE] {"at":120939,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++121.94s [SAMPLE] {"at":121939,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++122.94s [SAMPLE] {"at":122941,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++123.94s [SAMPLE] {"at":123944,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++124.94s [SAMPLE] {"at":124944,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++125.94s [SAMPLE] {"at":125944,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++126.95s [SAMPLE] {"at":126948,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++127.95s [SAMPLE] {"at":127946,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++128.95s [SAMPLE] {"at":128950,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++129.95s [SAMPLE] {"at":129948,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++130.95s [SAMPLE] {"at":130952,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++131.95s [SAMPLE] {"at":131949,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++132.95s [SAMPLE] {"at":132952,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++133.95s [SAMPLE] {"at":133953,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++134.95s [SAMPLE] {"at":134953,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++135.95s [SAMPLE] {"at":135954,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++136.95s [SAMPLE] {"at":136954,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++137.96s [SAMPLE] {"at":137955,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++138.96s [SAMPLE] {"at":138956,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++139.96s [SAMPLE] {"at":139957,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++140.96s [SAMPLE] {"at":140959,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++141.96s [SAMPLE] {"at":141959,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++142.96s [SAMPLE] {"at":142962,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1097,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[Processor] Browser-PDF fetch failed for http://127.0.0.1:40907/job-1002-doc-0.pdf: Network.enable timed out. Increase the 'protocolTimeout' setting in launch/connect calls for a higher timeout if needed.
+[REPRO-CHILD pid=126358 company=1002] fetch ok key=job-1002-doc-0 chars=0 marker=false ms=136495
+[REPRO-CHILD pid=126358 company=1002] synthetic scoring hold 20000ms (no provider calls)
++143.21s [EVENT] permit.release {"active":1,"waiting":2,"max":1}
++143.21s [EVENT] permit.acquire.granted {"active":1,"waiting":2,"max":1}
++143.46s [EVENT] browser.observed.launch {"pid":127039,"ppid":126351,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-Fa75aS "}
++143.96s [SAMPLE] {"at":143961,"liveBrowsers":2,"tasks":235,"procs":16,"jobChildren":4,"rssMb":2003,"pidsCurrent":265,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++144.96s [SAMPLE] {"at":144961,"liveBrowsers":2,"tasks":235,"procs":16,"jobChildren":4,"rssMb":2003,"pidsCurrent":265,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++145.96s [SAMPLE] {"at":145961,"liveBrowsers":2,"tasks":235,"procs":16,"jobChildren":4,"rssMb":2006,"pidsCurrent":265,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++146.97s [SAMPLE] {"at":146965,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2115,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++147.97s [SAMPLE] {"at":147969,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2115,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++148.97s [SAMPLE] {"at":148967,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2116,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++149.97s [SAMPLE] {"at":149968,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2115,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++150.97s [SAMPLE] {"at":150970,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2114,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:40907 -> no sensor cookies (continuing)
+[Processor] PDF parse error: bad XRef entry — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:40907/job-1000-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=126351 company=1000] fetch ok key=job-1000-doc-0 chars=176 marker=true ms=144634
++151.42s [EVENT] permit.release {"active":1,"waiting":1,"max":1}
++151.42s [EVENT] permit.acquire.granted {"active":1,"waiting":1,"max":1}
+[REPRO-CHILD pid=126351 company=1000] synthetic scoring hold 20000ms (no provider calls)
++151.48s [EVENT] browser.observed.launch {"pid":127238,"ppid":126969,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-WpmNWM "}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++151.97s [SAMPLE] {"at":151970,"liveBrowsers":3,"tasks":338,"procs":24,"jobChildren":4,"rssMb":2870,"pidsCurrent":371,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++152.97s [SAMPLE] {"at":152972,"liveBrowsers":3,"tasks":349,"procs":24,"jobChildren":4,"rssMb":3043,"pidsCurrent":382,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++153.97s [SAMPLE] {"at":153974,"liveBrowsers":3,"tasks":349,"procs":24,"jobChildren":4,"rssMb":3042,"pidsCurrent":382,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++154.98s [SAMPLE] {"at":154977,"liveBrowsers":3,"tasks":349,"procs":24,"jobChildren":4,"rssMb":3044,"pidsCurrent":382,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++155.98s [SAMPLE] {"at":155976,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3153,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++156.98s [SAMPLE] {"at":156979,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3154,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++157.98s [SAMPLE] {"at":157979,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3153,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++158.98s [SAMPLE] {"at":158983,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3152,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:40907 -> no sensor cookies (continuing)
+[Processor] PDF parse error: bad XRef entry — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:40907/job-1004-doc-0.pdf (766B PDF)
++159.84s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++159.84s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
+[REPRO-CHILD pid=126969 company=1004] fetch ok key=job-1004-doc-0 chars=176 marker=true ms=123731
+[REPRO-CHILD pid=126969 company=1004] synthetic scoring hold 20000ms (no provider calls)
+[Processor] Chromium launch attempt 1/3 failed (Failed to launch the browser process:  Code: null) — retrying in 1692ms
++159.98s [SAMPLE] {"at":159980,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3174,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++160.98s [SAMPLE] {"at":160983,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3173,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++161.74s [EVENT] browser.observed.launch {"pid":127450,"ppid":126983,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-FlbXgH "}
+[Processor] Chromium launch attempt 2/3 failed (Failed to launch the browser process:  Code: null) — retrying in 3299ms
++161.99s [EVENT] browser.observed.exit {"pid":127450,"livedMs":250}
++161.99s [SAMPLE] {"at":161988,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3173,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++162.99s [SAMPLE] {"at":162989,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3173,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++163.29s [JOB] done job=2 success=false error=no document text ms=161510
++163.29s [JOB] start job=6
++163.49s [EVENT] browser.observed.exit {"pid":126814,"livedMs":140440}
++163.99s [SAMPLE] {"at":163989,"liveBrowsers":2,"tasks":292,"procs":21,"jobChildren":4,"rssMb":2693,"pidsCurrent":322,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++164.88s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++164.99s [SAMPLE] {"at":164990,"liveBrowsers":2,"tasks":292,"procs":21,"jobChildren":4,"rssMb":2747,"pidsCurrent":322,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++165.24s [EVENT] browser.observed.launch {"pid":127474,"ppid":126983,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-YB9aIu "}
++165.99s [SAMPLE] {"at":165992,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3235,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++166.99s [SAMPLE] {"at":166993,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3235,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++167.99s [SAMPLE] {"at":167993,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3235,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++168.99s [SAMPLE] {"at":168993,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3235,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++169.99s [SAMPLE] {"at":169994,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3235,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++171.00s [SAMPLE] {"at":170998,"liveBrowsers":3,"tasks":360,"procs":25,"jobChildren":4,"rssMb":3234,"pidsCurrent":393,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++171.53s [JOB] done job=0 success=true error=- ms=169762
++171.53s [JOB] start job=7
++171.75s [EVENT] browser.observed.exit {"pid":127039,"livedMs":28284}
++172.00s [SAMPLE] {"at":171996,"liveBrowsers":2,"tasks":245,"procs":17,"jobChildren":4,"rssMb":2182,"pidsCurrent":275,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++173.00s [SAMPLE] {"at":173002,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2267,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++173.12s [EVENT] permit.acquire.request {"active":1,"waiting":1,"max":1}
++174.00s [SAMPLE] {"at":173999,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2268,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++175.00s [SAMPLE] {"at":175003,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2268,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++176.00s [SAMPLE] {"at":176002,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2268,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++177.00s [SAMPLE] {"at":177001,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2268,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++178.00s [SAMPLE] {"at":178003,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2268,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++179.01s [SAMPLE] {"at":179006,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2268,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++179.95s [JOB] done job=4 success=true error=- ms=145119
++179.95s [JOB] start job=8
++180.00s [EVENT] browser.observed.exit {"pid":127238,"livedMs":28529}
++180.00s [SAMPLE] {"at":180005,"liveBrowsers":1,"tasks":126,"procs":9,"jobChildren":4,"rssMb":1169,"pidsCurrent":153,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++181.01s [SAMPLE] {"at":181006,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1255,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++181.43s [EVENT] permit.acquire.request {"active":1,"waiting":2,"max":1}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++182.01s [SAMPLE] {"at":182007,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1274,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++183.01s [SAMPLE] {"at":183008,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1274,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++184.01s [SAMPLE] {"at":184009,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1274,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++185.01s [SAMPLE] {"at":185013,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1274,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++186.02s [SAMPLE] {"at":186018,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1274,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++187.02s [SAMPLE] {"at":187024,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1274,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++188.02s [SAMPLE] {"at":188022,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1165,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++189.02s [SAMPLE] {"at":189024,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1123,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++190.03s [SAMPLE] {"at":190025,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1121,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++191.03s [SAMPLE] {"at":191027,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1121,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++192.03s [SAMPLE] {"at":192025,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1121,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++193.03s [SAMPLE] {"at":193026,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1121,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++194.03s [SAMPLE] {"at":194027,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1121,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++195.03s [SAMPLE] {"at":195028,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1121,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++196.03s [SAMPLE] {"at":196029,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1124,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++197.03s [SAMPLE] {"at":197029,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++198.03s [SAMPLE] {"at":198030,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++199.03s [SAMPLE] {"at":199032,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++200.03s [SAMPLE] {"at":200033,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++201.03s [SAMPLE] {"at":201033,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++202.04s [SAMPLE] {"at":202036,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++203.04s [SAMPLE] {"at":203036,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++204.04s [SAMPLE] {"at":204039,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++205.04s [SAMPLE] {"at":205039,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++206.04s [SAMPLE] {"at":206044,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++207.04s [SAMPLE] {"at":207045,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++208.04s [SAMPLE] {"at":208045,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++209.05s [SAMPLE] {"at":209046,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++210.05s [SAMPLE] {"at":210049,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++211.05s [SAMPLE] {"at":211054,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++212.06s [SAMPLE] {"at":212056,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++213.06s [SAMPLE] {"at":213057,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++214.06s [SAMPLE] {"at":214056,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++215.06s [SAMPLE] {"at":215058,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++216.06s [SAMPLE] {"at":216064,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++217.06s [SAMPLE] {"at":217065,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++218.07s [SAMPLE] {"at":218068,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++219.07s [SAMPLE] {"at":219074,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++220.07s [SAMPLE] {"at":220072,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++221.07s [SAMPLE] {"at":221072,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++222.07s [SAMPLE] {"at":222074,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++223.07s [SAMPLE] {"at":223073,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++224.08s [SAMPLE] {"at":224078,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++225.08s [SAMPLE] {"at":225077,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1082,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++226.08s [SAMPLE] {"at":226078,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++227.08s [SAMPLE] {"at":227080,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++228.08s [SAMPLE] {"at":228084,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++229.09s [SAMPLE] {"at":229085,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++230.08s [SAMPLE] {"at":230082,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++231.08s [SAMPLE] {"at":231083,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++232.09s [SAMPLE] {"at":232085,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++233.09s [SAMPLE] {"at":233088,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++234.09s [SAMPLE] {"at":234087,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++235.09s [SAMPLE] {"at":235089,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++236.09s [SAMPLE] {"at":236088,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++237.09s [SAMPLE] {"at":237089,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++238.09s [SAMPLE] {"at":238088,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++239.09s [SAMPLE] {"at":239092,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++240.10s [SAMPLE] {"at":240096,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++241.10s [SAMPLE] {"at":241099,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++242.10s [SAMPLE] {"at":242100,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++243.10s [SAMPLE] {"at":243102,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++244.10s [SAMPLE] {"at":244105,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++245.10s [SAMPLE] {"at":245104,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++246.10s [SAMPLE] {"at":246105,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++247.10s [SAMPLE] {"at":247104,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++248.11s [SAMPLE] {"at":248107,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++249.11s [SAMPLE] {"at":249110,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++250.11s [SAMPLE] {"at":250110,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++251.11s [SAMPLE] {"at":251111,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++252.11s [SAMPLE] {"at":252112,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++253.11s [SAMPLE] {"at":253114,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++254.12s [SAMPLE] {"at":254115,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++255.12s [SAMPLE] {"at":255116,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1079,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++256.12s [SAMPLE] {"at":256116,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++257.12s [SAMPLE] {"at":257115,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++258.11s [SAMPLE] {"at":258114,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++259.12s [SAMPLE] {"at":259115,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++260.12s [SAMPLE] {"at":260115,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++261.14s [SAMPLE] {"at":261140,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++262.12s [SAMPLE] {"at":262119,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++263.12s [SAMPLE] {"at":263119,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++264.12s [SAMPLE] {"at":264123,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++265.13s [SAMPLE] {"at":265125,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++266.13s [SAMPLE] {"at":266125,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++267.13s [SAMPLE] {"at":267127,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++268.13s [SAMPLE] {"at":268129,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++269.13s [SAMPLE] {"at":269128,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++270.13s [SAMPLE] {"at":270133,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++271.13s [SAMPLE] {"at":271135,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++272.13s [SAMPLE] {"at":272135,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++273.13s [SAMPLE] {"at":273135,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++274.14s [SAMPLE] {"at":274136,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++275.14s [SAMPLE] {"at":275140,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++276.14s [SAMPLE] {"at":276140,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++277.14s [SAMPLE] {"at":277140,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++278.14s [SAMPLE] {"at":278140,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++279.14s [SAMPLE] {"at":279140,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++280.14s [SAMPLE] {"at":280141,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++281.14s [SAMPLE] {"at":281142,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++282.15s [SAMPLE] {"at":282147,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++283.14s [SAMPLE] {"at":283143,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++284.14s [SAMPLE] {"at":284145,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++285.14s [SAMPLE] {"at":285144,"liveBrowsers":1,"tasks":135,"procs":9,"jobChildren":4,"rssMb":1083,"pidsCurrent":162,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[Processor] Browser-PDF fetch failed for http://127.0.0.1:40907/job-1005-doc-0.pdf: Network.enable timed out. Increase the 'protocolTimeout' setting in launch/connect calls for a higher timeout if needed.
+[REPRO-CHILD pid=126983 company=1005] fetch ok key=job-1005-doc-0 chars=0 marker=false ms=240902
+[REPRO-CHILD pid=126983 company=1005] synthetic scoring hold 20000ms (no provider calls)
++285.60s [EVENT] permit.release {"active":1,"waiting":2,"max":1}
++285.60s [EVENT] permit.acquire.granted {"active":1,"waiting":2,"max":1}
++285.65s [EVENT] browser.observed.launch {"pid":127682,"ppid":127460,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-JBR9i4 "}
++286.15s [SAMPLE] {"at":286147,"liveBrowsers":2,"tasks":229,"procs":16,"jobChildren":4,"rssMb":1890,"pidsCurrent":259,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++287.15s [SAMPLE] {"at":287148,"liveBrowsers":2,"tasks":239,"procs":16,"jobChildren":4,"rssMb":1988,"pidsCurrent":269,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++288.15s [SAMPLE] {"at":288148,"liveBrowsers":2,"tasks":239,"procs":16,"jobChildren":4,"rssMb":1988,"pidsCurrent":269,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++289.15s [SAMPLE] {"at":289148,"liveBrowsers":2,"tasks":239,"procs":16,"jobChildren":4,"rssMb":1990,"pidsCurrent":269,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++290.15s [SAMPLE] {"at":290150,"liveBrowsers":2,"tasks":250,"procs":17,"jobChildren":4,"rssMb":2100,"pidsCurrent":280,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++291.15s [SAMPLE] {"at":291151,"liveBrowsers":2,"tasks":250,"procs":17,"jobChildren":4,"rssMb":2102,"pidsCurrent":280,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++292.15s [SAMPLE] {"at":292153,"liveBrowsers":2,"tasks":250,"procs":17,"jobChildren":4,"rssMb":2102,"pidsCurrent":280,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++293.16s [SAMPLE] {"at":293156,"liveBrowsers":2,"tasks":250,"procs":17,"jobChildren":4,"rssMb":2101,"pidsCurrent":280,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:40907 -> no sensor cookies (continuing)
+[Processor] PDF parse error: bad XRef entry — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:40907/job-1006-doc-0.pdf (766B PDF)
+[REPRO-CHILD pid=127460 company=1006] fetch ok key=job-1006-doc-0 chars=176 marker=true ms=128976
+[REPRO-CHILD pid=127460 company=1006] synthetic scoring hold 20000ms (no provider calls)
++293.85s [EVENT] permit.release {"active":1,"waiting":1,"max":1}
++293.85s [EVENT] permit.acquire.granted {"active":1,"waiting":1,"max":1}
++293.91s [EVENT] browser.observed.launch {"pid":127874,"ppid":127634,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-FNNhhY "}
++294.16s [SAMPLE] {"at":294156,"liveBrowsers":3,"tasks":323,"procs":27,"jobChildren":4,"rssMb":2574,"pidsCurrent":356,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++295.16s [SAMPLE] {"at":295156,"liveBrowsers":3,"tasks":353,"procs":24,"jobChildren":4,"rssMb":3027,"pidsCurrent":386,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++296.16s [SAMPLE] {"at":296156,"liveBrowsers":3,"tasks":353,"procs":24,"jobChildren":4,"rssMb":3026,"pidsCurrent":386,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++297.16s [SAMPLE] {"at":297158,"liveBrowsers":3,"tasks":353,"procs":24,"jobChildren":4,"rssMb":3028,"pidsCurrent":386,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++298.16s [SAMPLE] {"at":298160,"liveBrowsers":3,"tasks":364,"procs":25,"jobChildren":4,"rssMb":3137,"pidsCurrent":397,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++299.16s [SAMPLE] {"at":299157,"liveBrowsers":3,"tasks":364,"procs":25,"jobChildren":4,"rssMb":3138,"pidsCurrent":397,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++300.16s [SAMPLE] {"at":300157,"liveBrowsers":3,"tasks":364,"procs":25,"jobChildren":4,"rssMb":3136,"pidsCurrent":397,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++301.16s [SAMPLE] {"at":301158,"liveBrowsers":3,"tasks":364,"procs":25,"jobChildren":4,"rssMb":3136,"pidsCurrent":397,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[Processor] WAF session prime for http://127.0.0.1:40907 -> no sensor cookies (continuing)
+[Processor] PDF parse error: bad XRef entry — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:40907/job-1007-doc-0.pdf (766B PDF)
++302.12s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++302.12s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
+[REPRO-CHILD pid=127634 company=1007] fetch ok key=job-1007-doc-0 chars=176 marker=true ms=129003
+[REPRO-CHILD pid=127634 company=1007] synthetic scoring hold 20000ms (no provider calls)
++302.16s [EVENT] browser.observed.launch {"pid":128071,"ppid":127650,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-ZC6SNA "}
++302.16s [SAMPLE] {"at":302158,"liveBrowsers":4,"tasks":365,"procs":26,"jobChildren":4,"rssMb":3206,"pidsCurrent":398,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
+[Processor] Chromium launch attempt 1/3 failed (Failed to launch the browser process:  Code: null) — retrying in 1949ms
++302.41s [EVENT] browser.observed.exit {"pid":128071,"livedMs":250}
++303.16s [SAMPLE] {"at":303158,"liveBrowsers":3,"tasks":364,"procs":25,"jobChildren":4,"rssMb":3151,"pidsCurrent":397,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++304.16s [SAMPLE] {"at":304159,"liveBrowsers":3,"tasks":364,"procs":25,"jobChildren":4,"rssMb":3151,"pidsCurrent":397,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
+[Processor] Chromium launch attempt 2/3 failed (Failed to launch the browser process:  Code: null) — retrying in 3923ms
++305.16s [SAMPLE] {"at":305161,"liveBrowsers":3,"tasks":364,"procs":25,"jobChildren":4,"rssMb":3150,"pidsCurrent":397,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++305.67s [EVENT] browser.observed.exit {"pid":127474,"livedMs":140426}
++305.69s [JOB] done job=5 success=false error=no document text ms=262702
++305.69s [JOB] start job=9
++306.16s [SAMPLE] {"at":306160,"liveBrowsers":2,"tasks":293,"procs":21,"jobChildren":4,"rssMb":2654,"pidsCurrent":323,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++307.17s [SAMPLE] {"at":307167,"liveBrowsers":2,"tasks":293,"procs":21,"jobChildren":4,"rssMb":2722,"pidsCurrent":323,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++307.31s [EVENT] permit.acquire.request {"active":1,"waiting":0,"max":1}
++308.16s [SAMPLE] {"at":308162,"liveBrowsers":2,"tasks":293,"procs":21,"jobChildren":4,"rssMb":2724,"pidsCurrent":323,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++308.41s [EVENT] browser.observed.launch {"pid":128108,"ppid":127650,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-gxR9tp "}
++309.17s [SAMPLE] {"at":309166,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3219,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++310.17s [SAMPLE] {"at":310168,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3219,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++311.17s [SAMPLE] {"at":311165,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3214,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++312.17s [SAMPLE] {"at":312168,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3214,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++313.17s [SAMPLE] {"at":313171,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3214,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++313.93s [EVENT] browser.observed.exit {"pid":127682,"livedMs":28279}
++313.96s [JOB] done job=6 success=true error=- ms=150666
++313.96s [JOB] start job=10
++314.17s [SAMPLE] {"at":314172,"liveBrowsers":2,"tasks":245,"procs":17,"jobChildren":4,"rssMb":2151,"pidsCurrent":275,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++315.17s [SAMPLE] {"at":315172,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2216,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++315.57s [EVENT] permit.acquire.request {"active":1,"waiting":1,"max":1}
++316.17s [SAMPLE] {"at":316171,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2227,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++317.18s [SAMPLE] {"at":317177,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2228,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++318.17s [SAMPLE] {"at":318174,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2228,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++319.18s [SAMPLE] {"at":319176,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2228,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++320.18s [SAMPLE] {"at":320180,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2228,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++321.18s [SAMPLE] {"at":321181,"liveBrowsers":2,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2228,"pidsCurrent":276,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++322.18s [SAMPLE] {"at":322182,"liveBrowsers":1,"tasks":246,"procs":17,"jobChildren":4,"rssMb":2192,"pidsCurrent":195,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++322.29s [JOB] done job=7 success=true error=- ms=150765
++322.29s [JOB] start job=11
++322.43s [EVENT] browser.observed.exit {"pid":127874,"livedMs":28523}
++323.18s [SAMPLE] {"at":323179,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1205,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++323.72s [EVENT] permit.acquire.request {"active":1,"waiting":2,"max":1}
++324.18s [SAMPLE] {"at":324180,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1242,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++325.18s [SAMPLE] {"at":325182,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1242,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++326.18s [SAMPLE] {"at":326183,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1243,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++327.19s [SAMPLE] {"at":327185,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1243,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++328.19s [SAMPLE] {"at":328186,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1243,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++329.19s [SAMPLE] {"at":329187,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1243,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++330.19s [SAMPLE] {"at":330188,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1243,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++331.19s [SAMPLE] {"at":331188,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1163,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++332.19s [SAMPLE] {"at":332191,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1163,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++333.19s [SAMPLE] {"at":333192,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1163,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++334.19s [SAMPLE] {"at":334193,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1163,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++335.19s [SAMPLE] {"at":335192,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1163,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++336.19s [SAMPLE] {"at":336193,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1163,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++337.20s [SAMPLE] {"at":337196,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1163,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++338.20s [SAMPLE] {"at":338197,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1163,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++339.20s [SAMPLE] {"at":339199,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1098,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++340.20s [SAMPLE] {"at":340200,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++341.20s [SAMPLE] {"at":341200,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++342.20s [SAMPLE] {"at":342200,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++343.20s [SAMPLE] {"at":343203,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++344.20s [SAMPLE] {"at":344204,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++345.20s [SAMPLE] {"at":345204,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++346.21s [SAMPLE] {"at":346206,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++347.21s [SAMPLE] {"at":347207,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++348.21s [SAMPLE] {"at":348210,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++349.21s [SAMPLE] {"at":349210,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++350.21s [SAMPLE] {"at":350215,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++351.21s [SAMPLE] {"at":351214,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++352.22s [SAMPLE] {"at":352217,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++353.22s [SAMPLE] {"at":353216,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++354.22s [SAMPLE] {"at":354219,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++355.22s [SAMPLE] {"at":355222,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++356.22s [SAMPLE] {"at":356222,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++357.22s [SAMPLE] {"at":357223,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++358.23s [SAMPLE] {"at":358225,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++359.23s [SAMPLE] {"at":359226,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++360.23s [SAMPLE] {"at":360226,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++361.23s [SAMPLE] {"at":361227,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++362.23s [SAMPLE] {"at":362229,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++363.23s [SAMPLE] {"at":363231,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++364.23s [SAMPLE] {"at":364231,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++365.23s [SAMPLE] {"at":365231,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++366.23s [SAMPLE] {"at":366232,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++367.23s [SAMPLE] {"at":367233,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++368.24s [SAMPLE] {"at":368235,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1090,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++369.24s [SAMPLE] {"at":369235,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++370.24s [SAMPLE] {"at":370235,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++371.24s [SAMPLE] {"at":371238,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++372.24s [SAMPLE] {"at":372240,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++373.24s [SAMPLE] {"at":373242,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++374.24s [SAMPLE] {"at":374243,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++375.25s [SAMPLE] {"at":375249,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++376.25s [SAMPLE] {"at":376248,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++377.25s [SAMPLE] {"at":377247,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++378.25s [SAMPLE] {"at":378251,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++379.25s [SAMPLE] {"at":379251,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++380.25s [SAMPLE] {"at":380251,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++381.25s [SAMPLE] {"at":381251,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++382.25s [SAMPLE] {"at":382253,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++383.25s [SAMPLE] {"at":383252,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++384.25s [SAMPLE] {"at":384254,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++385.25s [SAMPLE] {"at":385254,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++386.26s [SAMPLE] {"at":386256,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++387.26s [SAMPLE] {"at":387256,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++388.26s [SAMPLE] {"at":388256,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++389.26s [SAMPLE] {"at":389259,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++390.26s [SAMPLE] {"at":390259,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++391.26s [SAMPLE] {"at":391261,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++392.26s [SAMPLE] {"at":392260,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++393.26s [SAMPLE] {"at":393262,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++394.26s [SAMPLE] {"at":394264,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++395.26s [SAMPLE] {"at":395264,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++396.26s [SAMPLE] {"at":396264,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++397.27s [SAMPLE] {"at":397267,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++398.27s [SAMPLE] {"at":398268,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++399.27s [SAMPLE] {"at":399269,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++400.27s [SAMPLE] {"at":400271,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++401.27s [SAMPLE] {"at":401271,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++402.27s [SAMPLE] {"at":402273,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++403.27s [SAMPLE] {"at":403274,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++404.27s [SAMPLE] {"at":404275,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++405.28s [SAMPLE] {"at":405279,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++406.28s [SAMPLE] {"at":406282,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++407.28s [SAMPLE] {"at":407282,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++408.28s [SAMPLE] {"at":408282,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++409.28s [SAMPLE] {"at":409283,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++410.29s [SAMPLE] {"at":410285,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++411.29s [SAMPLE] {"at":411287,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++412.29s [SAMPLE] {"at":412287,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++413.29s [SAMPLE] {"at":413287,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++414.29s [SAMPLE] {"at":414288,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++415.29s [SAMPLE] {"at":415290,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++416.29s [SAMPLE] {"at":416288,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++417.29s [SAMPLE] {"at":417293,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1095,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++418.29s [SAMPLE] {"at":418292,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++419.29s [SAMPLE] {"at":419292,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++420.29s [SAMPLE] {"at":420294,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++421.29s [SAMPLE] {"at":421294,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++422.30s [SAMPLE] {"at":422295,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++423.30s [SAMPLE] {"at":423297,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++424.30s [SAMPLE] {"at":424297,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++425.30s [SAMPLE] {"at":425301,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++426.30s [SAMPLE] {"at":426302,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++427.30s [SAMPLE] {"at":427301,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1096,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
++428.30s [SAMPLE] {"at":428304,"liveBrowsers":1,"tasks":132,"procs":9,"jobChildren":4,"rssMb":1098,"pidsCurrent":159,"pidsMax":400,"permit":{"active":1,"waiting":3,"max":1}}
+[Processor] Browser-PDF fetch failed for http://127.0.0.1:40907/job-1008-doc-0.pdf: Network.enable timed out. Increase the 'protocolTimeout' setting in launch/connect calls for a higher timeout if needed.
+[REPRO-CHILD pid=127650 company=1008] fetch ok key=job-1008-doc-0 chars=0 marker=false ms=247185
+[REPRO-CHILD pid=127650 company=1008] synthetic scoring hold 20000ms (no provider calls)
++428.62s [EVENT] permit.release {"active":1,"waiting":2,"max":1}
++428.62s [EVENT] permit.acquire.granted {"active":1,"waiting":2,"max":1}
++428.81s [EVENT] browser.observed.launch {"pid":128365,"ppid":128094,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-gV7pJy "}
++429.31s [SAMPLE] {"at":429310,"liveBrowsers":2,"tasks":238,"procs":17,"jobChildren":4,"rssMb":1994,"pidsCurrent":268,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++430.31s [SAMPLE] {"at":430307,"liveBrowsers":2,"tasks":236,"procs":16,"jobChildren":4,"rssMb":1998,"pidsCurrent":266,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++431.31s [SAMPLE] {"at":431311,"liveBrowsers":2,"tasks":236,"procs":16,"jobChildren":4,"rssMb":1999,"pidsCurrent":266,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++432.31s [SAMPLE] {"at":432313,"liveBrowsers":2,"tasks":247,"procs":17,"jobChildren":4,"rssMb":2108,"pidsCurrent":277,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++433.31s [SAMPLE] {"at":433313,"liveBrowsers":2,"tasks":247,"procs":17,"jobChildren":4,"rssMb":2108,"pidsCurrent":277,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++434.31s [SAMPLE] {"at":434314,"liveBrowsers":2,"tasks":247,"procs":17,"jobChildren":4,"rssMb":2110,"pidsCurrent":277,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++435.31s [SAMPLE] {"at":435315,"liveBrowsers":2,"tasks":247,"procs":17,"jobChildren":4,"rssMb":2109,"pidsCurrent":277,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
++436.32s [SAMPLE] {"at":436316,"liveBrowsers":2,"tasks":247,"procs":17,"jobChildren":4,"rssMb":2109,"pidsCurrent":277,"pidsMax":400,"permit":{"active":1,"waiting":2,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:40907 -> no sensor cookies (continuing)
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+Warning: Ignoring invalid character "186" in hex string
+Warning: Ignoring invalid character "35" in hex string
+Warning: Ignoring invalid character "235" in hex string
+Warning: Ignoring invalid character "33" in hex string
+Warning: Ignoring invalid character "181" in hex string
+Warning: Ignoring invalid character "117" in hex string
+Warning: Ignoring invalid character "184" in hex string
+Warning: Ignoring invalid character "108" in hex string
+Warning: Ignoring invalid character "186" in hex string
+Warning: Ignoring invalid character "36" in hex string
+Warning: Ignoring invalid character "251" in hex string
+Warning: Ignoring invalid character "184" in hex string
+Warning: Ignoring invalid character "127" in hex string
+Warning: Ignoring invalid character "246" in hex string
+Warning: Ignoring invalid character "47" in hex string
+Warning: Ignoring invalid character "169" in hex string
+Warning: Ignoring invalid character "231" in hex string
+Warning: Ignoring invalid character "58" in hex string
+Warning: Ignoring invalid character "247" in hex string
+Warning: Ignoring invalid character "240" in hex string
+Warning: Ignoring invalid character "39" in hex string
+Warning: Ignoring invalid character "188" in hex string
+[Processor] PDF parse error: bad XRef entry — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:40907/job-1009-doc-0.pdf (766B PDF)
++437.01s [EVENT] permit.release {"active":1,"waiting":1,"max":1}
++437.01s [EVENT] permit.acquire.granted {"active":1,"waiting":1,"max":1}
+[REPRO-CHILD pid=128094 company=1009] fetch ok key=job-1009-doc-0 chars=176 marker=true ms=129703
+[REPRO-CHILD pid=128094 company=1009] synthetic scoring hold 20000ms (no provider calls)
++437.07s [EVENT] browser.observed.launch {"pid":128716,"ppid":128273,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-S8S9lC "}
++437.32s [SAMPLE] {"at":437323,"liveBrowsers":3,"tasks":307,"procs":25,"jobChildren":4,"rssMb":2538,"pidsCurrent":340,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++438.32s [SAMPLE] {"at":438319,"liveBrowsers":3,"tasks":350,"procs":24,"jobChildren":4,"rssMb":3037,"pidsCurrent":383,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++439.32s [SAMPLE] {"at":439319,"liveBrowsers":3,"tasks":350,"procs":24,"jobChildren":4,"rssMb":3036,"pidsCurrent":383,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++440.32s [SAMPLE] {"at":440323,"liveBrowsers":3,"tasks":350,"procs":24,"jobChildren":4,"rssMb":3039,"pidsCurrent":383,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++441.32s [SAMPLE] {"at":441322,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3147,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++442.32s [SAMPLE] {"at":442322,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3145,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++443.40s [SAMPLE] {"at":443403,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3144,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++444.40s [SAMPLE] {"at":444401,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3144,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
++445.40s [SAMPLE] {"at":445403,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3136,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":1,"max":1}}
+[Processor] WAF session prime for http://127.0.0.1:40907 -> no sensor cookies (continuing)
+[Processor] PDF parse error: Invalid number: Ú (charCode 218) — trying pdftotext fallback
+[Processor] pdftotext fallback succeeded (173 chars)
+[Processor] Browser-PDF fetch succeeded for http://127.0.0.1:40907/job-1010-doc-0.pdf (766B PDF)
++445.73s [EVENT] permit.release {"active":1,"waiting":0,"max":1}
++445.73s [EVENT] permit.acquire.granted {"active":1,"waiting":0,"max":1}
+[REPRO-CHILD pid=128273 company=1010] fetch ok key=job-1010-doc-0 chars=176 marker=true ms=130171
+[REPRO-CHILD pid=128273 company=1010] synthetic scoring hold 20000ms (no provider calls)
+[Processor] Chromium launch attempt 1/3 failed (Failed to launch the browser process:  Code: null) — retrying in 1977ms
++446.40s [SAMPLE] {"at":446404,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3159,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++447.40s [SAMPLE] {"at":447404,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3159,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++447.90s [EVENT] browser.observed.launch {"pid":129245,"ppid":128289,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-uGkdFI "}
+[Processor] Chromium launch attempt 2/3 failed (Failed to launch the browser process:  Code: null) — retrying in 3262ms
++448.15s [EVENT] browser.observed.exit {"pid":129245,"livedMs":250}
++448.40s [SAMPLE] {"at":448405,"liveBrowsers":3,"tasks":361,"procs":25,"jobChildren":4,"rssMb":3158,"pidsCurrent":394,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++448.71s [JOB] done job=8 success=false error=no document text ms=268762
++448.91s [EVENT] browser.observed.exit {"pid":128108,"livedMs":140493}
++449.41s [SAMPLE] {"at":449406,"liveBrowsers":2,"tasks":280,"procs":20,"jobChildren":3,"rssMb":2539,"pidsCurrent":310,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++450.41s [SAMPLE] {"at":450407,"liveBrowsers":2,"tasks":280,"procs":20,"jobChildren":3,"rssMb":2539,"pidsCurrent":310,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++451.41s [EVENT] browser.observed.launch {"pid":129254,"ppid":128289,"parentComm":"node","cmd":"/usr/local/bin/chromium --headless=new about:blank --user-data-dir=/tmp/puppeteer_dev_chrome_profile-g1Rd4J "}
++451.41s [SAMPLE] {"at":451411,"liveBrowsers":3,"tasks":306,"procs":23,"jobChildren":3,"rssMb":2651,"pidsCurrent":339,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++452.42s [SAMPLE] {"at":452419,"liveBrowsers":3,"tasks":367,"procs":26,"jobChildren":3,"rssMb":3218,"pidsCurrent":400,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++453.41s [SAMPLE] {"at":453411,"liveBrowsers":3,"tasks":367,"procs":26,"jobChildren":3,"rssMb":3218,"pidsCurrent":400,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++454.42s [SAMPLE] {"at":454415,"liveBrowsers":3,"tasks":362,"procs":26,"jobChildren":3,"rssMb":3171,"pidsCurrent":395,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++455.41s [SAMPLE] {"at":455413,"liveBrowsers":3,"tasks":367,"procs":26,"jobChildren":3,"rssMb":3219,"pidsCurrent":400,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++456.41s [SAMPLE] {"at":456413,"liveBrowsers":3,"tasks":367,"procs":26,"jobChildren":3,"rssMb":3218,"pidsCurrent":400,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++457.13s [JOB] done job=9 success=true error=- ms=151441
++457.16s [EVENT] browser.observed.exit {"pid":128365,"livedMs":28356}
++457.41s [SAMPLE] {"at":457413,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2110,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++458.41s [SAMPLE] {"at":458413,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2109,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++459.42s [SAMPLE] {"at":459416,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2109,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++460.42s [SAMPLE] {"at":460416,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2109,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++461.42s [SAMPLE] {"at":461417,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2109,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++462.42s [SAMPLE] {"at":462419,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2109,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++463.42s [SAMPLE] {"at":463420,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2109,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++464.42s [SAMPLE] {"at":464423,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2109,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++465.43s [SAMPLE] {"at":465425,"liveBrowsers":2,"tasks":244,"procs":17,"jobChildren":2,"rssMb":2109,"pidsCurrent":274,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++465.84s [JOB] done job=10 success=true error=- ms=151879
++465.92s [EVENT] browser.observed.exit {"pid":128716,"livedMs":28849}
++466.42s [SAMPLE] {"at":466422,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++467.43s [SAMPLE] {"at":467425,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++468.43s [SAMPLE] {"at":468428,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++469.43s [SAMPLE] {"at":469426,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++470.43s [SAMPLE] {"at":470428,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++471.43s [SAMPLE] {"at":471429,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++472.43s [SAMPLE] {"at":472431,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++473.43s [SAMPLE] {"at":473432,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++474.43s [SAMPLE] {"at":474432,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++475.43s [SAMPLE] {"at":475432,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++476.44s [SAMPLE] {"at":476436,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++477.44s [SAMPLE] {"at":477435,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++478.44s [SAMPLE] {"at":478445,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++479.45s [SAMPLE] {"at":479446,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++480.46s [SAMPLE] {"at":480457,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
++481.46s [SAMPLE] {"at":481458,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":955,"pidsCurrent":144,"pidsMax":400,"permit":{"active":1,"waiting":0,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
+[Processor] Browser-PDF fetch failed for http://127.0.0.1:40907/job-1011-doc-0.pdf: Timed out after waiting 30000ms
+[REPRO-CHILD pid=128289 company=1011] fetch ok key=job-1011-doc-0 chars=0 marker=false ms=158093
+[REPRO-CHILD pid=128289 company=1011] synthetic scoring hold 20000ms (no provider calls)
++481.81s [EVENT] permit.release {"active":0,"waiting":0,"max":1}
++482.46s [SAMPLE] {"at":482457,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":144,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++483.46s [SAMPLE] {"at":483458,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":144,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++484.46s [SAMPLE] {"at":484460,"liveBrowsers":1,"tasks":117,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":144,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++485.46s [SAMPLE] {"at":485464,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++486.46s [SAMPLE] {"at":486465,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
+[DIAG][pool-state] pool=main max=20 total=0 idle=0 busy=0 waiting=0
++487.47s [SAMPLE] {"at":487466,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++488.47s [SAMPLE] {"at":488470,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++489.47s [SAMPLE] {"at":489473,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++490.48s [SAMPLE] {"at":490480,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++491.49s [SAMPLE] {"at":491485,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++492.48s [SAMPLE] {"at":492484,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++493.49s [SAMPLE] {"at":493485,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++494.49s [SAMPLE] {"at":494488,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++495.51s [SAMPLE] {"at":495507,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++496.51s [SAMPLE] {"at":496511,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
+[DIAG][pg-activity] {"reason":"interval","backends_total":0,"groups":[],"blocked":[],"local_pools":[{"pool":"main","max":20,"total":0,"idle":0,"waiting":0}]}
++497.51s [SAMPLE] {"at":497513,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++498.51s [SAMPLE] {"at":498514,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++499.51s [SAMPLE] {"at":499514,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++500.52s [SAMPLE] {"at":500519,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++501.52s [SAMPLE] {"at":501521,"liveBrowsers":1,"tasks":116,"procs":8,"jobChildren":1,"rssMb":958,"pidsCurrent":143,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++501.93s [JOB] done job=11 success=false error=no document text ms=179640
++502.02s [EVENT] browser.observed.exit {"pid":129254,"livedMs":50609}
++502.52s [SAMPLE] {"at":502519,"liveBrowsers":0,"tasks":12,"procs":1,"jobChildren":0,"rssMb":125,"pidsCurrent":36,"pidsMax":400,"permit":{"active":0,"waiting":0,"max":1}}
++503.44s [SUMMARY] {"label":"wt-before-tasksmax400","jobs":12,"concurrency":4,"maxConcurrentBrowser":1,"holdMs":20000,"docsPerChild":1,"limits":{"nproc":"Max processes 65536 65536 processes","cgroup":"/sys/fs/cgroup/system.slice/ciq-repro-wt-before-tasksmax400-126309.scope","pidsMax":400},"peak":{"liveBrowsers":4,"tasks":367,"procs":29,"rssMb":3398},"bound_held":false,"jobsOk":8,"jobsFailed":4,"spawn_failures":0,"firstFailureJob":2,"browsersLaunched":15,"extraction":{"expected":12,"markerFound":8,"neverRequested":["job-1002-doc-0","job-1005-doc-0","job-1008-doc-0","job-1011-doc-0"],"skippedBrowserUnavailable":[],"missingMarker":["job-1002-doc-0","job-1005-doc-0","job-1008-doc-0","job-1011-doc-0"]},"timing":{"wallMs":501933,"admissionWaitMs":{"n":12,"mean":93159,"p50":120721,"p95":136429,"max":136429,"total":1117912},"permitHoldMs":{"n":12,"mean":39611,"p50":8427,"p95":126498,"max":126498,"total":475329},"perDocFetchMs":{"n":12,"mean":132772,"p50":130171,"p95":247185,"max":247185,"total":1593260}},"perDoc":[{"key":"job-1001-doc-0","served":2,"chars":175,"markerFound":true,"skipped":false,"fetchMs":8262},{"key":"job-1003-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":16105},{"key":"job-1002-doc-0","served":0,"chars":0,"markerFound":false,"skipped":false,"fetchMs":136495},{"key":"job-1000-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":144634},{"key":"job-1004-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":123731},{"key":"job-1005-doc-0","served":0,"chars":0,"markerFound":false,"skipped":false,"fetchMs":240902},{"key":"job-1006-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":128976},{"key":"job-1007-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":129003},{"key":"job-1008-doc-0","served":0,"chars":0,"markerFound":false,"skipped":false,"fetchMs":247185},{"key":"job-1009-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":129703},{"key":"job-1010-doc-0","served":2,"chars":176,"markerFound":true,"skipped":false,"fetchMs":130171},{"key":"job-1011-doc-0","served":0,"chars":0,"markerFound":false,"skipped":false,"fetchMs":158093}],"all_documents_extracted":false,"finalBroker":{"llm":{"active":0,"waiting":0,"max":8},"browser":{"active":0,"waiting":0,"max":1},"proc":{"active":0,"waiting":0,"max":6}},"quarantined":0,"events":66,"samples":2003}
+exit=0
