@@ -1598,7 +1598,7 @@ export async function startWorker(workerId?: string): Promise<Worker> {
  * BATCH_STOP_RULE_FAILED_JOBS > 0. When tripped it runs the same sequence as
  * POST /batch/cancel and the caller skips the retry re-enqueue.
  */
-async function stopRuleTripped(batchId: number, jobId: number, error: string, frameworkId: number, workspaceId: number): Promise<boolean> {
+export async function stopRuleTripped(batchId: number, jobId: number, error: string, frameworkId: number, workspaceId: number): Promise<boolean> {
   return enforceBatchStopRule(batchId, jobId, error, {
     threshold: readStopRuleThreshold(),
     countFailures: async (id) => {
@@ -1610,15 +1610,27 @@ async function stopRuleTripped(batchId: number, jobId: number, error: string, fr
     cancelBatch: (id, reason) => runStopRuleCancelSequence(id, reason, {
       flag: cancelBatch,
       purge: async (bid) => { const { removeBatchJobs } = await import("./queue.js"); await removeBatchJobs(bid); },
-      snapshot: async (bid) => {
-        const { pool } = await import("./db.js");
-        const b = await pool.query("SELECT list_id FROM batch_runs WHERE id = $1", [bid]);
-        const listId = b.rows[0]?.list_id != null ? Number(b.rows[0].list_id) : undefined;
-        await saveBatchSnapshot(bid, frameworkId, workspaceId, listId);
-      },
-      pgCancel: (bid, r) => storage.cancelBatchRun(bid, r).then(() => undefined),
+      snapshot: (bid, r) => saveStopRuleSnapshot(bid, frameworkId, workspaceId, r),
+      pgCancel: (bid, r) => storage.cancelBatchRun(bid, r),
     }),
   });
+}
+
+/**
+ * Stop-rule snapshot: preserves completed companies like POST /batch/cancel,
+ * then marks every snapshot row of the batch rejected with an explicit
+ * "cancelled/partial" reason so it can never read as an accepted or
+ * comprehensive result. Exported for the real-Postgres stop-rule test.
+ */
+export async function saveStopRuleSnapshot(batchId: number, frameworkId: number, workspaceId: number, reason: string): Promise<void> {
+  const { pool } = await import("./db.js");
+  const b = await pool.query("SELECT list_id FROM batch_runs WHERE id = $1", [batchId]);
+  const listId = b.rows[0]?.list_id != null ? Number(b.rows[0].list_id) : undefined;
+  await saveBatchSnapshot(batchId, frameworkId, workspaceId, listId);
+  await pool.query(
+    "UPDATE analysis_results SET acceptance_state = 'rejected', accepted_at = NULL, rejection_reason = $2 WHERE batch_id = $1",
+    [batchId, `cancelled/partial snapshot — batch stopped by ${reason}; not comprehensive`],
+  );
 }
 
 export function cancelBatch(batchId: number): void {

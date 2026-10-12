@@ -98,7 +98,7 @@ async function simulate(threshold: number) {
           flag: () => { steps.push("flag"); cancelled = true; },
           purge: async () => { steps.push("purge"); queue.length = 0; },
           snapshot: async () => { steps.push("snapshot"); },
-          pgCancel: async () => { steps.push("pgCancel"); },
+          pgCancel: async () => { steps.push("pgCancel"); return true; },
           log: () => {},
         }),
       });
@@ -140,7 +140,7 @@ test("threshold N=3: Nth failed job trips → batch cancelled, snapshot saved, q
   const r = await simulate(3);
   assert.equal(r.cancelled, true);
   assert.equal(r.failedAttempts, 3, "stops on the 3rd failed attempt");
-  assert.deepEqual(r.steps, ["flag", "purge", "snapshot", "pgCancel"], "POST /batch/cancel order, snapshot included");
+  assert.deepEqual(r.steps, ["flag", "pgCancel", "purge", "snapshot"], "durable PG cancel issued before purge; snapshot only after PG cancel committed");
   assert.equal(r.queued, 0, "queued jobs purged");
   assert.equal(r.retriesEnqueued, 2, "only the 2 sub-threshold failures retried; the tripping failure is not re-enqueued");
   assert.equal(r.exhausted, 0);
@@ -152,11 +152,74 @@ test("cancel sequence: purge/snapshot errors are non-fatal; PG cancel still runs
     flag: () => { steps.push("flag"); },
     purge: async () => { steps.push("purge"); throw new Error("redis down"); },
     snapshot: async () => { steps.push("snapshot"); throw new Error("snapshot failed"); },
-    pgCancel: async (_b, reason) => { steps.push(`pgCancel:${reason}`); },
+    pgCancel: async (_b, reason) => { steps.push(`pgCancel:${reason}`); return true; },
     log: (l) => logs.push(l),
   });
-  assert.deepEqual(steps, ["flag", "purge", "snapshot", "pgCancel:stop rule S4"]);
+  assert.deepEqual(steps, ["flag", "pgCancel:stop rule S4", "purge", "snapshot"]);
   assert.equal(logs.length, 2);
+});
+
+/** Promise that never settles (a hung Redis/BullMQ purge or a hung snapshot query). */
+const never = () => new Promise<void>(() => {});
+/** Resolves with the elapsed ms when `p` settles, or rejects if it does not settle within `ms`. */
+async function settlesWithin(p: Promise<unknown>, ms: number, what: string): Promise<number> {
+  const t0 = Date.now(); let timer: NodeJS.Timeout | undefined;
+  await Promise.race([p, new Promise((_r, rej) => { timer = setTimeout(() => rej(new Error(`${what} did not settle within ${ms}ms`)), ms); })]);
+  clearTimeout(timer); return Date.now() - t0;
+}
+
+for (const [label, purge, snapshot] of [
+  ["HANGING purge", never, async () => {}],
+  ["HANGING snapshot", async () => {}, never],
+  ["HANGING purge AND snapshot", never, never],
+  ["FAILING purge AND snapshot", async () => { throw new Error("redis down"); }, async () => { throw new Error("pg snapshot error"); }],
+  ["HANGING purge, FAILING snapshot", never, async () => { throw new Error("pg snapshot error"); }],
+] as const) {
+  test(`durable cancel: ${label} cannot delay the PG cancel; sequence completes in bounded time`, async () => {
+    let pgCommittedAt = 0; let flagged = false; const t0 = Date.now(); const logs: string[] = [];
+    const seq = runStopRuleCancelSequence(5, "stop rule S4", {
+      flag: () => { flagged = true; },
+      purge, snapshot,
+      pgCancel: async () => { await new Promise((r) => setTimeout(r, 5)); pgCommittedAt = Date.now() - t0; return true; },
+      log: (l) => logs.push(l), purgeTimeoutMs: 300, snapshotTimeoutMs: 300,
+    });
+    assert.equal(flagged, true, "local/Redis cancel flag issued synchronously, before anything is awaited");
+    await settlesWithin(seq, 2000, "cancel sequence");
+    assert.ok(pgCommittedAt > 0 && pgCommittedAt < 100, `PG cancel committed promptly (${pgCommittedAt}ms), not after the ${label}`);
+    assert.ok(logs.length >= 1, "the hang/failure is logged");
+  });
+}
+
+test("durable cancel: PG cancel resolves while the purge is still hung (observed mid-flight)", async () => {
+  let pgDone = false; let purgeSettled = false;
+  const seq = runStopRuleCancelSequence(6, "stop rule S4", {
+    flag: () => {}, snapshot: never,
+    purge: () => never().finally(() => { purgeSettled = true; }),
+    pgCancel: async () => { pgDone = true; return true; },
+    log: () => {}, purgeTimeoutMs: 200, snapshotTimeoutMs: 200,
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(pgDone, true, "PG cancel already committed");
+  assert.equal(purgeSettled, false, "purge still hanging");
+  await seq;
+});
+
+test("durable cancel: PG cancel error propagates after the bounded purge; no snapshot", async () => {
+  const steps: string[] = [];
+  await assert.rejects(runStopRuleCancelSequence(7, "r", {
+    flag: () => {}, purge: never, snapshot: async () => { steps.push("snapshot"); },
+    pgCancel: async () => { throw new Error("pg down"); }, log: () => {}, purgeTimeoutMs: 100,
+  }), /pg down/);
+  assert.deepEqual(steps, []);
+});
+
+test("durable cancel: already-cancelled batch (pgCancel → false) takes no second snapshot", async () => {
+  const steps: string[] = [];
+  await runStopRuleCancelSequence(8, "r", {
+    flag: () => {}, purge: async () => { steps.push("purge"); }, snapshot: async () => { steps.push("snapshot"); },
+    pgCancel: async () => false, log: () => {},
+  });
+  assert.deepEqual(steps, ["purge"]);
 });
 
 test("SQL: COUNT_BATCH_FAILURES_SQL counts first failed attempts and exhaustion (optional, local PG)", { skip: !process.env.STOP_RULE_TEST_PG }, async () => {

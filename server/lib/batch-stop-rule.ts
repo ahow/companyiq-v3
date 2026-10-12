@@ -71,7 +71,7 @@ export const COUNT_BATCH_FAILURES_SQL = `
 export interface StopRuleDeps {
   threshold: number;
   countFailures: (batchId: number) => Promise<BatchFailureCounts>;
-  /** Same sequence as POST /batch/cancel: flag + queue purge + snapshot + PG cancel. */
+  /** Durable-first cancel (runStopRuleCancelSequence): flag + PG cancel, bounded purge, cancelled/partial snapshot. */
   cancelBatch: (batchId: number, reason: string) => Promise<void>;
   log?: (line: string) => void;
 }
@@ -110,28 +110,75 @@ export async function enforceBatchStopRule(
   return true;
 }
 
+/** Upper bound on the queue purge inside the stop-rule cancel sequence. */
+export const STOP_RULE_PURGE_TIMEOUT_MS = 10_000;
+/** Upper bound the cancel sequence waits for the (cancelled/partial) snapshot. */
+export const STOP_RULE_SNAPSHOT_TIMEOUT_MS = 30_000;
+
 export interface CancelSequenceSteps {
-  /** Local + Redis cancel flag (worker.cancelBatch) — first, so no new claim starts. */
+  /** Local + Redis cancel flag (worker.cancelBatch) — synchronous, first, so no new claim starts. */
   flag: (batchId: number) => void;
-  /** Purge the batch's still-queued BullMQ jobs (queue.removeBatchJobs). */
+  /** Purge the batch's still-queued BullMQ jobs (queue.removeBatchJobs). Bounded by purgeTimeoutMs. */
   purge: (batchId: number) => Promise<void>;
-  /** saveBatchSnapshot for the batch (non-fatal, as in POST /batch/cancel). */
-  snapshot: (batchId: number) => Promise<void>;
-  /** storage.cancelBatchRun: PG batch status → cancelled (claimJob fence). */
-  pgCancel: (batchId: number, reason: string) => Promise<void>;
+  /**
+   * Save a snapshot of completed companies, explicitly marked cancelled/partial
+   * (never accepted/comprehensive). Only run by the caller whose pgCancel
+   * actually transitioned the batch; bounded by snapshotTimeoutMs; non-fatal.
+   */
+  snapshot: (batchId: number, reason: string) => Promise<void>;
+  /**
+   * storage.cancelBatchRun: durable PG batch status → cancelled (claimJob
+   * fence). Returns true when THIS call transitioned the row, false when it was
+   * already cancelled (idempotent no-op).
+   */
+  pgCancel: (batchId: number, reason: string) => Promise<boolean>;
   log?: (line: string) => void;
+  purgeTimeoutMs?: number;
+  snapshotTimeoutMs?: number;
+}
+
+/** Await `p` for at most `ms`; never rejects. Resolves "ok" | "failed" | "timeout". */
+async function bounded(p: () => Promise<unknown>, ms: number, what: string, log: (l: string) => void): Promise<"ok" | "failed" | "timeout"> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<"timeout">((r) => { timer = setTimeout(() => r("timeout"), ms); });
+  const work = Promise.resolve().then(p).then(
+    () => "ok" as const,
+    (e: any) => { log(`[BATCH-STOP-RULE] ${what} failed (non-fatal): ${e?.message ?? e}`); return "failed" as const; },
+  );
+  const out = await Promise.race([work, timeout]);
+  clearTimeout(timer);
+  if (out === "timeout") log(`[BATCH-STOP-RULE] ${what} still pending after ${ms}ms — abandoned (non-fatal)`);
+  return out;
 }
 
 /**
- * The POST /batch/cancel sequence the stop rule runs when tripped:
- * flag → purge queue → snapshot → PG cancel. Purge and snapshot errors are
- * logged and do not prevent the PG cancel; a PG cancel error propagates (the
- * caller still suppresses the retry, see enforceBatchStopRule).
+ * Cancel sequence the stop rule runs when tripped. Durable cancel first:
+ *   1. flag (local + Redis notification, synchronous fire-and-forget)
+ *   2. PG cancel and queue purge start together; the PG cancel is never gated
+ *      behind the purge, and the purge is bounded by purgeTimeoutMs
+ *   3. only after the PG cancel committed AND transitioned the batch: a bounded
+ *      snapshot, marked cancelled/partial by the snapshot step
+ * Purge/snapshot errors or hangs are logged and never block or undo the PG
+ * cancel; a PG cancel error propagates (the caller still suppresses the retry,
+ * see enforceBatchStopRule). Total time is bounded by the PG cancel plus the
+ * two timeouts.
  */
 export async function runStopRuleCancelSequence(batchId: number, reason: string, s: CancelSequenceSteps): Promise<void> {
   const log = s.log ?? ((l: string) => console.warn(l));
   s.flag(batchId);
-  await s.purge(batchId).catch((e: any) => log(`[BATCH-STOP-RULE] removeBatchJobs failed: ${e?.message ?? e}`));
-  await s.snapshot(batchId).catch((e: any) => log(`[BATCH-STOP-RULE] snapshot failed (non-fatal): ${e?.message ?? e}`));
-  await s.pgCancel(batchId, reason);
+  const pg = Promise.resolve().then(() => s.pgCancel(batchId, reason));
+  const purge = bounded(() => s.purge(batchId), s.purgeTimeoutMs ?? STOP_RULE_PURGE_TIMEOUT_MS, "removeBatchJobs", log);
+  let transitioned: boolean;
+  try {
+    transitioned = await pg;
+  } catch (e) {
+    await purge;
+    throw e;
+  }
+  if (transitioned) {
+    await Promise.all([purge, bounded(() => s.snapshot(batchId, reason), s.snapshotTimeoutMs ?? STOP_RULE_SNAPSHOT_TIMEOUT_MS, "cancelled/partial snapshot", log)]);
+  } else {
+    log(`[BATCH-STOP-RULE] batch=${batchId} already cancelled by another path — snapshot left to that path`);
+    await purge;
+  }
 }
