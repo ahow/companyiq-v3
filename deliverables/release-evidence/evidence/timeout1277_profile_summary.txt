@@ -1,0 +1,11 @@
+node --cpu-prof (v22) of timeout1277_analyze_prep.ts 24 (AXA, 43 docs, 35.4M chars, 2675 workspace peers), local 2 vCPU, 2026-10-12
+Harness wall 10,804ms (aboutness 10,793ms, provenance 10ms); kept 43, deprioritized 8.
+Main-thread profile total 12,504ms (incl. tsx load + 458ms corpus JSON read):
+  inclusive  scoreAboutness (aboutness.ts)   10,710ms  85.7%
+  inclusive  countTerm      (aboutness.ts)   10,516ms  84.1%   <- per-peer RegExp construction + exec over 400k-char slice
+  self       countTerm                        3,327ms  26.6%   (remainder attributed to thousands of distinct per-peer RegExp frames)
+  readFileSync corpus                           458ms   3.7%
+  garbage collector                             100ms   0.8%
+Worker thread (tsx loader): 94% idle.
+Conclusion: the analysis-prep aboutness loop is CPU-bound and O(docs x peers), but costs ~10.8s locally for AXA,
+not the 7m26s of silence observed in prod. It is a secondary contributor, not the dominant cause.
