@@ -29,7 +29,7 @@
 import * as storage from "../storage.js";
 import { getDiagContext, setDiagStage, diagTags, startStageTimer, runWithChildTimer } from "./diag-context.js";
 import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
-import { LifecycleCancelledError, isLifecycleCancelledError, requireOwnershipForBatchWrite, revokeAttempt } from "./lifecycle-fence.js";
+import { LifecycleCancelledError, isLifecycleCancelledError, requireOwnershipForBatchWrite, revokeAttempt, createOperationScope, OperationAbortedError, isOperationAbortedError } from "./lifecycle-fence.js";
 import { searchCompanyDocuments, runTargetedDisclosureQuery, resolveCikForCompany, type DiscoveryResult } from "./discovery.js";
 import {
   getRequirementsForJurisdiction,
@@ -1130,13 +1130,35 @@ async function runFetchPhase(opts: {
         if (forceHeadless2a && !isPinnedOrKnown) {
           console.log(`[${companyName}] Fix 2a: forcing headless for ${doc.url.slice(0, 80)} (host ${docHost} has ${historyFails} prior empty/transient failures)`);
         }
-        // Wrap processDocument with a per-document timeout
+        // Wrap processDocument with an operation-scoped per-document deadline.
+        // CHANGE (operation-scoped cancellation, item 1) — the per-document budget
+        // is now ENFORCED BY CANCELLATION rather than by abandoning the await:
+        // createOperationScope arms an AbortController + absolute wall-clock deadline
+        // (PER_DOCUMENT_TIMEOUT_MS, VALUE UNCHANGED) combined with the attempt's
+        // lifecycle/revocation signal. The scope is threaded into processDocument so
+        // that, when the deadline elapses, the underlying operation ABORTS: it
+        // withdraws any queued browser-permit request from the parent broker, closes
+        // and reaps the browser before releasing the permit, and refuses to persist a
+        // late result — instead of silently holding the single browser permit past
+        // budget and serialising every other company on the replica (batch-1277 RCA).
         const fetchStart = Date.now();
-        const content = await withTimeout(
-          processDocument(doc.url, type, { forceHeadless: forceHeadless2a }),
-          PER_DOCUMENT_TIMEOUT_MS,
-          `[${companyName}] fetch ${doc.url.slice(0, 80)}`
-        );
+        const scope = createOperationScope({
+          budgetMs: PER_DOCUMENT_TIMEOUT_MS,
+          ctx: getDiagContext(),
+          label: `[${companyName}] fetch ${doc.url.slice(0, 80)}`,
+        });
+        let content: string;
+        try {
+          // Promise.race: whichever settles first wins. whenAborted() rejects with an
+          // OperationAbortedError at the deadline; processDocument itself also observes
+          // the scope and aborts its in-flight work, so the permit is actually freed.
+          content = await Promise.race([
+            processDocument(doc.url, type, { forceHeadless: forceHeadless2a, scope }),
+            scope.whenAborted(`[${companyName}] fetch ${doc.url.slice(0, 80)}`),
+          ]);
+        } finally {
+          scope.dispose();
+        }
         // 41-K: Track fetch latency for circuit-breaker
         const fetchElapsed = Date.now() - fetchStart;
         // Fix B: issuer-domain PDFs are expected to be large/slow — they must
@@ -1266,7 +1288,17 @@ async function runFetchPhase(opts: {
           }
         }
       } catch (error: any) {
-        if (error instanceof TimeoutError) {
+        if (isOperationAbortedError(error)) {
+          // CHANGE (operation-scoped cancellation, item 1/5) — the per-document
+          // deadline elapsed and the operation was ABORTED (permit withdrawn/freed,
+          // no late persistence). This is a budget condition, NOT a dead document:
+          // record a RETRYABLE failure so the URL stays pending for the deferred
+          // sweep / a later pass, rather than marking it permanently dead (which the
+          // old withTimeout→TimeoutError path did, losing recoverable documents).
+          console.warn(`[${companyName}] Document fetch ABORTED at deadline (${PER_DOCUMENT_TIMEOUT_MS / 1000}s) — keeping retryable: ${doc.url.slice(0, 100)} (${error.reason ?? "deadline_elapsed"})`);
+          if (docHost) hostFailHistory.set(docHost, (hostFailHistory.get(docHost) || 0) + 1);
+          await storage.recordFetchFailure(companyId, doc.url, "deadline_elapsed");
+        } else if (error instanceof TimeoutError) {
           console.warn(`[${companyName}] Document fetch TIMEOUT (${PER_DOCUMENT_TIMEOUT_MS / 1000}s) — marking dead: ${doc.url.slice(0, 100)}`);
           await storage.recordFetchDead(companyId, doc.url, "timeout");
         } else if (error instanceof TransientFetchError) {
@@ -1682,7 +1714,12 @@ async function runFetchPhase(opts: {
     const DEFERRED_RETRY_CONCURRENCY = Math.max(1, parseInt(process.env.DEFERRED_RETRY_CONCURRENCY || "2", 10));
     if (DEFERRED_RETRY_MAX_DOCS > 0 && DEFERRED_RETRY_BUDGET_MS > 0) {
       const allDocs = await storage.getAcceptedDocuments(companyId);
-      const budgetReason = /budget_exhausted|budget_exceeded/i;
+      // CHANGE (operation-scoped cancellation, item 6) — treat the new cancellation
+      // reasons as budget-starved too: admission_timeout (queued recovery gave up the
+      // permit wait at the company deadline) and deadline_elapsed (operation aborted
+      // before the URL was genuinely attempted). Like budget_exhausted these are NOT
+      // real document failures, so the bounded deferred sweep re-attempts them ONCE.
+      const budgetReason = /budget_exhausted|budget_exceeded|admission_timeout|deadline_elapsed/i;
       const deferredCandidates = allDocs
         .filter(d => d.fetchStatus === "dead" && budgetReason.test(String((d as any).failureReason || "")))
         .slice(0, DEFERRED_RETRY_MAX_DOCS);
@@ -1698,19 +1735,38 @@ async function runFetchPhase(opts: {
             if (remaining <= 0) break;
             try {
               const type = inferDocumentType(doc.url);
-              const content = await withTimeout(
-                processDocument(doc.url, type),
-                Math.min(PER_DOCUMENT_TIMEOUT_MS, remaining),
-                `[${companyName}] deferred-retry ${doc.url.slice(0, 80)}`
-              );
-              if (content && content.length > 50) {
+              // CHANGE (operation-scoped cancellation, item 1/5) — bound the deferred
+              // re-attempt by the SMALLER of the per-document budget and the remaining
+              // sweep wall-clock, enforced by CANCELLATION (scope) so an expired
+              // re-attempt withdraws from the broker / frees the permit rather than
+              // hanging the sweep. VALUES unchanged (still Math.min(PER_DOCUMENT…,
+              // remaining)); only the enforcement mechanism changed.
+              const scope = createOperationScope({
+                budgetMs: Math.max(1, Math.min(PER_DOCUMENT_TIMEOUT_MS, remaining)),
+                ctx: getDiagContext(),
+                label: `[${companyName}] deferred-retry ${doc.url.slice(0, 80)}`,
+              });
+              let content: string;
+              try {
+                content = await Promise.race([
+                  processDocument(doc.url, type, { scope }),
+                  scope.whenAborted(`[${companyName}] deferred-retry ${doc.url.slice(0, 80)}`),
+                ]);
+              } finally {
+                scope.dispose();
+              }
+              // Item 5 — refuse late-result persistence: if the operation was aborted
+              // (deadline passed) we must NOT call recordFetchSuccess, even if a
+              // straggling result arrived — the URL stays budget-starved/retryable.
+              if (content && content.length > 50 && !scope.aborted()) {
                 await storage.recordFetchSuccess(companyId, doc.url, content);
                 deferredRecovered++;
                 console.log(`[${companyName}] CHANGE 5: deferred retry recovered ${content.length} chars from ${doc.url.slice(0, 80)}`);
               }
             } catch (retryErr: any) {
               // Best-effort extra attempt — leave the existing dead status/reason
-              // untouched. Do not re-mark, escalate, or re-queue (no loop).
+              // untouched. Do not re-mark, escalate, or re-queue (no loop). An
+              // OperationAbortedError here is expected when the sweep budget elapses.
               console.log(`[${companyName}] CHANGE 5: deferred retry failed for ${doc.url.slice(0, 80)}: ${String(retryErr?.message || retryErr).slice(0, 100)}`);
             }
           }

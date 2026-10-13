@@ -23,9 +23,9 @@ import {
   PROXY_CREDIT_ALERT_KIND,
 } from "./credit-breaker.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
-import { dispatchRevokedReason } from "./lifecycle-fence.js";
+import { dispatchRevokedReason, OperationAbortedError, isOperationAbortedError, type OperationScope } from "./lifecycle-fence.js";
 import { beginStage } from "./diag-context.js";
-import { isIsolatedChild, remoteAcquire, remoteRelease, registerDescendantGroup } from "./isolation-ipc.js";
+import { isIsolatedChild, remoteAcquire, remoteRelease, registerDescendantGroup, emitLeaseEvent, nextOpId } from "./isolation-ipc.js";
 
 // User-facing message shown on the dashboard banner when the residential proxy
 // runs out of credit. Kept as a constant so the raise + any future references
@@ -545,6 +545,18 @@ function extractTextFromHtml(html: string): string {
 // glyphs via pdf-parse but no real text).
 const PDF_TEXT_MIN_CHARS = 100;
 
+// batch-1277 / bounded extraction. pdf-parse (Path 1 in extractTextFromPdf) runs
+// a SYNCHRONOUS, CPU-bound parse inside this Node process: it cannot observe an
+// AbortSignal and cannot be interrupted once started, so a pathological / huge
+// PDF could block the event loop past the operation deadline. The other two
+// extraction paths (pdftotext, OCR) run in child processes and are already
+// deadline-bounded + SIGKILL-able (runProcessCollect). We bound pdf-parse by
+// INPUT SIZE: buffers larger than PDF_PARSE_MAX_BYTES skip the in-process parse
+// and go straight to the killable pdftotext subprocess. Default 30 MB keeps
+// genuine annual/sustainability reports on the fast path while capping worst-case
+// in-process parse time.
+const PDF_PARSE_MAX_BYTES = parseInt(process.env.PDF_PARSE_MAX_BYTES || String(30 * 1024 * 1024), 10);
+
 // ── Subprocess concurrency ceiling ─────────────────────────────────────────
 // Bounds concurrent external forks (pdftotext / pdftoppm / tesseract) so a batch
 // cannot exhaust the container's RLIMIT_NPROC / pids cgroup cap. This is a CEILING,
@@ -680,12 +692,15 @@ function runProcessCollect(
  * plain text to stdout. Handles many PDFs that pdf-parse mishandles (compressed
  * object streams, unusual encodings). Returns "" on any failure.
  */
-async function extractViaPdftotext(buffer: Buffer): Promise<string> {
+async function extractViaPdftotext(buffer: Buffer, budgetMs?: number): Promise<string> {
   try {
+    // batch-1277: cap the subprocess timeout by the operation's remaining budget
+    // so an expired operation does not keep a pdftotext child alive past deadline.
+    const timeoutMs = budgetMs != null ? Math.max(1, Math.min(60_000, Math.floor(budgetMs))) : 60_000;
     const res = await runProcessCollect(
       "pdftotext",
       ["-q", "-enc", "UTF-8", "-", "-"],
-      { input: buffer, timeoutMs: 60_000, maxBuffer: 50 * 1024 * 1024 },
+      { input: buffer, timeoutMs, maxBuffer: 50 * 1024 * 1024 },
     );
     const text = res.stdout.toString("utf8");
     if (res.timedOut) {
@@ -707,13 +722,15 @@ async function extractViaPdftotext(buffer: Buffer): Promise<string> {
  * OCR budget so a pathological document cannot stall the pipeline. Always cleans
  * up temp files. Returns whatever text was recognised (may be short).
  */
-async function extractViaOcr(buffer: Buffer): Promise<string> {
+async function extractViaOcr(buffer: Buffer, budgetMs?: number): Promise<string> {
   const tmpDir = os.tmpdir();
   const token = crypto.randomBytes(8).toString("hex");
   const tmpPdf = path.join(tmpDir, `ciq_ocr_${token}.pdf`);
   const tmpBase = path.join(tmpDir, `ciq_ocr_${token}`);
   const createdFiles: string[] = [tmpPdf];
-  const OCR_TOTAL_BUDGET_MS = 120_000;
+  // batch-1277: bound the overall OCR budget (and each child timeout below) by the
+  // operation's remaining budget so an expired operation cannot keep rasterising.
+  const OCR_TOTAL_BUDGET_MS = budgetMs != null ? Math.max(1, Math.min(120_000, Math.floor(budgetMs))) : 120_000;
   const started = Date.now();
   try {
     await fsp.writeFile(tmpPdf, buffer);
@@ -722,7 +739,7 @@ async function extractViaOcr(buffer: Buffer): Promise<string> {
     const ppm = await runProcessCollect(
       "pdftoppm",
       ["-jpeg", "-r", "150", "-l", "8", tmpPdf, tmpBase],
-      { input: undefined, timeoutMs: 60_000, maxBuffer: 1024 },
+      { input: undefined, timeoutMs: Math.max(1, Math.min(60_000, OCR_TOTAL_BUDGET_MS)), maxBuffer: 1024 },
     );
     if (ppm.timedOut) {
       console.log(`[Processor] OCR: pdftoppm timed out — aborting OCR`);
@@ -751,7 +768,7 @@ async function extractViaOcr(buffer: Buffer): Promise<string> {
       const t = await runProcessCollect(
         "tesseract",
         [img, "stdout", "-l", "eng", "--psm", "1"],
-        { input: undefined, timeoutMs: 30_000, maxBuffer: 20 * 1024 * 1024 },
+        { input: undefined, timeoutMs: Math.max(1, Math.min(30_000, OCR_TOTAL_BUDGET_MS - (Date.now() - started))), maxBuffer: 20 * 1024 * 1024 },
       );
       const pageText = t.stdout.toString("utf8").trim();
       if (pageText) parts.push(pageText);
@@ -769,9 +786,18 @@ async function extractViaOcr(buffer: Buffer): Promise<string> {
   }
 }
 
-async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+async function extractTextFromPdf(buffer: Buffer, scope?: OperationScope): Promise<string> {
+  const abortIfExpired = (where: string) => {
+    if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", where);
+  };
+  abortIfExpired("extract_start");
   // ── Path 1: pdf-parse (primary) ──────────────────────────────────────────
-  try {
+  // pdf-parse is a SYNCHRONOUS, CPU-bound, NON-INTERRUPTIBLE in-process parse: it
+  // cannot observe scope.signal. We bound it by INPUT SIZE (PDF_PARSE_MAX_BYTES) —
+  // oversized buffers skip it and go straight to the killable pdftotext subprocess.
+  if (buffer.length > PDF_PARSE_MAX_BYTES) {
+    console.log(`[Processor] PDF ${buffer.length} bytes > PDF_PARSE_MAX_BYTES (${PDF_PARSE_MAX_BYTES}) — skipping in-process pdf-parse, using pdftotext subprocess`);
+  } else try {
     const data = await pdfParse(buffer);
     const raw = data.text || "";
     // I81: horizon-marker table normaliser — inlines time-horizon markers
@@ -792,8 +818,9 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   }
 
   // ── Path 2: pdftotext (poppler-utils) fallback ───────────────────────────
+  abortIfExpired("extract_before_pdftotext");
   try {
-    const viaCli = await extractViaPdftotext(buffer);
+    const viaCli = await extractViaPdftotext(buffer, scope?.remainingMs());
     if (viaCli && viaCli.trim().length >= PDF_TEXT_MIN_CHARS) {
       console.log(`[Processor] pdftotext fallback succeeded (${viaCli.trim().length} chars)`);
       return viaCli;
@@ -806,8 +833,9 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   // ── Path 3: OCR (pdftoppm + tesseract) fallback ──────────────────────────
   // For image-based/scanned PDFs. Return whatever OCR recovers — any text is
   // more useful than empty for these documents.
+  abortIfExpired("extract_before_ocr");
   try {
-    const viaOcr = await extractViaOcr(buffer);
+    const viaOcr = await extractViaOcr(buffer, scope?.remainingMs());
     return viaOcr || "";
   } catch (e: any) {
     console.log(`[Processor] OCR fallback error: ${e?.message}`);
@@ -835,7 +863,14 @@ const BROWSER_FETCH_TIMEOUT = parseInt(process.env.BROWSER_FETCH_TIMEOUT_MS || "
 // getSharedBrowser() serialises the launch itself behind sharedBrowserLaunching.
 const MAX_CONCURRENT_BROWSER = parseInt(process.env.MAX_CONCURRENT_BROWSER || "1", 10);
 let activeBrowserFetches = 0;
-const browserWaiters: Array<() => void> = [];
+// batch-1277: queued waiters are now cancellable objects (not bare resolvers) so
+// a waiter whose operation scope aborts (deadline elapsed / attempt revoked)
+// withdraws from the queue and never receives a slot. A `settled` guard makes a
+// grant/abort race safe: whichever of grant()/abort fires first wins, the other
+// is a no-op, and a slot is never leaked (grant() on an already-settled waiter
+// hands the slot straight on to the next waiter via releaseBrowserSlot()).
+interface BrowserWaiter { grant: () => void; settled: boolean }
+const browserWaiters: BrowserWaiter[] = [];
 
 // Counting semaphore with direct slot hand-off. When releasing, if a waiter is
 // queued we resolve it WITHOUT decrementing the count (the slot is transferred),
@@ -843,14 +878,35 @@ const browserWaiters: Array<() => void> = [];
 // race of the previous decrement-then-waiter-reincrements design, where a fresh
 // acquire could observe the transient (count-1) window and push activeBrowserFetches
 // above MAX_CONCURRENT_BROWSER — important now that MAX may be > 1.
-async function acquireBrowserSlot(): Promise<void> {
+// batch-1277: `scope` carries the operation's absolute deadline + combined abort
+// signal. A queued waiter that aborts withdraws from the broker/local queue (so
+// it is never granted a permit it would dispatch dead work on), and a permit
+// granted in the SAME tick as the abort is released immediately rather than used.
+async function acquireBrowserSlot(scope?: OperationScope): Promise<void> {
+  // Deadline already elapsed / attempt revoked before we even queued: do not take
+  // a slot. (remoteAcquire makes the same check for the brokered path.)
+  if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "browser_admission");
   if (isIsolatedChild()) {
     // Worker isolation: MAX_CONCURRENT_BROWSER is brokered by the parent so it
-    // stays a per-replica limit across all job children.
+    // stays a per-replica limit across all job children. Passing scope.signal
+    // makes the queued wait cancellable: on abort, remoteAcquire withdraws the
+    // request from the parent queue (cancelAcquire) and a grant that crosses the
+    // withdrawal in flight is handed straight back parent-side.
     const diagEndRemote = beginStage("browser_admission_wait", "browser_slot"); // DIAGNOSTIC-ONLY
-    await remoteAcquire("browser");
+    try {
+      await remoteAcquire("browser", scope?.signal, () => new OperationAbortedError(scope?.abortReason() || "aborted", "browser_admission"));
+    } catch (e) {
+      diagEndRemote(false);
+      throw e;
+    }
     diagEndRemote(true);
     childBrowserHolders++;
+    // Grant/abort race: we hold the permit but the scope aborted in the same tick
+    // the grant arrived — release immediately and never dispatch.
+    if (scope?.aborted()) {
+      await releaseChildBrowserPermit();
+      throw new OperationAbortedError(scope.abortReason() || "aborted", "browser_admission_postgrant");
+    }
     console.log(`[BROWSER-LIFECYCLE] child=${process.pid} permit acquired holders=${childBrowserHolders}`);
     return;
   }
@@ -858,10 +914,35 @@ async function acquireBrowserSlot(): Promise<void> {
     activeBrowserFetches++;
     return;
   }
-  // At capacity — wait until releaseBrowserSlot() hands a slot directly to us.
+  // At capacity — wait until releaseBrowserSlot() hands a slot directly to us, or
+  // our scope aborts first (deadline elapsed / attempt revoked), in which case we
+  // withdraw from the queue and never consume a slot.
   const diagEndWait = beginStage("browser_admission_wait", "browser_slot"); // DIAGNOSTIC-ONLY
-  await new Promise<void>((resolve) => browserWaiters.push(resolve));
-  diagEndWait(true);
+  await new Promise<void>((resolve, reject) => {
+    const w: BrowserWaiter = { settled: false, grant: () => {} };
+    const sig = scope?.signal;
+    const onAbort = () => {
+      if (w.settled) return;
+      w.settled = true;
+      const i = browserWaiters.indexOf(w);
+      if (i >= 0) browserWaiters.splice(i, 1);
+      sig?.removeEventListener("abort", onAbort);
+      reject(new OperationAbortedError(scope?.abortReason() || "aborted", "browser_admission"));
+    };
+    w.grant = () => {
+      if (w.settled) {
+        // Already withdrawn (aborted): the slot handed to us is unwanted — pass it
+        // straight on to the next waiter / return it to the pool. No leak.
+        void releaseBrowserSlot();
+        return;
+      }
+      w.settled = true;
+      sig?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    browserWaiters.push(w);
+    if (sig) sig.addEventListener("abort", onAbort, { once: true });
+  }).then(() => diagEndWait(true), (e) => { diagEndWait(false); throw e; });
   // Slot count was retained on our behalf by the releaser; do not increment.
 }
 
@@ -883,7 +964,9 @@ function releaseBrowserSlot(): Promise<void> {
   const next = browserWaiters.shift();
   if (next) {
     // Hand our slot straight to the next waiter without touching the count.
-    next();
+    // Aborted waiters remove themselves from the queue, so `next` is live; the
+    // grant()'s own settled-guard re-hands the slot if it somehow is not.
+    next.grant();
     return Promise.resolve();
   }
   activeBrowserFetches = Math.max(0, activeBrowserFetches - 1);
@@ -1000,7 +1083,11 @@ function browserConnected(b: any): boolean {
  */
 export const processorSlotBroker = {
   browser: {
-    acquire: () => acquireBrowserSlot(),
+    // `scope` is optional so production callers (job-isolation) keep calling
+    // acquire()/release() unchanged; the operation-scoped-cancellation tests pass
+    // a real OperationScope to exercise the queued-waiter withdrawal / grant-abort
+    // race against the production acquireBrowserSlot, not a copied simulation.
+    acquire: (scope?: OperationScope) => acquireBrowserSlot(scope),
     release: () => releaseBrowserSlot(),
     state: () => ({ active: activeBrowserFetches, waiting: browserWaiters.length, max: MAX_CONCURRENT_BROWSER }),
   },
@@ -1174,7 +1261,7 @@ export async function closeSharedBrowser(): Promise<void> {
   }
 }
 
-async function fetchWithBrowser(url: string): Promise<string> {
+async function fetchWithBrowser(url: string, scope?: OperationScope): Promise<string> {
   // If the launch circuit is open, skip immediately without acquiring a slot or
   // attempting another fork. This prevents per-URL launch storms when the
   // container is out of process budget.
@@ -1182,8 +1269,13 @@ async function fetchWithBrowser(url: string): Promise<string> {
     return "";
   }
   if (browserDispatchRefused("processor.fetchWithBrowser:pre-acquire")) return "";
-  await acquireBrowserSlot();
+  // batch-1277: scope-bounded admission — a queued waiter that aborts (deadline /
+  // revoke) withdraws from the broker/local queue and never dispatches here.
+  await acquireBrowserSlot(scope);
   if (browserDispatchRefused("processor.fetchWithBrowser:post-acquire")) { await releaseBrowserSlot(); return ""; }
+  // Cap every nav timeout by the operation's remaining budget so page.goto cannot
+  // run past the deadline while holding the permit.
+  const gotoTimeout = (base: number) => (scope ? Math.max(1, Math.min(base, scope.remainingMs())) : base);
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   try {
@@ -1208,8 +1300,9 @@ async function fetchWithBrowser(url: string): Promise<string> {
 
     await page.goto(url, {
       waitUntil: "networkidle2",
-      timeout: BROWSER_FETCH_TIMEOUT,
+      timeout: gotoTimeout(BROWSER_FETCH_TIMEOUT),
     });
+    if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "browser_after_goto");
 
     // Wait a moment for any JS-rendered content
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -1257,7 +1350,7 @@ async function fetchWithBrowser(url: string): Promise<string> {
           await page.setExtraHTTPHeaders(WAF_PRIME_HEADERS);
           const primed = await primeWafSession(page, origin);
           if (primed) {
-            await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+            await page.goto(url, { waitUntil: "networkidle2", timeout: gotoTimeout(30000) });
             await new Promise((resolve) => setTimeout(resolve, 2000));
             const reExtracted = await extractText();
             if (reExtracted && reExtracted.length > content.length) {
@@ -1272,6 +1365,9 @@ async function fetchWithBrowser(url: string): Promise<string> {
 
     return content;
   } catch (error: any) {
+    // An operation abort (deadline/revoke) is retryable, not "no content": let it
+    // propagate so the caller marks the URL incomplete rather than dead/empty.
+    if (isOperationAbortedError(error)) throw error;
     console.warn(`[Processor] Browser fetch failed for ${url}: ${error.message}`);
     return "";
   } finally {
@@ -1657,15 +1753,29 @@ export async function fetchPdfGoogleCache(url: string): Promise<string | null> {
 
 // Fix 2b: exported so the pipeline's PDF-fallback discovery can invoke the
 // browser PDF path directly for inaccessible issuer-domain documents.
-export async function fetchPdfViaBrowser(url: string): Promise<string> {
+export async function fetchPdfViaBrowser(url: string, scope?: OperationScope): Promise<string> {
   if (isBrowserCircuitOpen()) {
     // Browser fallback is temporarily unavailable — signal TRANSIENT so the
     // caller keeps the URL retryable rather than marking it permanently dead.
     throw new BrowserUnavailableError(`browser circuit open: ${url}`);
   }
   if (browserDispatchRefused("processor.fetchPdfViaBrowser:pre-acquire")) throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`);
-  await acquireBrowserSlot();
-  if (browserDispatchRefused("processor.fetchPdfViaBrowser:post-acquire")) { await releaseBrowserSlot(); throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`); }
+  // batch-1277: compact lease events bracket the permit lifecycle so a future
+  // timeout can be explained (which op held / was queued for the single permit).
+  const op = nextOpId("pdf");
+  const leaseOrigin = originOf(url);
+  emitLeaseEvent({ ev: "acquire", op, kind: "browser", origin: leaseOrigin, urls: 1 });
+  let settleOutcome = "ok";
+  try {
+    await acquireBrowserSlot(scope);
+  } catch (e) {
+    emitLeaseEvent({ ev: "settled", op, kind: "browser", origin: leaseOrigin, outcome: isOperationAbortedError(e) ? "admission_aborted" : "admission_error" });
+    throw e;
+  }
+  emitLeaseEvent({ ev: "granted", op, kind: "browser", origin: leaseOrigin, urls: 1 });
+  if (browserDispatchRefused("processor.fetchPdfViaBrowser:post-acquire")) { await releaseBrowserSlot(); emitLeaseEvent({ ev: "released", op, kind: "browser", origin: leaseOrigin, outcome: "dispatch_refused" }); throw new BrowserUnavailableError(`lifecycle cancelled: ${url}`); }
+  // Cap every nav / in-page fetch timeout by the operation's remaining budget.
+  const gotoTimeout = (base: number) => (scope ? Math.max(1, Math.min(base, scope.remainingMs())) : base);
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;
@@ -1684,14 +1794,15 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     // serves the real PDF with a 200 application/pdf response. This is the most
     // reliable path because it uses Chromium's own network stack end-to-end.
     try {
-      const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: BROWSER_FETCH_TIMEOUT });
+      const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: gotoTimeout(BROWSER_FETCH_TIMEOUT) });
+      if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "pdf_after_goto");
       if (resp && resp.ok()) {
         const ct = String(resp.headers()["content-type"] || "").toLowerCase();
         const bodyBuf: Buffer = await resp.buffer();
         if (bodyBuf && bodyBuf.length > 0) {
           const isPdf = bodyBuf.slice(0, 5).toString("latin1") === "%PDF-" || ct.includes("application/pdf");
           if (isPdf && bodyBuf.slice(0, 5).toString("latin1") === "%PDF-") {
-            const text = await extractTextFromPdf(bodyBuf);
+            const text = await extractTextFromPdf(bodyBuf, scope);
             if (text) {
               console.log(`[Processor] Browser-PDF (direct nav) succeeded for ${url} (${bodyBuf.length}B PDF)`);
               return text;
@@ -1700,10 +1811,13 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
         }
       }
     } catch (navErr: any) {
+      // An operation abort must not be swallowed as a soft nav failure.
+      if (isOperationAbortedError(navErr)) throw navErr;
       // Direct navigation can fail on some interstitials; fall through to the
       // in-page fetch strategy below.
       console.log(`[Processor] Browser-PDF direct nav did not yield bytes for ${url} (${String(navErr?.message || navErr).slice(0, 80)}) — trying in-page fetch`);
     }
+    if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "pdf_before_inpage");
 
     // Strategy B (fallback): PRIME the WAF session on the origin (Akamai/Imperva
     // issue their trust cookies only after the sensor JS runs on a real HTML
@@ -1721,7 +1835,11 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     // session. With the session primed above we now send explicit Accept/Referer
     // headers and try credentialed THEN uncredentialed. If the first pass returns
     // nothing AND the session was not yet primed, we re-prime and retry once.
-    const inPageFetch = async (): Promise<string | null> => page.evaluate(async (target: string, originUrl: string) => {
+    // batch-1277: bound each in-page fetch by the operation's remaining budget via
+    // an in-page AbortController, so a hung download inside the page cannot run past
+    // the deadline while this operation holds the single browser permit.
+    const inPageBudget = scope ? scope.remainingMs() : 0;
+    const inPageFetch = async (): Promise<string | null> => page.evaluate(async (target: string, originUrl: string, budgetMs: number) => {
       // esbuild's keepNames wraps named inner helpers with __name(fn,"name"); that
       // helper does not exist in the browser realm, so the serialized callback throws
       // "__name is not defined". Provide an identity shim as the very first statement.
@@ -1736,10 +1854,13 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
         return btoa(binary);
       };
       const attempt = async (creds: RequestCredentials): Promise<string | null> => {
+        const ctrl = new AbortController();
+        const tid = budgetMs > 0 ? setTimeout(() => ctrl.abort(), budgetMs) : null;
         try {
           const resp = await fetch(target, {
             credentials: creds,
             headers: { Accept: "application/pdf,*/*", Referer: originUrl },
+            signal: ctrl.signal,
           });
           if (!resp.ok) return null;
           const buf = await resp.arrayBuffer();
@@ -1747,10 +1868,12 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
           return toB64(buf);
         } catch {
           return null;
+        } finally {
+          if (tid) clearTimeout(tid);
         }
       };
       return (await attempt("include")) || (await attempt("omit"));
-    }, url, (origin || url));
+    }, url, (origin || url), inPageBudget);
 
     let base64: string | null = await inPageFetch();
     if (!base64 && origin && !wafPrimed) {
@@ -1770,7 +1893,7 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     const buf = Buffer.from(base64, "base64");
     const looksLikePdf = buf.slice(0, 5).toString("latin1") === "%PDF-";
     if (looksLikePdf) {
-      const text = await extractTextFromPdf(buf);
+      const text = await extractTextFromPdf(buf, scope);
       if (text) {
         console.log(`[Processor] Browser-PDF fetch succeeded for ${url} (${buf.length}B PDF)`);
         return text;
@@ -1784,14 +1907,20 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     }
     return "";
   } catch (error: any) {
+    // An operation abort (deadline/revoke) is retryable — propagate it unchanged so
+    // the caller marks the URL incomplete rather than dead, and never persists a
+    // late result. It is NOT a launch failure, so do not trip the browser circuit.
+    if (isOperationAbortedError(error)) { settleOutcome = "aborted"; throw error; }
     const msg = String(error?.message || error);
     const isLaunchFailure = /EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg) || !browserLaunched;
     if (isLaunchFailure) {
+      settleOutcome = "launch_failed";
       tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
       // The browser never actually ran — TRANSIENT. Keep the URL retryable.
       throw new BrowserUnavailableError(`browser launch failed: ${url} (${msg.split("\n")[0].slice(0, 80)})`);
     }
     // Browser ran but the in-page fetch / parse failed — treat as unusable content.
+    settleOutcome = "error";
     console.warn(`[Processor] Browser-PDF fetch failed for ${url}: ${msg}`);
     return "";
   } finally {
@@ -1800,6 +1929,8 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
     }
     diagEndBrowser();
     await releaseBrowserSlot(); // isolated child: Chromium closed + reaped before the permit returns
+    // Permit is back in the pool: record the settle (close/reap already done above).
+    emitLeaseEvent({ ev: "released", op, kind: "browser", origin: leaseOrigin, outcome: settleOutcome });
   }
 }
 
@@ -1835,7 +1966,10 @@ export async function fetchPdfViaBrowser(url: string): Promise<string> {
 export interface PdfRecoveryOutcome {
   url: string;
   ok: boolean;
-  reason: string;          // 'ok' | 'http_404' | 'waf_block' | 'challenge_page' | 'empty_bytes' | 'not_pdf' | 'no_text' | 'nav_timeout' | 'nav_error' | 'browser_launch_failure' | 'budget_exhausted' | 'session_setup_failed' | 'error'
+  // 'admission_timeout' / 'deadline_elapsed' = batch-1277: the URL was NOT attempted
+  // because the operation deadline elapsed while queued for the browser permit, or
+  // mid-loop. These are retryable/incomplete (NOT dead, NOT falsely researched).
+  reason: string;          // 'ok' | 'http_404' | 'waf_block' | 'challenge_page' | 'empty_bytes' | 'not_pdf' | 'no_text' | 'nav_timeout' | 'nav_error' | 'browser_launch_failure' | 'budget_exhausted' | 'admission_timeout' | 'deadline_elapsed' | 'session_setup_failed' | 'error'
   httpStatus?: number;
   bytes?: number;
   chars?: number;
@@ -1845,12 +1979,13 @@ export interface PdfRecoveryOutcome {
 export async function fetchIssuerPdfsWithPrimedSession(
   origin: string,
   urls: string[],
-  opts?: { overallBudgetMs?: number; perPdfTimeoutMs?: number; outcomes?: PdfRecoveryOutcome[] }
+  opts?: { overallBudgetMs?: number; perPdfTimeoutMs?: number; outcomes?: PdfRecoveryOutcome[]; scope?: OperationScope }
 ): Promise<Map<string, string>> {
   const recovered = new Map<string, string>();
   const outcomes = opts?.outcomes;
   const note = (o: PdfRecoveryOutcome) => { if (outcomes) outcomes.push(o); };
   if (!origin || urls.length === 0) return recovered;
+  const scope = opts?.scope;
 
   // CHANGE 3 — scale the per-origin recovery budget by the number of pending
   // URLs so a large issuer (e.g. 3i with ~74 documents) is not starved by a
@@ -1866,7 +2001,6 @@ export async function fetchIssuerPdfsWithPrimedSession(
     opts?.overallBudgetMs ??
     Math.min(maxBudgetMs, Math.max(baseBudgetMs, perUrlBudgetMs * urls.length));
   const perPdfTimeoutMs = opts?.perPdfTimeoutMs ?? BROWSER_FETCH_TIMEOUT;
-  const deadline = Date.now() + overallBudgetMs;
 
   // Last-resort recovery: clear any stale launch-circuit cooldown left over from
   // the main fetch phase so we actually get a browser here.
@@ -1876,11 +2010,40 @@ export async function fetchIssuerPdfsWithPrimedSession(
   if (isBrowserCircuitOpen()) return recovered;
 
   if (browserDispatchRefused("processor.pdfRecovery:pre-acquire")) return recovered;
-  await acquireBrowserSlot();
-  if (browserDispatchRefused("processor.pdfRecovery:post-acquire")) { await releaseBrowserSlot(); return recovered; }
+
+  // CHANGE (operation-scoped cancellation, item 6) — the overall recovery budget
+  // is an ACTIVE per-origin budget: it must only start counting once we have been
+  // admitted (hold the browser permit), not while this call is queued behind other
+  // companies on the replica. While queued, the caller's operation `scope` (if any)
+  // bounds how long we wait — a queued waiter withdraws from the parent broker at
+  // the company deadline (acquireBrowserSlot(scope) throws OperationAbortedError),
+  // and we then mark every URL admission_timeout (explicitly incomplete/pending,
+  // NOT dead and NOT falsely researched). Without a scope the admission wait is
+  // still finite (bounded by BROWSER_FETCH_TIMEOUT-derived waits in the broker).
+  const op = nextOpId("rec");
+  emitLeaseEvent({ ev: "acquire", op, kind: "browser", origin, urls: urls.length });
+  try {
+    await acquireBrowserSlot(scope);
+  } catch (admitErr: any) {
+    if (isOperationAbortedError(admitErr)) {
+      emitLeaseEvent({ ev: "settled", op, kind: "browser", origin, urls: urls.length, outcome: "admission_timeout" });
+      for (const u of urls) note({ url: u, ok: false, reason: "admission_timeout", ms: 0 });
+      return recovered;
+    }
+    throw admitErr;
+  }
+  emitLeaseEvent({ ev: "granted", op, kind: "browser", origin, urls: urls.length });
+  // ACTIVE budget starts only now that we hold the permit (post-admission).
+  const deadline = Date.now() + overallBudgetMs;
+  if (browserDispatchRefused("processor.pdfRecovery:post-acquire")) {
+    emitLeaseEvent({ ev: "released", op, kind: "browser", origin, urls: urls.length, outcome: "dispatch_refused" });
+    await releaseBrowserSlot();
+    return recovered;
+  }
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;
+  let settleOutcome: string | undefined; // set to "aborted" when the operation is cancelled
   try {
     const browser = await getSharedBrowser();
     browserLaunched = true;
@@ -1910,8 +2073,8 @@ export async function fetchIssuerPdfsWithPrimedSession(
     // Returns a diagnostic object so the caller can persist WHY a fetch failed
     // (HTTP status, byte count, and a short body snippet for WAF/challenge
     // detection) — stdout is unreliable on Railway under log rate-limiting.
-    const inPageFetch = async (target: string): Promise<{ base64: string | null; status: number; bytes: number; snippet: string }> =>
-      page.evaluate(async (t: string, originUrl: string) => {
+    const inPageFetch = async (target: string, inPageBudgetMs: number): Promise<{ base64: string | null; status: number; bytes: number; snippet: string }> =>
+      page.evaluate(async (t: string, originUrl: string, budgetMs: number) => {
       // esbuild's keepNames wraps named inner helpers with __name(fn,"name"); that
       // helper does not exist in the browser realm, so the serialized callback throws
       // "__name is not defined". Provide an identity shim as the very first statement.
@@ -1926,8 +2089,13 @@ export async function fetchIssuerPdfsWithPrimedSession(
         return btoa(binary);
       };
       const attempt = async (creds: RequestCredentials): Promise<{ base64: string | null; status: number; bytes: number; snippet: string }> => {
+        // In-page AbortController bounds this fetch by the remaining operation budget
+        // so an in-page download can be cancelled rather than hanging the page past
+        // the company deadline (the CDP evaluate itself is otherwise uninterruptible).
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), Math.max(1, budgetMs));
         try {
-          const resp = await fetch(t, { credentials: creds, headers: { Accept: "application/pdf,*/*", Referer: originUrl } });
+          const resp = await fetch(t, { credentials: creds, signal: ac.signal, headers: { Accept: "application/pdf,*/*", Referer: originUrl } });
           const buf = await resp.arrayBuffer();
           const bytes = buf ? buf.byteLength : 0;
           const head = bytes ? new Uint8Array(buf).slice(0, 5) : new Uint8Array();
@@ -1943,6 +2111,8 @@ export async function fetchIssuerPdfsWithPrimedSession(
           return { base64: toB64(buf), status: resp.status, bytes, snippet: "" };
         } catch (e) {
           return { base64: null, status: 0, bytes: 0, snippet: String(e).slice(0, 200) };
+        } finally {
+          clearTimeout(timer);
         }
       };
       const first = await attempt("include");
@@ -1950,25 +2120,35 @@ export async function fetchIssuerPdfsWithPrimedSession(
       const second = await attempt("omit");
       // Prefer whichever attempt carries the more informative status/snippet.
       return second.base64 || second.status ? second : first;
-    }, target, origin);
+    }, target, origin, inPageBudgetMs);
 
     for (let urlIdx = 0; urlIdx < urls.length; urlIdx++) {
       const url = urls[urlIdx];
       const t0 = Date.now();
-      if (Date.now() >= deadline) {
-        // Note ALL remaining URLs as budget_exhausted so Fix E can persist
-        // diagnostics for every candidate, not just the one that triggered the
-        // deadline. Without this, remaining URLs keep their original failure_reason.
+      // CHANGE (operation-scoped cancellation, item 6) — honour the caller's
+      // operation deadline/abort as well as our own active recovery budget. A URL
+      // not attempted because the operation was cancelled is marked deadline_elapsed
+      // (explicitly incomplete/pending — NOT dead, NOT a false "researched"); the
+      // deferred sweep treats both budget_exhausted and deadline_elapsed as
+      // retry-eligible so these URLs are re-attempted, never silently dropped.
+      if (scope?.aborted() || Date.now() >= deadline) {
+        const aborted = !!scope?.aborted();
+        const reason = aborted ? "deadline_elapsed" : "budget_exhausted";
         const remaining = urls.length - urlIdx;
         console.warn(
-          `[Processor] PDF-recovery: overall budget (${Math.round(overallBudgetMs / 1000)}s) exhausted for ${origin}` +
-          ` — stopping with ${recovered.size} recovered; marking ${remaining} remaining URL(s) as budget_exhausted`,
+          `[Processor] PDF-recovery: ${aborted ? "operation deadline reached" : `overall budget (${Math.round(overallBudgetMs / 1000)}s) exhausted`} for ${origin}` +
+          ` — stopping with ${recovered.size} recovered; marking ${remaining} remaining URL(s) as ${reason}`,
         );
         for (let j = urlIdx; j < urls.length; j++) {
-          note({ url: urls[j], ok: false, reason: "budget_exhausted", ms: 0 });
+          note({ url: urls[j], ok: false, reason, ms: 0 });
         }
         break;
       }
+      // Per-URL timeout bounded by: the configured per-PDF timeout, the remaining
+      // operation budget (scope), AND the remaining active recovery budget. Never
+      // below 1ms so a near-expired deadline still fails fast rather than hanging.
+      const effTimeout = () =>
+        Math.max(1, Math.min(perPdfTimeoutMs, scope?.remainingMs() ?? Infinity, deadline - Date.now()));
       try {
         let text = "";
         let httpStatus: number | undefined;
@@ -1980,11 +2160,11 @@ export async function fetchIssuerPdfsWithPrimedSession(
         // timeout per large PDF. Falls through to Strategy A/B if C doesn't get a PDF.
         if (cookieHeader) {
           try {
-            const cRes = await nodeFetchPdf(url, cookieHeader, origin, perPdfTimeoutMs);
+            const cRes = await nodeFetchPdf(url, cookieHeader, origin, effTimeout());
             if (cRes.status) httpStatus = cRes.status;
             if (cRes.bytes) bytes = cRes.bytes;
             if (cRes.buf) {
-              text = (await extractTextFromPdf(cRes.buf)) || "";
+              text = (await extractTextFromPdf(cRes.buf, scope)) || "";
               if (text) {
                 console.log(`[Processor] PDF-recovery [C]: node-fetch yielded ${text.length} chars from ${url.slice(0, 80)}`);
               } else {
@@ -2015,7 +2195,7 @@ export async function fetchIssuerPdfsWithPrimedSession(
         // Strategy A: direct navigation to the PDF, reusing the primed session.
         if (!text) {
           try {
-            const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: perPdfTimeoutMs });
+            const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: effTimeout() });
             if (resp) {
               httpStatus = resp.status();
               const ct = String(resp.headers()["content-type"] || "").toLowerCase();
@@ -2025,7 +2205,7 @@ export async function fetchIssuerPdfsWithPrimedSession(
                   bytes = bodyBuf.length;
                   const isPdf = bodyBuf.slice(0, 5).toString("latin1") === "%PDF-" || ct.includes("application/pdf");
                   if (isPdf && bodyBuf.slice(0, 5).toString("latin1") === "%PDF-") {
-                    text = (await extractTextFromPdf(bodyBuf)) || "";
+                    text = (await extractTextFromPdf(bodyBuf, scope)) || "";
                   }
                 }
               }
@@ -2038,13 +2218,13 @@ export async function fetchIssuerPdfsWithPrimedSession(
 
         // Strategy B: in-page credentialed fetch using the primed cookies.
         if (!text) {
-          const r = await inPageFetch(url);
+          const r = await inPageFetch(url, effTimeout());
           if (r.status) httpStatus = r.status;
           if (r.bytes) bytes = r.bytes;
           if (r.base64) {
             const buf = Buffer.from(r.base64, "base64");
             if (buf.slice(0, 5).toString("latin1") === "%PDF-") {
-              text = (await extractTextFromPdf(buf)) || "";
+              text = (await extractTextFromPdf(buf, scope)) || "";
               if (!text) reason = "no_text"; // PDF fetched but text extraction empty
             } else {
               reason = "not_pdf";
@@ -2076,6 +2256,15 @@ export async function fetchIssuerPdfsWithPrimedSession(
           console.log(`[Processor] PDF-recovery: no usable content from ${url.slice(0, 90)} [reason=${reason} status=${httpStatus ?? "-"} bytes=${bytes ?? "-"}]`);
         }
       } catch (err: any) {
+        // Operation cancelled (company deadline reached mid-URL) — mark this URL and
+        // all remaining URLs deadline_elapsed (retry-eligible, NOT dead) and stop.
+        if (isOperationAbortedError(err)) {
+          const remaining = urls.length - urlIdx;
+          console.warn(`[Processor] PDF-recovery: operation aborted mid-URL for ${origin} — marking ${remaining} remaining URL(s) deadline_elapsed`);
+          for (let j = urlIdx; j < urls.length; j++) note({ url: urls[j], ok: false, reason: "deadline_elapsed", ms: 0 });
+          settleOutcome = "aborted";
+          break;
+        }
         const msg = String(err?.message || err);
         // A launch failure here means the container is genuinely out of budget —
         // stop the batch rather than hammering it further.
@@ -2090,18 +2279,26 @@ export async function fetchIssuerPdfsWithPrimedSession(
       }
     }
   } catch (error: any) {
-    const msg = String(error?.message || error);
-    if (!browserLaunched || /EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg)) {
-      tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
-    }
-    console.warn(`[Processor] PDF-recovery: session setup failed for ${origin}: ${msg.slice(0, 120)}`);
-    // Fix L: note ALL URLs as session_setup_failed so Fix E can persist diagnostics
-    // even when the browser never reached the URL loop. Without this, the outer
-    // catch leaves recoveryOutcomes empty and Fix E skips the DB UPDATE for
-    // every URL in this origin batch — they retain their original failure_reason
-    // (timeout/transient) indefinitely.
-    for (const u of urls) {
-      note({ url: u, ok: false, reason: "session_setup_failed", ms: 0 });
+    // Operation cancelled during session setup (before/within the URL loop) — mark
+    // every URL deadline_elapsed (retry-eligible) rather than session_setup_failed.
+    if (isOperationAbortedError(error)) {
+      settleOutcome = "aborted";
+      console.warn(`[Processor] PDF-recovery: operation aborted during setup for ${origin} — marking ${urls.length} URL(s) deadline_elapsed`);
+      for (const u of urls) note({ url: u, ok: false, reason: "deadline_elapsed", ms: 0 });
+    } else {
+      const msg = String(error?.message || error);
+      if (!browserLaunched || /EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg)) {
+        tripBrowserCircuit(msg.split("\n")[0].slice(0, 120));
+      }
+      console.warn(`[Processor] PDF-recovery: session setup failed for ${origin}: ${msg.slice(0, 120)}`);
+      // Fix L: note ALL URLs as session_setup_failed so Fix E can persist diagnostics
+      // even when the browser never reached the URL loop. Without this, the outer
+      // catch leaves recoveryOutcomes empty and Fix E skips the DB UPDATE for
+      // every URL in this origin batch — they retain their original failure_reason
+      // (timeout/transient) indefinitely.
+      for (const u of urls) {
+        note({ url: u, ok: false, reason: "session_setup_failed", ms: 0 });
+      }
     }
   } finally {
     if (page) {
@@ -2109,17 +2306,46 @@ export async function fetchIssuerPdfsWithPrimedSession(
     }
     diagEndBrowser();
     await releaseBrowserSlot(); // isolated child: Chromium closed + reaped before the permit returns
+    // Lease released: Chromium closed + reaped before the permit returned (item 4
+    // guarantee preserved). Emit after release so the event reflects true settlement.
+    emitLeaseEvent({ ev: "released", op, kind: "browser", origin, urls: urls.length, outcome: settleOutcome });
   }
   return recovered;
 }
 
 // ─── Main Process Document Function ──────────────────────────────────────────
 
+// Item 5 — in-flight dedupe: coalesce overlapping processDocument calls for the
+// same URL so two callers never launch two concurrent browser recoveries for the
+// same document (which would double-book the single browser permit and race to
+// persist a late result). Keyed by URL; removed as soon as the work settles.
+const inFlightDocs = new Map<string, Promise<string>>();
+
 export async function processDocument(
   url: string,
   type: "pdf" | "html",
-  opts?: { forceHeadless?: boolean }
+  opts?: { forceHeadless?: boolean; scope?: OperationScope }
 ): Promise<string> {
+  // Check in-memory cache
+  const cached = getCachedContent(url);
+  if (cached) return cached;
+  const existing = inFlightDocs.get(url);
+  if (existing) return existing;
+  const work = processDocumentUncached(url, type, opts);
+  inFlightDocs.set(url, work);
+  try {
+    return await work;
+  } finally {
+    inFlightDocs.delete(url);
+  }
+}
+
+async function processDocumentUncached(
+  url: string,
+  type: "pdf" | "html",
+  opts?: { forceHeadless?: boolean; scope?: OperationScope }
+): Promise<string> {
+  const scope = opts?.scope;
   // Check in-memory cache
   const cached = getCachedContent(url);
   if (cached) return cached;
@@ -2131,13 +2357,16 @@ export async function processDocument(
     try {
       console.log(`[Processor] Force-headless fetch for pinned/known URL: ${url.slice(0, 80)}`);
       const isPdfUrl = url.toLowerCase().includes(".pdf");
-      let content = isPdfUrl ? await fetchPdfViaBrowser(url) : await fetchWithBrowser(url);
+      let content = isPdfUrl ? await fetchPdfViaBrowser(url, scope) : await fetchWithBrowser(url, scope);
       if (content && content.trim().length > 50) {
         content = capDocumentText(content, url, "Processor");
         setCachedContent(url, content);
         return content;
       }
     } catch (e: any) {
+      // Operation cancelled — do NOT fall through to another (budget-ignoring) path;
+      // propagate so the caller records a retryable abort, not a dead/empty result.
+      if (isOperationAbortedError(e)) throw e;
       console.warn(`[Processor] Force-headless failed for ${url}: ${e.message}`);
     }
     // Fall through to normal path if headless didn't work
@@ -2175,13 +2404,15 @@ export async function processDocument(
           }
         } catch { /* Strategy D never throws; fall through to browser-PDF */ }
         try {
-          let viaBrowser = await fetchPdfViaBrowser(url);
+          let viaBrowser = await fetchPdfViaBrowser(url, scope);
           if (viaBrowser) {
             viaBrowser = capDocumentText(viaBrowser, url, "Processor");
             setCachedContent(url, viaBrowser);
             return viaBrowser;
           }
         } catch (browserErr: any) {
+          // Operation cancelled — propagate (retryable abort), never swallow.
+          if (isOperationAbortedError(browserErr)) throw browserErr;
           // Browser couldn't RUN (launch failure / circuit open) — TRANSIENT.
           // Re-throw so the URL stays pending for a later pass instead of dead.
           if (browserErr instanceof BrowserUnavailableError) throw browserErr;
@@ -2207,15 +2438,15 @@ export async function processDocument(
         const warmBuf = warm ? Buffer.from(warm.data) : null;
         if (warmBuf && warmBuf.slice(0, 5).toString("latin1") === "%PDF-") {
           console.log(`[Processor] Cookie warm-up retry succeeded for ${url} (${warmBuf.length}B PDF)`);
-          content = await extractTextFromPdf(warmBuf);
+          content = await extractTextFromPdf(warmBuf, scope);
         } else {
           console.log(`[Processor] Cookie warm-up retry did not yield a PDF for ${url} — trying browser-PDF fetch`);
           // Use the WAF-aware browser PDF path (real browser session reads the
           // bytes), NOT the HTML scraper which returns ~nothing for a PDF.
-          content = await fetchPdfViaBrowser(url);
+          content = await fetchPdfViaBrowser(url, scope);
         }
       } else {
-        content = await extractTextFromPdf(buf);
+        content = await extractTextFromPdf(buf, scope);
       }
     } else {
       try {
@@ -2224,18 +2455,18 @@ export async function processDocument(
         // Check if response is actually a PDF
         if (contentType.includes("application/pdf")) {
           const { data: pdfData } = await fetchWithRetry(url, { responseType: "arraybuffer" });
-          content = await extractTextFromPdf(Buffer.from(pdfData));
+          content = await extractTextFromPdf(Buffer.from(pdfData), scope);
         } else if (looksLikeChallenge(String(data))) {
           // Bot-protection challenge interstitial returned for an HTML page.
           // Warm cookies and retry before falling back to the browser.
           console.log(`[Processor] HTML page returned a bot-challenge interstitial for ${url} — trying cookie warm-up retry`);
           const warm = await fetchWithWarmCookies(url);
           if (warm && warm.contentType.includes("application/pdf")) {
-            content = await extractTextFromPdf(Buffer.from(warm.data));
+            content = await extractTextFromPdf(Buffer.from(warm.data), scope);
           } else if (warm && !looksLikeChallenge(String(warm.data))) {
             content = extractTextFromHtml(String(warm.data));
           } else {
-            content = await fetchWithBrowser(url);
+            content = await fetchWithBrowser(url, scope);
           }
         } else {
           content = extractTextFromHtml(data);
@@ -2248,12 +2479,14 @@ export async function processDocument(
           if (isLikelyJsShell(String(data), content)) {
             console.log(`[Processor] HTML for ${url} looks like a JS/SPA shell (${content.length} chars) — escalating to browser render`);
             try {
-              const rendered = await fetchWithBrowser(url);
+              const rendered = await fetchWithBrowser(url, scope);
               if (rendered && rendered.trim().length > content.length) {
                 console.log(`[Processor] Browser render recovered ${rendered.trim().length} chars for ${url} (was ${content.length})`);
                 content = rendered;
               }
             } catch (shellErr: any) {
+              // Operation cancelled — propagate (retryable abort), never swallow.
+              if (isOperationAbortedError(shellErr)) throw shellErr;
               // Browser unavailable / failed — keep the stub (better than nothing);
               // a transient BrowserUnavailableError leaves the URL retryable upstream.
               if (shellErr instanceof BrowserUnavailableError) throw shellErr;
@@ -2291,8 +2524,10 @@ export async function processDocument(
             }
           } catch { /* Strategy D never throws; fall through to browser-PDF */ }
           try {
-            if (!content) content = await fetchPdfViaBrowser(url);
+            if (!content) content = await fetchPdfViaBrowser(url, scope);
           } catch (browserErr: any) {
+            // Operation cancelled — propagate (retryable abort), never swallow.
+            if (isOperationAbortedError(browserErr)) throw browserErr;
             // Browser couldn't RUN — TRANSIENT; keep retryable.
             if (browserErr instanceof BrowserUnavailableError) throw browserErr;
           }
@@ -2303,7 +2538,7 @@ export async function processDocument(
         } else {
           // Timeout, 5xx, 403 on HTML page, network error — browser fallback is valuable
           console.log(`[Processor] HTTP fetch failed for ${url} (${httpError.message}), trying browser fallback...`);
-          content = await fetchWithBrowser(url);
+          content = await fetchWithBrowser(url, scope);
         }
       }
     }
@@ -2323,6 +2558,13 @@ export async function processDocument(
 
     return content;
   } catch (error: any) {
+    // Operation cancelled (company/operation deadline reached) — propagate so the
+    // pipeline records a RETRYABLE abort and never persists a late/partial result.
+    // Must come first: do NOT fall through to another budget-ignoring browser path.
+    if (isOperationAbortedError(error)) {
+      console.log(`[Processor] Operation aborted for ${url} — leaving retryable (not dead)`);
+      throw error;
+    }
     // Propagate terminal failures unchanged so the pipeline can mark the URL
     // dead in a single step (no browser fallback, no retry passes).
     if (error instanceof PermanentFetchError) {
@@ -2362,13 +2604,15 @@ export async function processDocument(
         // ~nothing for a PDF rendered in Chromium's viewer); otherwise scrape HTML.
         const isPdfUrl = url.toLowerCase().includes(".pdf");
         console.log(`[Processor] Final browser fallback for ${url}${isPdfUrl ? ' (browser-PDF)' : ''}`);
-        let browserContent = isPdfUrl ? await fetchPdfViaBrowser(url) : await fetchWithBrowser(url);
+        let browserContent = isPdfUrl ? await fetchPdfViaBrowser(url, scope) : await fetchWithBrowser(url, scope);
         if (browserContent) {
           browserContent = capDocumentText(browserContent, url, "Processor");
           setCachedContent(url, browserContent);
           return browserContent;
         }
       } catch (e) {
+        // Operation cancelled — propagate (retryable abort), never swallow.
+        if (isOperationAbortedError(e)) throw e;
         // Ignore
       }
     } else {

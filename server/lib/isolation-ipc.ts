@@ -125,3 +125,39 @@ export function remotePermitState(): { pending: number; outstanding: Record<Perm
     outstanding: { llm: outstanding.llm.length, browser: outstanding.browser.length, proc: outstanding.proc.length },
   };
 }
+
+// ─── Operation / lease events (batch-1277 timeout explainability) ─────────────
+// Compact events that let a future timeout be explained AFTER the fact: which
+// operation (job/attempt/op id, origin, URL count) was queued for / holding /
+// released the browser permit and when. They are sent SYNCHRONOUSLY over the IPC
+// channel (process.send writes to the pipe immediately) so the last event
+// survives a subsequent child SIGKILL — the parent keeps the latest child stage
+// plus the set of still-outstanding operations (job-isolation.ts).
+export type LeaseEventKind = "acquire" | "granted" | "released" | "settled";
+export interface LeaseEvent {
+  ev: LeaseEventKind;
+  op: string;                 // operation id (unique within the child)
+  kind?: PermitKind;          // permit kind (browser)
+  origin?: string | null;     // request origin, when known
+  urls?: number;              // URL count for a batch recovery op
+  job?: number | null;        // owning job id
+  attempt?: number | null;    // owning attempt number
+  outcome?: string;           // settle/release outcome (ok / aborted / error …)
+  at: number;                 // wall-clock ms
+}
+
+let leaseSeq = 0;
+/** Unique-within-this-child operation id for lease correlation. */
+export function nextOpId(prefix = "op"): string {
+  return `${prefix}-${process.pid}-${++leaseSeq}`;
+}
+
+/**
+ * Emit a compact lease event to the parent. No-op outside an isolated child.
+ * Synchronous IPC write (sendToParent → process.send) so the event is on the
+ * wire before the caller can be SIGKILLed.
+ */
+export function emitLeaseEvent(e: Omit<LeaseEvent, "at"> & { at?: number }): void {
+  if (!isIsolatedChild()) return;
+  sendToParent({ t: "lease", ...e, at: e.at ?? Date.now() });
+}
