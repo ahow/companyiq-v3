@@ -2565,7 +2565,20 @@ export async function processDocument(
   // Only coalesce onto an in-flight fetch whose scope is still live. A fetch whose
   // scope has aborted (deadline elapsed / attempt revoked) is being torn down and
   // must not be re-used for a fresh caller — that caller gets its own attempt.
-  if (existing && !(existing.scope?.aborted())) return existing.promise;
+  if (existing && !(existing.scope?.aborted())) {
+    const callerScope = opts?.scope;
+    // batch-1277 (B7, obsolete-work settlement): a coalesced caller shares the
+    // launching op's promise, so without its own exit it would be pinned to that
+    // op's completion even after ITS OWN deadline elapses / attempt is revoked —
+    // an obsolete wait that outlives its budget. Race the shared promise against
+    // the caller's own abort so the coalesced caller reaches a terminal state
+    // (retryable OperationAbortedError) the instant its scope aborts, WITHOUT
+    // disturbing the shared underlying op (which keeps running for the launcher
+    // and still holds/returns its permit on its own settle path). A caller with
+    // no scope has no deadline to honour, so it waits on the shared promise as before.
+    if (!callerScope) return existing.promise;
+    return Promise.race([existing.promise, callerScope.whenAborted("coalesced_wait")]);
+  }
   const runUncached = __processDocumentWorkerForTest ?? processDocumentUncached;
   const work = runUncached(url, type, opts);
   inFlightDocs.set(url, { promise: work, scope: opts?.scope });

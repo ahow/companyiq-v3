@@ -38,7 +38,7 @@ Object.assign(process.env, {
 });
 
 const { processDocument, __setProcessDocumentWorkerForTest } = await import("./processor.js");
-const { createOperationScope } = await import("./lifecycle-fence.js");
+const { createOperationScope, isOperationAbortedError } = await import("./lifecycle-fence.js");
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -119,6 +119,66 @@ test("B7-2 — a new caller does NOT coalesce onto an in-flight entry whose scop
     __setProcessDocumentWorkerForTest(null);
     abortedScope.dispose();
     liveScope.dispose();
+  }
+});
+
+test("B7-3 — a COALESCED caller settles on ITS OWN abort while the shared op keeps running for the launcher", async () => {
+  const w = makeWorker();
+  __setProcessDocumentWorkerForTest(w.fn);
+  // Launcher A runs under a long-lived scope; the shared fetch is never resolved,
+  // so it stays genuinely in flight for the whole test. Coalesced caller B runs
+  // under a SHORT absolute budget so its own deadline elapses while still waiting.
+  const launcherScope = createOperationScope({ budgetMs: 60_000 });
+  const coalescedScope = createOperationScope({ budgetMs: 40 });
+  try {
+    const url = `https://example.test/b7-coalesced-abort-${Date.now()}.pdf`;
+
+    // A launches the single underlying fetch and installs the in-flight entry.
+    const a = processDocument(url, "pdf", { scope: launcherScope });
+    await delay(20);
+    assert.equal(w.calls, 1, "launcher A started the one underlying fetch");
+
+    // B arrives for the SAME url while A's entry is live → it COALESCES (no new fetch).
+    const b = processDocument(url, "pdf", { scope: coalescedScope });
+    await delay(10);
+    assert.equal(w.calls, 1, "coalesced caller B launched NO second fetch (it shares A's op)");
+
+    // B's own 40ms budget elapses. B must now reach a terminal state on its OWN
+    // abort — NOT stay pinned to A's still-in-flight shared op. A test-level
+    // sentinel bounds the wait so a regression (B pinned to the never-resolving
+    // shared op) surfaces as a FAST, explicit failure instead of hanging.
+    const PINNED = Symbol("still-pinned-to-shared-op");
+    let bErr: any;
+    let bVal: any;
+    const bStart = Date.now();
+    try {
+      bVal = await Promise.race([b, delay(2000).then(() => PINNED)]);
+    } catch (e) { bErr = e; }
+    const bLatency = Date.now() - bStart;
+
+    assert.notEqual(bVal, PINNED, "coalesced caller B stayed pinned to the shared op past its own deadline (did not self-settle)");
+    assert.ok(bErr, `coalesced caller B must settle on its own abort, got value=${JSON.stringify(bVal)}`);
+    assert.ok(
+      isOperationAbortedError(bErr),
+      `B must settle with OperationAbortedError, got ${bErr?.name}: ${bErr?.message}`,
+    );
+    assert.ok(bLatency < 2000, `B settled ${bLatency}ms after its deadline window — expected prompt (< 2000ms)`);
+
+    // The shared underlying op is untouched: still exactly one fetch, and A is still
+    // pending (B aborting its own wait did not cancel the launcher's work).
+    assert.equal(w.calls, 1, "B's abort did not spawn or cancel the shared fetch");
+    let aSettled = false;
+    void a.then(() => { aSettled = true; }, () => { aSettled = true; });
+    await delay(30);
+    assert.equal(aSettled, false, "launcher A's op keeps running after the coalesced caller abandoned its wait");
+
+    // Clean up: resolve the shared op so A settles too.
+    w.resolveAll();
+    await a.catch(() => {});
+  } finally {
+    __setProcessDocumentWorkerForTest(null);
+    launcherScope.dispose();
+    coalescedScope.dispose();
   }
 });
 
