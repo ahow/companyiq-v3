@@ -1421,6 +1421,43 @@ export async function closeSharedBrowser(): Promise<void> {
   }
 }
 
+// batch-1277 (B-browser) — BOUNDED in-flight interruption of an active browser op.
+//
+// Problem: once a browser operation is in flight holding the single browser permit,
+// an abort (deadline OR revoke) is only observed at the explicit scope.aborted()
+// checks BETWEEN gates. A CDP/navigation step already running when the abort fires
+// (page.goto, primeWafSession, page.evaluate, resp.buffer) continues until its own
+// natural completion or the full BROWSER_FETCH_TIMEOUT before the next check is
+// reached — so the aborted op keeps the permit far longer than necessary.
+//
+// Fix: on abort, force the page CLOSED within BROWSER_ABORT_GRACE_MS. A short grace
+// lets the explicit checks settle the clean path first; if the op is stuck inside a
+// CDP call, closing the page makes that pending call reject at the next protocol
+// round-trip, so the op settles at the next gate. This is a BOUNDED interruption
+// (≤ grace + one gate round-trip), NOT an instantaneous kill. The caller's catch
+// converts the resulting failure into a retryable OperationAbortedError when the
+// scope has aborted (see the catch blocks below).
+const BROWSER_ABORT_GRACE_MS = 500;
+function installBoundedPageInterrupt(page: any, scope?: OperationScope): () => void {
+  const sig = scope?.signal;
+  if (!sig) return () => {};
+  let graceTimer: NodeJS.Timeout | null = null;
+  const onAbort = () => {
+    if (graceTimer) return;
+    graceTimer = setTimeout(() => {
+      // Close the page out-of-band; any in-flight CDP call then rejects promptly.
+      Promise.resolve(page?.close?.()).catch(() => {});
+    }, BROWSER_ABORT_GRACE_MS);
+    if (typeof graceTimer.unref === "function") graceTimer.unref();
+  };
+  if (sig.aborted) onAbort();
+  else sig.addEventListener("abort", onAbort, { once: true });
+  return () => {
+    if (graceTimer) clearTimeout(graceTimer);
+    try { sig.removeEventListener("abort", onAbort); } catch { /* ignore */ }
+  };
+}
+
 async function fetchWithBrowser(url: string, scope?: OperationScope): Promise<string> {
   // If the launch circuit is open, skip immediately without acquiring a slot or
   // attempting another fork. This prevents per-URL launch storms when the
@@ -1939,10 +1976,15 @@ export async function fetchPdfViaBrowser(url: string, scope?: OperationScope): P
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
   let browserLaunched = false;
+  let clearInterrupt: () => void = () => {};
   try {
     const browser = await getSharedBrowser();
     browserLaunched = true;
     page = await browser.newPage();
+    // batch-1277 (B-browser): arm the bounded in-flight interrupt now that we hold a
+    // page, so an abort mid-navigation forces the page closed within the grace and
+    // the op settles promptly instead of running to BROWSER_FETCH_TIMEOUT.
+    clearInterrupt = installBoundedPageInterrupt(page, scope);
     await page.setUserAgent(USER_AGENT);
     // Authenticate with residential proxy if configured (no-op when unset).
     const _proxyCreds2 = getProxyBrowserConfig().credentials;
@@ -2071,6 +2113,10 @@ export async function fetchPdfViaBrowser(url: string, scope?: OperationScope): P
     // the caller marks the URL incomplete rather than dead, and never persists a
     // late result. It is NOT a launch failure, so do not trip the browser circuit.
     if (isOperationAbortedError(error)) { settleOutcome = "aborted"; throw error; }
+    // batch-1277 (B-browser): if the scope aborted, a failure here is the bounded
+    // in-flight interrupt closing the page out from under an in-flight CDP call —
+    // surface it as a retryable abort, NOT a dead/launch failure or a tripped circuit.
+    if (scope?.aborted()) { settleOutcome = "aborted"; throw new OperationAbortedError(scope.abortReason() || "aborted", "browser_inflight_interrupted"); }
     const msg = String(error?.message || error);
     const isLaunchFailure = /EAGAIN|Cannot fork|Resource temporarily unavailable|Failed to launch|Code: null/i.test(msg) || !browserLaunched;
     if (isLaunchFailure) {
@@ -2084,6 +2130,9 @@ export async function fetchPdfViaBrowser(url: string, scope?: OperationScope): P
     console.warn(`[Processor] Browser-PDF fetch failed for ${url}: ${msg}`);
     return "";
   } finally {
+    // batch-1277 (B-browser): disarm the bounded interrupt first so the grace timer
+    // can never fire against a page we are about to close (or have already closed).
+    clearInterrupt();
     if (page) {
       try { await page.close(); } catch { /* ignore */ }
     }
