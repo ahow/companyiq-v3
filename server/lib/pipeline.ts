@@ -356,6 +356,36 @@ export function remainingFetchBudgetMs(
   return Math.max(RECOVERY_WINDOW_FLOOR_MS, Math.min(budgetMs, remaining));
 }
 
+/** The explicit terminal failure_reason recorded for a URL that the fetch phase
+ *  was cancelled before it could attempt. Distinct from 'budget_exceeded' (ran
+ *  out of time) so an audit can tell "we were cancelled before trying" apart from
+ *  "we tried until the clock ran out". */
+export const NOT_ATTEMPTED_CANCELLED_REASON = "not_attempted_cancelled";
+
+/**
+ * Operation-scoped cancellation — item 5 (explicit unattempted-URL outcomes).
+ *
+ * When the fetch loop exits because the operation was cancelled (cancelCheck
+ * flipped true), every still-'pending' accepted document is a URL we never got to
+ * attempt. Leaving it 'pending' is a silent drop: downstream a pending doc reads
+ * as "still in progress" and feeds thin-corpus / readiness heuristics as though
+ * work were ongoing. This records an EXPLICIT, auditable terminal outcome
+ * (fetch_status='dead', failure_reason='not_attempted_cancelled') for each such
+ * URL — mirroring the budget-exceeded force-mark, but with a reason that names
+ * cancellation rather than time exhaustion. Already-resolved docs (ok/dead/
+ * inaccessible) are untouched. Returns the number of URLs marked.
+ */
+export async function markUnattemptedCancelled(companyId: number, companyName: string): Promise<number> {
+  const unattempted = (await storage.getAcceptedDocuments(companyId)).filter((d) => d.fetchStatus === "pending");
+  for (const doc of unattempted) {
+    await storage.recordFetchDead(companyId, doc.url, NOT_ATTEMPTED_CANCELLED_REASON);
+  }
+  if (unattempted.length > 0) {
+    console.warn(`[${companyName}] Operation cancelled — marked ${unattempted.length} unattempted doc(s) as ${NOT_ATTEMPTED_CANCELLED_REASON}`);
+  }
+  return unattempted.length;
+}
+
 async function runFetchPhase(opts: {
   company: Company;
   framework: Framework;
@@ -1066,7 +1096,15 @@ async function runFetchPhase(opts: {
 
   while (true) {
     pass++;
-    if (cancelCheck?.()) break;
+    if (cancelCheck?.()) {
+      // Operation-scoped cancellation: give every URL we never got to an EXPLICIT
+      // terminal outcome instead of silently leaving it 'pending' (see
+      // markUnattemptedCancelled). Non-fatal — a marking failure must not mask the
+      // cancellation itself.
+      try { await markUnattemptedCancelled(companyId, companyName); }
+      catch (e: any) { console.warn(`[${companyName}] cancel-path unattempted-doc marking failed (non-fatal): ${e?.message || e}`); }
+      break;
+    }
 
     // ─── FETCH PHASE TIME BUDGET CHECK ──────────────────────────────────
     const elapsed = Date.now() - fetchPhaseStart;
