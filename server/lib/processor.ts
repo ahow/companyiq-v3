@@ -1458,7 +1458,28 @@ function installBoundedPageInterrupt(page: any, scope?: OperationScope): () => v
   };
 }
 
-async function fetchWithBrowser(url: string, scope?: OperationScope): Promise<string> {
+// batch-1277 (B-browser): a fixed post-navigation settle/delay that still returns
+// promptly when the operation aborts, so a hard-coded wait on a page path cannot
+// burn time past the deadline while this op holds the single browser permit.
+function abortableDelay(ms: number, scope?: OperationScope): Promise<void> {
+  const sig = scope?.signal;
+  if (!sig) return new Promise((resolve) => setTimeout(resolve, ms));
+  if (sig.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      try { sig.removeEventListener("abort", done); } catch { /* ignore */ }
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    sig.addEventListener("abort", done, { once: true });
+  });
+}
+
+// Exported as a behavioral-test seam (mirrors fetchPdfViaBrowser) so the HTML-path
+// bounded-interrupt wiring can be exercised against a real Chromium page. No
+// production call site changes — internal callers still use it unqualified.
+export async function fetchWithBrowser(url: string, scope?: OperationScope): Promise<string> {
   // If the launch circuit is open, skip immediately without acquiring a slot or
   // attempting another fork. This prevents per-URL launch storms when the
   // container is out of process budget.
@@ -1475,9 +1496,14 @@ async function fetchWithBrowser(url: string, scope?: OperationScope): Promise<st
   const gotoTimeout = (base: number) => (scope ? Math.max(1, Math.min(base, scope.remainingMs())) : base);
   const diagEndBrowser = beginStage("browser_nav_parse", "browser_page"); // DIAGNOSTIC-ONLY
   let page: any = null;
+  // batch-1277 (B-browser): bounded in-flight interrupt for the HTML path, same as
+  // fetchPdfViaBrowser. On scope abort an in-flight goto/evaluate/content is torn
+  // down within the grace instead of running to BROWSER_FETCH_TIMEOUT.
+  let clearInterrupt: () => void = () => {};
   try {
     const browser = await getSharedBrowser();
     page = await browser.newPage();
+    clearInterrupt = installBoundedPageInterrupt(page, scope);
     await page.setUserAgent(USER_AGENT);
     // Authenticate with residential proxy if configured (no-op when unset).
     const _proxyCreds1 = getProxyBrowserConfig().credentials;
@@ -1501,8 +1527,10 @@ async function fetchWithBrowser(url: string, scope?: OperationScope): Promise<st
     });
     if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "browser_after_goto");
 
-    // Wait a moment for any JS-rendered content
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // Wait a moment for any JS-rendered content (abortable: returns promptly on
+    // scope abort so it cannot burn the deadline while holding the permit).
+    await abortableDelay(2000, scope);
+    if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "browser_after_settle");
 
     // Extract text content from the page. The evaluate() call is destructive
     // (it removes noise DOM nodes), so this must run AFTER we capture rawHtml.
@@ -1548,7 +1576,7 @@ async function fetchWithBrowser(url: string, scope?: OperationScope): Promise<st
           const primed = await primeWafSession(page, origin);
           if (primed) {
             await page.goto(url, { waitUntil: "networkidle2", timeout: gotoTimeout(30000) });
-            await new Promise((resolve) => setTimeout(resolve, 2000));
+            await abortableDelay(2000, scope);
             const reExtracted = await extractText();
             if (reExtracted && reExtracted.length > content.length) {
               content = reExtracted;
@@ -1565,9 +1593,15 @@ async function fetchWithBrowser(url: string, scope?: OperationScope): Promise<st
     // An operation abort (deadline/revoke) is retryable, not "no content": let it
     // propagate so the caller marks the URL incomplete rather than dead/empty.
     if (isOperationAbortedError(error)) throw error;
+    // batch-1277 (B-browser): when the bounded interrupt tore the page down because
+    // the scope aborted mid-flight, page.goto/evaluate reject with a "Target closed"
+    // error. Surface that as a retryable OperationAbortedError rather than a silent
+    // empty "no content" that would mark the URL permanently dead.
+    if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "browser_html_interrupted");
     console.warn(`[Processor] Browser fetch failed for ${url}: ${error.message}`);
     return "";
   } finally {
+    clearInterrupt();
     // Close only the page (the shared browser is reused), then free the slot.
     if (page) {
       try {
@@ -2253,10 +2287,15 @@ export async function fetchIssuerPdfsWithPrimedSession(
   let page: any = null;
   let browserLaunched = false;
   let settleOutcome: string | undefined; // set to "aborted" when the operation is cancelled
+  // batch-1277 (B-browser): bounded in-flight interrupt for the issuer-PDF recovery
+  // path too, so an abort mid-recovery tears the page down within the grace instead
+  // of letting a hung goto/fetch run while this op holds the single browser permit.
+  let clearInterrupt: () => void = () => {};
   try {
     const browser = await getSharedBrowser();
     browserLaunched = true;
     page = await browser.newPage();
+    clearInterrupt = installBoundedPageInterrupt(page, scope);
     await page.setUserAgent(USER_AGENT);
     // Authenticate with residential proxy if configured (no-op when unset).
     const _proxyCreds3 = getProxyBrowserConfig().credentials;
@@ -2510,6 +2549,7 @@ export async function fetchIssuerPdfsWithPrimedSession(
       }
     }
   } finally {
+    clearInterrupt();
     if (page) {
       try { await page.close(); } catch { /* ignore */ }
     }
