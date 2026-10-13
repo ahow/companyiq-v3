@@ -1,0 +1,367 @@
+{
+ "CSX": {
+  "company_id": 9,
+  "doc_rows": 36,
+  "touched": 6,
+  "ok": 30,
+  "dead_in_window": 1,
+  "dead_reasons": {
+   "timeout": 1
+  },
+  "failed_urls": 9,
+  "launch_fail_urls": 2,
+  "recovered": 2,
+  "recovered_by": {
+   "firecrawl": 2
+  },
+  "ok_no_logged_rec": 6,
+  "gap": 1,
+  "gap_first_party": 0,
+  "gap_urls": [
+   [
+    "https://aba.stevieawards.com/awards/aba-winners/2025/publication-awards/",
+    "dead",
+    "timeout",
+    "third_party",
+    [
+     "browser-launch-failed",
+     "http-fetch-failed",
+     "timeout-marked-dead"
+    ]
+   ]
+  ]
+ },
+ "MAGNA": {
+  "company_id": 10,
+  "doc_rows": 63,
+  "touched": 4,
+  "ok": 56,
+  "dead_in_window": 0,
+  "dead_reasons": {},
+  "failed_urls": 1,
+  "launch_fail_urls": 0,
+  "recovered": 0,
+  "recovered_by": {},
+  "ok_no_logged_rec": 0,
+  "gap": 1,
+  "gap_first_party": 0,
+  "gap_urls": [
+   [
+    "https://www.gurufocus.com/stock/MGA/transcripts/8838359",
+    "rejected",
+    "unspecified",
+    "third_party",
+    [
+     "http-fetch-failed"
+    ]
+   ]
+  ]
+ },
+ "BCE": {
+  "company_id": 15,
+  "doc_rows": 62,
+  "touched": 31,
+  "ok": 44,
+  "dead_in_window": 16,
+  "dead_reasons": {
+   "timeout": 12,
+   "budget_exceeded": 4
+  },
+  "failed_urls": 14,
+  "launch_fail_urls": 3,
+  "recovered": 6,
+  "recovered_by": {
+   "browser-pdf": 6
+  },
+  "ok_no_logged_rec": 0,
+  "gap": 8,
+  "gap_first_party": 6,
+  "gap_urls": [
+   [
+    "https://bce.ca/news-and-media/newsroom?article=bell-canada-launches-bell-cyber-a-central-pillar-in-its-strategy-to-lead-in-managed-ai-powered-solut",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://www.bce.ca/news-and-media/newsroom?article=Bell-AI-Fabric-Cohere-Hypertec-and-BUZZ-HPC-announce-landmark-deal-to-advance-sovereign-AI-in-Canada",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "browser-launch-failed",
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://bce.ca/news-and-media/newsroom?article=new-study-shows-canadian-businesses-eager-to-adopt-ai-data-sovereignty-a-key-concern",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "browser-launch-failed",
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://bce.ca/news-and-media/newsroom?article=bell-ai-fabric-expands-national-network-with-300-mw-data-centre-in-saskatchewan",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "browser-launch-failed",
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://www.bce.ca/news-and-media/newsroom?article=bell-cyber-and-cohere-deploy-sovereign-ai-for-canadian-cybersecurity-operations",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://bce.ca/news-and-media/newsroom?article=bell-and-celestica-collaborate-to-advance-canadian-sovereign-ai-infrastructure",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://mediumir.com/01301/2026042903407.pdf",
+    "dead",
+    "budget_exceeded",
+    "third_party",
+    [
+     "http-fetch-failed"
+    ]
+   ],
+   [
+    "https://ca.finance.yahoo.com/sec-filing/BRK-A/0001193125-26-106263_1067983",
+    "dead",
+    "budget_exceeded",
+    "third_party",
+    [
+     "http-fetch-failed"
+    ]
+   ]
+  ]
+ },
+ "Dominion": {
+  "company_id": 20,
+  "doc_rows": 37,
+  "touched": 10,
+  "ok": 32,
+  "dead_in_window": 0,
+  "dead_reasons": {},
+  "failed_urls": 5,
+  "launch_fail_urls": 0,
+  "recovered": 0,
+  "recovered_by": {},
+  "ok_no_logged_rec": 5,
+  "gap": 0,
+  "gap_first_party": 0,
+  "gap_urls": []
+ },
+ "DARDEN": {
+  "company_id": 14,
+  "doc_rows": 50,
+  "touched": 10,
+  "ok": 39,
+  "dead_in_window": 3,
+  "dead_reasons": {
+   "timeout": 3
+  },
+  "failed_urls": 5,
+  "launch_fail_urls": 1,
+  "recovered": 1,
+  "recovered_by": {
+   "firecrawl": 1,
+   "deferred-retry": 1
+  },
+  "ok_no_logged_rec": 1,
+  "gap": 3,
+  "gap_first_party": 2,
+  "gap_urls": [
+   [
+    "https://moneysense.ai/sec-filings/company/dri/10-k",
+    "dead",
+    "timeout",
+    "third_party",
+    [
+     "http-fetch-failed",
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://investor.darden.com/financials/sec-filings/sec-filings-details/default.aspx?FilingId=19643942",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "browser-launch-failed",
+     "http-fetch-failed",
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://investor.darden.com/financials/sec-filings/sec-filings-details/default.aspx?FilingId=19681313",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "timeout-marked-dead"
+    ]
+   ]
+  ]
+ },
+ "CELESTICA": {
+  "company_id": 19,
+  "doc_rows": 49,
+  "touched": 7,
+  "ok": 45,
+  "dead_in_window": 3,
+  "dead_reasons": {
+   "timeout": 3
+  },
+  "failed_urls": 6,
+  "launch_fail_urls": 3,
+  "recovered": 5,
+  "recovered_by": {
+   "firecrawl": 5
+  },
+  "ok_no_logged_rec": 1,
+  "gap": 0,
+  "gap_first_party": 0,
+  "gap_urls": []
+ },
+ "AXA": {
+  "company_id": 24,
+  "doc_rows": 54,
+  "touched": 32,
+  "ok": 43,
+  "dead_in_window": 9,
+  "dead_reasons": {
+   "timeout": 6,
+   "recovery:challenge_page status=403 bytes=6443": 1,
+   "budget_exceeded": 1,
+   "recovery:challenge_page status=403 bytes=6483": 1
+  },
+  "failed_urls": 10,
+  "launch_fail_urls": 3,
+  "recovered": 4,
+  "recovered_by": {
+   "firecrawl": 4
+  },
+  "ok_no_logged_rec": 1,
+  "gap": 5,
+  "gap_first_party": 5,
+  "gap_urls": [
+   [
+    "https://www.axa.com/en/press/publications/2024-integrated-report",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://www.axa.com/en/press/publications/2022-climate-report",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://webcast.axa.com/f/telecharger_document.php?id_Document=264",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "browser-launch-failed",
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://www.axa.co.uk/about/section-172-and-corporate-governance-reports/",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://www.axa.com/en/page/ai-frequently-asked-questions",
+    "dead",
+    "timeout",
+    "first_party",
+    [
+     "timeout-marked-dead"
+    ]
+   ]
+  ]
+ },
+ "Idemitsu": {
+  "company_id": 29,
+  "doc_rows": 40,
+  "touched": 12,
+  "ok": 32,
+  "dead_in_window": 5,
+  "dead_reasons": {
+   "timeout": 5
+  },
+  "failed_urls": 8,
+  "launch_fail_urls": 0,
+  "recovered": 4,
+  "recovered_by": {
+   "browser-pdf": 4,
+   "direct-retry": 2
+  },
+  "ok_no_logged_rec": 1,
+  "gap": 3,
+  "gap_first_party": 0,
+  "gap_urls": [
+   [
+    "https://financialfilings.com/companies/idemitsu-kosan-coltd/2026/",
+    "dead",
+    "timeout",
+    "third_party",
+    [
+     "http-fetch-failed",
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://nsrp.vn/partner-blog/survey-questionaire-and-screening-criteria-for-purchasing-of-mdea-methyl-diethanolamine-cas-number-105-59-9-foramine-absorber-regenerator-normal-operation-in-2025-2/",
+    "dead",
+    "timeout",
+    "third_party",
+    [
+     "http-fetch-failed",
+     "timeout-marked-dead"
+    ]
+   ],
+   [
+    "https://docs.publicnow.com/viewDoc?filename=33680%5CEXT%5C3672A4F5956FC46B0449F51DFCEBAC5B5B5E6909_2403377EA24D389F29BC7E045AB065474B59FC9D.PDF",
+    "dead",
+    "timeout",
+    "third_party",
+    [
+     "http-fetch-failed",
+     "timeout-marked-dead"
+    ]
+   ]
+  ]
+ }
+}

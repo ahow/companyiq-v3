@@ -1,79 +1,126 @@
-# Review package: browser lifetime + stop rule S4
+# Review package: operation-scoped cancellation (B1–B7)
+
+> **Scope note.** This packet reviews the **operation-scoped-cancellation** work. It supersedes the earlier "browser lifetime + stop rule S4" packet (candidate `9a1b931`, base `b676c2d`), which is a separate change preserved in git history. Nothing here touches BM25/aboutness/discovery/counters/scoring/operating-settings, `BATCH_STOP_RULE_FAILED_JOBS` stays unset, and there is no quarantine-recovery override. **This is a local feature-branch review candidate only: no merge, no deploy, no paid/Railway runs, no live web/LLM calls.**
 
 | | |
 |---|---|
-| Branch | `fix/browser-lifetime-and-stop-rule` (pushed to origin) |
-| Base | `b676c2d` |
-| Release candidate | **`9a1b931`** (code + tests). It contains the accepted browser-lifetime fix `f2288ce`, the harness commit `caaa191`, and the release-item commit `9a1b931` (durable stop-rule cancel, identified/allowlisted integration helper). The commits that add these docs sit on top of it and change no code. |
-| Patch | `fix-browser-lifetime-and-stop-rule.patch` = `git format-patch b676c2d..9a1b931 -- . ':(exclude)deliverables'` (4 code commits; verified to reproduce the `9a1b931` tree when applied to `b676c2d`) |
-| Gates | **The browser fix is active as soon as this is deployed.** Production already runs with `WORKER_ISOLATION_ENABLED=true`, and the fix applies in isolated job children. There is no separate switch for it. **Only the stop rule is inert by default**: it does nothing unless `BATCH_STOP_RULE_FAILED_JOBS` is set to an integer > 0. |
+| Branch | `fix/operation-scoped-cancellation` |
+| Base (production) | **`origin/main` = `8c03b07449701a7fb83dc062abbfe6726cf7c208`** — untouched; nothing pushed to it |
+| Release candidate | **`6e09ced4bf42d036c257cb35772335600215ff30`** |
+| Lineage | `f764c95` (B1 recovery scope + B6 killable pdf-parse subprocess) → `b317833` (B2/B3/B7 production-boundary tests + B7 test seam) → `0d05556` (recovery window = real remaining fetch-phase budget) → `782f99d` (bounded in-flight browser interruption, PDF path) → `e4894ae` (obsolete-work settlement for coalesced callers) → `45cc661` (real-IPC proc-admission withdrawal test + explicit unattempted-URL outcomes) → `658a17c` (deadline threading into browser nav timeouts via `remainingMs`) → **`6e09ced`** (bounded in-flight interruption wired into the `fetchWithBrowser` HTML path + abort-aware settle waits) |
+| Gates | No new env switch. The cancellation machinery is active on the isolated-child path that production already runs (`WORKER_ISOLATION_ENABLED=true`). `BATCH_STOP_RULE_FAILED_JOBS` is **not** part of this change and stays unset. |
+| Delivery constraints honoured | Feature branch only; **no push to origin/main**; no merge; no deploy; no paid/Railway runs; no real web/LLM calls. |
 
-## Contents
+---
 
-| Document | What it contains |
+## 1. What changed (`origin/main..6e09ced`)
+
+Code:
+
+- **`server/lib/pipeline.ts`** —
+  - `runCompanyPdfRecovery` arms **one** `OperationScope` per company PDF recovery, caps its deadline by `min(PDF_RECOVERY_MAX_BUDGET_MS, remainingMs)`, propagates that scope to **every** fetch call (`fetchFn(origin, slice, { outcomes, scope })`), stops dispatching once the scope aborts (leaving the untried tail retryable), and caps total attempts across origins.
+  - **(`0d05556`)** `remainingFetchBudgetMs(fetchPhaseStart)` returns the real remaining fetch-phase budget (configured budget minus elapsed, clamped to `RECOVERY_WINDOW_FLOOR_MS`), and the recovery call site now feeds **that** as `remainingMs` — so the production recovery window is the per-company remaining budget, not the raw 600000 ms constant. The constant itself is unchanged.
+  - **(`45cc661`)** `markUnattemptedCancelled(companyId, companyName)` + const `NOT_ATTEMPTED_CANCELLED_REASON = "not_attempted_cancelled"`: on a cancel break in the fetch loop, every still-`pending` accepted document is recorded fetch-dead with that reason, so cancellation no longer leaves URLs silently `pending`. Wired into the top-of-loop cancel break (non-fatal, wrapped in try/catch).
+- **`server/lib/processor.ts`** —
+  - **B2:** `acquireProcSlot` queued waiter is cancellable — on abort it withdraws from the local broker queue and consumes no slot; grant/abort races hand the slot straight back. In the isolated-child path it withdraws across IPC via `remoteAcquire("proc", signal, () => new OperationAbortedError(…, "proc_admission"))`.
+  - **B3:** `runProcessCollect` registers an abort listener that SIGKILLs a hung extraction child at the abort instant.
+  - **B6:** pdf-parse runs in a **killable subprocess** (`extractViaPdfParseSubprocess` → `pdf-parse-worker.cjs` via `runProcessCollect`), not in-process — a genuine execution boundary.
+  - **B7:** `processDocument` coalesces concurrent same-URL callers to one fetch **only while the in-flight scope is live**; a caller arriving after that scope aborts starts its own attempt (liveness guard). **(`e4894ae`)** a caller that *coalesced onto* an in-flight op and whose **own** scope then aborts self-settles via `Promise.race([existing.promise, callerScope.whenAborted("coalesced_wait")])` instead of hanging on the obsolete shared op.
+  - **(`782f99d`)** `installBoundedPageInterrupt` + `BROWSER_ABORT_GRACE_MS` (500 ms): on scope abort, an in-flight browser op is driven to settle within the grace bound + a gate round-trip instead of running to its own timeout. In `782f99d` this was wired only on the PDF path.
+  - **(this candidate)** the bounded interrupt is now **also wired into the `fetchWithBrowser` HTML path and into `fetchIssuerPdfsWithPrimedSession`** (`clearInterrupt = installBoundedPageInterrupt(page, scope)` at lines ~1506/2021/2298), closing the §6.1 "HTML path not wired" gap from the prior candidate. Two supporting HTML-path changes: the two post-navigation settle waits become `abortableDelay(2000, scope)` (resolve early on abort instead of always burning 2 s), and the catch block converts the puppeteer "Target closed" / detached-frame rejection produced by the forced page-close **after** an abort into a retryable `OperationAbortedError(…, "browser_html_interrupted")`, so an interrupted HTML fetch surfaces an explicit abort instead of a silent `""` (dead URL). Deadline threading into the per-navigation timeouts (`gotoTimeout` clamped to `remainingMs`) landed in `658a17c`.
+
+Tests added / present (all under `server/lib/`): `company-pdf-recovery-boundary.test.ts` (B1, incl. B1-7 recovery window), `cancellable-proc-admission-boundary.test.ts` (B2 in-process), `isolated-proc-admission-boundary.test.ts` (B2 across real fork+IPC) + fixture `__fixtures__/proc-admission-child.ts`, `stalled-extraction-boundary.test.ts` (B3), `pdf-parse-subprocess-equivalence.test.ts` (B6), `inflight-coalescing-boundary.test.ts` (B7, incl. B7-3 obsolete-work settlement), `browser-inflight-interrupt.test.ts` (bounded in-flight page interrupt, real Chromium — **now 2 subtests: PDF path + the new HTML `fetchWithBrowser` path**), `unattempted-cancelled-boundary.test.ts` (explicit unattempted-URL outcomes, real Postgres), `operation-scoped-cancellation.test.ts` (scope primitives A/B/C) and the pre-existing `browser-close-order.test.ts` (real-Chromium close/reap ordering).
+
+---
+
+## 2. Coverage matrix
+
+Full requirement→test→assertion map, with the realism level of each case and the honest gaps, is in **[COVERAGE_MATRIX.md](COVERAGE_MATRIX.md)**. Headline: **11 test files, all green on `6e09ced`** — 34 `node:test` subtests across 10 files + `scoring-cancellation.unit` (60 passed) = **94 total checks, 0 failures**. Realism spans a real-killed child process (B3), a real fork+IPC admission withdrawal (B2b), a real Chromium child close/reap on four exit paths, a real Chromium page bounded-interrupt on **both** the PDF and HTML browser paths, real Postgres terminal-state assertions, and the real production broker/scope functions in-process for the rest.
+
+---
+
+## 3. Mutation-fail demo per guard (all run **this session**, applied → observed → reverted clean)
+
+Each guard is shown to be load-bearing: remove it and the named assertion fails. Every mutation was reverted and the tree re-verified clean (`grep -rn MUTATION_MARKER server/` → none; `git diff --quiet HEAD -- server/lib/processor.ts server/lib/pipeline.ts` → clean).
+
+| Gap | Mutation | Result | Evidence |
+|---|---|---|---|
+| **B1** scope propagation | `fetchFn(origin, slice, { outcomes, scope })` → `{ outcomes }` | **B1-1 fails** | `AssertionError … a scope was passed to the fetch boundary` |
+| **B1-7** recovery window | `remainingFetchBudgetMs` body → `return budgetMs;` (`MUTATION_MARKER_B2`) | **B1-7 fails** | `6 pass / 1 fail` — window no longer shrinks with elapsed |
+| **B2** queued-waiter abort | remove `sig.addEventListener("abort", onAbort…)` | **B2-1 fails** | `'hung' !== 'settled'`; B2-2/3/4 cascade `proc slot leaked` |
+| **B2b** IPC withdrawal error type | `() => new OperationAbortedError(…, "proc_admission")` → `() => new Error("MUTATION_MARKER_B5 …")` | **isolated-proc-admission fails fast** | child withdraws at ~700 ms but `isOperationAborted: false` |
+| **B3** stalled-child kill | disable abort registration | **B3 fails** | `parent settled promptly after abort (elapsed=60005ms)` — child ran the **full 60 s** |
+| **B7** coalescing | `if (false && existing …)` | **B7-1 fails** | `2 !== 1` (two fetches) |
+| **B7** liveness | ignore `scope.aborted()` | **B7-2 fails** | `1 !== 2` (new caller coalesced onto aborted entry) |
+| **B7-3** coalesced self-settle | `Promise.race([existing.promise, callerScope.whenAborted(…)])` → `return existing.promise;` (`MUTATION_MARKER_B4`) | **B7-3 fails** | `2 pass / 1 fail` — coalesced caller hangs past its own abort |
+| **B-browser (PDF)** bounded interrupt | `installBoundedPageInterrupt` `onAbort` body → no-op (`MUTATION_MARKER_B3`) | **browser-inflight-interrupt PDF subtest fails** | page settled **8169 ms** vs `< 3000 ms` bound |
+| **B-browser (HTML)** `fetchWithBrowser` wiring | HTML-path wiring neutralised only (`clearInterrupt = (() => {})` in `fetchWithBrowser`, PDF path left intact) | **HTML subtest fails, PDF subtest still passes** | HTML page settled **8108 ms** (≈ `BROWSER_FETCH_TIMEOUT=8000`) vs `< 3000 ms` — proves the new HTML wiring is independently load-bearing |
+| **B6(unattempted)** terminal outcomes | pending filter `&& false` (`MUTATION_MARKER_B6`) | **B6-1 fails** | `0 !== 3` — pending docs silently dropped again |
+
+B7 needs three mutants because the coalesce / liveness / self-settlement clauses are independently load-bearing. The B2b *error-type* mutation is the load-bearing one for the IPC path; a weaker `cancelAcquire`-suppression mutation did **not** fail (child-exit cleanup masks it) and that masking is documented in COVERAGE_MATRIX §2b rather than hidden.
+
+---
+
+## 4. Gate results (`6e09ced`)
+
+**All 11 cancellation test files green** (fixtures: local `ciq-int-pg` on 55432, `ciq-int-redis` on 56379; no production `DATABASE_URL`; `PDF_RECOVERY_MAX_BUDGET_MS=600000`):
+
+```
+operation-scoped-cancellation        pass 7  fail 0
+company-pdf-recovery-boundary        pass 7  fail 0   (B1-7 added)
+cancellable-proc-admission-boundary  pass 4  fail 0
+isolated-proc-admission-boundary     pass 1  fail 0   (real fork+IPC)
+inflight-coalescing-boundary         pass 3  fail 0   (B7-3 added)
+stalled-extraction-boundary          pass 2  fail 0
+pdf-parse-subprocess-equivalence     pass 2  fail 0
+browser-close-order (real Chromium)  pass 4  fail 0
+browser-inflight-interrupt (real)    pass 2  fail 0   (PDF + HTML paths)
+unattempted-cancelled-boundary (PG)  pass 2  fail 0
+scoring-cancellation.unit            60 passed, 0 failed   (custom runner)
+```
+
+34 `node:test` subtests + 60 scoring-unit assertions = **94 total checks, 0 failures**. `browser-close-order` and `browser-inflight-interrupt` ran against a **real** Chromium (`PUPPETEER_EXECUTABLE_PATH`), not skipped; `isolated-proc-admission-boundary` spawned a **real** OS child over the production IPC channel.
+
+---
+
+## 5. Normalized tsc comparison
+
+`npx tsc --noEmit -p tsconfig.json`, error sets path/line-normalized and de-duplicated, candidate vs base (base run in a worktree checked out at `origin/main` = `8c03b07` with the same `node_modules`). Normalization: `grep 'error TS' | sed -E 's/\(([0-9]+),([0-9]+)\)//' | sort -u` (unique error *signatures*, not raw line count).
+
+| | unique error signatures |
 |---|---|
-| [BRANCH_DIFF.md](BRANCH_DIFF.md) | Commits, files, what changed in `processor.ts`/`worker.ts`/`storage.ts`/`batch-stop-rule.ts`, gates, review focus |
-| [TEST_RESULTS.md](TEST_RESULTS.md) | Before/after repro (unlimited and TasksMax=400), new tests, regression suites, integration suite with process identities, real-PG stop-rule test, tsc, what is not verified |
-| [evidence/batch1276-url-reconciliation.md](evidence/batch1276-url-reconciliation.md) | Batch 1276: failed, then recovered, then residual gap per company. **Batch 1276 is a failed/degraded run** (see below). |
-| `evidence/browser-lifetime-candidate/` | Raw repro JSON and logs for the four worktree runs, plus `wt-run.sh` |
-| `evidence/regression-caaa191/` | Suite logs, tsc outputs (base and `caaa191`), integration logs for the previous candidate |
-| `evidence/release-items/` | Release-item evidence for `9a1b931`: stop-rule unit and real-PG logs, three integration runs with process identities, `tsc.txt`, and `regression/` (all suite logs re-run on `9a1b931`) |
+| base `8c03b07` | 13 |
+| candidate `6e09ced` | 12 |
+| **new errors in candidate** (`comm -13`) | **0** |
+| errors removed by candidate (`comm -23`) | 1 — `server/lib/processor.ts … TS7016: Could not find a declaration file for module 'pdf-parse'` (eliminated because B6 moved pdf-parse out of the in-process import) |
 
-## Release items (reviewer's list) — outcomes on `9a1b931`
+The candidate introduces **zero** new type errors and removes one pre-existing `pdf-parse` declaration warning. All 12 remaining signatures are pre-existing vitest/`any` noise identical to base. (This counts unique error *signatures*; the earlier packet's "62/61" figure counted raw error *lines* — the invariant is the same either way: **0 new errors**.)
 
-1. **Durable stop-rule cancel: done, tested.**
-   - The cancel sequence now runs the flag first (local + Redis notification, synchronous). It then starts the PG cancel and the queue purge together, so the PG cancel is never gated behind the purge.
-   - The purge is bounded (10 s). The snapshot runs only after the PG cancel has committed, and only on the path that actually transitioned the batch. It is bounded (30 s), and its rows are marked `rejected` with `cancelled/partial snapshot … not comprehensive`.
-   - Unit tests with never-resolving purge/snapshot fakes show the PG cancel completing in < 100 ms and the sequence settling within its bounds: 20/20 pass with local PG, 19 + 1 skip without it. The rule is still inert at threshold 0/unset (test 9).
-2. **Extra integration process: identified, allowlisted by exe + cmdline. The zero-descendant check was not relaxed.**
-   - It is tsx's esbuild transform service: exe `node_modules/.pnpm/@esbuild+linux-x64@0.28.0/.../bin/esbuild`, cmdline `<exe> --service=0.28.0 --ping`, parent = the test harness process.
-   - It is spawned lazily when tsx compiles uncached TypeScript. In the cold-cache run it already existed before any job ran; with a warm cache it does not appear at all.
-   - It is test toolchain, not app work (production runs compiled JS without tsx). It exits with the harness.
-   - Final run: 12/12 PASS, with 0 counted descendants after completion and after `stopWorker`.
-3. **Real-PG stop-rule test: PASS 17/17**, run on a throwaway database on a disposable local PG container, which was dropped afterwards.
-   - Exercises `COUNT_BATCH_FAILURES_SQL`, the real `failJob`/`cancelBatchRun`/`claimJob`/BullMQ purge/Redis flag, and two concurrent failure paths racing to trip the rule.
-   - Outcome: durably cancelled, exactly one PG transition, exactly one snapshot (rejected, partial), zero retries, and no re-claim.
-   - Production `companyiq_v3` and the hosted `default` DB were not touched.
+---
 
-## Headline results (browser fix, unchanged from the accepted review)
+## 6. Remaining unbounded / unproven paths (honest boundary)
 
-**Live browsers.**
+1. **(RESOLVED in this candidate)** *Active in-page CDP interruption was bounded on one path only.* In the prior candidate `installBoundedPageInterrupt` was wired only into `fetchPdfViaBrowser`, leaving the `fetchWithBrowser` HTML path un-interruptible. It is **now wired into both browser paths and the primed-session path** (lines ~1506/2021/2298), proven with a real Chromium page by the new HTML subtest 5b.2 and its path-isolated mutation (wired → 8108 ms when neutralised, while the PDF subtest still passes). A fetch / `page.goto` / `page.evaluate` / WAF challenge already executing on the HTML path when the scope aborts is now driven to settle within `BROWSER_ABORT_GRACE_MS` + a gate round-trip and surfaces a retryable `OperationAbortedError(…, "browser_html_interrupted")`, instead of running to the browser timeout or returning a silent `""`.
+2. **Deadline is now threaded into the browser fetch at the navigation + settle layers; a deep per-socket timeout is still not asserted.** Since `658a17c` the per-navigation timeouts are clamped to `remainingMs` (`gotoTimeout = base => scope ? max(1, min(base, scope.remainingMs())) : base`, lines ~1496/2009), and this candidate makes the two post-navigation settle waits abort-aware via `abortableDelay`. So on both browser paths the effective ceiling on an in-flight fetch is now the scope deadline (via the clamped nav timeout) or the grace bound (via the interrupt), **not** the pipeline-deadline → SIGKILL fallback. What is still **not** independently asserted by a test is a per-request TCP/socket read timeout equal to `remainingMs` inside the lowest-level puppeteer/CDP transport; the abort path tears the page down within the grace bound, which supersedes that socket in practice, but no test pins the socket layer itself. This is the honest residual of the former "bounded, not threaded" gap.
+3. **(RESOLVED in the `0d05556` candidate)** The production recovery window previously degenerated to the `PDF_RECOVERY_MAX_BUDGET_MS` (600000) constant because the call site omitted `remainingMs`. It now feeds `remainingFetchBudgetMs(fetchPhaseStart)` — the configured budget minus elapsed, clamped to a floor — so the per-company remaining budget is honoured in production, not just in the test (B1-7 + mutation). The constant is unchanged; only the derivation changed.
+4. **Specific production stalls unobserved.** The Idemitsu ~18-minute single step and the AXA analysis-prep ~7m26s stall (`TIMEOUT_INVESTIGATION.md`) are not reproduced here and are **not** claimed fixed by this patch.
 
-- With 1 browser permit, the base keeps up to **4** Chromium instances alive (one per child), and the candidate keeps **1**.
-- Threads fell from 550 to 205 and summed RSS from 4.9 GB to 2.0 GB. Wall time, admission wait and permit hold did not change in this workload.
+---
 
-**Under a 400-task cgroup cap (TasksMax=400).**
+## 7. Claims kept narrow
 
-- The base failed **4/12** jobs. Those documents were never fetched, after Chromium launch failures and protocol timeouts, and the run took 3.9× as long.
-- The candidate ran **12/12** with unchanged timing.
+- **Candidate only.** `6e09ced` is a review candidate on a feature branch. Nothing was merged, deployed, or run on Railway/paid providers. `origin/main` is untouched at `8c03b07` (verified: `git rev-parse origin/main` = `8c03b07…`; local `main` = `8c03b07…`).
+- **No full scoring fixture.** Per the reviewer's clarification, no end-to-end scoring run is included; the behavioural tests drive the real caller-to-recovery boundary and the real admission/coalescing/subprocess/IPC/Postgres functions directly.
+- **Mutations are session-local and reverted.** Every §3 mutation was applied, observed to fail the named assertion, and reverted in this session; `grep -rn MUTATION_MARKER server/` is empty and `git diff --quiet HEAD -- server/lib/processor.ts server/lib/pipeline.ts` is clean.
+- **What is proven** is the requirement→assertion map in COVERAGE_MATRIX.md plus the §3 mutation demos. **What is not proven** is in §6 and COVERAGE_MATRIX §6 — read the green suite as exactly that boundary, no wider.
 
-**Ordering.** `browser-close-order.test.ts` (4/4) shows that Chromium is gone before the permit returns on the success, fetch-failure, cancellation and child-death paths. A mutation check showed that releasing the permit first makes these tests fail.
+---
 
-**Regressions on `9a1b931`.**
+## 8. Reviewer's 6-point clarification — status
 
-- Every suite was re-run and exits 0, including `lifecycle-fence.db` (165/165 on real local PG/Redis, which covers concurrent `cancelBatchRun`).
-- tsc: 62 errors, an error set identical to the base. One new error (a test variable typed `Promise<void>` for `cancelBatchRun`'s new `Promise<boolean>`) was found and fixed before commit.
-- Integration (real PG/Redis/BullMQ/Chromium): **12/12 PASS**. One earlier attempt failed 6 checks, but that was caused by my own first real-PG stop-rule test, not by the product. It left its Redis cancel flag `cancelled:batch:9` behind; the next integration run reused batch id 9, so its batch was pre-cancelled and never claimed. The flag was deleted and the test's teardown now removes it. The log is kept as `integration-identity-attempt1-redis-polluted.log`.
-
-**Stop rule.** In the batch-1276 shape, the rule off means 13 jobs exhaust retries (39 failed attempts). With `BATCH_STOP_RULE_FAILED_JOBS=2`, the batch is cancelled at the 2nd failed job, before any retry is exhausted.
-
-## Batch 1276: a failed/degraded run
-
-**Batch 1276 is a failed/degraded run.** Its completed companies must **not** be treated as confirmed-comprehensive results. They were scored on a corpus with a known residual gap.
-
-- 95 failed URLs: 26 recovered by fallback, 20 ok in DB without a logged recovery, and **49 URLs never recovered** (12.5% of the attempted corpus).
-- That includes **10 of Southern's 27** URLs (37%), all after browser-launch failures. That is the clearest coverage loss consistent with the browser-lifetime defect. It is an inference from log tags, not a measured causal link.
-
-## Claims kept narrow
-
-- **SIGABRT not reproduced.** The production SIGABRT signature was **not** reproduced locally. Locally we reproduced a launch-failure / starvation mode under a task cap.
-- **What the fix is shown to do.** It removes the browser accumulation demonstrated locally (live Chromium bounded by permits, not by children), and the extraction failures that came with it in that constrained repro. **Production must still show whether it eliminates the child-start failures** seen there.
-- **Overhead.** Overhead was negligible **in this local workload only** (wall time, admission wait and permit hold unchanged). This is not a general zero-overhead claim. Closing and relaunching Chromium per permit cycle has a cost that depends on fetch mix and concurrency.
-- **Environment.** Not run on Railway or at production settings. No real web fetches or LLM providers were used.
-
-## Rollback procedure
-
-1. **Rollback = revert the deploy.** Redeploy the previous production image/commit: `b676c2d`, or whatever the production deploy history shows as the deploy immediately before this one. Confirm the commit there before redeploying. This removes both the browser fix and the stop rule.
-2. **To turn off only the stop rule** (keeping the browser fix): unset `BATCH_STOP_RULE_FAILED_JOBS` or set it to `0`. The value is read from the process environment, so it takes effect once the worker process restarts with the new value.
-3. **Do NOT disable `WORKER_ISOLATION_ENABLED` as a rollback.** That would switch production onto the in-process path, which is a different, larger change than this release, and it is not a rollback of this release. Reverting the deploy is the rollback.
-4. No data migration to undo. The release adds no schema change. Stop-rule snapshots, if any were taken, are already marked `rejected` / cancelled/partial and can stay.
+1. **Behavioural recovery boundary (not callee+grep).** Done — `runCompanyPdfRecovery` is real production code called in the production pipeline; B1-1..B1-7 assert scope construction, deadline capping, no-dispatch-after-expiry, retryable tail, healthy path, expiry-through-the-real-admission-boundary, **and** that the production window is the real remaining budget (B1-7). Mutations: scope-drop → B1-1 fail; `return budgetMs` → B1-7 fail (§3).
+2. **Chromium realism + coverage matrix.** Done — COVERAGE_MATRIX.md states per case whether it is real-Chromium-child (R), real-Chromium-page (R(page)), real-subprocess (S), real fork+IPC (I), real-Postgres (D), or broker/unit (U). The bounded in-flight interrupt is now proven on **both** the PDF and HTML (`fetchWithBrowser`) browser paths (§5b, 5b.1/5b.2); the one remaining active-interruption residual — a deep per-socket read timeout not asserted by a test — is listed explicitly (§6.2).
+3. **Fixture infra.** Done — `ciq-int-pg` (55432) / `ciq-int-redis` (56379), no production `DATABASE_URL`.
+4. **B6 killable execution boundary.** Done — subprocess, not in-process size cap (§1); `pdf-parse-subprocess-equivalence.test.ts` green. Admission withdrawal additionally proven across a real fork+IPC boundary (`isolated-proc-admission-boundary.test.ts`).
+5. **Recovery budget value retained, semantics documented.** `PDF_RECOVERY_MAX_BUDGET_MS=600000` retained; the production window now derives from the real remaining fetch-phase budget (B1-7), resolving the earlier "degenerates to the constant" gap. Documented in §6.3 and tested.
+6. **Delivery: feature branch, no origin/main, no deploy/paid runs.** Honoured (§ header + §7).

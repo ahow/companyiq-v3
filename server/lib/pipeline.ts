@@ -29,7 +29,7 @@
 import * as storage from "../storage.js";
 import { getDiagContext, setDiagStage, diagTags, startStageTimer, runWithChildTimer } from "./diag-context.js";
 import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
-import { LifecycleCancelledError, isLifecycleCancelledError, requireOwnershipForBatchWrite, revokeAttempt } from "./lifecycle-fence.js";
+import { LifecycleCancelledError, isLifecycleCancelledError, requireOwnershipForBatchWrite, revokeAttempt, createOperationScope, OperationAbortedError, isOperationAbortedError, type OperationScope } from "./lifecycle-fence.js";
 import { searchCompanyDocuments, runTargetedDisclosureQuery, resolveCikForCompany, type DiscoveryResult } from "./discovery.js";
 import {
   getRequirementsForJurisdiction,
@@ -205,6 +205,185 @@ export function newBatchFetchState(): BatchFetchState {
     hostSlowFetches: new Map(),
     hostCircuitBroken: new Set(),
   };
+}
+
+// batch-1277 (B1) — injectable signature of the browser recovery boundary. The
+// production default is the REAL fetchIssuerPdfsWithPrimedSession (resolved lazily
+// to avoid a load-time pipeline<->processor import cycle); tests pass a fake to
+// observe exactly which scope/urls reach the boundary.
+export type IssuerPdfFetchFn = (
+  origin: string,
+  urls: string[],
+  opts: { outcomes?: PdfRecoveryOutcome[]; scope?: OperationScope }
+) => Promise<Map<string, string>>;
+
+export interface CompanyPdfRecoveryParams {
+  // Ordered candidate PDF URLs grouped by issuer origin.
+  candidatesByOrigin: Map<string, string[]>;
+  // Total number of per-URL attempts allowed ACROSS all origins (CHANGE 3).
+  attemptBudget: number;
+  // Per-URL diagnostics are appended here by the fetch boundary (callee).
+  outcomes: PdfRecoveryOutcome[];
+  // Remaining company budget, if a caller has one. The recovery scope budget is
+  // capped at min(PDF_RECOVERY_MAX_BUDGET_MS, remainingMs ?? Infinity). Production
+  // runFetchPhase has NO in-process company deadline, so it omits this and the cap
+  // degenerates to the constant; tests pass a small value to prove the cap is
+  // honoured (the only way to exercise capping deterministically today).
+  remainingMs?: number;
+  ctx?: ReturnType<typeof getDiagContext>;
+  label?: string;
+  // Injectable fetch boundary; defaults to the REAL processor implementation.
+  fetchFn?: IssuerPdfFetchFn;
+}
+
+export interface CompanyPdfRecoveryResult {
+  // URL->text pairs returned by the fetch boundary (UNFILTERED; the caller applies
+  // its own min-length threshold and persists via storage.recordFetchSuccess).
+  recovered: Array<{ url: string; text: string }>;
+  // Per-URL attempts actually dispatched across origins.
+  attemptsUsed: number;
+  // True iff the company-wide recovery scope aborted before all origins were tried.
+  aborted: boolean;
+}
+
+/**
+ * batch-1277 (B1) — THE confirmed production gap, extracted from an inline block in
+ * runFetchPhase into this testable helper.
+ *
+ * Before this fix the recovery call omitted `scope`, so
+ * fetchIssuerPdfsWithPrimedSession's operation-scoped cancellation was DEAD CODE on
+ * the production recovery path: a company whose recovery ran long could hold the
+ * single browser permit indefinitely while a later origin was queued behind an
+ * earlier one at the replica browser broker, with NO company-wide deadline bounding
+ * the loop across origins.
+ *
+ * This helper arms ONE operation scope for the WHOLE recovery (all origins), created
+ * ONCE and reused across the per-origin loop. It is therefore an ABSOLUTE
+ * company-wide recovery deadline that is NOT reset per origin and KEEPS COUNTING
+ * while a later origin is queued behind an earlier one.
+ *
+ * SEMANTIC CHANGE (value unchanged): the scope budget reuses the EXISTING
+ * PDF_RECOVERY_MAX_BUDGET_MS value (default 600000ms / 10 min), which previously was
+ * only a PER-ORIGIN "never run away" hard cap inside fetchIssuerPdfsWithPrimedSession.
+ * Here the SAME value is applied as a COMPANY-WIDE TOTAL cap across all origins. No
+ * budget VALUE changes; the value is now additionally honoured across origins by
+ * cancellation rather than only per origin. When the scope elapses, every
+ * not-yet-attempted URL is marked deadline_elapsed/admission_timeout (retryable /
+ * incomplete — never falsely dead or researched) by the callee, and the deferred
+ * sweep re-attempts them.
+ */
+export async function runCompanyPdfRecovery(
+  params: CompanyPdfRecoveryParams
+): Promise<CompanyPdfRecoveryResult> {
+  const { candidatesByOrigin, outcomes, remainingMs, ctx, label } = params;
+  let attemptBudget = params.attemptBudget;
+
+  // Default to the REAL boundary, resolved lazily to avoid a module load-time cycle.
+  const fetchFn: IssuerPdfFetchFn =
+    params.fetchFn ??
+    (async (origin, urls, opts) => {
+      const { fetchIssuerPdfsWithPrimedSession } = (await import("./processor.js")) as any;
+      if (typeof fetchIssuerPdfsWithPrimedSession !== "function") return new Map<string, string>();
+      return fetchIssuerPdfsWithPrimedSession(origin, urls, opts);
+    });
+
+  const maxBudgetMs = parseInt(process.env.PDF_RECOVERY_MAX_BUDGET_MS || "600000", 10);
+  const budgetMs = Math.min(maxBudgetMs, remainingMs ?? Infinity);
+
+  const recovered: Array<{ url: string; text: string }> = [];
+  let attemptsUsed = 0;
+  let aborted = false;
+
+  const scope = createOperationScope({
+    budgetMs,
+    ctx: ctx ?? getDiagContext(),
+    label: label ?? "pdf-recovery",
+  });
+  try {
+    for (const [origin, urls] of candidatesByOrigin) {
+      if (attemptBudget <= 0) break;
+      // Company-wide recovery deadline elapsed (counts while queued) — stop
+      // dispatching new origins; the callee marks remaining URLs retryable.
+      if (scope.aborted()) {
+        aborted = true;
+        break;
+      }
+      const slice = urls.slice(0, attemptBudget);
+      attemptBudget -= slice.length;
+      attemptsUsed += slice.length;
+      const recoveredMap = await fetchFn(origin, slice, { outcomes, scope });
+      for (const [pdfUrl, pdfText] of recoveredMap) {
+        recovered.push({ url: pdfUrl, text: pdfText });
+      }
+    }
+    if (!aborted && scope.aborted()) aborted = true;
+  } finally {
+    scope.dispose();
+  }
+  return { recovered, attemptsUsed, aborted };
+}
+
+/**
+ * batch-1277 (B1 follow-up) — the ACTUAL remaining company/operation execution
+ * budget for PDF recovery.
+ *
+ * The reviewer flagged that the production recovery window "degenerates to a
+ * constant": the call site omitted `remainingMs`, so the recovery scope budget
+ * collapsed to the standalone PDF_RECOVERY_MAX_BUDGET_MS constant (10 min) no
+ * matter how much of the company's execution budget was already spent on
+ * discovery and document fetching.
+ *
+ * There IS an operation deadline already threaded through runFetchPhase:
+ * `fetchPhaseStart + FETCH_PHASE_BUDGET_MS` — the SAME deadline the fetch loop
+ * enforces at every document (see the `Date.now() - fetchPhaseStart >
+ * FETCH_PHASE_BUDGET_MS` guards). The remaining budget is therefore simply
+ * (deadline - now). This introduces NO new configured budget and does NOT alter
+ * FETCH_PHASE_BUDGET_MS or PDF_RECOVERY_MAX_BUDGET_MS; it only computes the time
+ * left against the existing deadline and CLAMPS it:
+ *   - floor at RECOVERY_WINDOW_FLOOR_MS so a nearly-elapsed budget still yields a
+ *     tiny-but-nonzero window (never <= 0, which would abort recovery instantly);
+ *   - ceiling at the phase budget itself (remaining can never exceed the budget).
+ * The PDF_RECOVERY_MAX_BUDGET_MS cap is still applied downstream inside
+ * runCompanyPdfRecovery via min(cap, remainingMs).
+ */
+export const RECOVERY_WINDOW_FLOOR_MS = 1000;
+export function remainingFetchBudgetMs(
+  fetchPhaseStart: number,
+  budgetMs: number = FETCH_PHASE_BUDGET_MS,
+  now: number = Date.now(),
+): number {
+  const remaining = budgetMs - (now - fetchPhaseStart);
+  return Math.max(RECOVERY_WINDOW_FLOOR_MS, Math.min(budgetMs, remaining));
+}
+
+/** The explicit terminal failure_reason recorded for a URL that the fetch phase
+ *  was cancelled before it could attempt. Distinct from 'budget_exceeded' (ran
+ *  out of time) so an audit can tell "we were cancelled before trying" apart from
+ *  "we tried until the clock ran out". */
+export const NOT_ATTEMPTED_CANCELLED_REASON = "not_attempted_cancelled";
+
+/**
+ * Operation-scoped cancellation — item 5 (explicit unattempted-URL outcomes).
+ *
+ * When the fetch loop exits because the operation was cancelled (cancelCheck
+ * flipped true), every still-'pending' accepted document is a URL we never got to
+ * attempt. Leaving it 'pending' is a silent drop: downstream a pending doc reads
+ * as "still in progress" and feeds thin-corpus / readiness heuristics as though
+ * work were ongoing. This records an EXPLICIT, auditable terminal outcome
+ * (fetch_status='dead', failure_reason='not_attempted_cancelled') for each such
+ * URL — mirroring the budget-exceeded force-mark, but with a reason that names
+ * cancellation rather than time exhaustion. Already-resolved docs (ok/dead/
+ * inaccessible) are untouched. Returns the number of URLs marked.
+ */
+export async function markUnattemptedCancelled(companyId: number, companyName: string): Promise<number> {
+  const unattempted = (await storage.getAcceptedDocuments(companyId)).filter((d) => d.fetchStatus === "pending");
+  for (const doc of unattempted) {
+    await storage.recordFetchDead(companyId, doc.url, NOT_ATTEMPTED_CANCELLED_REASON);
+  }
+  if (unattempted.length > 0) {
+    console.warn(`[${companyName}] Operation cancelled — marked ${unattempted.length} unattempted doc(s) as ${NOT_ATTEMPTED_CANCELLED_REASON}`);
+  }
+  return unattempted.length;
 }
 
 async function runFetchPhase(opts: {
@@ -917,7 +1096,15 @@ async function runFetchPhase(opts: {
 
   while (true) {
     pass++;
-    if (cancelCheck?.()) break;
+    if (cancelCheck?.()) {
+      // Operation-scoped cancellation: give every URL we never got to an EXPLICIT
+      // terminal outcome instead of silently leaving it 'pending' (see
+      // markUnattemptedCancelled). Non-fatal — a marking failure must not mask the
+      // cancellation itself.
+      try { await markUnattemptedCancelled(companyId, companyName); }
+      catch (e: any) { console.warn(`[${companyName}] cancel-path unattempted-doc marking failed (non-fatal): ${e?.message || e}`); }
+      break;
+    }
 
     // ─── FETCH PHASE TIME BUDGET CHECK ──────────────────────────────────
     const elapsed = Date.now() - fetchPhaseStart;
@@ -1130,13 +1317,35 @@ async function runFetchPhase(opts: {
         if (forceHeadless2a && !isPinnedOrKnown) {
           console.log(`[${companyName}] Fix 2a: forcing headless for ${doc.url.slice(0, 80)} (host ${docHost} has ${historyFails} prior empty/transient failures)`);
         }
-        // Wrap processDocument with a per-document timeout
+        // Wrap processDocument with an operation-scoped per-document deadline.
+        // CHANGE (operation-scoped cancellation, item 1) — the per-document budget
+        // is now ENFORCED BY CANCELLATION rather than by abandoning the await:
+        // createOperationScope arms an AbortController + absolute wall-clock deadline
+        // (PER_DOCUMENT_TIMEOUT_MS, VALUE UNCHANGED) combined with the attempt's
+        // lifecycle/revocation signal. The scope is threaded into processDocument so
+        // that, when the deadline elapses, the underlying operation ABORTS: it
+        // withdraws any queued browser-permit request from the parent broker, closes
+        // and reaps the browser before releasing the permit, and refuses to persist a
+        // late result — instead of silently holding the single browser permit past
+        // budget and serialising every other company on the replica (batch-1277 RCA).
         const fetchStart = Date.now();
-        const content = await withTimeout(
-          processDocument(doc.url, type, { forceHeadless: forceHeadless2a }),
-          PER_DOCUMENT_TIMEOUT_MS,
-          `[${companyName}] fetch ${doc.url.slice(0, 80)}`
-        );
+        const scope = createOperationScope({
+          budgetMs: PER_DOCUMENT_TIMEOUT_MS,
+          ctx: getDiagContext(),
+          label: `[${companyName}] fetch ${doc.url.slice(0, 80)}`,
+        });
+        let content: string;
+        try {
+          // Promise.race: whichever settles first wins. whenAborted() rejects with an
+          // OperationAbortedError at the deadline; processDocument itself also observes
+          // the scope and aborts its in-flight work, so the permit is actually freed.
+          content = await Promise.race([
+            processDocument(doc.url, type, { forceHeadless: forceHeadless2a, scope }),
+            scope.whenAborted(`[${companyName}] fetch ${doc.url.slice(0, 80)}`),
+          ]);
+        } finally {
+          scope.dispose();
+        }
         // 41-K: Track fetch latency for circuit-breaker
         const fetchElapsed = Date.now() - fetchStart;
         // Fix B: issuer-domain PDFs are expected to be large/slow — they must
@@ -1266,7 +1475,17 @@ async function runFetchPhase(opts: {
           }
         }
       } catch (error: any) {
-        if (error instanceof TimeoutError) {
+        if (isOperationAbortedError(error)) {
+          // CHANGE (operation-scoped cancellation, item 1/5) — the per-document
+          // deadline elapsed and the operation was ABORTED (permit withdrawn/freed,
+          // no late persistence). This is a budget condition, NOT a dead document:
+          // record a RETRYABLE failure so the URL stays pending for the deferred
+          // sweep / a later pass, rather than marking it permanently dead (which the
+          // old withTimeout→TimeoutError path did, losing recoverable documents).
+          console.warn(`[${companyName}] Document fetch ABORTED at deadline (${PER_DOCUMENT_TIMEOUT_MS / 1000}s) — keeping retryable: ${doc.url.slice(0, 100)} (${error.reason ?? "deadline_elapsed"})`);
+          if (docHost) hostFailHistory.set(docHost, (hostFailHistory.get(docHost) || 0) + 1);
+          await storage.recordFetchFailure(companyId, doc.url, "deadline_elapsed");
+        } else if (error instanceof TimeoutError) {
           console.warn(`[${companyName}] Document fetch TIMEOUT (${PER_DOCUMENT_TIMEOUT_MS / 1000}s) — marking dead: ${doc.url.slice(0, 100)}`);
           await storage.recordFetchDead(companyId, doc.url, "timeout");
         } else if (error instanceof TransientFetchError) {
@@ -1549,26 +1768,42 @@ async function runFetchPhase(opts: {
       // nav_timeout per URL.
       const recoveryOutcomes: PdfRecoveryOutcome[] = [];
       try {
-        const { fetchIssuerPdfsWithPrimedSession } = await import("./processor.js") as any;
-        if (typeof fetchIssuerPdfsWithPrimedSession === 'function') {
-          // CHANGE 3 — cap total recovery attempts across origins. This was a
-          // hard-coded 15, which starved large issuers (e.g. 3i needed ~18 and
-          // lost its tail). It is now env-configurable via
-          // PDF_RECOVERY_ATTEMPT_BUDGET and defaults higher (40). Highest-priority
-          // DB-sourced URLs still come first per the ordering above.
-          let attemptBudget = parseInt(process.env.PDF_RECOVERY_ATTEMPT_BUDGET || "40", 10);
-          for (const [origin, urls] of candidatesByOrigin) {
-            if (attemptBudget <= 0) break;
-            const slice = urls.slice(0, attemptBudget);
-            attemptBudget -= slice.length;
-            const recoveredMap: Map<string, string> = await fetchIssuerPdfsWithPrimedSession(origin, slice, { outcomes: recoveryOutcomes });
-            for (const [pdfUrl, pdfText] of recoveredMap) {
-              if (pdfText && pdfText.length > 200) {
-                await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
-                pdfRecovered++;
-                console.log(`[${companyName}] Fix 2b: PDF fallback recovered ${pdfText.length} chars from ${pdfUrl.slice(0, 80)}`);
-              }
-            }
+        // CHANGE 3 — cap total recovery attempts across origins. This was a
+        // hard-coded 15, which starved large issuers (e.g. 3i needed ~18 and
+        // lost its tail). It is now env-configurable via
+        // PDF_RECOVERY_ATTEMPT_BUDGET and defaults higher (40). Highest-priority
+        // DB-sourced URLs still come first per the ordering above.
+        const attemptBudget = parseInt(process.env.PDF_RECOVERY_ATTEMPT_BUDGET || "40", 10);
+        // batch-1277 (B1 follow-up) — the operation-scoped recovery boundary is the
+        // extracted, unit-tested runCompanyPdfRecovery helper (see its doc comment
+        // for the company-wide-total-vs-per-origin budget semantic change). The
+        // recovery window is now the ACTUAL remaining fetch-phase execution budget
+        // (deadline - now) derived from the SAME in-process operation deadline this
+        // phase already enforces at every document — fetchPhaseStart +
+        // FETCH_PHASE_BUDGET_MS — via remainingFetchBudgetMs(). Previously this call
+        // omitted `remainingMs`, so the recovery scope degenerated to the
+        // PDF_RECOVERY_MAX_BUDGET_MS constant regardless of how much of the
+        // company's budget discovery and fetching had already spent. No configured
+        // budget is introduced or changed; the PDF_RECOVERY_MAX_BUDGET_MS cap is
+        // still applied downstream (min(cap, remainingMs)). The default fetchFn is
+        // the REAL fetchIssuerPdfsWithPrimedSession.
+        const recoveryRemainingMs = remainingFetchBudgetMs(fetchPhaseStart);
+        const recoveryResult = await runCompanyPdfRecovery({
+          candidatesByOrigin,
+          attemptBudget,
+          outcomes: recoveryOutcomes,
+          remainingMs: recoveryRemainingMs,
+          ctx: getDiagContext(),
+          label: `[${companyName}] pdf-recovery`,
+        });
+        if (recoveryResult.aborted) {
+          console.warn(`[${companyName}] Fix 2b: company-wide recovery deadline elapsed — remaining origin(s) left retryable`);
+        }
+        for (const { url: pdfUrl, text: pdfText } of recoveryResult.recovered) {
+          if (pdfText && pdfText.length > 200) {
+            await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
+            pdfRecovered++;
+            console.log(`[${companyName}] Fix 2b: PDF fallback recovered ${pdfText.length} chars from ${pdfUrl.slice(0, 80)}`);
           }
         }
       } catch (pdfErr: any) {
@@ -1682,7 +1917,12 @@ async function runFetchPhase(opts: {
     const DEFERRED_RETRY_CONCURRENCY = Math.max(1, parseInt(process.env.DEFERRED_RETRY_CONCURRENCY || "2", 10));
     if (DEFERRED_RETRY_MAX_DOCS > 0 && DEFERRED_RETRY_BUDGET_MS > 0) {
       const allDocs = await storage.getAcceptedDocuments(companyId);
-      const budgetReason = /budget_exhausted|budget_exceeded/i;
+      // CHANGE (operation-scoped cancellation, item 6) — treat the new cancellation
+      // reasons as budget-starved too: admission_timeout (queued recovery gave up the
+      // permit wait at the company deadline) and deadline_elapsed (operation aborted
+      // before the URL was genuinely attempted). Like budget_exhausted these are NOT
+      // real document failures, so the bounded deferred sweep re-attempts them ONCE.
+      const budgetReason = /budget_exhausted|budget_exceeded|admission_timeout|deadline_elapsed/i;
       const deferredCandidates = allDocs
         .filter(d => d.fetchStatus === "dead" && budgetReason.test(String((d as any).failureReason || "")))
         .slice(0, DEFERRED_RETRY_MAX_DOCS);
@@ -1698,19 +1938,38 @@ async function runFetchPhase(opts: {
             if (remaining <= 0) break;
             try {
               const type = inferDocumentType(doc.url);
-              const content = await withTimeout(
-                processDocument(doc.url, type),
-                Math.min(PER_DOCUMENT_TIMEOUT_MS, remaining),
-                `[${companyName}] deferred-retry ${doc.url.slice(0, 80)}`
-              );
-              if (content && content.length > 50) {
+              // CHANGE (operation-scoped cancellation, item 1/5) — bound the deferred
+              // re-attempt by the SMALLER of the per-document budget and the remaining
+              // sweep wall-clock, enforced by CANCELLATION (scope) so an expired
+              // re-attempt withdraws from the broker / frees the permit rather than
+              // hanging the sweep. VALUES unchanged (still Math.min(PER_DOCUMENT…,
+              // remaining)); only the enforcement mechanism changed.
+              const scope = createOperationScope({
+                budgetMs: Math.max(1, Math.min(PER_DOCUMENT_TIMEOUT_MS, remaining)),
+                ctx: getDiagContext(),
+                label: `[${companyName}] deferred-retry ${doc.url.slice(0, 80)}`,
+              });
+              let content: string;
+              try {
+                content = await Promise.race([
+                  processDocument(doc.url, type, { scope }),
+                  scope.whenAborted(`[${companyName}] deferred-retry ${doc.url.slice(0, 80)}`),
+                ]);
+              } finally {
+                scope.dispose();
+              }
+              // Item 5 — refuse late-result persistence: if the operation was aborted
+              // (deadline passed) we must NOT call recordFetchSuccess, even if a
+              // straggling result arrived — the URL stays budget-starved/retryable.
+              if (content && content.length > 50 && !scope.aborted()) {
                 await storage.recordFetchSuccess(companyId, doc.url, content);
                 deferredRecovered++;
                 console.log(`[${companyName}] CHANGE 5: deferred retry recovered ${content.length} chars from ${doc.url.slice(0, 80)}`);
               }
             } catch (retryErr: any) {
               // Best-effort extra attempt — leave the existing dead status/reason
-              // untouched. Do not re-mark, escalate, or re-queue (no loop).
+              // untouched. Do not re-mark, escalate, or re-queue (no loop). An
+              // OperationAbortedError here is expected when the sweep budget elapses.
               console.log(`[${companyName}] CHANGE 5: deferred retry failed for ${doc.url.slice(0, 80)}: ${String(retryErr?.message || retryErr).slice(0, 100)}`);
             }
           }

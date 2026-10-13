@@ -212,6 +212,103 @@ export function requestAbortSignal(
   };
 }
 
+// ─── Operation-scoped cancellation (document fetch/recovery) ─────────────────
+// batch-1277 timeout fix. The old per-document wrapper (`withTimeout`) only
+// REJECTED the caller's wait at the deadline; the underlying operation kept
+// running, kept holding the single browser permit far beyond budget, and an
+// expired-but-still-queued operation could later be GRANTED the permit and
+// dispatch dead work — serialising every other company on the replica.
+//
+// An OperationScope turns a per-operation budget into a real cancellation:
+//   - an ABSOLUTE wall-clock deadline (deadlineAt) aborts the operation;
+//   - it is combined (AbortSignal.any) with the attempt-lifecycle/revocation
+//     signal (requestAbortSignal), so an attempt revoke / batch cancel /
+//     attempt deadline still aborts the operation exactly as before.
+// The combined signal is threaded into acquireBrowserSlot (so a queued waiter
+// withdraws from the broker at the deadline and never dispatches a late grant),
+// into page.goto / the in-page fetch, and into the extraction subprocesses.
+
+export class OperationAbortedError extends Error {
+  readonly reason: string;
+  constructor(reason: string, where?: string) {
+    super(`Operation aborted (${reason}${where ? ` at ${where}` : ""})`);
+    this.name = "OperationAbortedError";
+    this.reason = reason;
+  }
+}
+
+export function isOperationAbortedError(e: unknown): e is OperationAbortedError {
+  return !!e && typeof e === "object" && (e as any).name === "OperationAbortedError";
+}
+
+export interface OperationScope {
+  /** Aborts at the operation deadline OR on attempt-lifecycle revocation. */
+  readonly signal: AbortSignal;
+  /** Absolute wall-clock deadline (ms since epoch). */
+  readonly deadlineAt: number;
+  /** Milliseconds left before the deadline (never negative). */
+  remainingMs(): number;
+  aborted(): boolean;
+  /** Why the scope aborted (deadline_elapsed / lifecycle reason), or null. */
+  abortReason(): string | null;
+  /**
+   * A promise that REJECTS with OperationAbortedError when the scope aborts.
+   * Race it against work that cannot itself observe the signal, so the caller's
+   * slot is freed at the deadline even if a sub-path ignores cancellation.
+   */
+  whenAborted(where?: string): Promise<never>;
+  /** Clear the deadline timer and the lifecycle watcher. Call in finally. */
+  dispose(): void;
+}
+
+/**
+ * Create an operation scope with an absolute wall-clock budget, combined with
+ * the current attempt's lifecycle/revocation signal. `budgetMs` is the per-
+ * operation budget (unchanged in value from the old withTimeout wrappers); the
+ * deadline is absolute, so passing a smaller remaining budget to a nested call
+ * can be done by reading `remainingMs()` on the parent scope.
+ */
+export function createOperationScope(opts: {
+  budgetMs: number;
+  ctx?: DiagContext;
+  label?: string;
+}): OperationScope {
+  const budgetMs = Math.max(0, opts.budgetMs);
+  const deadlineAt = Date.now() + budgetMs;
+  const opAc = new AbortController();
+  const timer = setTimeout(() => {
+    if (!opAc.signal.aborted) opAc.abort(new OperationAbortedError("deadline_elapsed", opts.label));
+  }, budgetMs);
+  (timer as any)?.unref?.();
+  // Lifecycle/revocation signal: aborts on attempt revoke / batch cancel /
+  // attempt deadline (polled, no network). Disposed with the scope.
+  const lc = requestAbortSignal(opts.ctx);
+  const combined = AbortSignal.any([opAc.signal, lc.signal]);
+  const abortReason = (): string | null => {
+    if (!combined.aborted) return null;
+    const r: any = (combined as any).reason;
+    if (isOperationAbortedError(r) || isLifecycleCancelledError(r)) return r.reason;
+    return "aborted";
+  };
+  return {
+    signal: combined,
+    deadlineAt,
+    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+    aborted: () => combined.aborted,
+    abortReason,
+    whenAborted: (where?: string) =>
+      new Promise<never>((_, reject) => {
+        const fail = () => reject(new OperationAbortedError(abortReason() || "aborted", where));
+        if (combined.aborted) fail();
+        else combined.addEventListener("abort", fail, { once: true });
+      }),
+    dispose: () => {
+      clearTimeout(timer);
+      lc.dispose();
+    },
+  };
+}
+
 /**
  * Race `work` against a watchdog timer. If the timer fires first, `onFire()`
  * runs (side effects: flag/revoke/log) and its Error rejects the race. The

@@ -261,6 +261,11 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
     let settled = false;
     let exited = false;
     let lastStage = "spawn";
+    // batch-1277: outstanding browser/lease operations reported by the child, so
+    // a deadline/kill can be explained after the fact (which op held / was
+    // queued for the permit, its origin, URL count, and queued/granted times).
+    // Keyed by op id; entries are removed on released/settled.
+    const outstandingLeases = new Map<string, import("./isolation-ipc.js").LeaseEvent>();
     let killReason: KillReason | null = null;
     let reported: IsolatedOutcome | null = null;
     const timers: Array<ReturnType<typeof setTimeout>> = [];
@@ -288,7 +293,9 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
       // Monotonic: the FIRST terminal decision (cancel / revoke / deadline) is final;
       // a later deadline only hastens the kill.
       if (!killReason) killReason = which;
-      console.warn(`[WORKER-ISOLATION] ${which} reached for child pid=${child.pid} (stage=${lastStage}) → revoke + SIGKILL groups`);
+      const leaseSummary = outstandingLeases.size === 0 ? "none" : Array.from(outstandingLeases.values())
+        .map((e) => `${e.op}[${e.ev} ${e.kind ?? "?"} ${e.origin ?? "-"} urls=${e.urls ?? 0} job=${e.job ?? "-"}/att=${e.attempt ?? "-"} at=${e.at}]`).join(", ");
+      console.warn(`[WORKER-ISOLATION] ${which} reached for child pid=${child.pid} (stage=${lastStage}, outstandingLeases=${leaseSummary}) → revoke + SIGKILL groups`);
       if (lc) revokeAttempt(lc, which === "pipeline_deadline" ? "pipeline_timeout" : "job_watchdog_timeout");
       if (!testHooks.suppressDeadlineKill) killNow(); // test-only: lets an ordering test deliver a report AFTER the decision
     };
@@ -388,6 +395,16 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
         case "usage": ingestUsageRowFromChild(m.row); break;
         case "signal": ingestSignalFromChild(m.kind); break;
         case "stage": if (typeof m.stage === "string") { lastStage = m.stage; setDiagStage(m.stage); } break;
+        case "lease": {
+          // batch-1277: track the set of browser operations the child has queued
+          // for / is holding, so a later deadline/kill can be explained. acquire
+          // and granted (re)record the op; released and settled remove it.
+          if (typeof m.op !== "string") break;
+          const e = m as import("./isolation-ipc.js").LeaseEvent;
+          if (e.ev === "acquire" || e.ev === "granted") outstandingLeases.set(e.op, e);
+          else outstandingLeases.delete(e.op);
+          break;
+        }
         case "result":
           mergeBatchFetchState(opts.batchFetchState, m.batchFetchState);
           if (m.revokedReason && lc) revokeAttempt(lc, m.revokedReason);

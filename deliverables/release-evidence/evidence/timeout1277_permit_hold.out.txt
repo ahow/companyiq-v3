@@ -1,0 +1,21 @@
+    0ms === scenario 1: timeout while holding ===
+    0ms A permit ACQUIRED (dispatch)
+  202ms A caller: A timed out after 200ms -> caller moves on
+ 1502ms A work finished (would persist result)
+ 1502ms A permit RELEASED
+ 1502ms B(company 2) permit ACQUIRED (dispatch)
+ 1553ms B(company 2) work finished (would persist result)
+ 1553ms B(company 2) permit RELEASED
+ 1553ms B waited 1492ms for admission
+ 1553ms === scenario 2: timeout while queued ===
+ 1553ms H(holder) permit ACQUIRED (dispatch)
+ 1709ms Q caller: Q timed out after 150ms -> caller moves on
+ 2354ms H(holder) work finished (would persist result)
+ 2354ms H(holder) permit RELEASED
+ 2354ms Q(queued) permit ACQUIRED (dispatch)
+ 2955ms Q(queued) work finished (would persist result)
+ 2955ms Q(queued) permit RELEASED
+ 2955ms B(company 2) permit ACQUIRED (dispatch)
+ 3005ms B(company 2) work finished (would persist result)
+ 3006ms B(company 2) permit RELEASED
+ 3006ms B waited 1392ms for admission
