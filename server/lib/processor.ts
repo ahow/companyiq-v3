@@ -2487,6 +2487,23 @@ export async function fetchIssuerPdfsWithPrimedSession(
 // starts its own fresh work under its own live scope instead.
 const inFlightDocs = new Map<string, { promise: Promise<string>; scope?: OperationScope }>();
 
+// batch-1277 (B7) — test seam. Lets the in-flight-coalescing boundary test drive
+// the REAL processDocument coalescing map + scope-liveness guard against a
+// controllable stand-in for the (browser/network) uncached worker, exactly as B1
+// injects a fake fetchFn at the recovery boundary. The REAL coalescing logic and
+// the `!existing.scope?.aborted()` guard below stay production code and are what
+// the test exercises; only the expensive downstream fetch is replaced. Unset
+// (null) in production, so processDocumentUncached runs unchanged.
+type ProcessDocumentWorker = (
+  url: string,
+  type: "pdf" | "html",
+  opts?: { forceHeadless?: boolean; scope?: OperationScope },
+) => Promise<string>;
+let __processDocumentWorkerForTest: ProcessDocumentWorker | null = null;
+export function __setProcessDocumentWorkerForTest(fn: ProcessDocumentWorker | null): void {
+  __processDocumentWorkerForTest = fn;
+}
+
 export async function processDocument(
   url: string,
   type: "pdf" | "html",
@@ -2500,7 +2517,8 @@ export async function processDocument(
   // scope has aborted (deadline elapsed / attempt revoked) is being torn down and
   // must not be re-used for a fresh caller — that caller gets its own attempt.
   if (existing && !(existing.scope?.aborted())) return existing.promise;
-  const work = processDocumentUncached(url, type, opts);
+  const runUncached = __processDocumentWorkerForTest ?? processDocumentUncached;
+  const work = runUncached(url, type, opts);
   inFlightDocs.set(url, { promise: work, scope: opts?.scope });
   try {
     return await work;
