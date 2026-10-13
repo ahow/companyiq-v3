@@ -29,7 +29,7 @@
 import * as storage from "../storage.js";
 import { getDiagContext, setDiagStage, diagTags, startStageTimer, runWithChildTimer } from "./diag-context.js";
 import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
-import { LifecycleCancelledError, isLifecycleCancelledError, requireOwnershipForBatchWrite, revokeAttempt, createOperationScope, OperationAbortedError, isOperationAbortedError } from "./lifecycle-fence.js";
+import { LifecycleCancelledError, isLifecycleCancelledError, requireOwnershipForBatchWrite, revokeAttempt, createOperationScope, OperationAbortedError, isOperationAbortedError, type OperationScope } from "./lifecycle-fence.js";
 import { searchCompanyDocuments, runTargetedDisclosureQuery, resolveCikForCompany, type DiscoveryResult } from "./discovery.js";
 import {
   getRequirementsForJurisdiction,
@@ -205,6 +205,122 @@ export function newBatchFetchState(): BatchFetchState {
     hostSlowFetches: new Map(),
     hostCircuitBroken: new Set(),
   };
+}
+
+// batch-1277 (B1) — injectable signature of the browser recovery boundary. The
+// production default is the REAL fetchIssuerPdfsWithPrimedSession (resolved lazily
+// to avoid a load-time pipeline<->processor import cycle); tests pass a fake to
+// observe exactly which scope/urls reach the boundary.
+export type IssuerPdfFetchFn = (
+  origin: string,
+  urls: string[],
+  opts: { outcomes?: PdfRecoveryOutcome[]; scope?: OperationScope }
+) => Promise<Map<string, string>>;
+
+export interface CompanyPdfRecoveryParams {
+  // Ordered candidate PDF URLs grouped by issuer origin.
+  candidatesByOrigin: Map<string, string[]>;
+  // Total number of per-URL attempts allowed ACROSS all origins (CHANGE 3).
+  attemptBudget: number;
+  // Per-URL diagnostics are appended here by the fetch boundary (callee).
+  outcomes: PdfRecoveryOutcome[];
+  // Remaining company budget, if a caller has one. The recovery scope budget is
+  // capped at min(PDF_RECOVERY_MAX_BUDGET_MS, remainingMs ?? Infinity). Production
+  // runFetchPhase has NO in-process company deadline, so it omits this and the cap
+  // degenerates to the constant; tests pass a small value to prove the cap is
+  // honoured (the only way to exercise capping deterministically today).
+  remainingMs?: number;
+  ctx?: ReturnType<typeof getDiagContext>;
+  label?: string;
+  // Injectable fetch boundary; defaults to the REAL processor implementation.
+  fetchFn?: IssuerPdfFetchFn;
+}
+
+export interface CompanyPdfRecoveryResult {
+  // URL->text pairs returned by the fetch boundary (UNFILTERED; the caller applies
+  // its own min-length threshold and persists via storage.recordFetchSuccess).
+  recovered: Array<{ url: string; text: string }>;
+  // Per-URL attempts actually dispatched across origins.
+  attemptsUsed: number;
+  // True iff the company-wide recovery scope aborted before all origins were tried.
+  aborted: boolean;
+}
+
+/**
+ * batch-1277 (B1) — THE confirmed production gap, extracted from an inline block in
+ * runFetchPhase into this testable helper.
+ *
+ * Before this fix the recovery call omitted `scope`, so
+ * fetchIssuerPdfsWithPrimedSession's operation-scoped cancellation was DEAD CODE on
+ * the production recovery path: a company whose recovery ran long could hold the
+ * single browser permit indefinitely while a later origin was queued behind an
+ * earlier one at the replica browser broker, with NO company-wide deadline bounding
+ * the loop across origins.
+ *
+ * This helper arms ONE operation scope for the WHOLE recovery (all origins), created
+ * ONCE and reused across the per-origin loop. It is therefore an ABSOLUTE
+ * company-wide recovery deadline that is NOT reset per origin and KEEPS COUNTING
+ * while a later origin is queued behind an earlier one.
+ *
+ * SEMANTIC CHANGE (value unchanged): the scope budget reuses the EXISTING
+ * PDF_RECOVERY_MAX_BUDGET_MS value (default 600000ms / 10 min), which previously was
+ * only a PER-ORIGIN "never run away" hard cap inside fetchIssuerPdfsWithPrimedSession.
+ * Here the SAME value is applied as a COMPANY-WIDE TOTAL cap across all origins. No
+ * budget VALUE changes; the value is now additionally honoured across origins by
+ * cancellation rather than only per origin. When the scope elapses, every
+ * not-yet-attempted URL is marked deadline_elapsed/admission_timeout (retryable /
+ * incomplete — never falsely dead or researched) by the callee, and the deferred
+ * sweep re-attempts them.
+ */
+export async function runCompanyPdfRecovery(
+  params: CompanyPdfRecoveryParams
+): Promise<CompanyPdfRecoveryResult> {
+  const { candidatesByOrigin, outcomes, remainingMs, ctx, label } = params;
+  let attemptBudget = params.attemptBudget;
+
+  // Default to the REAL boundary, resolved lazily to avoid a module load-time cycle.
+  const fetchFn: IssuerPdfFetchFn =
+    params.fetchFn ??
+    (async (origin, urls, opts) => {
+      const { fetchIssuerPdfsWithPrimedSession } = (await import("./processor.js")) as any;
+      if (typeof fetchIssuerPdfsWithPrimedSession !== "function") return new Map<string, string>();
+      return fetchIssuerPdfsWithPrimedSession(origin, urls, opts);
+    });
+
+  const maxBudgetMs = parseInt(process.env.PDF_RECOVERY_MAX_BUDGET_MS || "600000", 10);
+  const budgetMs = Math.min(maxBudgetMs, remainingMs ?? Infinity);
+
+  const recovered: Array<{ url: string; text: string }> = [];
+  let attemptsUsed = 0;
+  let aborted = false;
+
+  const scope = createOperationScope({
+    budgetMs,
+    ctx: ctx ?? getDiagContext(),
+    label: label ?? "pdf-recovery",
+  });
+  try {
+    for (const [origin, urls] of candidatesByOrigin) {
+      if (attemptBudget <= 0) break;
+      // Company-wide recovery deadline elapsed (counts while queued) — stop
+      // dispatching new origins; the callee marks remaining URLs retryable.
+      if (scope.aborted()) {
+        aborted = true;
+        break;
+      }
+      const slice = urls.slice(0, attemptBudget);
+      attemptBudget -= slice.length;
+      attemptsUsed += slice.length;
+      const recoveredMap = await fetchFn(origin, slice, { outcomes, scope });
+      for (const [pdfUrl, pdfText] of recoveredMap) {
+        recovered.push({ url: pdfUrl, text: pdfText });
+      }
+    }
+    if (!aborted && scope.aborted()) aborted = true;
+  } finally {
+    scope.dispose();
+  }
+  return { recovered, attemptsUsed, aborted };
 }
 
 async function runFetchPhase(opts: {
@@ -1581,26 +1697,35 @@ async function runFetchPhase(opts: {
       // nav_timeout per URL.
       const recoveryOutcomes: PdfRecoveryOutcome[] = [];
       try {
-        const { fetchIssuerPdfsWithPrimedSession } = await import("./processor.js") as any;
-        if (typeof fetchIssuerPdfsWithPrimedSession === 'function') {
-          // CHANGE 3 — cap total recovery attempts across origins. This was a
-          // hard-coded 15, which starved large issuers (e.g. 3i needed ~18 and
-          // lost its tail). It is now env-configurable via
-          // PDF_RECOVERY_ATTEMPT_BUDGET and defaults higher (40). Highest-priority
-          // DB-sourced URLs still come first per the ordering above.
-          let attemptBudget = parseInt(process.env.PDF_RECOVERY_ATTEMPT_BUDGET || "40", 10);
-          for (const [origin, urls] of candidatesByOrigin) {
-            if (attemptBudget <= 0) break;
-            const slice = urls.slice(0, attemptBudget);
-            attemptBudget -= slice.length;
-            const recoveredMap: Map<string, string> = await fetchIssuerPdfsWithPrimedSession(origin, slice, { outcomes: recoveryOutcomes });
-            for (const [pdfUrl, pdfText] of recoveredMap) {
-              if (pdfText && pdfText.length > 200) {
-                await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
-                pdfRecovered++;
-                console.log(`[${companyName}] Fix 2b: PDF fallback recovered ${pdfText.length} chars from ${pdfUrl.slice(0, 80)}`);
-              }
-            }
+        // CHANGE 3 — cap total recovery attempts across origins. This was a
+        // hard-coded 15, which starved large issuers (e.g. 3i needed ~18 and
+        // lost its tail). It is now env-configurable via
+        // PDF_RECOVERY_ATTEMPT_BUDGET and defaults higher (40). Highest-priority
+        // DB-sourced URLs still come first per the ordering above.
+        const attemptBudget = parseInt(process.env.PDF_RECOVERY_ATTEMPT_BUDGET || "40", 10);
+        // batch-1277 (B1) — the operation-scoped recovery boundary is now the
+        // extracted, unit-tested runCompanyPdfRecovery helper (see its doc comment
+        // for the company-wide-total-vs-per-origin budget semantic change). This
+        // production call omits `remainingMs` because runFetchPhase holds NO
+        // in-process company deadline (the company deadline is enforced EXTERNALLY
+        // by job-isolation SIGKILL), so the recovery scope degenerates to the
+        // PDF_RECOVERY_MAX_BUDGET_MS constant here. The default fetchFn is the REAL
+        // fetchIssuerPdfsWithPrimedSession.
+        const recoveryResult = await runCompanyPdfRecovery({
+          candidatesByOrigin,
+          attemptBudget,
+          outcomes: recoveryOutcomes,
+          ctx: getDiagContext(),
+          label: `[${companyName}] pdf-recovery`,
+        });
+        if (recoveryResult.aborted) {
+          console.warn(`[${companyName}] Fix 2b: company-wide recovery deadline elapsed — remaining origin(s) left retryable`);
+        }
+        for (const { url: pdfUrl, text: pdfText } of recoveryResult.recovered) {
+          if (pdfText && pdfText.length > 200) {
+            await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
+            pdfRecovered++;
+            console.log(`[${companyName}] Fix 2b: PDF fallback recovered ${pdfText.length} chars from ${pdfUrl.slice(0, 80)}`);
           }
         }
       } catch (pdfErr: any) {

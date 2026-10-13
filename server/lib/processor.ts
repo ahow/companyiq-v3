@@ -1,7 +1,8 @@
 import axios from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import * as cheerio from "cheerio";
-import pdfParse from "pdf-parse";
+// batch-1277 (B6): pdf-parse is no longer imported in-process here — Path 1 now
+// runs it in pdf-parse-worker.cjs through the killable runProcessCollect boundary.
 import { normaliseTableHorizonMarkers } from "./table-horizon-normaliser";
 import crypto from "crypto";
 import puppeteer from "puppeteer-core";
@@ -9,6 +10,7 @@ import { spawn } from "child_process";
 import { promises as fsp, readdirSync, readFileSync } from "fs";
 import os from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 import { capDocumentText } from "./doc-size-guard";
 import {
   isCreditExhaustionError,
@@ -545,17 +547,27 @@ function extractTextFromHtml(html: string): string {
 // glyphs via pdf-parse but no real text).
 const PDF_TEXT_MIN_CHARS = 100;
 
-// batch-1277 / bounded extraction. pdf-parse (Path 1 in extractTextFromPdf) runs
-// a SYNCHRONOUS, CPU-bound parse inside this Node process: it cannot observe an
-// AbortSignal and cannot be interrupted once started, so a pathological / huge
-// PDF could block the event loop past the operation deadline. The other two
-// extraction paths (pdftotext, OCR) run in child processes and are already
-// deadline-bounded + SIGKILL-able (runProcessCollect). We bound pdf-parse by
-// INPUT SIZE: buffers larger than PDF_PARSE_MAX_BYTES skip the in-process parse
-// and go straight to the killable pdftotext subprocess. Default 30 MB keeps
-// genuine annual/sustainability reports on the fast path while capping worst-case
-// in-process parse time.
+// batch-1277 (B6) / killable pdf-parse boundary. pdf-parse runs a SYNCHRONOUS,
+// CPU-bound, NON-interruptible parse: run in-process it cannot observe an
+// AbortSignal, so a pathological / huge PDF blocks the event loop past the
+// operation deadline. A size-only bound (the REJECTED earlier approach) does not
+// fix this — a small-but-pathological PDF still hangs, and a large-but-benign
+// report is needlessly denied the pdf-parse path. Instead Path 1 now runs
+// pdf-parse in a SHORT-LIVED CHILD PROCESS (pdf-parse-worker.cjs) via the SAME
+// killable boundary as pdftotext / OCR (runProcessCollect): the parse is bounded
+// by the operation's remaining budget and SIGKILLed the instant the scope aborts,
+// on BOTH admission (acquireProcSlot) and active execution. The parent applies
+// normaliseTableHorizonMarkers() to the worker stdout, so the horizon-marker
+// annotation stays byte-identical to the old in-process path (same library, same
+// normaliser). PDF_PARSE_MAX_BYTES is retained ONLY as a cheap stdout maxBuffer
+// guard for the subprocess (not a correctness bound); its value is unchanged.
 const PDF_PARSE_MAX_BYTES = parseInt(process.env.PDF_PARSE_MAX_BYTES || String(30 * 1024 * 1024), 10);
+
+// Absolute path to the CJS pdf-parse worker (sibling of this module). Resolved
+// from import.meta.url because package.json is "type":"module"; the worker is
+// .cjs so it can `require("pdf-parse")`. The server runs via `tsx server/index.ts`
+// (no bundling), so this file is present at runtime next to processor.ts.
+const PDF_PARSE_WORKER_PATH = fileURLToPath(new URL("./pdf-parse-worker.cjs", import.meta.url));
 
 // ── Subprocess concurrency ceiling ─────────────────────────────────────────
 // Bounds concurrent external forks (pdftotext / pdftoppm / tesseract) so a batch
@@ -568,17 +580,66 @@ const PDF_PARSE_MAX_BYTES = parseInt(process.env.PDF_PARSE_MAX_BYTES || String(3
 // without touching the count.
 const MAX_CONCURRENT_SUBPROC = parseInt(process.env.MAX_CONCURRENT_SUBPROC || "6", 10);
 let activeSubprocs = 0;
-const subprocWaiters: Array<() => void> = [];
+// batch-1277 (B2): subprocess-admission waiters are cancellable objects (mirroring
+// the browser semaphore's BrowserWaiter) so a waiter whose operation scope aborts
+// (deadline elapsed / attempt revoked) withdraws from the queue and never receives
+// a slot it would then dispatch dead extraction work on. A `settled` guard makes
+// the grant/abort race safe: whichever of grant()/abort fires first wins, the other
+// is a no-op, and a slot is never leaked (grant() on an already-settled waiter hands
+// the slot straight on to the next waiter via releaseProcSlot()).
+interface ProcWaiter { grant: () => void; settled: boolean }
+const subprocWaiters: ProcWaiter[] = [];
 
-async function acquireProcSlot(): Promise<void> {
+async function acquireProcSlot(scope?: OperationScope): Promise<void> {
+  // Deadline already elapsed / attempt revoked before we even queued: do not take
+  // a slot. (remoteAcquire makes the same check for the brokered path.)
+  if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "proc_admission");
   // Worker isolation: brokered by the parent (per-replica limit across children).
-  if (isIsolatedChild()) return remoteAcquire("proc");
+  // Passing scope.signal makes the queued wait cancellable: on abort, remoteAcquire
+  // withdraws the request from the parent queue (cancelAcquire) and a grant that
+  // crosses the withdrawal in flight is handed straight back parent-side.
+  if (isIsolatedChild()) {
+    await remoteAcquire("proc", scope?.signal, () => new OperationAbortedError(scope?.abortReason() || "aborted", "proc_admission"));
+    // Grant/abort race: we hold the permit but the scope aborted in the same tick
+    // the grant arrived — release immediately and never dispatch.
+    if (scope?.aborted()) {
+      remoteRelease("proc");
+      throw new OperationAbortedError(scope.abortReason() || "aborted", "proc_admission_postgrant");
+    }
+    return;
+  }
   if (activeSubprocs < MAX_CONCURRENT_SUBPROC) {
     activeSubprocs++;
     return;
   }
-  // At capacity — wait until releaseProcSlot() hands a slot directly to us.
-  await new Promise<void>((resolve) => subprocWaiters.push(resolve));
+  // At capacity — wait until releaseProcSlot() hands a slot directly to us, or our
+  // scope aborts first (deadline elapsed / attempt revoked), in which case we
+  // withdraw from the queue and never consume a slot.
+  await new Promise<void>((resolve, reject) => {
+    const w: ProcWaiter = { settled: false, grant: () => {} };
+    const sig = scope?.signal;
+    const onAbort = () => {
+      if (w.settled) return;
+      w.settled = true;
+      const i = subprocWaiters.indexOf(w);
+      if (i >= 0) subprocWaiters.splice(i, 1);
+      sig?.removeEventListener("abort", onAbort);
+      reject(new OperationAbortedError(scope?.abortReason() || "aborted", "proc_admission"));
+    };
+    w.grant = () => {
+      if (w.settled) {
+        // Already withdrawn (aborted): the slot handed to us is unwanted — pass it
+        // straight on to the next waiter / return it to the pool. No leak.
+        releaseProcSlot();
+        return;
+      }
+      w.settled = true;
+      sig?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    subprocWaiters.push(w);
+    if (sig) sig.addEventListener("abort", onAbort, { once: true });
+  });
   // Slot count was retained on our behalf by the releaser; do not increment.
 }
 
@@ -587,7 +648,9 @@ function releaseProcSlot(): void {
   const next = subprocWaiters.shift();
   if (next) {
     // Hand our slot straight to the next waiter without touching the count.
-    next();
+    // Aborted waiters remove themselves from the queue, so `next` is live; the
+    // grant()'s own settled-guard re-hands the slot if it somehow is not.
+    next.grant();
     return;
   }
   activeSubprocs = Math.max(0, activeSubprocs - 1);
@@ -606,13 +669,25 @@ function releaseProcSlot(): void {
  * event). This is the sole spawn site for PDF-extraction binaries, so one wrap
  * bounds the whole fetch phase's fork pressure.
  */
-function runProcessCollect(
+export async function runProcessCollect(
   cmd: string,
   args: string[],
   opts: { input?: Buffer; timeoutMs: number; maxBuffer: number },
+  scope?: OperationScope,
 ): Promise<{ stdout: Buffer; code: number | null; timedOut: boolean; error?: string }> {
-  return new Promise(async (resolve) => {
-    await acquireProcSlot();
+  // batch-1277 (B2): acquire the subprocess slot BEFORE constructing the settle
+  // promise so an abort while queued (acquireProcSlot throws OperationAbortedError)
+  // propagates to the caller instead of silently hanging an un-settled promise. The
+  // abort then bypasses extraction fallback (OperationAbortedError is re-thrown by
+  // extractTextFromPdf's abortIfExpired guards), never recorded as a dead result.
+  await acquireProcSlot(scope);
+  // Recompute the effective timeout AFTER admission: the operation's remaining
+  // budget may have shrunk while we were queued, so never honour a stale pre-queue
+  // timeout that would let a child outlive the deadline.
+  const effTimeoutMs = scope?.remainingMs() != null
+    ? Math.max(1, Math.min(opts.timeoutMs, Math.floor(scope!.remainingMs())))
+    : opts.timeoutMs;
+  return new Promise((resolve) => {
     let slotReleased = false;
     const releaseSlot = () => {
       if (slotReleased) return;
@@ -638,10 +713,22 @@ function runProcessCollect(
     let timedOut = false;
     let stderr = "";
 
+    // batch-1277 (B3): active-work abort — if the operation scope aborts while this
+    // child is running, SIGKILL it immediately rather than letting it run to its
+    // own timeout past the company deadline. The slot is released on the same
+    // settle path so capacity is never withheld for an aborted extraction.
+    const sig = scope?.signal;
+    const onAbort = () => {
+      if (settled) return;
+      try { child.kill("SIGKILL"); } catch {}
+      finish(null);
+    };
+
     const finish = (code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      sig?.removeEventListener("abort", onAbort);
       releaseSlot();
       resolve({
         stdout: Buffer.concat(chunks),
@@ -655,7 +742,13 @@ function runProcessCollect(
       timedOut = true;
       try { child.kill("SIGKILL"); } catch {}
       finish(null);
-    }, opts.timeoutMs);
+    }, effTimeoutMs);
+
+    // Registered after `timer`/`finish` exist so onAbort can clear/settle safely.
+    if (sig) {
+      if (sig.aborted) { onAbort(); }
+      else sig.addEventListener("abort", onAbort, { once: true });
+    }
 
     child.stdout?.on("data", (d: Buffer) => {
       total += d.length;
@@ -688,19 +781,64 @@ function runProcessCollect(
 }
 
 /**
+ * batch-1277 (B6): Path-1 pdf-parse run through the SAME killable subprocess
+ * boundary as pdftotext / OCR (runProcessCollect). The pdf-parse-worker.cjs child
+ * reads the PDF from stdin and writes raw `data.text` to stdout; this parent
+ * applies normaliseTableHorizonMarkers() so horizon-marker annotation is
+ * byte-identical to the old in-process path (same library output, same normaliser).
+ *
+ * Cancellation applies on BOTH extraction ADMISSION (acquireProcSlot withdraws a
+ * queued waiter whose scope aborts) and ACTIVE EXECUTION (the running worker is
+ * SIGKILLed the moment the scope aborts) — inherited wholesale from runProcessCollect.
+ *
+ * Returns the RAW extracted text (before the PDF_TEXT_MIN_CHARS gate). A worker
+ * failure (non-zero exit / timed-out / killed) returns "" so the caller falls
+ * through to pdftotext/OCR, EXCEPT a scope-abort which is re-thrown by the caller's
+ * guards (runProcessCollect surfaces abort via the empty-stdout + aborted-scope
+ * combination, and extractTextFromPdf re-checks scope.aborted()).
+ */
+export async function extractViaPdfParseSubprocess(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
+  // Bound the worker by the operation's remaining budget (same ceiling the old
+  // in-process parse lacked). 60s matches the pdftotext ceiling.
+  const timeoutMs = budgetMs != null ? Math.max(1, Math.min(60_000, Math.floor(budgetMs))) : 60_000;
+  const res = await runProcessCollect(
+    process.execPath, // the running node/tsx binary — runs the .cjs worker directly
+    [PDF_PARSE_WORKER_PATH],
+    { input: buffer, timeoutMs, maxBuffer: Math.max(PDF_PARSE_MAX_BYTES, 50 * 1024 * 1024) },
+    scope,
+  );
+  if (res.timedOut) {
+    console.log(`[Processor] pdf-parse subprocess timed out (${timeoutMs}ms) — falling through`);
+    return "";
+  }
+  if (res.code !== 0) {
+    // Worker signalled a parse error (exit 1) or was SIGKILLed (code null). If the
+    // scope aborted, extractTextFromPdf's abortIfExpired re-throws; otherwise this
+    // is a genuine parse failure and we fall through to pdftotext.
+    if (res.error) console.log(`[Processor] pdf-parse subprocess exit ${res.code}: ${res.error.slice(0, 160)}`);
+    return "";
+  }
+  // RAW text only — normalisation is applied by the caller (parity with in-process).
+  return res.stdout.toString("utf8");
+}
+
+/**
  * Fallback 1: pdftotext (poppler-utils) reading the PDF from stdin and writing
  * plain text to stdout. Handles many PDFs that pdf-parse mishandles (compressed
  * object streams, unusual encodings). Returns "" on any failure.
  */
-async function extractViaPdftotext(buffer: Buffer, budgetMs?: number): Promise<string> {
+async function extractViaPdftotext(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
   try {
     // batch-1277: cap the subprocess timeout by the operation's remaining budget
     // so an expired operation does not keep a pdftotext child alive past deadline.
+    // The scope is also threaded into runProcessCollect so proc admission is
+    // cancellable and a running child is SIGKILLed the moment the scope aborts.
     const timeoutMs = budgetMs != null ? Math.max(1, Math.min(60_000, Math.floor(budgetMs))) : 60_000;
     const res = await runProcessCollect(
       "pdftotext",
       ["-q", "-enc", "UTF-8", "-", "-"],
       { input: buffer, timeoutMs, maxBuffer: 50 * 1024 * 1024 },
+      scope,
     );
     const text = res.stdout.toString("utf8");
     if (res.timedOut) {
@@ -710,6 +848,10 @@ async function extractViaPdftotext(buffer: Buffer, budgetMs?: number): Promise<s
     }
     return text;
   } catch (e: any) {
+    // Cancellation (deadline elapsed / attempt revoked while queued for a proc
+    // slot) must NOT be swallowed into an empty-result fallback — re-throw so the
+    // caller records a retryable abort rather than a false "no text extracted".
+    if (isOperationAbortedError(e)) throw e;
     console.log(`[Processor] pdftotext fallback threw: ${e?.message}`);
     return "";
   }
@@ -722,7 +864,7 @@ async function extractViaPdftotext(buffer: Buffer, budgetMs?: number): Promise<s
  * OCR budget so a pathological document cannot stall the pipeline. Always cleans
  * up temp files. Returns whatever text was recognised (may be short).
  */
-async function extractViaOcr(buffer: Buffer, budgetMs?: number): Promise<string> {
+async function extractViaOcr(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
   const tmpDir = os.tmpdir();
   const token = crypto.randomBytes(8).toString("hex");
   const tmpPdf = path.join(tmpDir, `ciq_ocr_${token}.pdf`);
@@ -732,6 +874,9 @@ async function extractViaOcr(buffer: Buffer, budgetMs?: number): Promise<string>
   // operation's remaining budget so an expired operation cannot keep rasterising.
   const OCR_TOTAL_BUDGET_MS = budgetMs != null ? Math.max(1, Math.min(120_000, Math.floor(budgetMs))) : 120_000;
   const started = Date.now();
+  // batch-1277 (B3): stop the OCR page loop immediately on scope abort, and thread
+  // scope into every child spawn so pdftoppm/tesseract are SIGKILLed on abort.
+  const abortedReason = () => scope?.aborted();
   try {
     await fsp.writeFile(tmpPdf, buffer);
 
@@ -740,6 +885,7 @@ async function extractViaOcr(buffer: Buffer, budgetMs?: number): Promise<string>
       "pdftoppm",
       ["-jpeg", "-r", "150", "-l", "8", tmpPdf, tmpBase],
       { input: undefined, timeoutMs: Math.max(1, Math.min(60_000, OCR_TOTAL_BUDGET_MS)), maxBuffer: 1024 },
+      scope,
     );
     if (ppm.timedOut) {
       console.log(`[Processor] OCR: pdftoppm timed out — aborting OCR`);
@@ -761,6 +907,10 @@ async function extractViaOcr(buffer: Buffer, budgetMs?: number): Promise<string>
 
     const parts: string[] = [];
     for (const img of pageImages) {
+      if (abortedReason()) {
+        console.log(`[Processor] OCR: operation aborted — stopping at ${parts.length} page(s)`);
+        break;
+      }
       if (Date.now() - started > OCR_TOTAL_BUDGET_MS) {
         console.log(`[Processor] OCR: overall 120s budget exceeded — stopping at ${parts.length} page(s)`);
         break;
@@ -769,6 +919,7 @@ async function extractViaOcr(buffer: Buffer, budgetMs?: number): Promise<string>
         "tesseract",
         [img, "stdout", "-l", "eng", "--psm", "1"],
         { input: undefined, timeoutMs: Math.max(1, Math.min(30_000, OCR_TOTAL_BUDGET_MS - (Date.now() - started))), maxBuffer: 20 * 1024 * 1024 },
+        scope,
       );
       const pageText = t.stdout.toString("utf8").trim();
       if (pageText) parts.push(pageText);
@@ -791,15 +942,14 @@ async function extractTextFromPdf(buffer: Buffer, scope?: OperationScope): Promi
     if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", where);
   };
   abortIfExpired("extract_start");
-  // ── Path 1: pdf-parse (primary) ──────────────────────────────────────────
-  // pdf-parse is a SYNCHRONOUS, CPU-bound, NON-INTERRUPTIBLE in-process parse: it
-  // cannot observe scope.signal. We bound it by INPUT SIZE (PDF_PARSE_MAX_BYTES) —
-  // oversized buffers skip it and go straight to the killable pdftotext subprocess.
-  if (buffer.length > PDF_PARSE_MAX_BYTES) {
-    console.log(`[Processor] PDF ${buffer.length} bytes > PDF_PARSE_MAX_BYTES (${PDF_PARSE_MAX_BYTES}) — skipping in-process pdf-parse, using pdftotext subprocess`);
-  } else try {
-    const data = await pdfParse(buffer);
-    const raw = data.text || "";
+  // ── Path 1: pdf-parse (primary), via the killable subprocess boundary ─────
+  // batch-1277 (B6): pdf-parse runs in pdf-parse-worker.cjs through runProcessCollect
+  // (same boundary as pdftotext/OCR). Cancellation applies on admission AND active
+  // execution; an oversized/pathological PDF is bounded by the remaining budget and
+  // SIGKILLed on abort rather than blocking the event loop. Normalisation is applied
+  // HERE (parent) to the raw worker stdout — identical to the old in-process path.
+  try {
+    const raw = await extractViaPdfParseSubprocess(buffer, scope?.remainingMs(), scope);
     // I81: horizon-marker table normaliser — inlines time-horizon markers
     // next to bullet-only rows so the flattened PDF preserves the table's
     // short/medium/long-term semantics after chunking. Format-agnostic: a
@@ -814,19 +964,23 @@ async function extractTextFromPdf(buffer: Buffer, scope?: OperationScope): Promi
     }
     console.log(`[Processor] pdf-parse yielded ${normalised.text.trim().length} chars (< ${PDF_TEXT_MIN_CHARS}) — trying pdftotext fallback`);
   } catch (error: any) {
+    // Cancellation must bypass the pdftotext/OCR fallback — propagate as retryable abort.
+    if (isOperationAbortedError(error)) throw error;
     console.warn(`[Processor] PDF parse error: ${error.message} — trying pdftotext fallback`);
   }
 
   // ── Path 2: pdftotext (poppler-utils) fallback ───────────────────────────
   abortIfExpired("extract_before_pdftotext");
   try {
-    const viaCli = await extractViaPdftotext(buffer, scope?.remainingMs());
+    const viaCli = await extractViaPdftotext(buffer, scope?.remainingMs(), scope);
     if (viaCli && viaCli.trim().length >= PDF_TEXT_MIN_CHARS) {
       console.log(`[Processor] pdftotext fallback succeeded (${viaCli.trim().length} chars)`);
       return viaCli;
     }
     console.log(`[Processor] pdftotext yielded ${viaCli.trim().length} chars (< ${PDF_TEXT_MIN_CHARS}) — trying OCR fallback`);
   } catch (e: any) {
+    // Cancellation must bypass the OCR fallback — propagate as a retryable abort.
+    if (isOperationAbortedError(e)) throw e;
     console.log(`[Processor] pdftotext fallback error: ${e?.message} — trying OCR fallback`);
   }
 
@@ -835,9 +989,11 @@ async function extractTextFromPdf(buffer: Buffer, scope?: OperationScope): Promi
   // more useful than empty for these documents.
   abortIfExpired("extract_before_ocr");
   try {
-    const viaOcr = await extractViaOcr(buffer, scope?.remainingMs());
+    const viaOcr = await extractViaOcr(buffer, scope?.remainingMs(), scope);
     return viaOcr || "";
   } catch (e: any) {
+    // Cancellation must not be masked as an empty extraction result.
+    if (isOperationAbortedError(e)) throw e;
     console.log(`[Processor] OCR fallback error: ${e?.message}`);
     return "";
   }
@@ -1092,7 +1248,11 @@ export const processorSlotBroker = {
     state: () => ({ active: activeBrowserFetches, waiting: browserWaiters.length, max: MAX_CONCURRENT_BROWSER }),
   },
   proc: {
-    acquire: () => acquireProcSlot(),
+    // `scope` optional so production callers (job-isolation) are unchanged; the
+    // operation-scoped-cancellation tests pass a real OperationScope to exercise
+    // the queued-waiter withdrawal / grant-abort race against the production
+    // acquireProcSlot, not a copied simulation.
+    acquire: (scope?: OperationScope) => acquireProcSlot(scope),
     release: () => releaseProcSlot(),
     state: () => ({ active: activeSubprocs, waiting: subprocWaiters.length, max: MAX_CONCURRENT_SUBPROC }),
   },
@@ -2319,7 +2479,13 @@ export async function fetchIssuerPdfsWithPrimedSession(
 // same URL so two callers never launch two concurrent browser recoveries for the
 // same document (which would double-book the single browser permit and race to
 // persist a late result). Keyed by URL; removed as soon as the work settles.
-const inFlightDocs = new Map<string, Promise<string>>();
+// batch-1277 (B7): the in-flight entry carries the operation scope of the call
+// that launched the work, so a later caller is never handed a promise whose scope
+// has already aborted (its result would be withheld by the abort guards, so
+// coalescing onto it would make the new caller's fetch fail spuriously). A new
+// caller whose arriving work would coalesce onto an aborted in-flight promise
+// starts its own fresh work under its own live scope instead.
+const inFlightDocs = new Map<string, { promise: Promise<string>; scope?: OperationScope }>();
 
 export async function processDocument(
   url: string,
@@ -2330,13 +2496,18 @@ export async function processDocument(
   const cached = getCachedContent(url);
   if (cached) return cached;
   const existing = inFlightDocs.get(url);
-  if (existing) return existing;
+  // Only coalesce onto an in-flight fetch whose scope is still live. A fetch whose
+  // scope has aborted (deadline elapsed / attempt revoked) is being torn down and
+  // must not be re-used for a fresh caller — that caller gets its own attempt.
+  if (existing && !(existing.scope?.aborted())) return existing.promise;
   const work = processDocumentUncached(url, type, opts);
-  inFlightDocs.set(url, work);
+  inFlightDocs.set(url, { promise: work, scope: opts?.scope });
   try {
     return await work;
   } finally {
-    inFlightDocs.delete(url);
+    // Only delete the entry if it is still the one we installed (a concurrent
+    // caller that superseded an aborted entry may have replaced it).
+    if (inFlightDocs.get(url)?.promise === work) inFlightDocs.delete(url);
   }
 }
 
