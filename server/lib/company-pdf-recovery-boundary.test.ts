@@ -29,7 +29,7 @@ Object.assign(process.env, {
 });
 
 const { isOperationAbortedError } = await import("./lifecycle-fence.js");
-const { runCompanyPdfRecovery } = await import("./pipeline.js");
+const { runCompanyPdfRecovery, remainingFetchBudgetMs, RECOVERY_WINDOW_FLOOR_MS } = await import("./pipeline.js");
 const { processorSlotBroker, fetchIssuerPdfsWithPrimedSession } = await import("./processor.js");
 import type { IssuerPdfFetchFn } from "./pipeline.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
@@ -205,6 +205,69 @@ test("B1-6 default fetchFn routes through the REAL admission boundary which with
 
   await b.release();
   assertDrained("B1-6 post");
+});
+
+// ── B1-7 — the recovery window is the REMAINING execution budget, not a constant ─
+// This is the reviewer-flagged gap: the production call site previously omitted
+// remainingMs, so the recovery scope budget collapsed to the standalone
+// PDF_RECOVERY_MAX_BUDGET_MS constant (600000ms) regardless of how much of the
+// company's fetch-phase budget discovery + fetching had already burned. The fix
+// derives remainingFetchBudgetMs(fetchPhaseStart) = (fetchPhaseStart +
+// FETCH_PHASE_BUDGET_MS) - now and feeds it as remainingMs. Here we assert that
+// (a) a near-elapsed budget yields a short window, a fresh phase a large one, and
+// the two differ (window TRACKS remaining, is not constant); and (b) that short
+// window, fed through the REAL operation scope in runCompanyPdfRecovery, actually
+// bounds recovery — it aborts in ~the window, not at the 10-min constant.
+test("B1-7 recovery window reflects the REMAINING fetch-phase budget (not the constant)", async () => {
+  const PHASE_BUDGET = 360_000; // the existing FETCH_PHASE_BUDGET_MS default (6 min)
+  const now = 1_000_000_000_000;
+
+  // Fresh phase: ~full budget remaining.
+  const freshStart = now;
+  const windowFresh = remainingFetchBudgetMs(freshStart, PHASE_BUDGET, now);
+  assert.equal(windowFresh, PHASE_BUDGET, "a just-started phase gets ~the whole budget");
+
+  // Near the deadline: only ~2s left. The window MUST shrink to ~that, NOT stay at
+  // the 600000ms constant and NOT stay at the full phase budget.
+  const nearDeadlineStart = now - (PHASE_BUDGET - 2_000);
+  const windowNear = remainingFetchBudgetMs(nearDeadlineStart, PHASE_BUDGET, now);
+  assert.equal(windowNear, 2_000, "near the deadline the window is the ~2s that remain");
+  assert.ok(windowNear < windowFresh, "window TRACKS remaining (short near deadline, large when fresh)");
+  assert.notEqual(windowNear, 600_000, "window is NOT the PDF_RECOVERY_MAX_BUDGET_MS constant");
+  assert.notEqual(windowNear, PHASE_BUDGET, "window is NOT the full phase budget either");
+
+  // Past the deadline: clamped to the nonzero floor (never <= 0, which would abort
+  // recovery instantly before a single admission).
+  const elapsedStart = now - (PHASE_BUDGET + 60_000);
+  const windowElapsed = remainingFetchBudgetMs(elapsedStart, PHASE_BUDGET, now);
+  assert.equal(windowElapsed, RECOVERY_WINDOW_FLOOR_MS, "an over-budget phase clamps to the nonzero floor");
+
+  // End-to-end: the short near-deadline window, fed through the REAL scope, bounds
+  // recovery — it aborts in ~that window, not the constant.
+  let sawAbortInsideBoundary = false;
+  const fetchFn: IssuerPdfFetchFn = async (_origin, urls, opts) => {
+    const scope = opts.scope!;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 5_000 && !scope.aborted()) await sleep(10);
+    if (scope.aborted()) sawAbortInsideBoundary = true;
+    for (const u of urls) opts.outcomes?.push({ url: u, ok: false, reason: "deadline_elapsed" });
+    return new Map();
+  };
+  const candidatesByOrigin = new Map<string, string[]>([
+    ["https://a.example", ["https://a.example/1.pdf"]],
+    ["https://b.example", ["https://b.example/1.pdf"]],
+  ]);
+  const outcomes: PdfRecoveryOutcome[] = [];
+  // Simulate the call site with ~120ms left on the phase deadline.
+  const windowShort = remainingFetchBudgetMs(now - (PHASE_BUDGET - 120), PHASE_BUDGET, now);
+  const t0 = Date.now();
+  const res = await runCompanyPdfRecovery({
+    candidatesByOrigin, attemptBudget: 40, outcomes, remainingMs: windowShort, fetchFn,
+  });
+  const elapsed = Date.now() - t0;
+  assert.ok(sawAbortInsideBoundary, "the derived short window aborted recovery (not the 10-min constant)");
+  assert.ok(elapsed < 3_000, `recovery gave up near the derived window, not the constant (elapsed=${elapsed}ms)`);
+  assert.equal(res.aborted, true, "helper reports the company-wide deadline elapsed under the derived window");
 });
 
 test.after(() => clearInterval(keepAlive));

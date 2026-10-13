@@ -323,6 +323,39 @@ export async function runCompanyPdfRecovery(
   return { recovered, attemptsUsed, aborted };
 }
 
+/**
+ * batch-1277 (B1 follow-up) — the ACTUAL remaining company/operation execution
+ * budget for PDF recovery.
+ *
+ * The reviewer flagged that the production recovery window "degenerates to a
+ * constant": the call site omitted `remainingMs`, so the recovery scope budget
+ * collapsed to the standalone PDF_RECOVERY_MAX_BUDGET_MS constant (10 min) no
+ * matter how much of the company's execution budget was already spent on
+ * discovery and document fetching.
+ *
+ * There IS an operation deadline already threaded through runFetchPhase:
+ * `fetchPhaseStart + FETCH_PHASE_BUDGET_MS` — the SAME deadline the fetch loop
+ * enforces at every document (see the `Date.now() - fetchPhaseStart >
+ * FETCH_PHASE_BUDGET_MS` guards). The remaining budget is therefore simply
+ * (deadline - now). This introduces NO new configured budget and does NOT alter
+ * FETCH_PHASE_BUDGET_MS or PDF_RECOVERY_MAX_BUDGET_MS; it only computes the time
+ * left against the existing deadline and CLAMPS it:
+ *   - floor at RECOVERY_WINDOW_FLOOR_MS so a nearly-elapsed budget still yields a
+ *     tiny-but-nonzero window (never <= 0, which would abort recovery instantly);
+ *   - ceiling at the phase budget itself (remaining can never exceed the budget).
+ * The PDF_RECOVERY_MAX_BUDGET_MS cap is still applied downstream inside
+ * runCompanyPdfRecovery via min(cap, remainingMs).
+ */
+export const RECOVERY_WINDOW_FLOOR_MS = 1000;
+export function remainingFetchBudgetMs(
+  fetchPhaseStart: number,
+  budgetMs: number = FETCH_PHASE_BUDGET_MS,
+  now: number = Date.now(),
+): number {
+  const remaining = budgetMs - (now - fetchPhaseStart);
+  return Math.max(RECOVERY_WINDOW_FLOOR_MS, Math.min(budgetMs, remaining));
+}
+
 async function runFetchPhase(opts: {
   company: Company;
   framework: Framework;
@@ -1703,18 +1736,25 @@ async function runFetchPhase(opts: {
         // PDF_RECOVERY_ATTEMPT_BUDGET and defaults higher (40). Highest-priority
         // DB-sourced URLs still come first per the ordering above.
         const attemptBudget = parseInt(process.env.PDF_RECOVERY_ATTEMPT_BUDGET || "40", 10);
-        // batch-1277 (B1) — the operation-scoped recovery boundary is now the
+        // batch-1277 (B1 follow-up) — the operation-scoped recovery boundary is the
         // extracted, unit-tested runCompanyPdfRecovery helper (see its doc comment
-        // for the company-wide-total-vs-per-origin budget semantic change). This
-        // production call omits `remainingMs` because runFetchPhase holds NO
-        // in-process company deadline (the company deadline is enforced EXTERNALLY
-        // by job-isolation SIGKILL), so the recovery scope degenerates to the
-        // PDF_RECOVERY_MAX_BUDGET_MS constant here. The default fetchFn is the REAL
-        // fetchIssuerPdfsWithPrimedSession.
+        // for the company-wide-total-vs-per-origin budget semantic change). The
+        // recovery window is now the ACTUAL remaining fetch-phase execution budget
+        // (deadline - now) derived from the SAME in-process operation deadline this
+        // phase already enforces at every document — fetchPhaseStart +
+        // FETCH_PHASE_BUDGET_MS — via remainingFetchBudgetMs(). Previously this call
+        // omitted `remainingMs`, so the recovery scope degenerated to the
+        // PDF_RECOVERY_MAX_BUDGET_MS constant regardless of how much of the
+        // company's budget discovery and fetching had already spent. No configured
+        // budget is introduced or changed; the PDF_RECOVERY_MAX_BUDGET_MS cap is
+        // still applied downstream (min(cap, remainingMs)). The default fetchFn is
+        // the REAL fetchIssuerPdfsWithPrimedSession.
+        const recoveryRemainingMs = remainingFetchBudgetMs(fetchPhaseStart);
         const recoveryResult = await runCompanyPdfRecovery({
           candidatesByOrigin,
           attemptBudget,
           outcomes: recoveryOutcomes,
+          remainingMs: recoveryRemainingMs,
           ctx: getDiagContext(),
           label: `[${companyName}] pdf-recovery`,
         });
