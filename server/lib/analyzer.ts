@@ -25,6 +25,13 @@ import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scorin
 import { buildCanonicalRuleTrace, buildCanonicalRule, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
 import { PASSAGE_LEVEL_EQUIVALENCE_CLAUSE } from "./framework-v2/structured-guidance.js";
 import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from "./eligibility-flags.js";
+// A3 / WP04: end-to-end entity/provenance/temporal eligibility composition guardrail.
+// Attached per measure in SHADOW mode by default (observability only); verdict-
+// mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
+import {
+  composeEligibilityDecision,
+  type EligibilityDecision,
+} from "./eligibility-decision.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
 import { extractGuidanceObject, stripStructuredGuidanceBlock } from "./framework-guidance-audit.js";
@@ -150,6 +157,12 @@ export interface MeasureResult {
   // measure so the authoritative Yes-bar is auditable on the live scoring path.
   // Back-compat optional field; never changes verdict/score.
   canonicalRuleTrace?: CanonicalRuleTrace | null;
+  // A3 / WP04: the single IMMUTABLE eligibility decision composed for THIS
+  // (measure's winning source, target) pair. Carries entity-relation, source
+  // class, temporal/scope status and the monotonic-exclusion audit end to end.
+  // Attached in SHADOW mode (observability only) by default; it only alters the
+  // verdict when ELIGIBILITY_ENFORCE=on. Back-compat optional field.
+  eligibilityDecision?: EligibilityDecision | null;
 }
 
 export interface AnalysisResult {
@@ -2767,6 +2780,57 @@ export async function analyzeCompanyMeasures(opts: {
         }
       } catch (err) {
         console.warn(`[${companyName}] eligibility-flags ${result.measureId}: computation skipped (${(err as Error)?.message ?? "error"}) — advisory only, not blocking`);
+      }
+
+      // A3 / WP04: compose the single immutable eligibility decision for this
+      // measure's PRIMARY supporting source and the assessed target, then carry
+      // it end to end. Pure/total (never throws). SHADOW by default — the
+      // decision is attached for observability/export only and does NOT change
+      // the verdict. Verdict-mutating enforcement is opt-in via
+      // ELIGIBILITY_ENFORCE=on (mirrors the A2 kill-switch precedent), so the
+      // live batch stays baseline-stable until a measurement run explicitly
+      // turns it on. The composition policy itself is versioned via
+      // ELIGIBILITY_POLICY (v2 default / v1 kill-switch) inside the module.
+      try {
+        const primaryQuote =
+          (result.quotes || []).find((q) => q && typeof q.sourceUrl === "string" && q.sourceUrl.trim() !== "") ||
+          (result.quotes || [])[0] ||
+          null;
+        const decision = composeEligibilityDecision({
+          target: {
+            id: company?.id ?? null,
+            name: company?.name || companyName,
+            ticker: company?.ticker ?? null,
+            domain: company?.domain ?? null,
+            relatedDomains: company?.relatedDomains ?? null,
+            isin: company?.isin ?? null,
+          },
+          source: {
+            url: primaryQuote?.sourceUrl ?? null,
+            title: primaryQuote?.source ?? null,
+            content: primaryQuote?.text ?? null,
+          },
+          // Framework scope defaults (entity_only, no current-state/issuer
+          // requirement) keep the guardrail from over-firing on undated
+          // evidence; stricter per-framework scope can be threaded later.
+        });
+        result.eligibilityDecision = decision;
+
+        const enforce = (process.env.ELIGIBILITY_ENFORCE || "").trim().toLowerCase() === "on";
+        if (enforce && isPositiveVerdict(result.verdict) && decision.status === "excluded") {
+          console.log(`[${companyName}] A3-ENFORCE DOWNGRADE ${result.measureId}: ${result.verdict} → No (eligibility=excluded; ${decision.entityRelation}/${decision.sourceClass})`);
+          result = {
+            ...result,
+            verdict: "No",
+            score: 0,
+            eligibilityDecision: decision,
+            verdictNuance: `A3: evidence ineligible (${decision.reasons[decision.reasons.length - 1] || "excluded"})`,
+          };
+        } else if (decision.status === "excluded" || decision.status === "review") {
+          console.log(`[${companyName}] A3-SHADOW ${result.measureId}: eligibility=${decision.status} (${decision.entityRelation}/${decision.sourceClass}) — not enforced`);
+        }
+      } catch (err) {
+        console.warn(`[${companyName}] A3 eligibility-decision ${result.measureId}: composition skipped (${(err as Error)?.message ?? "error"}) — shadow only, not blocking`);
       }
       return result;
     }
