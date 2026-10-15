@@ -218,11 +218,13 @@ accuracy/completeness = **rollback** (hard rule).
 
 | WP | Branch/commit | Deployed to | Batch id | Result vs baseline | Decision | Rollback note |
 |---|---|---|---|---|---|---|
-| WP01 | — | — | — | — | pending | — |
+| WP01 | 328d025 (deployed) | prod (all 4 svc) | 1284 | BASELINE CAPTURED: 10/10 first-attempt, max 26m42s claim→done, sum_score=156/met=56, Yes=56/No=304, cost $3.95, 13.7M tok | ✅ reference established | n/a (reference) |
 | WP08 | — | — | — | — | pending | — |
 | WP10 | — | — | — | — | pending | — |
 | WP13-A | — | — | — | — | pending | — |
-| A1 | — | — | — | — | pending | — |
+| A1 | e6b2e85 + 08b56ee | prod (all 4 svc) | 1285 | ADDITIVE/NON-REGRESSIVE: 10/10 first-attempt, max 30m46s claim→done (<35m bar), all ms=36, 360 measure_scores (=baseline), sum_score=152/met=55 & Yes=55/No=305 (within run-to-run variance; baseline 156/56, 56/304), cost $3.94/13.68M tok (≈baseline $3.95/13.7M). Code diff (328d025→e6b2e85) touches NO scoring/analyzer file ⇒ additivity by construction. researchStatus/extraction_state verified live. | ✅ keep | revert e6b2e85+08b56ee if ever needed (additive cols only) |
+
+**A1 reuse-path completeness fix (08b56ee):** verification found `markLinkedDocumentVerified` (cache-reuse promote path) left `extraction_state` NULL on reused docs — 292/338 fetch=ok docs (77%) unlabeled in batch 1285, breaking A1's "every required source has a traceable outcome" acceptance + coverage denominator. Fixed via scalar-subquery derivation (promotion to 'ok' never gated on the join; mirrors recordFetchSuccess). Live-validated by backfilling batch 1285: all 292 → 'complete', now **338/338 fetch=ok docs (100%) labeled**, remaining 42 NULL = exactly the 19 dead + 23 rejected (never extracted ⇒ correctly NULL). In-pipeline behaviour of the promote-path write will be confirmed incidentally in the next WP's batch (warm corpus ⇒ heavy reuse).
 | A2 | — | — | — | — | pending | — |
 | A3 | — | — | — | — | pending | — |
 | B1 | — | — | — | — | pending | — |
@@ -238,3 +240,42 @@ accuracy/completeness = **rollback** (hard rule).
 
 > Circuit-breaker: after 2 failed attempts on any single WP, mark BLOCKED and move on.
 > Never auto-invoke quarantine-recovery override. Stop and surface before any Trial 2.
+
+---
+
+## Baseline run (WP01 reference) — ESTABLISHED
+
+- **Batch id:** 1284
+- **Deployed commit (all 4 services):** 328d025 (= measurement-foundations code 2b91d86 + docs-only commits; carries stage_profile_events / paid_call_events / run_manifests telemetry sinks)
+- **Roster:** frozen 9–18 (CSX, Magna, Southern Co, S&P Global, Martin Marietta, Darden, BCE, Stryker, Amphenol, Aflac)
+- **Workspace 3, framework 18 (36 measures), provenance list_id=7**
+- **Enqueue:** production-canonical POST /api/admin/resume-analysis (createBatchRun→createAnalysisJobs→addBatchJobs), 10/10 enqueued
+- **Pre-run state:** CLEAN SLATE — documents + measure_scores purged, status reset to idle for all 10 (prior state snapshotted to /home/ubuntu/baseline_prerun_snapshot.json: 180 measure_scores, 309 docs). Clean-slate chosen so every company runs full discovery→fetch→extraction→retrieval→scoring (uniform/reproducible starting state + complete stage telemetry + maximal regression coverage); harness-only reset, pipeline/scoring code byte-identical to production.
+- **Sole queue consumer:** prod worker (3 replicas); dev worker off shared "analysis" queue (sleep infinity, numReplicas 1).
+- **Enqueued at:** 2026-10-15 (resume-analysis HTTP 200)
+- **Pass bar (from batch-1275):** 10/10 first-attempt completions, each ≤35 min from claim; any retry voids pass; no accuracy/completeness regression.
+- **Status:** ✅ COMPLETE / CAPTURED — 2026-10-15T13:29:51Z.
+
+### Baseline captured results (batch 1284) — this is the WP01 reference for all comparisons
+
+- **Completion:** 10/10 completed, 0 failed, **all first-attempt (attempts=1)**. Wall-clock **46m16s** (8-concurrency, 1 prod worker × 3 replicas).
+- **Per-company claim→complete:** min 12m29s (Aflac), max 26m42s (Martin Marietta). **NONE exceeded 35 min.** ✅ PASS BAR MET.
+  - CSX 23m15s · Magna 20m18s · Southern 20m28s · S&P 26m17s · Martin Marietta 26m42s · Darden 24m43s · BCE 24m05s · Stryker 19m33s · Amphenol 26m16s · Aflac 12m29s.
+- **Scores (deterministic reference — keep byte-stable for equivalence WPs):**
+
+  | id | company | score | met/36 | ms |
+  |----|---------|-------|--------|-----|
+  | 9 | CSX | 8 | 3 | 36 |
+  | 10 | Magna | 28 | 10 | 36 |
+  | 11 | Southern Co | 6 | 2 | 36 |
+  | 12 | S&P Global | 39 | 14 | 36 |
+  | 13 | Martin Marietta | 0 | 0 | 36 |
+  | 14 | Darden | 0 | 0 | 36 |
+  | 15 | BCE | 39 | 14 | 36 |
+  | 16 | Stryker | 19 | 7 | 36 |
+  | 17 | Amphenol | 0 | 0 | 36 |
+  | 18 | Aflac | 17 | 6 | 36 |
+
+  **Aggregate:** sum_score=156, sum_met=56, all companies ms=36 (full coverage). Verdict distribution over 360 measure_scores: **No=304, Yes=56**.
+- **Cost / telemetry:** total paid LLM cost **$3.9476** (deepseek 1825 calls $3.9464 + openrouter 1 escalation $0.0012); 13,704,064 tokens; 1826 LLM calls, 61 browser (evomi_proxy), 2161 search (serper). 104 stage_profile_events. run_manifest run_id=batch-1284, mode=fresh, hash=fe36c21278c271c6.
+- **Interpretation:** three companies scored 0/0 (Martin Marietta, Darden, Amphenol) — all completed with ms=36 (every measure adjudicated), i.e. legitimate "all-No" results, not failures. This all-No cohort is exactly where WP02/A1 research-state accounting (distinguish "looked & found nothing" from "never got doc") will add signal without changing verdicts.
