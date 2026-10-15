@@ -818,8 +818,25 @@ export async function getDocumentsNeedingVerification(companyId: number) {
  * content_id; no re-fetch). Used after issuer verification of reused content.
  */
 export async function markLinkedDocumentVerified(companyId: number, url: string) {
+  // WP02/A1 (additive): cache-reused content also carries an extraction outcome.
+  // This promote path previously left `extraction_state` NULL, so reused docs
+  // (the majority of a corpus once document_content is warm) had no extraction-
+  // quality state — breaking A1's "every required source has a traceable outcome"
+  // and its coverage denominator. We derive extraction_state via a SCALAR
+  // SUBQUERY (not a FROM-join), so the promotion to 'ok' is NEVER gated on the
+  // join resolving — behaviour for fetch_status is byte-identical to before.
+  // Derivation mirrors recordFetchSuccess: content_length>0 => 'complete', an
+  // empty linked body => 'empty', and if somehow no content is linked we leave
+  // the column unchanged. Never read by scoring/analyzer => verdicts unaffected.
   await db.execute(sql`
-    UPDATE documents SET fetch_status = 'ok', fetched_at = NOW()
+    UPDATE documents SET
+      fetch_status = 'ok',
+      fetched_at = NOW(),
+      extraction_state = CASE
+        WHEN (SELECT dc.content_length FROM document_content dc WHERE dc.id = documents.content_id) > 0 THEN 'complete'
+        WHEN documents.content_id IS NOT NULL THEN 'empty'
+        ELSE extraction_state
+      END
     WHERE company_id = ${companyId} AND url = ${url} AND fetch_status = 'needs_verify'
   `);
 }
