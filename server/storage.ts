@@ -494,6 +494,7 @@ export async function getAcceptedDocuments(companyId: number) {
       fetchFailures: schema.documents.fetchFailures,
       failureReason: schema.documents.failureReason,
       sourceType: schema.documents.sourceType,
+      extractionState: schema.documents.extractionState, // WP02/A1 (additive)
       fetchedAt: schema.documents.fetchedAt,
       createdAt: schema.documents.createdAt,
     })
@@ -647,11 +648,18 @@ export async function recordFetchSuccess(companyId: number, url: string, content
   const contentId = (dcResult.rows[0] as any)?.id;
 
   // Step 2: Update the documents row to reference the content and mark as fetched
+  // WP02/A1 (additive): record extraction completeness. A successful fetch with
+  // extracted content is 'complete'; an empty extraction is 'empty' (looked, got
+  // nothing usable). 'partial' is reserved for future truncation detection
+  // (WP05). This column is never read by scoring/analyzer, so verdicts/scores
+  // are unaffected — it only feeds research-state accounting.
+  const extractionState = contentLength > 0 ? "complete" : "empty";
   await db.execute(sql`
     UPDATE documents SET
       fetch_status = 'ok',
       content_id = ${contentId},
       content = NULL,
+      extraction_state = ${extractionState},
       fetched_at = NOW()
     WHERE company_id = ${companyId} AND url = ${url}
   `);

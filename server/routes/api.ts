@@ -21,6 +21,9 @@ import { analyzeCompanyMeasures } from "../lib/analyzer.js";
 import { loadPriceTable, lookupPrice, computeCost } from "../lib/llm-usage.js";
 import { runMeasureDesignDiagnostic } from "../lib/measure-design-diagnostic.js";
 import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.js";
+// WP02/A1 (additive): explicit research-state accounting. Pure derivation —
+// never affects scores/verdicts; attached to responses as metadata only.
+import { buildManifest, deriveResearchStatus } from "../../shared/research-state.js";
 import { runCompletenessValidator } from "../lib/framework-completeness.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -151,7 +154,16 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
       measuresMetCount: met.length,
     };
 
-    res.json({ company: enrichedCompany, scores, documents });
+    // WP02/A1 (additive): derive explicit research status at read time from the
+    // same documents already loaded. Pure derivation — never reads/changes any
+    // score/verdict. Returned as an additive field so the UI renders the SAME
+    // status as CSV/export/share (CV07).
+    const researchStatus = deriveResearchStatus({
+      documents: documents as any,
+      manifest: buildManifest({ entityBoundary: company.name }),
+    });
+
+    res.json({ company: enrichedCompany, scores, documents, researchStatus });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1669,7 +1681,12 @@ apiRouter.get("/results/:id/share", async (req: Request, res: Response) => {
               'coverageLevel',      e->>'coverageLevel',
               'corpusValidityWarning', e->>'corpusValidityWarning',
               'hasRequiredDataDoc',    e->'hasRequiredDataDoc',
-              'corpusHash',            e->>'corpusHash'
+              'corpusHash',            e->>'corpusHash',
+              -- WP02/A1 (additive): explicit research status, surfaced in the
+              -- summary projection so the shared view renders the SAME status as
+              -- the full export / API / CSV (CV07). Full format carries the whole
+              -- row verbatim, so researchStatus flows there automatically.
+              'researchStatus',        e->'researchStatus'
             ))
             FROM jsonb_array_elements(ar.results_data) e
           ), '[]'::jsonb) AS summary

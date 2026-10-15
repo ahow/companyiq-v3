@@ -3,6 +3,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { Download, Share2, Trash2, X, CheckSquare } from "lucide-react";
 import { normalizeVerdict, isMet } from "@shared/verdict";
+// WP02/A1 (additive): shared research-status columns so CSV shows the SAME
+// status as the API/UI/export (CV07). Pure formatting — no score/verdict effect.
+import { researchStatusCsvColumns } from "@shared/research-state";
 
 export default function ResultsPage() {
   const queryClient = useQueryClient();
@@ -126,7 +129,11 @@ export default function ResultsPage() {
       measureHeaders.push(`${title} - Validation Status`);
       measureHeaders.push(`${title} - Trace Diagnostics`);
     }
-    const headers = [...baseHeaders, ...measureHeaders, "Source Documents"];
+    // WP02/A1 (additive): research-status columns appended at the very END (after
+    // Source Documents) so no existing column position/order changes. Stable
+    // headers come from researchStatusCsvColumns(null).
+    const researchHeaders = researchStatusCsvColumns(null).map((c) => c.header);
+    const headers = [...baseHeaders, ...measureHeaders, "Source Documents", ...researchHeaders];
 
     // Build rows
     const csvRows = rows.map((row: any) => {
@@ -245,7 +252,12 @@ export default function ResultsPage() {
         .filter(Boolean)
         .join(" ; ");
 
-      return [...baseValues, ...measureValues, sourceDocs];
+      // WP02/A1 (additive): research-status values appended at the END, aligned
+      // with researchHeaders. row.researchStatus is undefined for legacy snapshots
+      // (columns render blank), never throwing.
+      const researchValues = researchStatusCsvColumns(row.researchStatus).map((c) => c.value);
+
+      return [...baseValues, ...measureValues, sourceDocs, ...researchValues];
     });
 
     // Escape and format CSV
