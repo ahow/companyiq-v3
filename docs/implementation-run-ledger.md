@@ -53,6 +53,56 @@ envs show `2b91d86` = SUCCESS. This baseline anchors both Lane A (scores) and La
 (speed/cost). ~35 min for 10 companies; record batch id + commit `2b91d86` here, then read
 `stage_profile_events` / `paid_call_events` / `run_manifests` + scores.
 
+### Post-deploy verification + topology CORRECTION (2026-10-15 10:29 UTC)
+
+Confirmed the merge landed healthy on both environments:
+
+| check | result |
+|---|---|
+| prod app /worker deploy | **SUCCESS** on commit `328d025` (merge + this ledger) |
+| dev app /worker deploy | **SUCCESS** on commit `328d025` |
+| prod app `/api/health` | `{status:ok, version:3.0.0}` |
+| dev app `/api/health` | `{status:ok, version:3.0.0}` |
+| dev worker process | alive, redis+pg ready, pools idle |
+
+**CORRECTION to the "`dev == prod` by construction" claim above.** That is true for the
+**code** (both on `328d025`) but **FALSE for runtime behaviour and state**. Direct
+inspection of Railway variables + serviceInstances shows:
+
+1. **Shared state.** Prod `DATABASE_URL` → `postgres.railway.internal`, dev → 
+   `pgbouncer.railway.internal`, but **same user / db name `companyiq_v3` / same password
+   hash** and **same `REDIS_URL`**. The two environments share **one Postgres database and
+   one Redis**. Queue name is the hardcoded string `"analysis"` in both `queue.ts` and
+   `worker.ts` with **no environment namespacing** → there is exactly **one** BullMQ queue.
+2. **Different pipeline config, both live on that one queue.** Both worker pools are
+   currently up and connected as `bullmq-worker` to the shared queue:
+
+   | knob | prod worker (3 replicas) | dev worker (8 replicas) |
+   |---|---|---|
+   | `FRAMEWORK_V2_MEASURES_PER_CALL` | 8 | **1** |
+   | `FRAMEWORK_V2_TWO_STEP` | — | **1** |
+   | `FRAMEWORK_V2_CONTEXT_EXPAND` | — | **1** |
+   | `FRAMEWORK_V2_EVIDENCE_ABSENT` | — | **1** |
+   | scoring rule | `SCORING_CANONICAL_RULE_GOVERNS=1` | `SCORING_BASE_RATE_PRIOR=true` |
+   | `RECONCILE_ENABLED` | true | **false** |
+   | `WORKER_CONCURRENCY` | 4 | 2 |
+   | `JOB/PIPELINE_TIMEOUT_MS` | 2.4M / 2.1M | **3.9M / 3.6M** |
+
+3. **Consequence (blocks a clean baseline).** Because both pools pull from the **same**
+   queue, a batch enqueued now would be processed by a **nondeterministic mix** of the
+   canonical (prod) and experimental (dev) pipeline configurations. That is not a valid,
+   attributable baseline and would waste the authorized spend. A clean run requires exactly
+   **one** worker pool consuming the queue for its duration (scale the other to 0 replicas).
+
+4. **Strategic implication.** The dev environment already has several Lane-A-style quality
+   knobs enabled as env flags (two-step, context-expand, evidence-absent, base-rate prior,
+   per-call=1). Part of the backlog may already be live-as-flags on dev, which must be
+   reconciled with the "implement one WP at a time from a clean baseline" protocol.
+
+**PAUSED for a decision** (money + live-infra change + contradicting evidence): which
+configuration is the baseline/target, and which single worker pool should own the batch
+runs. No spend and no replica change made unilaterally.
+
 ---
 
 ## Authorization gate (one-time, blocking)
