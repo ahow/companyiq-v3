@@ -503,6 +503,110 @@ export function isEligible(decision: EligibilityDecision | null | undefined): bo
   return !!decision && decision.status === "eligible";
 }
 
+// ─── Cell-level composition (A3 / WP04 redesign) ─────────────────────────────
+
+/**
+ * The composed eligibility picture for a WHOLE cell (one company × measure),
+ * taken over ALL of the measure's supporting quotes — so A3's basis EQUALS the
+ * verdict's basis instead of a single-quote sample of it.
+ *
+ * `decisions` is one decision per source, in input order (per-target recompute,
+ * I1, applied to every quote). `representative` is the single decision that best
+ * speaks for the cell (first eligible > first review > first excluded), used for
+ * the back-compat single `eligibilityDecision` field and for quote-correction.
+ */
+export interface CellEligibilityResult {
+  readonly decisions: readonly EligibilityDecision[];
+  /** Index into the input `sources` of the representative (-1 when none). */
+  readonly representativeIndex: number;
+  readonly representative: EligibilityDecision | null;
+  /** Cell status: eligible if any source is eligible; else review (incl. empty); else excluded. */
+  readonly status: EligibilityStatus;
+  readonly anyEligible: boolean;
+  readonly anyReview: boolean;
+  /** True only when sourceCount>=1 and EVERY decision is excluded (verdict-change trigger). */
+  readonly allExcluded: boolean;
+  readonly sourceCount: number;
+}
+
+/**
+ * Compose the cell-level eligibility picture over the FULL supporting quote set.
+ * Pure and total (never throws). A per-source composition failure degrades that
+ * ONE source to a review/unknown decision rather than failing the cell. The
+ * returned object and its decisions array are frozen.
+ *
+ * Representative selection priority: first "eligible" → first "review" → first
+ * "excluded" → null (empty sources).
+ *
+ * Cell status: "eligible" if ANY decision is eligible; else "review" if ANY is
+ * review OR there are zero sources (never silently assert authority with no
+ * evidence, I4); else "excluded" (>=1 source and all excluded).
+ */
+export function composeCellEligibility(args: {
+  target: EligibilityTarget;
+  sources: EligibilitySource[];
+  framework?: EligibilityFrameworkScope;
+  policyVersion?: EligibilityPolicyVersion | null;
+}): CellEligibilityResult {
+  const target = args?.target ?? ({ name: "" } as EligibilityTarget);
+  const sources = Array.isArray(args?.sources) ? args.sources : [];
+  const framework = args?.framework;
+  const policyVersion = args?.policyVersion;
+
+  const decisions: EligibilityDecision[] = [];
+  for (const source of sources) {
+    let d: EligibilityDecision;
+    try {
+      d = composeEligibilityDecision({ target, source, framework, policyVersion });
+    } catch {
+      // A single bad source must never break the cell — treat it as an unknown
+      // provenance → review decision (I4), bound to the correct target (I1).
+      d = freeze({
+        policyVersion: resolveEligibilityPolicy(policyVersion),
+        targetKey: targetKeyOf(target),
+        entityRelation: "unknown",
+        sourceClass: "unknown",
+        asOfYear: null,
+        version: null,
+        supersededBy: null,
+        scopePolicy: framework?.scopePolicy ?? DEFAULT_SCOPE_POLICY,
+        status: "review",
+        reasons: ["composition error for this source — treated as review/unknown (not authority)"],
+        repaired: false,
+      });
+    }
+    decisions.push(d);
+  }
+
+  const sourceCount = decisions.length;
+
+  // Representative: first eligible, else first review, else first excluded, else none.
+  let representativeIndex = decisions.findIndex((d) => d.status === "eligible");
+  if (representativeIndex < 0) representativeIndex = decisions.findIndex((d) => d.status === "review");
+  if (representativeIndex < 0) representativeIndex = decisions.findIndex((d) => d.status === "excluded");
+  const representative = representativeIndex >= 0 ? decisions[representativeIndex] : null;
+
+  const anyEligible = decisions.some((d) => d.status === "eligible");
+  const anyReview = decisions.some((d) => d.status === "review");
+  const allExcluded = sourceCount >= 1 && decisions.every((d) => d.status === "excluded");
+
+  let status: EligibilityStatus;
+  if (anyEligible) status = "eligible";
+  else if (anyReview || sourceCount === 0) status = "review";
+  else status = "excluded";
+
+  return Object.freeze({
+    decisions: Object.freeze([...decisions]) as readonly EligibilityDecision[],
+    representativeIndex,
+    representative,
+    status,
+    anyEligible,
+    anyReview,
+    allExcluded,
+    sourceCount,
+  }) as CellEligibilityResult;
+}
+
 /** Compact, stable serialization for persistence / export carry-through. */
 export function serializeEligibilityDecision(d: EligibilityDecision): {
   policyVersion: EligibilityPolicyVersion;

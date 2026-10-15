@@ -29,8 +29,9 @@ import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from
 // Attached per measure in SHADOW mode by default (observability only); verdict-
 // mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
 import {
-  composeEligibilityDecision,
+  composeCellEligibility,
   type EligibilityDecision,
+  type EligibilityStatus,
 } from "./eligibility-decision.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
@@ -163,6 +164,12 @@ export interface MeasureResult {
   // Attached in SHADOW mode (observability only) by default; it only alters the
   // verdict when ELIGIBILITY_ENFORCE=on. Back-compat optional field.
   eligibilityDecision?: EligibilityDecision | null;
+  // A3 / WP04 (full-quote-set redesign): one eligibility decision per supporting
+  // quote (A3's basis now EQUALS the verdict's basis), plus the composed
+  // cell-level status over the whole set. Observability / GATE3 label-set fields;
+  // never change the verdict unless ELIGIBILITY_ENFORCE=on. Back-compat optional.
+  eligibilityDecisions?: EligibilityDecision[] | null;
+  eligibilityCellStatus?: EligibilityStatus | null;
 }
 
 export interface AnalysisResult {
@@ -2792,11 +2799,26 @@ export async function analyzeCompanyMeasures(opts: {
       // turns it on. The composition policy itself is versioned via
       // ELIGIBILITY_POLICY (v2 default / v1 kill-switch) inside the module.
       try {
-        const primaryQuote =
-          (result.quotes || []).find((q) => q && typeof q.sourceUrl === "string" && q.sourceUrl.trim() !== "") ||
-          (result.quotes || [])[0] ||
-          null;
-        const decision = composeEligibilityDecision({
+        // A3 BASIS = VERDICT BASIS: compose one decision for EVERY supporting
+        // quote (not a single-quote sample), so the eligibility picture covers
+        // the same evidence the verdict was computed from. Per-target recompute
+        // (I1) is applied to each quote inside composeCellEligibility.
+        // Exclude non-scoring diagnostic sidecar quotes (sourceUrl scheme
+        // `diag://`, e.g. diag://retrieval-v1, diag://evidence-gate-v1) from the
+        // eligibility basis. These are telemetry blobs appended at persistence
+        // time (pipeline.ts), not real supporting evidence, and must never become
+        // the representative / cited quote. Defensive at runtime (live quotes
+        // carry no sidecars yet) and the exact basis the offline GATE3 label
+        // script uses, so shadow labels equal live behaviour.
+        const evidenceQuotes = (result.quotes || []).filter(
+          (q) => !String(q?.sourceUrl ?? "").startsWith("diag://"),
+        );
+        const sources = evidenceQuotes.map((q) => ({
+          url: q?.sourceUrl ?? null,
+          title: q?.source ?? null,
+          content: q?.text ?? null,
+        }));
+        const cell = composeCellEligibility({
           target: {
             id: company?.id ?? null,
             name: company?.name || companyName,
@@ -2805,29 +2827,71 @@ export async function analyzeCompanyMeasures(opts: {
             relatedDomains: company?.relatedDomains ?? null,
             isin: company?.isin ?? null,
           },
-          source: {
-            url: primaryQuote?.sourceUrl ?? null,
-            title: primaryQuote?.source ?? null,
-            content: primaryQuote?.text ?? null,
-          },
+          sources,
           // Framework scope defaults (entity_only, no current-state/issuer
           // requirement) keep the guardrail from over-firing on undated
           // evidence; stricter per-framework scope can be threaded later.
         });
-        result.eligibilityDecision = decision;
+
+        // Observability / GATE3 label-set carry-through (never mutates verdict).
+        result.eligibilityDecision = cell.representative;
+        result.eligibilityDecisions = cell.decisions as EligibilityDecision[];
+        result.eligibilityCellStatus = cell.status;
 
         const enforce = (process.env.ELIGIBILITY_ENFORCE || "").trim().toLowerCase() === "on";
-        if (enforce && isPositiveVerdict(result.verdict) && decision.status === "excluded") {
-          console.log(`[${companyName}] A3-ENFORCE DOWNGRADE ${result.measureId}: ${result.verdict} → No (eligibility=excluded; ${decision.entityRelation}/${decision.sourceClass})`);
-          result = {
-            ...result,
-            verdict: "No",
-            score: 0,
-            eligibilityDecision: decision,
-            verdictNuance: `A3: evidence ineligible (${decision.reasons[decision.reasons.length - 1] || "excluded"})`,
-          };
-        } else if (decision.status === "excluded" || decision.status === "review") {
-          console.log(`[${companyName}] A3-SHADOW ${result.measureId}: eligibility=${decision.status} (${decision.entityRelation}/${decision.sourceClass}) — not enforced`);
+
+        if (!enforce) {
+          // SHADOW: no output mutation. Log only when there is observable churn —
+          // the cell is not cleanly eligible, OR the eligible representative is
+          // not already the cited (first) quote.
+          if (cell.status !== "eligible" || cell.representativeIndex > 0) {
+            const rep = cell.representative;
+            console.log(
+              `[${companyName}] A3-SHADOW ${result.measureId}: cell=${cell.status} eligible=${cell.decisions.filter((d) => d.status === "eligible").length}/${cell.sourceCount} (rep ${rep?.entityRelation ?? "none"}/${rep?.sourceClass ?? "none"})`,
+            );
+          }
+        } else if (isPositiveVerdict(result.verdict)) {
+          if (cell.anyEligible) {
+            // PRIMARY REMEDY — quote correction. Keep verdict & score; make the
+            // cited (first) quote the eligible one so the citation is accurate.
+            // representativeIndex indexes the FILTERED evidence set, so resolve
+            // the quote object and move it by identity in result.quotes (robust
+            // to interleaved diagnostic sidecars).
+            if (cell.representativeIndex > 0 && Array.isArray(result.quotes)) {
+              const eligibleQuote = evidenceQuotes[cell.representativeIndex];
+              const actualIndex = result.quotes.indexOf(eligibleQuote);
+              if (actualIndex > 0) {
+                result.quotes.splice(actualIndex, 1);
+                result.quotes.unshift(eligibleQuote);
+                console.log(
+                  `[${companyName}] A3-CORRECT ${result.measureId}: cited quote ${actualIndex} -> 0 (eligible ${cell.representative?.entityRelation}/${cell.representative?.sourceClass}); verdict unchanged`,
+                );
+              }
+            }
+            result.eligibilityDecision = cell.representative;
+          } else if (cell.allExcluded) {
+            // LAST RESORT — every supporting quote is hard-excluded. Downgrade.
+            console.log(
+              `[${companyName}] A3-ENFORCE DOWNGRADE ${result.measureId}: ${result.verdict} -> No (all ${cell.sourceCount} quotes ineligible)`,
+            );
+            result = {
+              ...result,
+              verdict: "No",
+              score: 0,
+              eligibilityDecision: cell.representative,
+              eligibilityDecisions: cell.decisions as EligibilityDecision[],
+              eligibilityCellStatus: cell.status,
+              verdictNuance: `A3: all supporting evidence ineligible (${cell.representative?.reasons.slice(-1)[0] || "excluded"})`,
+            };
+          } else {
+            // None eligible but some under review — unknown provenance only.
+            // Do NOT flip the verdict on unknown-provenance alone; flag it.
+            result.verdictNuance = "A3: supporting evidence pending provenance review";
+            result.eligibilityCellStatus = "review";
+            console.log(
+              `[${companyName}] A3-REVIEW ${result.measureId}: provenance incomplete on all quotes — flagged for review, verdict unchanged`,
+            );
+          }
         }
       } catch (err) {
         console.warn(`[${companyName}] A3 eligibility-decision ${result.measureId}: composition skipped (${(err as Error)?.message ?? "error"}) — shadow only, not blocking`);

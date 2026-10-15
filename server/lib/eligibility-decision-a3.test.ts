@@ -31,6 +31,7 @@
 import assert from "node:assert/strict";
 import {
   composeEligibilityDecision,
+  composeCellEligibility,
   recomputeForTarget,
   mergeEligibilityRepair,
   isEligible,
@@ -383,6 +384,129 @@ test("serialization round-trips the load-bearing fields", () => {
   assert.equal(s.status, d.status);
   assert.equal(s.policyVersion, d.policyVersion);
   assert.ok(Array.isArray(s.reasons));
+});
+
+// ─── CELL-LEVEL composition (A3 full-quote-set redesign) ─────────────────────
+// composeCellEligibility makes A3's basis EQUAL the verdict's basis: it composes
+// one decision per supporting quote and derives a single cell status +
+// representative. These prove the four buckets that drive enforcement
+// (STAY / QUOTE_CORRECT / VERDICT_CHANGE / REVIEW).
+
+const UNRELATED_SRC = {
+  url: "https://investor.unrelatedcorp.com/press",
+  title: "UnrelatedCorp quarterly update",
+  content: "UnrelatedCorp announced a new buyback.",
+};
+
+test("CELL01: one eligible quote among excluded/unknown → status eligible, rep points at the eligible one", () => {
+  const cell = composeCellEligibility({
+    target: AFLAC,
+    sources: [
+      UNRELATED_SRC, // excluded (unrelated third party)
+      { url: ISSUER_SELF_URL, title: "Aflac Sustainability Report" }, // eligible (issuer self)
+      { url: null, title: "untitled snippet", content: "some text" }, // review (unknown provenance)
+    ],
+  });
+  assert.equal(cell.sourceCount, 3);
+  assert.equal(cell.status, "eligible");
+  assert.equal(cell.anyEligible, true);
+  assert.equal(cell.allExcluded, false);
+  assert.equal(cell.representativeIndex, 1, "representative must be the eligible quote at index 1");
+  assert.equal(cell.representative?.status, "eligible");
+  assert.equal(cell.decisions.length, 3);
+});
+
+test("CELL02: all quotes hard-excluded → allExcluded, status excluded, representative excluded", () => {
+  const cell = composeCellEligibility({
+    target: AFLAC,
+    sources: [
+      UNRELATED_SRC,
+      {
+        url: "https://news.othercorp.com/story",
+        title: "OtherCorp in the news",
+        content: "OtherCorp reported earnings.",
+      },
+    ],
+  });
+  assert.equal(cell.allExcluded, true);
+  assert.equal(cell.status, "excluded");
+  assert.equal(cell.anyEligible, false);
+  assert.equal(cell.representative?.status, "excluded");
+  assert.equal(cell.representativeIndex, 0, "first excluded is the representative when none eligible/review");
+});
+
+test("CELL03: no eligible but ≥1 review (unknown) + rest excluded → status review", () => {
+  const cell = composeCellEligibility({
+    target: AFLAC,
+    sources: [
+      UNRELATED_SRC, // excluded
+      { url: null, title: "untitled snippet" }, // review (no url)
+    ],
+  });
+  assert.equal(cell.anyEligible, false);
+  assert.equal(cell.anyReview, true);
+  assert.equal(cell.allExcluded, false, "a review present means not every quote is excluded");
+  assert.equal(cell.status, "review");
+  assert.equal(cell.representativeIndex, 1, "first review is the representative when none eligible");
+});
+
+test("CELL04: empty sources → status review, representativeIndex -1, sourceCount 0", () => {
+  const cell = composeCellEligibility({ target: AFLAC, sources: [] });
+  assert.equal(cell.sourceCount, 0);
+  assert.equal(cell.status, "review", "no evidence must never silently assert authority (I4)");
+  assert.equal(cell.representativeIndex, -1);
+  assert.equal(cell.representative, null);
+  assert.equal(cell.anyEligible, false);
+  assert.equal(cell.allExcluded, false);
+});
+
+test("CELL05: per-target recompute (I1) — same source bytes never inherit a decision across targets", () => {
+  const CSX: EligibilityTarget = { id: 9, name: "CSX Corporation", ticker: "CSX", domain: "csx.com" };
+  const sharedBytes = { url: "https://csx.com/sustainability", title: "CSX report", content: "CSX operations ..." };
+
+  const forCsx = composeCellEligibility({ target: CSX, sources: [sharedBytes] });
+  const forAflac = composeCellEligibility({ target: AFLAC, sources: [sharedBytes] });
+
+  // Decisions are bound to their respective targets…
+  assert.equal(forCsx.decisions[0].targetKey, targetKeyOf(CSX));
+  assert.equal(forAflac.decisions[0].targetKey, targetKeyOf(AFLAC));
+  assert.notEqual(forCsx.decisions[0].targetKey, forAflac.decisions[0].targetKey);
+  // …and resolve differently: issuer-self for CSX, unrelated/excluded for Aflac.
+  assert.equal(forCsx.status, "eligible", "csx.com is issuer-self for CSX");
+  assert.equal(forAflac.status, "excluded", "csx.com must not leak an eligible decision onto Aflac");
+});
+
+test("CELL06: representative-first stability — [excluded, eligibleA, eligibleB] → index 1, not 2", () => {
+  const cell = composeCellEligibility({
+    target: AFLAC,
+    sources: [
+      UNRELATED_SRC, // excluded
+      { url: ISSUER_SELF_URL, title: "Aflac report" }, // eligibleA (issuer_self)
+      { url: ISSUER_FILED_URL, title: "Aflac 10-K" }, // eligibleB (issuer_filed)
+    ],
+  });
+  assert.equal(cell.status, "eligible");
+  assert.equal(cell.representativeIndex, 1, "the FIRST eligible quote wins, not a later one");
+  assert.equal(cell.representative?.sourceClass, "issuer_self");
+});
+
+test("CELL07: cell composition is total — never throws on degenerate input", () => {
+  assert.doesNotThrow(() => composeCellEligibility({ target: { name: "" }, sources: [] }));
+  assert.doesNotThrow(() =>
+    composeCellEligibility({ target: AFLAC, sources: [{}, { url: null }] as any }),
+  );
+  const cell = composeCellEligibility({ target: AFLAC, sources: [{}] as any });
+  assert.equal(cell.status, "review", "a contentless source must route to review, not authority");
+});
+
+test("CELL08: result and decisions array are frozen (immutable carry-through)", () => {
+  const cell = composeCellEligibility({ target: AFLAC, sources: [{ url: ISSUER_SELF_URL }] });
+  assert.throws(() => {
+    (cell as unknown as { status: string }).status = "excluded";
+  }, "the cell result must be frozen");
+  assert.throws(() => {
+    (cell.decisions as unknown as EligibilityDecisionInput[]).push({} as EligibilityDecisionInput);
+  }, "the decisions array must be frozen");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
