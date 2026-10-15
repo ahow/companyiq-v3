@@ -424,3 +424,87 @@ per target → bounded repair that can't override exclusion), which is why it is
   **Aggregate:** sum_score=156, sum_met=56, all companies ms=36 (full coverage). Verdict distribution over 360 measure_scores: **No=304, Yes=56**.
 - **Cost / telemetry:** total paid LLM cost **$3.9476** (deepseek 1825 calls $3.9464 + openrouter 1 escalation $0.0012); 13,704,064 tokens; 1826 LLM calls, 61 browser (evomi_proxy), 2161 search (serper). 104 stage_profile_events. run_manifest run_id=batch-1284, mode=fresh, hash=fe36c21278c271c6.
 - **Interpretation:** three companies scored 0/0 (Martin Marietta, Darden, Amphenol) — all completed with ms=36 (every measure adjudicated), i.e. legitimate "all-No" results, not failures. This all-No cohort is exactly where WP02/A1 research-state accounting (distinguish "looked & found nothing" from "never got doc") will add signal without changing verdicts.
+
+---
+
+## WP04 / A3 — GATE3 label set (full supporting-quote-set eligibility) — ESTABLISHED
+
+**What changed.** Commit `9e94507` ("feat(WP04/A3): full supporting-quote-set
+eligibility basis + quote-correction-primary enforcement") is on `origin/main` and
+auto-deployed to all four Railway services (shadow: `ELIGIBILITY_ENFORCE` unset).
+A3's eligibility basis now equals the **verdict's basis** — it evaluates the **entire
+supporting-quote set** of each positive cell (new pure/total `composeCellEligibility`
+in `server/lib/eligibility-decision.ts`), not just the single cited quote. Remedy order
+is **quote-correction primary, verdict-change last resort**: if any supporting quote is
+eligible, promote it (`A3-CORRECT`, verdict unchanged); only if **all** quotes are
+hard-excluded does the verdict downgrade to No/0 (`A3-ENFORCE DOWNGRADE`).
+
+**GATE3 forecast — method (replaces the "no held-out labels" caveat with a measured forecast).**
+Rather than a human-labelled set (none exists for this roster), the label set replays the
+exact enforcement composer over **real production evidence**: batch **1287** snapshot
+(`analysis_results` id 803, roster 9–18, policy v2). Persisted snapshots drop quote
+`sourceUrl`, so URLs were **recovered** by matching each quote's `{text, source}` back to
+the batch corpus (`batch_corpus`→`documents`/`document_content`) via NFKC-normalised
+anchor-window containment. **Recovery rate 99.34% (150/151 supporting quotes; 1
+unresolved)** — high enough that the offline replay is rigorous, so **no paid batch was
+spent** (the fail-silent "URL-drop ⇒ REVIEW" artifact that made the first offline attempt
+unusable is fully eliminated: **0 cells excluded as artifacts**).
+
+**Label buckets (64 positive cells, all currently Yes):**
+
+| Bucket | Cells | Share | Meaning |
+|---|---|---|---|
+| STAY | 56 | 87.5% | cited quote already eligible — no change |
+| QUOTE_CORRECT | 5 | 7.8% | eligible supporting quote promoted; **verdict unchanged** |
+| VERDICT_CHANGE | 3 | 4.7% | all quotes hard-excluded → downgrade (last resort) |
+| REVIEW (genuine) | 0 | 0.0% | none eligible, some unknown-provenance |
+| excluded (URL-drop artifact) | 0 | n/a | — |
+
+**Directional verdict flips implied by enforcement (per standing reporting constraint):**
+
+| Direction | Cells | Of which genuine | Of which provenance-attribution artifact |
+|---|---|---|---|
+| **Yes→No** | **3** | **0** | **3** |
+| **No→Yes** | **0** | 0 | 0 |
+| **Total cells changing verdict** | **3** | **0** | **3** |
+
+(No→Yes is structurally 0: A3 only acts on positive cells.) Per-company detail and the
+per-quote exclusion-kind table are in `/home/ubuntu/gate3_labels.md` / `.json`; all 3
+Yes→No flips are **S&P Global (co 12)**.
+
+**User expectation — CONFIRMED.** The governing expectation was that making A3 evaluate
+the full quote set *"should almost always result in the quote being changed … rather than
+the verdict being changed."* Among the 8 actionable cells, **quote-correction (5)
+dominates verdict-change (3)**; VERDICT_CHANGE is 4.7% of classified cells (rare). The
+data confirms the expectation.
+
+**Root-cause of the 3 VERDICT_CHANGE cells — provenance-attribution gaps, not genuine
+ineligibility.** Every excluded quote in the 3 flips is **S&P Global's own disclosure**
+(2025/2026 Proxy Statements) whose recovered URL the classifier cannot map to the issuer:
+unmapped **Q4 Inc IR-distribution CDN** tenants (`s29.q4cdn.com`, kind `ir_cdn`) and
+**search-engine redirect masks** (`www.google.com/goto`, kind `redirect_mask`). These are
+issuer-self sources mis-scored as third-party — i.e. a classifier provenance gap, **not**
+evidence the verdict should flip. **Genuine verdict-change after removing the artifacts = 0.**
+
+### Enforcement enablement — GATED (two prerequisites, decision required)
+
+Enabling `ELIGIBILITY_ENFORCE=on` **as-is** would apply 3 **false** Yes→No downgrades to
+S&P Global. That contradicts the data (0 genuine ineligibility) and the project goal
+("legitimate results per measure, not fail-silent downgrades"). Enforcement is therefore
+gated on:
+
+1. **Provenance-gap closure (recommended first; code, not env).** Map the issuer's
+   Q4/IR-CDN tenants into `related_domains` and resolve `www.google.com/goto` redirect
+   masks to their target before provenance classification, so these 3 issuer disclosures
+   score as issuer-self. After this, the forecast becomes **STAY 56 / QUOTE_CORRECT 5 /
+   VERDICT_CHANGE 0** and enforcement produces **zero** verdict flips on this roster —
+   pure quote-correction, exactly the intended behaviour. *(Distinct scope from the
+   approved A3 work; awaiting go-ahead.)*
+2. **Production write mechanism.** Flipping `ELIGIBILITY_ENFORCE=on` in prod needs Railway
+   env-var write access (current CLI token here is unauthenticated), **or** approval to
+   change the in-code default to enforce-on (ships via `git push` to main, which is how
+   `9e94507` already deployed; kill switch `ELIGIBILITY_ENFORCE=off` + `ELIGIBILITY_POLICY=v1`
+   remain). Code deploys work from here; **env-var writes do not.**
+
+**Carried forward unchanged:** WP05/A4 (behavioral recovery-boundary guard + small-PDF
+runtime gap) remains OUTSTANDING and does not intersect A3.
