@@ -105,6 +105,40 @@ runs. No spend and no replica change made unilaterally.
 
 ---
 
+### Topology decision RESOLVED — dev aligned to prod + dev worker off the queue (2026-10-15 12:11 UTC)
+
+User decision: production is canonical (`companyiq.online` confirmed = prod custom domain).
+Dev (sprint-10-preview) settings are to match production exactly, and the dev worker pool is
+authorized to come off the shared `"analysis"` queue so prod is the sole consumer.
+
+**Actions taken (Railway GraphQL, reversible — see `dev_env_rollback_2026-10-15T1210.json`):**
+
+1. **Dev worker taken off the queue.** Railway rejects `numReplicas:0` (min 1), and
+   `worker-main.ts` calls `startWorker()` unconditionally (no env guard). So the dev worker
+   `startCommand` was overridden to `/usr/bin/tini -g -- sleep infinity` and `numReplicas`
+   dropped `8 → 1`. The BullMQ consumer never registers → the dev pool no longer pulls jobs.
+   Prod worker unchanged (3 replicas, real start command) = sole consumer.
+2. **Dev var alignment (dev → prod values).** Every **non-protected** behavioural / scoring /
+   concurrency / timeout variable on the dev app and dev worker set to its production value;
+   prod-only vars added; dev-only experimental flags removed. Verified: **0 non-protected
+   diffs** vs prod on both services. Key changes:
+   - App: `FRAMEWORK_V2_MEASURES_PER_CALL 1→8`, `+SCORING_CANONICAL_RULE_GOVERNS=1`,
+     removed `SCORING_BASE_RATE_PRIOR`, `FRAMEWORK_V2_TWO_STEP/CONTEXT_EXPAND/EVIDENCE_ABSENT`.
+   - Worker: `MEASURES_PER_CALL 1→8`, `RECONCILE_ENABLED false→true`, `WORKER_CONCURRENCY 2→4`,
+     `JOB/PIPELINE_TIMEOUT_MS 3.9M/3.6M→2.4M/2.1M`, `PG_POOL_MAX 5→20`, added isolation /
+     adaptive-concurrency / discovery / issuer-sweep / firecrawl / llm-usage-logging vars,
+     removed the four experimental flags.
+3. **Protected (left env-specific, NOT copied):** `DATABASE_URL`, `REDIS_URL`, `PORT`,
+   `PG_CONNECTION_TIMEOUT_MS`, all `RAILWAY_*`, all `*_API_KEY` / `SESSION_SECRET` / proxy creds.
+
+**Post-change verification:** dev app redeploy **SUCCESS** + HTTP 200; dev worker redeploy
+**SUCCESS** (sleep cmd, 1 replica); `companyiq.online` (prod) HTTP 200; prod worker untouched.
+
+**Rollback:** restore dev worker `startCommand` + `numReplicas=8`, re-add/delete vars per the
+rollback JSON. No prod changes were made.
+
+---
+
 ## Authorization gate (one-time, blocking)
 
 Each live 10-company production run costs ≈ **$4+ model spend alone** (≈$0.405/co ×10,
