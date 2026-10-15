@@ -1126,6 +1126,101 @@ export async function initializeDatabase(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_company ON llm_usage_events(company_id)
     `);
 
+    // ─── WP13-A: per-call cost attribution ─────────────────────────────
+    // One row per PAID call (LLM completion, search provider fetch, paid
+    // browser/proxy fetch). Every row is self-describing: it carries its own
+    // stable request_id, full attribution ids, provider/model, tokens, retry
+    // count, cost split and an emit timestamp — so rows join by their OWN
+    // identifiers/timestamp, never by log-arrival order. All attribution
+    // columns are NULLABLE (a call made without full context still logs).
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS paid_call_events (
+        id SERIAL PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        call_kind TEXT NOT NULL,
+        workspace_id INTEGER,
+        batch_id INTEGER,
+        job_id INTEGER,
+        company_id INTEGER,
+        framework_id INTEGER,
+        measure_id TEXT,
+        role TEXT,
+        stage TEXT,
+        provider TEXT,
+        model TEXT,
+        endpoint TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        total_tokens INTEGER,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        input_cost_usd NUMERIC,
+        output_cost_usd NUMERIC,
+        total_cost_usd NUMERIC,
+        emit_ts TIMESTAMPTZ NOT NULL
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_paid_call_events_job ON paid_call_events(job_id, emit_ts)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_paid_call_events_batch ON paid_call_events(batch_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_paid_call_events_request ON paid_call_events(request_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_paid_call_events_measure ON paid_call_events(framework_id, measure_id)`);
+
+    // ─── WP10: per-stage wall-clock profiler ───────────────────────────
+    // One row per pipeline stage of a finished attempt-timer, PLUS one
+    // attempt-total row (stage = '*'). Read after a batch run to attribute
+    // wall-clock per job and per stage. Pure telemetry; no behaviour change.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS stage_profile_events (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER,
+        batch_id INTEGER,
+        job_id INTEGER,
+        attempt_id TEXT,
+        attempt_n INTEGER,
+        company_id INTEGER,
+        framework_id INTEGER,
+        timer_kind TEXT NOT NULL,
+        timer_label TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        done INTEGER,
+        errors INTEGER,
+        pending INTEGER,
+        busy_sum_ms INTEGER,
+        union_wall_ms INTEGER,
+        attempt_wall_ms INTEGER,
+        tracked_wall_ms INTEGER,
+        started_at TIMESTAMPTZ NOT NULL,
+        emit_ts TIMESTAMPTZ NOT NULL
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_stage_profile_events_batch_stage ON stage_profile_events(batch_id, stage)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_stage_profile_events_job ON stage_profile_events(job_id, attempt_id)`);
+
+    // ─── WP08: immutable replay / dependency-aware run manifest ─────────
+    // One row per finalized run. manifest (jsonb) links framework/measure
+    // hashes, entity/as-of scope, source content/version hashes, extraction/
+    // translation versions, retrieval/tokenizer settings, prompts, provider/
+    // model params and the code/runtime tree hash. run_mode separates a
+    // fixed-corpus REPLAY from a FRESH-research run. manifest_hash is stable
+    // across identical runs (it excludes wall-clock), so re-emission dedups
+    // via UNIQUE(run_id).
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS run_manifests (
+        id SERIAL PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE,
+        batch_id INTEGER,
+        workspace_id INTEGER,
+        framework_id INTEGER,
+        run_mode TEXT NOT NULL,
+        manifest_hash TEXT NOT NULL,
+        manifest JSONB NOT NULL,
+        reproducibility_limits JSONB,
+        emit_ts TIMESTAMPTZ NOT NULL
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_run_manifests_batch ON run_manifests(batch_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_run_manifests_hash ON run_manifests(manifest_hash)`);
+
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();
 

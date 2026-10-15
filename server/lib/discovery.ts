@@ -8,6 +8,7 @@ import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
 import { assertDispatchAllowed, requestAbortSignal, isLifecycleCancelledError, revokeAttempt } from "./lifecycle-fence.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
+import { recordPaidCall } from "./paid-call-attribution.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { traceKeep, traceDrop, traceInfo, traceSessionHeader, traceMatches, TRACE_ENABLED, flushTraceBuffer } from "./discovery-tracer.js";
 import {
@@ -983,6 +984,8 @@ async function webSearchSerper(
   }).catch((e: any) => { throw abortReasonOr(signal, e); });
 
   const organic = response.data.organic || [];
+  // WP13-A — one paid search call just settled (billed on request, not cache).
+  recordPaidCall({ callKind: "search", provider: "serper", model: "serper", endpoint: "https://google.serper.dev/search", role: "search" });
   return organic.map((r: any, idx: number) => ({
     title: r.title || "",
     link: r.link || "",
@@ -1016,6 +1019,8 @@ async function webSearchSerpApi(
   }).catch((e: any) => { throw abortReasonOr(signal, e); });
 
   const organic = response.data.organic_results || [];
+  // WP13-A — one paid search call just settled (SerpAPI failover path, still billed).
+  recordPaidCall({ callKind: "search", provider: "serpapi", model: "serpapi", endpoint: "https://serpapi.com/search.json", role: "search" });
   return organic.map((r: any, idx: number) => ({
     title: r.title || "",
     link: r.link || "",

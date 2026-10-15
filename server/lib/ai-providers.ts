@@ -23,6 +23,7 @@ import {
 } from "./provider-resilience.js";
 import { noteRateLimited, noteProviderSuccess } from "./adaptive-concurrency.js";
 import { recordLlmUsage } from "./llm-usage.js";
+import { recordPaidCall } from "./paid-call-attribution.js";
 import { getDiagContext, type DiagContext } from "./diag-context.js";
 import {
   LifecycleCancelledError,
@@ -209,6 +210,31 @@ function scoringReqLog(
   const line = parts.join(" ");
   if (phase === "settle" && f.outcome !== "success") console.warn(line);
   else console.log(line);
+}
+
+// WP13-A — mirror every recordLlmUsage(...) at a paid LLM call site with a
+// per-call cost-attribution row (joinable by the call's own identifiers/timestamp,
+// not log order). Fully swallowed inside recordPaidCall; additive — no control-flow
+// change, so pipeline outputs stay byte-identical.
+function recordLlmPaidCall(f: {
+  raw: any;
+  model: string;
+  provider: string;
+  callType?: string;
+  role: "primary" | "fallback";
+  measureId?: string | null;
+  retryCount?: number;
+}): void {
+  recordPaidCall({
+    callKind: "llm",
+    provider: f.provider,
+    model: f.model,
+    role: f.role,
+    stage: f.callType,
+    measureId: f.measureId ?? null,
+    rawUsage: f.raw,
+    retryCount: f.retryCount ?? 0,
+  });
 }
 
 // ─── Provider Interface ──────────────────────────────────────────────────────
@@ -1157,6 +1183,7 @@ export async function completeScoring(
               // flight and the transport resolved anyway. The tokens were billed,
               // so usage is still recorded (cost truth), but the text is DISCARDED.
               recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType });
+              recordLlmPaidCall({ raw: capturedUsage, model: primary.model, provider: primary.name, callType, role: "primary", measureId, retryCount: attempt });
               throw cancellationFromSignal(signal, `scoring:primary ${primary.name} late-response`);
             }
             // Success: clear any credit breaker/alert for this provider (recovery).
@@ -1168,6 +1195,7 @@ export async function completeScoring(
             }
             noteProviderSuccess();
             recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType });
+            recordLlmPaidCall({ raw: capturedUsage, model: primary.model, provider: primary.name, callType, role: "primary", measureId, retryCount: attempt });
             scoringReqLog(ctx, "settle", { provider: primary.name, role: "primary", tryN: attempt + 1, callType, measureId, outcome: "success", ms: Date.now() - t0 });
             return { text, provider: primary.name, model: primary.model };
           } catch (error: any) {
@@ -1250,11 +1278,13 @@ export async function completeScoring(
         const text = await fallback.complete({ ...reqOpts, signal, onUsage: (u) => { capturedUsage = u; } });
         if (signal?.aborted) {
           recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType });
+          recordLlmPaidCall({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType, role: "fallback", measureId, retryCount: 0 });
           throw cancellationFromSignal(signal, `scoring:fallback ${fallback.name} late-response`);
         }
         console.warn(`[AI:scoring] PRIMARY ${providerName} EXHAUSTED — graded by fallback ${fallback.name} (auditable variance source)`);
         noteProviderSuccess();
         recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType });
+        recordLlmPaidCall({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType, role: "fallback", measureId, retryCount: 0 });
         scoringReqLog(ctx, "settle", { provider: fallback.name, role: "fallback", callType, measureId, outcome: "success", ms: Date.now() - t0 });
         return { text, provider: fallback.name, model: fallback.model };
       } catch (error: any) {
@@ -1309,6 +1339,7 @@ async function completeWithFallbackInner(
         onMeta: (m) => { capturedMeta = m; },
       });
       recordLlmUsage({ raw: capturedUsage, model: primary.model, provider: primary.name, callType: opts.callType });
+      recordLlmPaidCall({ raw: capturedUsage, model: primary.model, provider: primary.name, callType: opts.callType, role: "primary", retryCount: 0 });
       const toks = normaliseUsageTokens(capturedUsage);
       return {
         text,
@@ -1337,6 +1368,7 @@ async function completeWithFallbackInner(
         onMeta: (m) => { capturedMeta = m; },
       });
       recordLlmUsage({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType: opts.callType });
+      recordLlmPaidCall({ raw: capturedUsage, model: fallback.model, provider: fallback.name, callType: opts.callType, role: "fallback", retryCount: 0 });
       const toks = normaliseUsageTokens(capturedUsage);
       return {
         text,

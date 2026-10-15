@@ -27,6 +27,7 @@ import {
 import { noteRateLimited } from "./adaptive-concurrency.js";
 import { dispatchRevokedReason, OperationAbortedError, isOperationAbortedError, type OperationScope } from "./lifecycle-fence.js";
 import { beginStage } from "./diag-context.js";
+import { recordPaidCall } from "./paid-call-attribution.js";
 import { isIsolatedChild, remoteAcquire, remoteRelease, registerDescendantGroup, emitLeaseEvent, nextOpId } from "./isolation-ipc.js";
 
 // User-facing message shown on the dashboard banner when the residential proxy
@@ -1525,6 +1526,10 @@ export async function fetchWithBrowser(url: string, scope?: OperationScope): Pro
       waitUntil: "networkidle2",
       timeout: gotoTimeout(BROWSER_FETCH_TIMEOUT),
     });
+    // WP13-A — a browser navigation that routed through the paid residential
+    // proxy just consumed billable bandwidth. Record only when the proxy was
+    // actually engaged (otherwise the fetch was free). Fully swallowed/additive.
+    if (_proxyCreds1) recordPaidCall({ callKind: "browser", provider: EVOMI_PROXY_PROVIDER, model: "residential-proxy", endpoint: url, role: "fetch" });
     if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", "browser_after_goto");
 
     // Wait a moment for any JS-rendered content (abortable: returns promptly on
@@ -1812,6 +1817,9 @@ export async function fetchPdfDirectRetry(
       console.log(`[Processor] Strategy D${proxyAgent ? " (proxy)" : ""}: non-2xx (${status}) for ${url.slice(0, 80)}`);
       return null;
     }
+    // WP13-A — a 2xx PDF fetch routed through the paid residential proxy consumed
+    // billable bandwidth. Record only when the proxy was actually engaged.
+    if (proxyAgent) recordPaidCall({ callKind: "browser", provider: EVOMI_PROXY_PROVIDER, model: "residential-proxy", endpoint: url, role: "fetch" });
     const raw = response?.data;
     const buf: Buffer = raw ? Buffer.from(raw as ArrayBuffer) : Buffer.alloc(0);
     const isPdf = buf.length >= 5 && buf.slice(0, 5).toString("latin1") === "%PDF-";

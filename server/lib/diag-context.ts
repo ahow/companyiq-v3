@@ -10,6 +10,9 @@
 // batch_id / job_id / attempt_id / company_id / stage without threading params.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+// WP10 — queryable persistence of the per-stage profile this timer already
+// computes. Additive: the sink only records; it never affects timing/control flow.
+import { recordStageProfile, type StageProfilePerStage } from "./stage-profile-sink.js";
 
 export interface DiagContext {
   batchId?: number | null;
@@ -198,6 +201,8 @@ export class StageTimer {
     const wallMs = now - this.startedAt;
     // Fold still-active intervals into union/any time up to "now".
     const stages: Record<string, unknown> = {};
+    // WP10 — typed mirror of `stages`, handed to the profile sink (no log parsing).
+    const profileStages: Record<string, StageProfilePerStage> = {};
     let busySum = 0;
     for (const [name, s] of this.stages) {
       const pendingBusy = [...this.pending.values()]
@@ -205,13 +210,15 @@ export class StageTimer {
         .reduce((a, p) => a + (now - p.startedAt), 0);
       const union = s.unionMs + (s.active > 0 ? now - s.activeSince : 0);
       busySum += s.busyMs + pendingBusy;
-      stages[name] = {
+      const perStage = {
         done: s.count,
         errors: s.errors,
         pending: s.active,
         busy_sum_ms: Math.round(s.busyMs + pendingBusy),
         union_wall_ms: Math.round(union),
       };
+      stages[name] = perStage;
+      profileStages[name] = perStage;
     }
     const anyMs = this.anyMs + (this.anyActive > 0 ? now - this.anySince : 0);
     const pendingList = [...this.pending.values()]
@@ -239,6 +246,27 @@ export class StageTimer {
     const line = `[DIAG][stage-timer] ${JSON.stringify(payload)}`;
     if (outcome === "ok") console.log(line);
     else console.warn(line);
+    // WP10 — ALSO persist the same per-stage + attempt-total numbers to a
+    // queryable table. Swallowed in the sink; this call is inside finish()'s
+    // try/catch too, so it can never disturb the pipeline.
+    const c = diagStore.getStore();
+    recordStageProfile({
+      timerKind: this.kind,
+      timerLabel: this.label,
+      outcome,
+      startedAtIso: this.startedAtIso,
+      attemptWallMs: wallMs,
+      trackedWallMs: anyMs,
+      stages: profileStages,
+      attribution: {
+        batchId: c?.batchId ?? null,
+        jobId: c?.jobId ?? null,
+        attemptId: c?.attemptId ?? null,
+        attemptNumber: c?.attemptNumber ?? null,
+        companyId: c?.companyId ?? null,
+        frameworkId: c?.frameworkId ?? null,
+      },
+    });
     // Pending entries stay referenced only for their end() closures to no-op.
     this.pending.clear();
   }
