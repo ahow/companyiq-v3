@@ -226,7 +226,7 @@ accuracy/completeness = **rollback** (hard rule).
 
 **A1 reuse-path completeness fix (08b56ee):** verification found `markLinkedDocumentVerified` (cache-reuse promote path) left `extraction_state` NULL on reused docs — 292/338 fetch=ok docs (77%) unlabeled in batch 1285, breaking A1's "every required source has a traceable outcome" acceptance + coverage denominator. Fixed via scalar-subquery derivation (promotion to 'ok' never gated on the join; mirrors recordFetchSuccess). Live-validated by backfilling batch 1285: all 292 → 'complete', now **338/338 fetch=ok docs (100%) labeled**, remaining 42 NULL = exactly the 19 dead + 23 rejected (never extracted ⇒ correctly NULL). In-pipeline behaviour of the promote-path write will be confirmed incidentally in the next WP's batch (warm corpus ⇒ heavy reuse).
 | A2 | 7702606 | prod (all 4 svc) | 1286 | EVIDENCE-GATE HARDENED, versioned (v2 default; v1 via `EVIDENCE_GATE_POLICY=v1`). Fixes E6 #1/#2/#3: NFKC Unicode-aware normalisation (preserves digits/−/%/decimals/non-Latin; removed ASCII-only strip), removed fuzzy `lcs≥120` escape hatch + honest-ellipsis span validation, explicit source-attribution failure instead of silent pack-wide fallback, anti-echo override for authoritative provenance. **Correctness proven by 17 unit tests (QI01–QI09 + idempotence/non-mutation/fail-open), legacy gate+provenance tests still green under v1.** Live batch 1286: 10/10 first-attempt, 38m24s, all ms=36 (no measure collapse), docs gate 403 accept/29 reject (6.7%), cost $3.9531/13.72M tok (≈baseline — pure string gate, zero LLM overhead). Aggregate 58 yes vs baseline 56/A1 55 (within run-to-run band). **Cell-flip vs baseline 1284: Y→N=9, N→Y=11, Total Flips=20** (net +2 Yes conceals 20 changed cells; vs A1 1285: Y→N=7, N→Y=10, Total Flips=17 — see Comparison methodology + table below). **No over-rejection**: three 0/0 cos (MartinMarietta/Darden/Amphenol) are baseline-stable (0/0 in 1284 & 1285 too — see L281), NOT caused by A2. | ✅ keep (v2 on) | revert to v1 via env flag (no redeploy) or revert 7702606 |
-| A3 | — | — | — | — | pending | — |
+| A3 | 3990bcd | prod (app + worker, both SUCCESS) | 1287 | ELIGIBILITY COMPOSITION GUARDRAIL added as a standalone module (`server/lib/eligibility-decision.ts`) that carries an **immutable, frozen eligibility decision** (entity · issuer/author · source class · as-of/version · scope) through compose → recompute-per-target (I1) → bounded repair (I2); repair can fill missing provenance but **can never override an exclusion**; applies framework parent/subsidiary scope (`entity_only` vs `group_consolidated`); recomputes per target so reused source bytes can't carry stale eligibility. Versioned kill-switches: `ELIGIBILITY_POLICY` (v2 default = compose+enforce logic available / v1 = legacy passthrough) and `ELIGIBILITY_ENFORCE` (unset/off = **shadow**: compose & attach decision, zero verdict mutation / on = downgrade excluded positives to No). **Correctness proven by 20 unit tests (EP01–EP06 + kill-switch/immutability/totality/serialization), 20/20 pass; legacy suites still green (evidence-gate 14/14, evidence-gate-a2 17/17, provenance-gate 15/15, provenance 40/40).** tsc gate: 61 baseline == 61 current, **zero new diagnostics**. Live batch 1287 ran in **shadow mode** (no `ELIGIBILITY_ENFORCE` in prod env ⇒ zero verdict impact by construction): 10/10 first-attempt, all ms=36 (no measure collapse), cost $3.8945/13.52M tok (≈baseline $3.95/13.7M — checks are string/compute-cheap, zero LLM overhead). **Cell-flip vs baseline 1284: Yes 56→64, Net +8, Y→N=10, N→Y=18, Total Flips=28; vs A2 1286: Yes 58→64, Net +6, Y→N=9, N→Y=15, Total Flips=24** (see tables below). These flips are **run-to-run model variance, not A3-caused** — shadow mode mutates no verdict. **No collapse / over-rejection**: the three all-No cos (Martin Marietta/Darden/Amphenol) stay 0/0 where expected; the only loss (Aflac −3 vs baseline) is already present in A2 (6→3 at 1286) and is stable A2→A3 (3→3), i.e. reproducible corpus variance independent of A3. | ✅ keep (v2 default, shadow) | revert to v1/off via env flag (no redeploy) or revert 3990bcd (additive module + one optional field + env-gated shadow block) |
 | B1 | — | — | — | — | pending | — |
 | A4 | — | — | — | — | pending | — |
 | A5 | — | — | — | — | pending | — |
@@ -298,6 +298,93 @@ For reference, **A1 (batch 1285) vs baseline (1284)**: Yes 56→55, Net −1, Y�
 N→Y=10, **Total Flips=21** (consistency: −1 == 10 − 11, PASS). And **A2 vs A1
 (1286 vs 1285)**: Net +3, Y→N=7, N→Y=10, Total Flips=17 — the 7 Y→N here reproduce
 exactly the earlier `a2_cmp.json` `y2nList`, which had lacked the N→Y side and totals.
+
+### A3 (batch 1287) vs WP01 baseline (batch 1284)
+
+Cell set: 10 companies × 36 measures = 360 cells. Source: `analysis_results` snapshots.
+
+| Company ID | Company | Yes (baseline) | Yes (variant) | Net | Y→N | N→Y | Total Flips |
+|---|---|---|---|---|---|---|---|
+| 9 | CSX Corporation | 3 | 5 | +2 | 0 | 2 | 2 |
+| 10 | MAGNA INTERNATIONAL INC. | 10 | 12 | +2 | 1 | 3 | 4 |
+| 11 | THE SOUTHERN COMPANY | 2 | 3 | +1 | 1 | 2 | 3 |
+| 12 | S&P GLOBAL INC. | 14 | 13 | −1 | 4 | 3 | 7 |
+| 13 | MARTIN MARIETTA MATERIALS, INC. | 0 | 0 | +0 | 0 | 0 | 0 |
+| 14 | DARDEN RESTAURANTS, INC. | 0 | 5 | +5 | 0 | 5 | 5 |
+| 15 | BCE INC. | 14 | 16 | +2 | 1 | 3 | 4 |
+| 16 | STRYKER CORPORATION | 7 | 7 | +0 | 0 | 0 | 0 |
+| 17 | AMPHENOL CORPORATION | 0 | 0 | +0 | 0 | 0 | 0 |
+| 18 | AFLAC INCORPORATED | 6 | 3 | −3 | 3 | 0 | 3 |
+| **ALL** | **Aggregate (10 companies)** | **56** | **64** | **+8** | **10** | **18** | **28** |
+
+Consistency check (Net == N→Y − Y→N): **PASS** (+8 == 18 − 10).
+
+### A3 (batch 1287) vs A2 (batch 1286)
+
+| Company ID | Company | Yes (A2 1286) | Yes (A3 1287) | Net | Y→N | N→Y | Total Flips |
+|---|---|---|---|---|---|---|---|
+| 9 | CSX Corporation | 2 | 5 | +3 | 0 | 3 | 3 |
+| 10 | MAGNA INTERNATIONAL INC. | 12 | 12 | +0 | 1 | 1 | 2 |
+| 11 | THE SOUTHERN COMPANY | 5 | 3 | −2 | 2 | 0 | 2 |
+| 12 | S&P GLOBAL INC. | 14 | 13 | −1 | 4 | 3 | 7 |
+| 13 | MARTIN MARIETTA MATERIALS, INC. | 0 | 0 | +0 | 0 | 0 | 0 |
+| 14 | DARDEN RESTAURANTS, INC. | 0 | 5 | +5 | 0 | 5 | 5 |
+| 15 | BCE INC. | 14 | 16 | +2 | 1 | 3 | 4 |
+| 16 | STRYKER CORPORATION | 8 | 7 | −1 | 1 | 0 | 1 |
+| 17 | AMPHENOL CORPORATION | 0 | 0 | +0 | 0 | 0 | 0 |
+| 18 | AFLAC INCORPORATED | 3 | 3 | +0 | 0 | 0 | 0 |
+| **ALL** | **Aggregate (10 companies)** | **58** | **64** | **+6** | **9** | **15** | **24** |
+
+Consistency check (Net == N→Y − Y→N): **PASS** (+6 == 15 − 9).
+
+**Reading (A3 is shadow-mode — these flips are run variance, not A3 behaviour).**
+A3 deployed with `ELIGIBILITY_ENFORCE` **unset** in prod, so the composition logic
+attaches an eligibility decision to each `MeasureResult` but mutates **no verdict**;
+by construction A3 cannot have produced any of the 28/24 flips above — they are the
+same run-to-run model/corpus variance seen between every pair of runs (cf. A1-vs-base
+21 flips, A2-vs-base 20 flips). Direction confirms **no collapse or over-rejection**:
+the net is a Yes **increase** (+8 / +6), not a loss; the three structurally all-No cos
+(Martin Marietta, Darden, Amphenol) show zero regression; **Darden 0→5** is a gain, not
+a collapse; and the single loss — **Aflac −3 vs baseline** — is not new to A3: Aflac
+dropped 6→3 under A2 as well (see A2 table above) and is **stable A2→A3 (3→3, zero
+flips)**, i.e. a reproducible corpus artefact independent of this change. The STEP-5
+stop-rule (halt on measure-level collapse / over-rejection / regression) is therefore
+**not triggered**; no second batch was run.
+
+**Correctness is established by the unit suite, not the live run.** Because the live
+batch is shadow-mode, the EP01–EP06 guarantees (rejected third-party stays rejected
+through every path; a subsidiary can't support a parent-wide claim unless scope permits;
+a current-year question doesn't inherit a superseded report; issuer-filed vs
+analyst-commentary is distinguished; cache reuse can't carry stale eligibility;
+incomplete provenance → repair/review, never authority assumption) are proven by the
+20 passing tests in `server/lib/eligibility-decision-a3.test.ts`, reproducible with
+`DATABASE_URL=postgres://stub:stub@127.0.0.1:1/stub npx tsx server/lib/eligibility-decision-a3.test.ts`.
+
+> **GATE3 caveat (no held-out human labels).** There is no adjudicated human-labelled
+> set for this roster, so A3 acceptance rests on (a) the EP01–EP06 unit tests encoding
+> the composition guarantees and (b) demonstrably safe, baseline-stable live behaviour
+> in shadow mode — **not** on measured agreement with human ground truth. Enabling
+> enforcement (`ELIGIBILITY_ENFORCE=on`) should be gated on such a held-out check.
+
+> **Carried-forward constraint (recovery-boundary guard + small-PDF runtime gap).**
+> This open constraint belongs to **A4/WP05** (subprocess PDF extraction — EX04/EX06).
+> A3 touches none of the extraction path (`pipeline.ts` / `processor.ts` are untouched;
+> A3 adds a standalone module, one optional `MeasureResult` field, and an env-gated
+> shadow block in `analyzer.ts`), so it does **not intersect** A3 and is **carried
+> forward to A4** unchanged.
+
+### Step-1 trace findings (A3 composition gap, confirmed before building)
+
+The plan flagged wrong-entity reinsertion as a *carried-forward* concern to re-verify.
+Trace confirmed the app already has the individual controls — `classifyProvenance`
+(`server/lib/provenance.ts`) labels issuer-self / issuer-filed / third-party sources,
+and `issuer-resolver.ts` derives entity aliases — but there was **no single immutable
+decision composed from them and carried through scoring**: provenance was classified
+ad hoc at gate time and not re-pinned per target, so a reused passage or a
+similarly-named / subsidiary / superseded source had no end-to-end object asserting
+eligibility. A3 fills exactly that composition gap (compose once → freeze → recompute
+per target → bounded repair that can't override exclusion), which is why it is a
+*composition* guardrail over existing controls rather than a replacement for them.
 
 ---
 
