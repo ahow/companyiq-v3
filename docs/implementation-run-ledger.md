@@ -222,10 +222,10 @@ accuracy/completeness = **rollback** (hard rule).
 | WP08 | — | — | — | — | pending | — |
 | WP10 | — | — | — | — | pending | — |
 | WP13-A | — | — | — | — | pending | — |
-| A1 | e6b2e85 + 08b56ee | prod (all 4 svc) | 1285 | ADDITIVE/NON-REGRESSIVE: 10/10 first-attempt, max 30m46s claim→done (<35m bar), all ms=36, 360 measure_scores (=baseline), sum_score=152/met=55 & Yes=55/No=305 (within run-to-run variance; baseline 156/56, 56/304), cost $3.94/13.68M tok (≈baseline $3.95/13.7M). Code diff (328d025→e6b2e85) touches NO scoring/analyzer file ⇒ additivity by construction. researchStatus/extraction_state verified live. | ✅ keep | revert e6b2e85+08b56ee if ever needed (additive cols only) |
+| A1 | e6b2e85 + 08b56ee | prod (all 4 svc) | 1285 | ADDITIVE/NON-REGRESSIVE: 10/10 first-attempt, max 30m46s claim→done (<35m bar), all ms=36, 360 measure_scores (=baseline), sum_score=152/met=55 & Yes=55/No=305 (within run-to-run variance; baseline 156/56, 56/304). **Cell-flip vs baseline 1284: Y→N=11, N→Y=10, Total Flips=21** (net −1 Yes conceals 21 changed cells — see Comparison methodology below). cost $3.94/13.68M tok (≈baseline $3.95/13.7M). Code diff (328d025→e6b2e85) touches NO scoring/analyzer file ⇒ additivity by construction. researchStatus/extraction_state verified live. | ✅ keep | revert e6b2e85+08b56ee if ever needed (additive cols only) |
 
 **A1 reuse-path completeness fix (08b56ee):** verification found `markLinkedDocumentVerified` (cache-reuse promote path) left `extraction_state` NULL on reused docs — 292/338 fetch=ok docs (77%) unlabeled in batch 1285, breaking A1's "every required source has a traceable outcome" acceptance + coverage denominator. Fixed via scalar-subquery derivation (promotion to 'ok' never gated on the join; mirrors recordFetchSuccess). Live-validated by backfilling batch 1285: all 292 → 'complete', now **338/338 fetch=ok docs (100%) labeled**, remaining 42 NULL = exactly the 19 dead + 23 rejected (never extracted ⇒ correctly NULL). In-pipeline behaviour of the promote-path write will be confirmed incidentally in the next WP's batch (warm corpus ⇒ heavy reuse).
-| A2 | 7702606 | prod (all 4 svc) | 1286 | EVIDENCE-GATE HARDENED, versioned (v2 default; v1 via `EVIDENCE_GATE_POLICY=v1`). Fixes E6 #1/#2/#3: NFKC Unicode-aware normalisation (preserves digits/−/%/decimals/non-Latin; removed ASCII-only strip), removed fuzzy `lcs≥120` escape hatch + honest-ellipsis span validation, explicit source-attribution failure instead of silent pack-wide fallback, anti-echo override for authoritative provenance. **Correctness proven by 17 unit tests (QI01–QI09 + idempotence/non-mutation/fail-open), legacy gate+provenance tests still green under v1.** Live batch 1286: 10/10 first-attempt, 38m24s, all ms=36 (no measure collapse), docs gate 403 accept/29 reject (6.7%), cost $3.9531/13.72M tok (≈baseline — pure string gate, zero LLM overhead). Aggregate 58 yes vs baseline 56/A1 55 (within run-to-run band). **No over-rejection**: three 0/0 cos (MartinMarietta/Darden/Amphenol) are baseline-stable (0/0 in 1284 & 1285 too — see L281), NOT caused by A2. | ✅ keep (v2 on) | revert to v1 via env flag (no redeploy) or revert 7702606 |
+| A2 | 7702606 | prod (all 4 svc) | 1286 | EVIDENCE-GATE HARDENED, versioned (v2 default; v1 via `EVIDENCE_GATE_POLICY=v1`). Fixes E6 #1/#2/#3: NFKC Unicode-aware normalisation (preserves digits/−/%/decimals/non-Latin; removed ASCII-only strip), removed fuzzy `lcs≥120` escape hatch + honest-ellipsis span validation, explicit source-attribution failure instead of silent pack-wide fallback, anti-echo override for authoritative provenance. **Correctness proven by 17 unit tests (QI01–QI09 + idempotence/non-mutation/fail-open), legacy gate+provenance tests still green under v1.** Live batch 1286: 10/10 first-attempt, 38m24s, all ms=36 (no measure collapse), docs gate 403 accept/29 reject (6.7%), cost $3.9531/13.72M tok (≈baseline — pure string gate, zero LLM overhead). Aggregate 58 yes vs baseline 56/A1 55 (within run-to-run band). **Cell-flip vs baseline 1284: Y→N=9, N→Y=11, Total Flips=20** (net +2 Yes conceals 20 changed cells; vs A1 1285: Y→N=7, N→Y=10, Total Flips=17 — see Comparison methodology + table below). **No over-rejection**: three 0/0 cos (MartinMarietta/Darden/Amphenol) are baseline-stable (0/0 in 1284 & 1285 too — see L281), NOT caused by A2. | ✅ keep (v2 on) | revert to v1 via env flag (no redeploy) or revert 7702606 |
 | A3 | — | — | — | — | pending | — |
 | B1 | — | — | — | — | pending | — |
 | A4 | — | — | — | — | pending | — |
@@ -240,6 +240,64 @@ accuracy/completeness = **rollback** (hard rule).
 
 > Circuit-breaker: after 2 failed attempts on any single WP, mark BLOCKED and move on.
 > Never auto-invoke quarantine-recovery override. Stop and surface before any Trial 2.
+
+---
+
+## Comparison methodology — cell-level flips (why net Yes counts are insufficient)
+
+Earlier result rows reported only the **number of Yes verdicts** per run (e.g. A2 58
+vs baseline 56). A net Yes count hides **offsetting cell changes**: a run can flip
+several cells No→Yes and several others Yes→No, so a small net can sit on top of a
+large amount of actual churn — and a genuine regression (a measure that broke) can be
+masked by an unrelated improvement elsewhere. Net Yes alone therefore both understates
+churn and can hide direction-specific harm.
+
+We compare two runs over the shared **company × measure** cell set (10 companies × 36
+measures = 360 cells; identical set is asserted, not assumed) and report, per company
+and in aggregate:
+
+- **Yes (baseline)** / **Yes (variant)** — Yes-verdict counts in each run.
+- **Net** = Yes(variant) − Yes(baseline).
+- **Y→N** = cells that were **Yes in baseline but No in variant** (direction: lost Yes).
+- **N→Y** = cells that were **No in baseline but Yes in variant** (direction: gained Yes).
+- **Total Flips** = Y→N + N→Y — the real count of cells whose verdict changed.
+
+Internal consistency (always holds): **Net == N→Y − Y→N**. "No" here means *any*
+verdict that is not exactly `Yes` (No / Partial / Insufficient evidence / Scoring error).
+
+Numbers below are produced by `server/scripts/compare_run_flips.ts` reading the
+immutable `analysis_results` batch snapshots (read-only); they are reproducible with
+`node --import tsx server/scripts/compare_run_flips.ts <baseline> <variant>`.
+
+### A2 (batch 1286) vs WP01 baseline (batch 1284) — corrected table
+
+Cell set: 10 companies × 36 measures = 360 cells. Source: `analysis_results` snapshots.
+
+| Company ID | Company | Yes (baseline) | Yes (variant) | Net | Y→N | N→Y | Total Flips |
+|---|---|---|---|---|---|---|---|
+| 9 | CSX Corporation | 3 | 2 | −1 | 1 | 0 | 1 |
+| 10 | MAGNA INTERNATIONAL INC. | 10 | 12 | +2 | 1 | 3 | 4 |
+| 11 | THE SOUTHERN COMPANY | 2 | 5 | +3 | 0 | 3 | 3 |
+| 12 | S&P GLOBAL INC. | 14 | 14 | +0 | 3 | 3 | 6 |
+| 13 | MARTIN MARIETTA MATERIALS, INC. | 0 | 0 | +0 | 0 | 0 | 0 |
+| 14 | DARDEN RESTAURANTS, INC. | 0 | 0 | +0 | 0 | 0 | 0 |
+| 15 | BCE INC. | 14 | 14 | +0 | 1 | 1 | 2 |
+| 16 | STRYKER CORPORATION | 7 | 8 | +1 | 0 | 1 | 1 |
+| 17 | AMPHENOL CORPORATION | 0 | 0 | +0 | 0 | 0 | 0 |
+| 18 | AFLAC INCORPORATED | 6 | 3 | −3 | 3 | 0 | 3 |
+| **ALL** | **Aggregate (10 companies)** | **56** | **58** | **+2** | **9** | **11** | **20** |
+
+Consistency check (Net == N→Y − Y→N): **PASS** (+2 == 11 − 9).
+
+**Reading:** the +2 net Yes is the surface of **20 changed cells** (9 lost, 11 gained).
+The churn concentrates in S&P Global (6 flips, net 0), Magna (4), Southern (3) and
+Aflac (3 flips, all Yes→N). The three all-No companies (Martin Marietta, Darden,
+Amphenol) show **zero** flips — baseline-stable, confirming no over-rejection there.
+
+For reference, **A1 (batch 1285) vs baseline (1284)**: Yes 56→55, Net −1, Y→N=11,
+N→Y=10, **Total Flips=21** (consistency: −1 == 10 − 11, PASS). And **A2 vs A1
+(1286 vs 1285)**: Net +3, Y→N=7, N→Y=10, Total Flips=17 — the 7 Y→N here reproduce
+exactly the earlier `a2_cmp.json` `y2nList`, which had lacked the N→Y side and totals.
 
 ---
 
