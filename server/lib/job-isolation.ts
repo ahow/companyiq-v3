@@ -28,6 +28,8 @@ import { revokeAttempt, LifecycleCancelledError } from "./lifecycle-fence.js";
 import { llmSlotBroker } from "./ai-providers.js";
 import { processorSlotBroker } from "./processor.js";
 import { ingestUsageRowFromChild } from "./llm-usage.js";
+import { ingestPaidCallRowFromChild } from "./paid-call-attribution.js";
+import { ingestStageProfileRowFromChild } from "./stage-profile-sink.js";
 import { ingestSignalFromChild } from "./adaptive-concurrency.js";
 import { ProviderScoringError } from "./credit-breaker.js";
 import { PG_PARENT_RESERVE } from "../db.js";
@@ -393,6 +395,8 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
         }
         case "pgroup": if (Number.isInteger(m.pid) && m.pid > 1) groups.add(m.pid); break;
         case "usage": ingestUsageRowFromChild(m.row); break;
+        case "paid": ingestPaidCallRowFromChild(m.row); break;
+        case "stageprofile": ingestStageProfileRowFromChild(m.row); break;
         case "signal": ingestSignalFromChild(m.kind); break;
         case "stage": if (typeof m.stage === "string") { lastStage = m.stage; setDiagStage(m.stage); } break;
         case "lease": {

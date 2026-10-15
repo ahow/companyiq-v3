@@ -37,6 +37,14 @@ import { enforceBatchStopRule, readStopRuleThreshold, runStopRuleCancelSequence,
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
 import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
 import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
+// WP08 — immutable replay / dependency-aware run manifest (additive telemetry).
+import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
+import { computeFrameworkContentHash } from "./lib/framework-v2/reliability/decision-trace.js";
+import { measureContentHash } from "./lib/framework-v2/reliability/canonical-rule.js";
+import { computeBatchFingerprint } from "./lib/corpus-replay.js";
+import { getPromptHash } from "./lib/analyzer.js";
+import { getProviderStatus } from "./lib/ai-providers.js";
+import { getConfiguredFallbackOrder } from "./lib/provider-resilience.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -1300,6 +1308,69 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       console.warn(`[Worker] QUARANTINED batch ${batchId}: ${quarantineReason}`);
     }
     console.log("[Worker] Saved analysis results for batch " + batchId + " (" + resultsData.length + " companies, avg " + avgScore + "%, acceptance=" + (persistedSnapshotIsComplete ? "accepted" : "rejected") + ")");
+
+    // ── WP08: emit the immutable run manifest (additive, fully swallowed) ──
+    // One row per finalized run. Runs AFTER the snapshot has been persisted, so
+    // it cannot alter the saved snapshot bytes. All inputs are read from state
+    // already in scope; buildAndRecordRunManifest never throws and honours its
+    // own kill-switch (RUN_MANIFEST_ENABLED).
+    try {
+      const prov = (batchRow as any)?.corpusReplayProvenance || null;
+      const sourceBatchId = (batchRow as any)?.sourceBatchId ?? prov?.sourceBatchId ?? null;
+      const scoreOnly = (batchRow as any)?.scoreOnly ?? null;
+      const asOfRaw = (batchRow as any)?.startedAt ?? (batchRow as any)?.createdAt ?? null;
+      const asOf = asOfRaw instanceof Date ? asOfRaw.toISOString()
+        : (typeof asOfRaw === "string" && asOfRaw ? new Date(asOfRaw).toISOString() : null);
+
+      const perCompanyCorpus = resultsData
+        .filter((r) => r.companyId != null && r.corpusHash)
+        .map((r) => ({ companyId: Number(r.companyId), corpusHash: String(r.corpusHash) }));
+      const corpusFingerprint = perCompanyCorpus.length > 0
+        ? computeBatchFingerprint(perCompanyCorpus.map((c) => ({ companyId: c.companyId, hash: c.corpusHash })) as any)
+        : null;
+
+      const measureHashes = allMeasures.map((m: any) => ({
+        measureId: String(m?.measureId ?? m?.measure_id ?? ""),
+        hash: measureContentHash(m),
+      }));
+      const frameworkHash = computeFrameworkContentHash(framework as any, allMeasures);
+
+      // Honest provider/model set: the configured scoring fallback order resolved
+      // to its current model aliases (every entry is drift-prone — recorded as a
+      // reproducibility limit by run-manifest). Plus the translation provider.
+      const status = getProviderStatus();
+      const providerModelParams = getConfiguredFallbackOrder()
+        .filter((name) => status[name])
+        .map((name) => ({ role: "scoring", provider: name, model: status[name].model, temperature: 0 }));
+      providerModelParams.push({
+        role: "translation",
+        provider: process.env.TRANSLATION_PROVIDER || "deepseek",
+        model: status[process.env.TRANSLATION_PROVIDER || "deepseek"]?.model || (process.env.TRANSLATION_PROVIDER || "deepseek"),
+        temperature: 0,
+      });
+
+      void buildAndRecordRunManifest({
+        runId: reliabilityRun?.runKey ? String(reliabilityRun.runKey) : `batch-${batchId}`,
+        batchId,
+        workspaceId,
+        frameworkId,
+        listId: listId ?? null,
+        scoreOnly,
+        sourceBatchId,
+        asOf,
+        entityScope: { companyIds: perCompanyCorpus.map((c) => c.companyId), listId: listId ?? null },
+        frameworkHash,
+        frameworkVersion: (framework as any)?.version ?? null,
+        measureHashes,
+        corpusFingerprint,
+        sourceCorpusFingerprint: prov?.sourceCorpusFingerprint ?? null,
+        perCompanyCorpus,
+        promptHashes: { binary: getPromptHash("binary"), partial: getPromptHash("partial") },
+        providerModelParams,
+      });
+    } catch (manifestErr: any) {
+      console.warn("[Worker] run-manifest emission skipped (swallowed) for batch " + batchId + ": " + (manifestErr?.message || manifestErr));
+    }
 
     // ── Reconciliation guarantee ──────────────────────────────────────────
     // Every company in the batch must be accounted for as either SAVED (in the
