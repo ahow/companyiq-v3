@@ -39,6 +39,9 @@ import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRe
 import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
 // WP08 — immutable replay / dependency-aware run manifest (additive telemetry).
 import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
+// WP02/A1: additive research-state accounting. Pure derivation — never affects
+// scores/verdicts; attached to the snapshot as metadata only.
+import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
 import { computeFrameworkContentHash } from "./lib/framework-v2/reliability/decision-trace.js";
 import { measureContentHash } from "./lib/framework-v2/reliability/canonical-rule.js";
 import { computeBatchFingerprint } from "./lib/corpus-replay.js";
@@ -1083,6 +1086,17 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         corpusHash = acceptedOk.map((d: any) => d.id).sort((a: number, b: number) => a - b).join(",");
       }
 
+      // WP02/A1 (additive): derive explicit research status from the documents
+      // already loaded (allAccepted has fetchStatus/failureReason/gateVerdict/
+      // sourceType/extractionState). This is pure derivation over existing fields
+      // — it never reads or changes any score/verdict. Attached to the snapshot
+      // so API, UI, CSV and export all render the SAME status (CV07).
+      const researchManifest = buildManifest({ entityBoundary: company.name });
+      const researchStatus = deriveResearchStatus({
+        documents: allAccepted as any,
+        manifest: researchManifest,
+      });
+
       resultsData.push({
         companyId: company.id,
         companyName: company.name,
@@ -1113,6 +1127,8 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         manifest,
         sourceDocuments,
         measureScores: fullMeasureScores,
+        // WP02/A1 (additive): explicit research status. Metadata only.
+        researchStatus,
       });
     }
 

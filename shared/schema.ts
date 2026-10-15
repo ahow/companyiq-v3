@@ -287,6 +287,11 @@ export const documents = pgTable("documents", {
   // commitment-type measures require first-party support.
   sourceType: text("source_type"), // "first_party" | "third_party" | null (legacy)
   failureReason: text("failure_reason"), // blocked_403 | not_found_404 | timeout | empty_after_render | paywall_401 | transient | null
+  // WP02/A1 (additive): extraction completeness of a successfully-fetched doc.
+  // "complete" | "partial" | "empty" | null (legacy = completeness-unknown).
+  // Never read by scoring/analyzer — research-state accounting only, so verdicts
+  // and scores are unaffected. Distinguishes extracted_complete vs extracted_partial.
+  extractionState: text("extraction_state"),
   fetchedAt: timestamp("fetched_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({

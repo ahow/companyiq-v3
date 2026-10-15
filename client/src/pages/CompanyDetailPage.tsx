@@ -3,6 +3,10 @@ import { api } from "../lib/api";
 import { useState } from "react";
 import { ArrowLeft, Play, Camera, Upload, ExternalLink, FileText, CheckCircle2, XCircle } from "lucide-react";
 import { isMet } from "@shared/verdict";
+// WP02/A1 (additive): render explicit research status so the UI shows the SAME
+// status as CSV/export/API (CV07) and never claims "comprehensive" when there is
+// an unresolved essential gap. Display-only — no score/verdict effect.
+import { summarizeResearchStatus } from "@shared/research-state";
 
 interface CompanyDetailPageProps {
   companyId: number;
@@ -21,7 +25,7 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
 
   if (!data) return <div className="text-center py-8 text-gray-400">Loading...</div>;
 
-  const { company, scores, documents } = data;
+  const { company, scores, documents, researchStatus } = data as any;
 
   const handleAnalyze = async () => {
     try {
@@ -99,6 +103,47 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
           <div className="text-3xl font-bold text-gray-900">{documents?.length || company.documentsFound || 0}</div>
         </div>
       </div>
+
+      {/* WP02/A1: Research status banner. Additive, display-only — never claims
+          "comprehensive" when there is an unresolved essential gap. */}
+      {researchStatus && (
+        <div
+          className={`rounded-lg border p-4 ${
+            researchStatus.comprehensive
+              ? "bg-green-50 border-green-200"
+              : "bg-amber-50 border-amber-200"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-semibold uppercase text-gray-500">Research Status</div>
+              <div
+                className={`text-sm font-medium ${
+                  researchStatus.comprehensive ? "text-green-700" : "text-amber-700"
+                }`}
+              >
+                {summarizeResearchStatus(researchStatus)}
+              </div>
+            </div>
+            <div className="text-xs text-gray-500 text-right">
+              <div>
+                Eligible retrieved: {researchStatus.coverage?.retrieved ?? 0} /{" "}
+                {researchStatus.coverage?.denominator ?? 0}
+              </div>
+              <div>{researchStatus.discoveryRecall?.label}</div>
+            </div>
+          </div>
+          {!researchStatus.comprehensive &&
+            Array.isArray(researchStatus.reasons) &&
+            researchStatus.reasons.length > 0 && (
+              <ul className="mt-2 list-disc list-inside text-xs text-amber-800">
+                {researchStatus.reasons.map((r: string, i: number) => (
+                  <li key={i}>{r}</li>
+                ))}
+              </ul>
+            )}
+        </div>
+      )}
 
       {/* Executive Summary */}
       {company.summary && (

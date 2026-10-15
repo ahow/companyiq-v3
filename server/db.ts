@@ -457,6 +457,7 @@ export async function initializeDatabase(): Promise<void> {
         fetch_failures INTEGER NOT NULL DEFAULT 0,
         content_id INTEGER REFERENCES document_content(id),
         content TEXT,
+        extraction_state TEXT,
         fetched_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT NOW() NOT NULL,
         UNIQUE(company_id, url)
@@ -878,6 +879,11 @@ export async function initializeDatabase(): Promise<void> {
     // Dead-fetch diagnosis fix 1: record failure reason on documents
     await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
     await db.execute(sql`ALTER TABLE documents ALTER COLUMN failure_reason SET DEFAULT 'unspecified'`);
+    // WP02/A1 (additive): extraction completeness of a successfully-fetched doc.
+    // Nullable; never read by scoring/analyzer — research-state accounting only,
+    // so adding/populating it cannot change any verdict or score. Legacy rows
+    // stay NULL (completeness-unknown), treated conservatively (never a gap).
+    await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_state TEXT`);
 
     // Corpus snapshot: freeze the evidence set per batch for reproducibility
     await db.execute(sql`
