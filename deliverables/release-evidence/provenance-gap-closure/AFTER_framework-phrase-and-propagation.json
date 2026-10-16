@@ -1,0 +1,3273 @@
+{
+  "batchId": 1287,
+  "analysisResultId": 803,
+  "generatedAt": "2026-10-16T07:01:05.636Z",
+  "companyIds": [
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18
+  ],
+  "path": "FREE corpus-URL recovery (replay of composeCellEligibility over recovered URLs)",
+  "policy": "ELIGIBILITY_POLICY=(default v2)",
+  "recovery": {
+    "totalQuotes": 151,
+    "totalRecovered": 150,
+    "unresolvedQuotes": 1,
+    "recoveryRatePct": 99.34,
+    "tierCounts": {
+      "T1-full": 127,
+      "T3-anchor32": 2,
+      "T2-anchor48": 21
+    }
+  },
+  "totals": {
+    "positiveCells": 64,
+    "stay": 63,
+    "quoteCorrect": 1,
+    "verdictChange": 0,
+    "verdictChangeGenuine": 0,
+    "verdictChangeProvenanceGap": 0,
+    "review": 0,
+    "excludedUrlArtifact": 0
+  },
+  "classifiedCells": 64,
+  "perCompany": [
+    {
+      "companyId": 9,
+      "companyName": "CSX Corporation",
+      "positiveCells": 5,
+      "stay": 5,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "positiveCells": 12,
+      "stay": 11,
+      "quoteCorrect": 1,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 11,
+      "companyName": "THE SOUTHERN COMPANY",
+      "positiveCells": 3,
+      "stay": 3,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "positiveCells": 13,
+      "stay": 13,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 13,
+      "companyName": "MARTIN MARIETTA MATERIALS, INC.",
+      "positiveCells": 0,
+      "stay": 0,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 14,
+      "companyName": "DARDEN RESTAURANTS, INC.",
+      "positiveCells": 5,
+      "stay": 5,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "positiveCells": 16,
+      "stay": 16,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "positiveCells": 7,
+      "stay": 7,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 17,
+      "companyName": "AMPHENOL CORPORATION",
+      "positiveCells": 0,
+      "stay": 0,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    },
+    {
+      "companyId": 18,
+      "companyName": "AFLAC INCORPORATED",
+      "positiveCells": 3,
+      "stay": 3,
+      "quoteCorrect": 0,
+      "verdictChange": 0,
+      "review": 0,
+      "excludedUrlArtifact": 0
+    }
+  ],
+  "cells": [
+    {
+      "companyId": 9,
+      "companyName": "CSX Corporation",
+      "measure": "1.4-strategic-objectives",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/share/wwwcsx15/assets/File/About_Us/Responsibility/2024-CSX-Sustainability-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 9,
+      "companyName": "CSX Corporation",
+      "measure": "2.1-deployed-systems",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 9,
+      "companyName": "CSX Corporation",
+      "measure": "2.2-business-function-deployment",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 9,
+      "companyName": "CSX Corporation",
+      "measure": "2.4-customer-facing-ai",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/share/wwwcsx15/assets/File/About_Us/Responsibility/2024-CSX-Sustainability-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 9,
+      "companyName": "CSX Corporation",
+      "measure": "2.9-ai-product-innovation",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.csx.com/index.cfm/customers/csx-introduces-chatbot-to-streamline-real-estate-inquiries/?mobileFormat=false",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "1.2-board-oversight",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/financial-reports-public-filings/proxy-statements/magna-2026-management-information-circular.pdf?sfvrsn=9c00ce53_11",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "1.4-strategic-objectives",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/corporate-governance/disclosure-documents---2024/form-40-f.pdf?sfvrsn=39d814be_11",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/corporate-governance/disclosure-documents_2026/magna-2026-annual-information-form.pdf?sfvrsn=7e5db937_11",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "1.7-responsible-ai-commitment",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T3-anchor32"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "1.8-external-alignment",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "2.1-deployed-systems",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/corporate-governance/disclosure-documents---2024/form-40-f.pdf?sfvrsn=39d814be_11",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "2.2-business-function-deployment",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/stories/tech-talks/2024/ai--limitless-possibilities-without-anxiety",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "2.5-generative-ai-use",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 1,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": false,
+      "anyEligible": true,
+      "anyReview": true,
+      "allExcluded": false,
+      "representativeIndex": 1,
+      "label": "QUOTE_CORRECT",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "review",
+          "entityRelation": "unknown",
+          "sourceClass": "unknown",
+          "url": null,
+          "recoveryTier": null
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/stories/tech-talks/2025/ai-in-the-driver-s-seat---transforming-vehicle-usability-and-safety",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2025-news---press-releases/magna-news-release_magna-and-nvidia-team-up-to-advance-next-gen-automotive-technologies_final.pdf?sfvrsn=e170fb00_4",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "2.8-ai-partnerships",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/corporate-governance/disclosure-documents_2026/magna-2026-annual-information-form.pdf?sfvrsn=7e5db937_11",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/financial-reports-public-filings/proxy-statements/magna-2026-management-information-circular.pdf?sfvrsn=9c00ce53_11",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2025-news---press-releases/magna-news-release_magna-and-nvidia-team-up-to-advance-next-gen-automotive-technologies_final.pdf?sfvrsn=e170fb00_4",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "3.1-ai-governance-body",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/financial-reports-public-filings/proxy-statements/magna-2026-management-information-circular.pdf?sfvrsn=9c00ce53_11",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/financial-reports-public-filings/proxy-statements/magna-2026-management-information-circular.pdf?sfvrsn=9c00ce53_11",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "3.11-regulatory-compliance",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "3.6-human-oversight",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T3-anchor32"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "measure": "3.7-ai-incident-management",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.magna.com/docs/default-source/2026-compliance-policies/responsible-ai-policy/english---responsible-ai-policy.pdf?sfvrsn=79e0b97f_11",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 11,
+      "companyName": "THE SOUTHERN COMPANY",
+      "measure": "1.7-responsible-ai-commitment",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.southerncompany.com/content/dam/southerncompany/pdfs/about/governance/values-and-ethics/summary-of-amendments-to-code-of-ethics.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 11,
+      "companyName": "THE SOUTHERN COMPANY",
+      "measure": "2.11-ai-research-activity",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.southerncompany.com/miscellaneous-pages/2025-year-in-review.html",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 11,
+      "companyName": "THE SOUTHERN COMPANY",
+      "measure": "2.8-ai-partnerships",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.southerncompany.com/miscellaneous-pages/2025-year-in-review.html",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "1.2-board-oversight",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "1.5-investment-commitment",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "analyst_commentary",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "analyst_commentary",
+          "url": "https://www.google.com/goto?url=CAESoAEB6zswFZzTPnJU7oTYZV4PQPF_XQvkj1dPRlkOoQnuMTTFU35k83vmwUMFPyughbtjxOe4N1da2GouXt4bjST6cAlE5JKn_lOtC49X5B0wtGVDYVQGTdwu37QmcTfMqUaDQMFXcX8px9regXTni8z8rKBJglHMGY16xxTzSh7Rlq_s0F2D4Ix0MbaIlxncxaIDRLhrf38phUpj2VPtUkMA&gsessionid=H6mVc9yyY7DawVcii8j1h3m9YEt4NiQ4PmDJfZawR52izoA29oen5g",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_events/2025/SP-Global-Investor-Day-Slides-11-13-2025.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "1.9-workforce-strategy",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_downloads/2026/08/2025-Impact-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.1-deployed-systems",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_filed",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_filed",
+          "url": "https://www.sec.gov/Archives/edgar/data/64040/000006404026000045/spgi-20260630.htm",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.11-ai-research-activity",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_events/2025/SP-Global-Investor-Day-Slides-11-13-2025.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_events/2025/SP-Global-Investor-Day-Slides-11-13-2025.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.13-ai-portfolio-inventory",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2025/sr/S-P-Global-2025-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.3-quantified-outcomes",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2024/ar/S-P-Global-2024-Annual-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "analyst_commentary",
+          "url": "https://content.edgar-online.com/ExternalLink/EDGAR/0001104659-24-035901.html?hash=321dabb4d7df81882616e74687ab296d9bc46d9d83b6ac5ab8cdc80b04a59046&dest=tm242732d2_def14a_htm",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.4-customer-facing-ai",
+      "verdict": "Yes",
+      "quoteCount": 4,
+      "recoveredUrlCount": 4,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "analyst_commentary",
+          "url": "https://www.prnewswire.com/news-releases/sp-global-evolves-market-intelligence-operating-model-to-accelerate-agentic-solutions-platform-capabilities-and-innovation-announces-executive-leadership-changes-302818317.html",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 3,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2024/ar/S-P-Global-2024-Annual-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.5-generative-ai-use",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "analyst_commentary",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "analyst_commentary",
+          "url": "https://www.google.com/goto?url=CAESoAEB6zswFZzTPnJU7oTYZV4PQPF_XQvkj1dPRlkOoQnuMTTFU35k83vmwUMFPyughbtjxOe4N1da2GouXt4bjST6cAlE5JKn_lOtC49X5B0wtGVDYVQGTdwu37QmcTfMqUaDQMFXcX8px9regXTni8z8rKBJglHMGY16xxTzSh7Rlq_s0F2D4Ix0MbaIlxncxaIDRLhrf38phUpj2VPtUkMA&gsessionid=H6mVc9yyY7DawVcii8j1h3m9YEt4NiQ4PmDJfZawR52izoA29oen5g",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "analyst_commentary",
+          "url": "https://content.edgar-online.com/ExternalLink/EDGAR/0000064040-26-000013.html?hash=facb2b11b488221ea7866b0f22cc29012ad1ba5ab3606d7f7f2f08cfee6e015d&dest=exhibit1045tofy2025formxam_htm",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.6-ai-capability-building",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_downloads/2026/08/2025-Impact-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.8-ai-partnerships",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2025/q4/S-P-Global-4Q-FY-2025-Earnings-Call-Slides-2-10-2026.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_events/2025/SP-Global-Investor-Day-Slides-11-13-2025.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "2.9-ai-product-innovation",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2025/sr/S-P-Global-2025-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2025/sr/S-P-Global-2025-Proxy-Statement.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s29.q4cdn.com/690959130/files/doc_financials/2025/sr/S-P-Global-2025-Proxy-Statement.pdf",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "measure": "3.11-regulatory-compliance",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "analyst_commentary",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "analyst_commentary",
+          "url": "https://content.edgar-online.com/ExternalLink/EDGAR/0000064040-26-000013.html?hash=facb2b11b488221ea7866b0f22cc29012ad1ba5ab3606d7f7f2f08cfee6e015d&dest=exhibit1045tofy2025formxam_htm",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 14,
+      "companyName": "DARDEN RESTAURANTS, INC.",
+      "measure": "1.3-executive-accountability",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2026/08/DRI-2026-Impact-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2025/08/DRI-2025-Impact-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 14,
+      "companyName": "DARDEN RESTAURANTS, INC.",
+      "measure": "1.4-strategic-objectives",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2026/08/DRI-2026-Impact-Report.pdf",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://s27.q4cdn.com/308865545/files/doc_financials/2022/ar/2022-Annual-Report-on-Form-10-K-with-Shareholder-Letter.pdf",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 14,
+      "companyName": "DARDEN RESTAURANTS, INC.",
+      "measure": "1.7-responsible-ai-commitment",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2026/08/DRI-2026-Impact-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2025/08/DRI-2025-Impact-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 14,
+      "companyName": "DARDEN RESTAURANTS, INC.",
+      "measure": "2.5-generative-ai-use",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2026/08/DRI-2026-Impact-Report.pdf",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2026/08/DRI-2026-Impact-Report.pdf",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 14,
+      "companyName": "DARDEN RESTAURANTS, INC.",
+      "measure": "3.1-ai-governance-body",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2026/08/DRI-2026-Impact-Report.pdf",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.darden.com/wp-content/uploads/2025/08/DRI-2025-Impact-Report.pdf",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "1.1-ai-strategy-document",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/aHR0cHM6Ly9hc3NldHMuY29udGVudHN0YWNrLmlvL3YzL2Fzc2V0cy9ibHRmYTgyMjcxYzllZDAxMDBiL2JsdGMwNTY4YmE0OWIyMDczNDIvNjhjNWIwYjhkMjNmZGMxMzYyM2VhNzVhLzIwMjUtY29kZS1vZi1idXNpbmVzcy1jb25kdWN0LnBkZg==",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-Bell-responsible-ai-policy.pdf-blt8bf1113752270889",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "1.2-board-oversight",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "1.4-strategic-objectives",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=BCE-reports-first-quarter-2025-results",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=BCE-reports-first-quarter-2025-results",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/aHR0cHM6Ly9hc3NldHMuY29udGVudHN0YWNrLmlvL3YzL2Fzc2V0cy9ibHRmYTgyMjcxYzllZDAxMDBiL2JsdDEyNzNkNWQ1MzEwMjQwODQvNjhkNDUyNTJlOGQ0ODM1M2ZlMmY4MmQ3LzIwMjQtYmNlLWludGVncmF0ZWQtYW5udWFsLXJlcG9ydC5wZGY=",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "1.7-responsible-ai-commitment",
+      "verdict": "Yes",
+      "quoteCount": 4,
+      "recoveredUrlCount": 4,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/aHR0cHM6Ly9hc3NldHMuY29udGVudHN0YWNrLmlvL3YzL2Fzc2V0cy9ibHRmYTgyMjcxYzllZDAxMDBiL2JsdGMwNTY4YmE0OWIyMDczNDIvNjhjNWIwYjhkMjNmZGMxMzYyM2VhNzVhLzIwMjUtY29kZS1vZi1idXNpbmVzcy1jb25kdWN0LnBkZg==",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 3,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-Bell-responsible-ai-policy.pdf-blt8bf1113752270889",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.1-deployed-systems",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/news-and-media/newsroom?article=bell-cyber-and-cohere-deploy-sovereign-ai-for-canadian-cybersecurity-operations",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=BCE-reports-first-quarter-2025-results",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/news-and-media/newsroom?article=bell-cyber-and-cohere-deploy-sovereign-ai-for-canadian-cybersecurity-operations",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.11-ai-research-activity",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2024-bell-responsible-ai-policy.pdf-blt745dbb7db92f086a",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.2-business-function-deployment",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/news-and-media/newsroom?article=bell-cyber-and-cohere-deploy-sovereign-ai-for-canadian-cybersecurity-operations",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=BCE-reports-first-quarter-2025-results",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=BCE-reports-first-quarter-2025-results",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.3-quantified-outcomes",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/aHR0cHM6Ly9hc3NldHMuY29udGVudHN0YWNrLmlvL3YzL2Fzc2V0cy9ibHRmYTgyMjcxYzllZDAxMDBiL2JsdDEyNzNkNWQ1MzEwMjQwODQvNjhkNDUyNTJlOGQ0ODM1M2ZlMmY4MmQ3LzIwMjQtYmNlLWludGVncmF0ZWQtYW5udWFsLXJlcG9ydC5wZGY=",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.4-customer-facing-ai",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/aHR0cHM6Ly9hc3NldHMuY29udGVudHN0YWNrLmlvL3YzL2Fzc2V0cy9ibHRmYTgyMjcxYzllZDAxMDBiL2JsdDEyNzNkNWQ1MzEwMjQwODQvNjhkNDUyNTJlOGQ0ODM1M2ZlMmY4MmQ3LzIwMjQtYmNlLWludGVncmF0ZWQtYW5udWFsLXJlcG9ydC5wZGY=",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/aHR0cHM6Ly9hc3NldHMuY29udGVudHN0YWNrLmlvL3YzL2Fzc2V0cy9ibHRmYTgyMjcxYzllZDAxMDBiL2JsdDEyNzNkNWQ1MzEwMjQwODQvNjhkNDUyNTJlOGQ0ODM1M2ZlMmY4MmQ3LzIwMjQtYmNlLWludGVncmF0ZWQtYW5udWFsLXJlcG9ydC5wZGY=",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.5-generative-ai-use",
+      "verdict": "Yes",
+      "quoteCount": 4,
+      "recoveredUrlCount": 4,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=%2FBell-Canada-and-Cohere-forge-strategic-partnership-to-deliver-sovereign-AI-powered-solutions-for-government-and-business",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=%2FBell-Canada-and-Cohere-forge-strategic-partnership-to-deliver-sovereign-AI-powered-solutions-for-government-and-business",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=%2FBell-Canada-and-Cohere-forge-strategic-partnership-to-deliver-sovereign-AI-powered-solutions-for-government-and-business",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 3,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/aHR0cHM6Ly9hc3NldHMuY29udGVudHN0YWNrLmlvL3YzL2Fzc2V0cy9ibHRmYTgyMjcxYzllZDAxMDBiL2JsdDEyNzNkNWQ1MzEwMjQwODQvNjhkNDUyNTJlOGQ0ODM1M2ZlMmY4MmQ3LzIwMjQtYmNlLWludGVncmF0ZWQtYW5udWFsLXJlcG9ydC5wZGY=",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.6-ai-capability-building",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.7-ai-infrastructure",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=bell-and-celestica-collaborate-to-advance-canadian-sovereign-ai-infrastructure",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2026-q1-shareholder-report.pdf-blt38df62655d99475d",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=%2FBell-Canada-and-Cohere-forge-strategic-partnership-to-deliver-sovereign-AI-powered-solutions-for-government-and-business",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.8-ai-partnerships",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=bell-and-celestica-collaborate-to-advance-canadian-sovereign-ai-infrastructure",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=%2FBell-Canada-and-Cohere-forge-strategic-partnership-to-deliver-sovereign-AI-powered-solutions-for-government-and-business",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "2.9-ai-product-innovation",
+      "verdict": "Yes",
+      "quoteCount": 5,
+      "recoveredUrlCount": 5,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=BCE-reports-first-quarter-2025-results",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://bce.ca/news-and-media/newsroom?article=BCE-reports-first-quarter-2025-results",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 3,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 4,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "3.1-ai-governance-body",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2025-bce-integrated-annual-report.pdf-blt14a3fcac20d37443",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "measure": "3.5-explainability-transparency",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/security-requirements",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/2024-bell-responsible-ai-policy.pdf-blt745dbb7db92f086a",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.bce.ca/cs-assets/aHR0cHM6Ly9hc3NldHMuY29udGVudHN0YWNrLmlvL3YzL2Fzc2V0cy9ibHRmYTgyMjcxYzllZDAxMDBiL2JsdGMwNTY4YmE0OWIyMDczNDIvNjhjNWIwYjhkMjNmZGMxMzYyM2VhNzVhLzIwMjUtY29kZS1vZi1idXNpbmVzcy1jb25kdWN0LnBkZg==",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "measure": "1.3-executive-accountability",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2024/Stryker-2024-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2025/Stryker-2025-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "measure": "1.4-strategic-objectives",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/acute-care/products/care-ai/resources/Care-ai-platform-one-sheet.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2023/Stryker-2023-Comprehensive-Report.pdf",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "measure": "1.7-responsible-ai-commitment",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2024/Stryker-2024-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2025/Stryker-2025-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "measure": "2.4-customer-facing-ai",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2023/Stryker-2023-Comprehensive-Report.pdf",
+          "recoveryTier": "T2-anchor48"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2023/Stryker-2023-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2024/Stryker-2024-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "measure": "2.5-generative-ai-use",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2023/Stryker-2023-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "measure": "2.9-ai-product-innovation",
+      "verdict": "Yes",
+      "quoteCount": 3,
+      "recoveredUrlCount": 3,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/acute-care/products/care-ai/resources/Care-ai-platform-one-sheet.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/acute-care/products/care-ai/resources/Care-ai-platform-one-sheet.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 2,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2023/Stryker-2023-Comprehensive-Report.pdf",
+          "recoveryTier": "T2-anchor48"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "measure": "3.1-ai-governance-body",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2024/Stryker-2024-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://www.stryker.com/content/dam/stryker/about/annual-review/2025/Stryker-2025-Comprehensive-Report.pdf",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 18,
+      "companyName": "AFLAC INCORPORATED",
+      "measure": "2.1-deployed-systems",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://investors.aflac.com/press-releases/press-release-details/2023/Aflac-receives-2023-CIO-100-award-from-Foundrys-CIO/default.aspx",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://investors.aflac.com/press-releases/press-release-details/2023/Aflac-receives-2023-CIO-100-award-from-Foundrys-CIO/default.aspx",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 18,
+      "companyName": "AFLAC INCORPORATED",
+      "measure": "2.2-business-function-deployment",
+      "verdict": "Yes",
+      "quoteCount": 2,
+      "recoveredUrlCount": 2,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://investors.aflac.com/press-releases/press-release-details/2023/Aflac-receives-2023-CIO-100-award-from-Foundrys-CIO/default.aspx",
+          "recoveryTier": "T1-full"
+        },
+        {
+          "index": 1,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://investors.aflac.com/press-releases/press-release-details/2023/Aflac-receives-2023-CIO-100-award-from-Foundrys-CIO/default.aspx",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    },
+    {
+      "companyId": 18,
+      "companyName": "AFLAC INCORPORATED",
+      "measure": "2.3-quantified-outcomes",
+      "verdict": "Yes",
+      "quoteCount": 1,
+      "recoveredUrlCount": 1,
+      "unresolvedQuoteCount": 0,
+      "cellStatus": "eligible",
+      "citedQuoteEligible": true,
+      "anyEligible": true,
+      "anyReview": false,
+      "allExcluded": false,
+      "representativeIndex": 0,
+      "label": "STAY",
+      "excludedUrlArtifact": false,
+      "provenanceGapSuspect": false,
+      "genuineIneligible": false,
+      "exclusionHosts": [],
+      "exclusionKinds": [],
+      "quoteSourceTitles": [],
+      "representative": {
+        "entityRelation": "self",
+        "sourceClass": "issuer_self",
+        "status": "eligible",
+        "reason": "entityRelation=self"
+      },
+      "decisions": [
+        {
+          "index": 0,
+          "status": "eligible",
+          "entityRelation": "self",
+          "sourceClass": "issuer_self",
+          "url": "https://investors.aflac.com/press-releases/press-release-details/2023/Aflac-receives-2023-CIO-100-award-from-Foundrys-CIO/default.aspx",
+          "recoveryTier": "T1-full"
+        }
+      ]
+    }
+  ]
+}

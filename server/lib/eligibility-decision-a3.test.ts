@@ -509,5 +509,120 @@ test("CELL08: result and decisions array are frozen (immutable carry-through)", 
   }, "the decisions array must be frozen");
 });
 
+// ─── R5c / full-name phrase identity + tenant propagation ────────────────────
+// Framework-level closure of the IR-platform recall gap for issuers whose
+// corporate name yields NO distinctive identity tokens (e.g. "S&P Global Inc."
+// → tokens all generic/short, ticker absent from the URL). The fix is purely
+// code + name-derived: a full-name PHRASE match self-confirms the issuer's own
+// IR-platform document, which then seeds a shared tenant cache so sibling URLs
+// on the SAME tenant are accepted without re-establishing identity. NO
+// per-company data (no related_domains seed) is used anywhere in these tests.
+
+// A generic-name issuer with no usable distinctive tokens. Deliberately NO
+// domain and NO relatedDomains — the ONLY signals available are the name itself
+// and the Q4 tenant in the URL path.
+const SPG: EligibilityTarget = { id: 12, name: "S&P Global Inc.", ticker: "SPGI" };
+// Q4 CDN URL whose filename carries the full issuer name as a phrase.
+const SPG_CONFIRM_URL =
+  "https://s29.q4cdn.com/690959130/files/doc_financials/2026/sr/S-P-Global-Inc-2026-Proxy-Statement.pdf";
+// Sibling on the SAME Q4 tenant whose path carries NO identity (weak signal).
+const SPG_SIBLING_URL =
+  "https://s29.q4cdn.com/690959130/files/doc_financials/2026/q1/financial-supplement.pdf";
+
+test("R5c-1: generic-name issuer self-confirms its own IR doc via full-name phrase match", () => {
+  // No domain, no related_domains, ticker absent from the path — the ONLY way
+  // this can be issuer_self is the general full-name phrase signal.
+  const d = composeEligibilityDecision({
+    target: SPG,
+    source: { url: SPG_CONFIRM_URL, title: "2026 Proxy Statement" },
+  });
+  assert.equal(d.sourceClass, "issuer_self", "full-name phrase must confirm the issuer's own Q4 doc");
+  assert.equal(d.entityRelation, "self");
+  assert.equal(isEligible(d), true);
+  assert.ok(
+    d.reasons.some((r) => r.includes("full-name")),
+    "audit trail must record the full-name phrase signal",
+  );
+});
+
+test("R5c-2: a bare sibling on the same tenant is NOT issuer on its own (no cache)", () => {
+  const d = composeEligibilityDecision({
+    target: SPG,
+    source: { url: SPG_SIBLING_URL, title: "Financial Supplement" },
+  });
+  // Without a warm tenant cache the weak sibling cannot self-confirm.
+  assert.notEqual(d.sourceClass, "issuer_self", "a nameless sibling must not self-confirm without the cache");
+});
+
+test("R5c-3: tenant propagation covers a weak sibling — order [confirm, sibling]", () => {
+  const cell = composeCellEligibility({
+    target: SPG,
+    sources: [
+      { url: SPG_CONFIRM_URL, title: "2026 Proxy Statement" },
+      { url: SPG_SIBLING_URL, title: "Financial Supplement" },
+    ],
+  });
+  assert.equal(cell.decisions[0].sourceClass, "issuer_self");
+  assert.equal(cell.decisions[1].sourceClass, "issuer_self", "the sibling inherits issuer_self via the tenant cache");
+  assert.equal(cell.status, "eligible");
+});
+
+test("R5c-4: tenant propagation is ORDER-INDEPENDENT — order [sibling, confirm]", () => {
+  // The confirming source comes SECOND. Pass 2 must retro-cover the earlier
+  // sibling once the cache is warm.
+  const cell = composeCellEligibility({
+    target: SPG,
+    sources: [
+      { url: SPG_SIBLING_URL, title: "Financial Supplement" },
+      { url: SPG_CONFIRM_URL, title: "2026 Proxy Statement" },
+    ],
+  });
+  assert.equal(cell.decisions[1].sourceClass, "issuer_self");
+  assert.equal(
+    cell.decisions[0].sourceClass,
+    "issuer_self",
+    "the earlier sibling must be retro-covered regardless of order",
+  );
+  assert.equal(cell.status, "eligible");
+  // Original source indices preserved (sibling stayed at index 0).
+  assert.ok(cell.decisions[0].reasons.some((r) => r.includes("tenant-cache") || r.includes("tenant")),
+    "the retro-covered sibling must cite a tenant-cache hit");
+});
+
+test("R5c-5: negative guard — a DIFFERENT issuer cannot borrow another issuer's bound tenant", () => {
+  // Shared cache across two companies. S&P confirms its tenant first; a
+  // DIFFERENT issuer (Newmont) with a URL on S&P's tenant must NOT be accepted
+  // (companyMatchesBinding rejects the cross-company reuse).
+  const shared = new Map();
+  composeCellEligibility({
+    target: SPG,
+    sources: [{ url: SPG_CONFIRM_URL, title: "2026 Proxy Statement" }],
+    knownIrTenants: shared as any,
+  });
+  const other: EligibilityTarget = { id: 99, name: "Newmont Corporation", ticker: "NEM" };
+  const cell = composeCellEligibility({
+    target: other,
+    sources: [{ url: SPG_SIBLING_URL, title: "Financial Supplement" }],
+    knownIrTenants: shared as any,
+  });
+  assert.notEqual(
+    cell.decisions[0].sourceClass,
+    "issuer_self",
+    "a different issuer must not inherit S&P's tenant binding",
+  );
+});
+
+test("R5c-6: over-fire guard — a too-short two-token name does NOT phrase-match", () => {
+  // "AT&T Inc" → ["at","t"] → joined "att" (<6 chars) → phrase match suppressed.
+  // With no domain and no distinctive/ticker signal in the path, it must NOT
+  // self-confirm (prevents generic phrase over-fire on short initialisms).
+  const att: EligibilityTarget = { id: 77, name: "AT&T Inc.", ticker: "T" };
+  const d = composeEligibilityDecision({
+    target: att,
+    source: { url: "https://s1.q4cdn.com/222/files/at-t-overview.pdf", title: "Overview" },
+  });
+  assert.notEqual(d.sourceClass, "issuer_self", "short two-token name must not phrase-match");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

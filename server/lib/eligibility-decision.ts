@@ -49,7 +49,7 @@
  * returns a frozen object, so a carried decision cannot be mutated downstream.
  */
 
-import { classifyProvenance } from "./provenance.js";
+import { classifyProvenance, type IrTenantBinding } from "./provenance.js";
 import { deriveAliases } from "./issuer-resolver.js";
 
 // ─── Policy version ──────────────────────────────────────────────────────────
@@ -195,6 +195,16 @@ export interface EligibilityDecisionInput {
   source: EligibilitySource;
   framework?: EligibilityFrameworkScope;
   policyVersion?: EligibilityPolicyVersion | null;
+  /**
+   * R5c tenant-propagation cache, threaded straight through to the provenance
+   * classifier. Shared (mutable) across all sources of a company so that once
+   * ANY source confirms an IR-platform tenant (via title/URL/content/full-name
+   * identity), sibling URLs on the same tenant are accepted for free. Optional:
+   * when omitted the classifier behaves statelessly (pre-R5c). Framework-level
+   * and company-agnostic — carries no per-company data, only tenant bindings
+   * earned at runtime from the sources themselves.
+   */
+  knownIrTenants?: Map<string, IrTenantBinding>;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -310,6 +320,7 @@ export function composeEligibilityDecision(
         companyAliases: target.aliases ?? null,
         companyIsin: target.isin ?? null,
         companySecCik: target.secCik ?? null,
+        knownIrTenants: input.knownIrTenants,
       });
       provIssuer = prov.provenance === "issuer";
       regulator = !!prov.regulatorHost;
@@ -547,21 +558,30 @@ export function composeCellEligibility(args: {
   sources: EligibilitySource[];
   framework?: EligibilityFrameworkScope;
   policyVersion?: EligibilityPolicyVersion | null;
+  /**
+   * Shared IR-platform tenant-propagation cache (R5c). Threaded into every
+   * per-source decision so a tenant confirmed by ONE source covers weak-signal
+   * siblings in the SAME cell (and, when the caller owns the map, across cells
+   * of the same company). Optional — defaults to a fresh per-call map, which
+   * still gives in-cell propagation. Company-agnostic: no per-company data.
+   */
+  knownIrTenants?: Map<string, IrTenantBinding>;
 }): CellEligibilityResult {
   const target = args?.target ?? ({ name: "" } as EligibilityTarget);
   const sources = Array.isArray(args?.sources) ? args.sources : [];
   const framework = args?.framework;
   const policyVersion = args?.policyVersion;
+  // One shared, mutable tenant cache for this cell. Caller may supply a wider
+  // (per-company) map; otherwise a fresh map still propagates within the cell.
+  const knownIrTenants = args?.knownIrTenants ?? new Map<string, IrTenantBinding>();
 
-  const decisions: EligibilityDecision[] = [];
-  for (const source of sources) {
-    let d: EligibilityDecision;
+  const classifyOne = (source: EligibilitySource): EligibilityDecision => {
     try {
-      d = composeEligibilityDecision({ target, source, framework, policyVersion });
+      return composeEligibilityDecision({ target, source, framework, policyVersion, knownIrTenants });
     } catch {
       // A single bad source must never break the cell — treat it as an unknown
       // provenance → review decision (I4), bound to the correct target (I1).
-      d = freeze({
+      return freeze({
         policyVersion: resolveEligibilityPolicy(policyVersion),
         targetKey: targetKeyOf(target),
         entityRelation: "unknown",
@@ -575,7 +595,27 @@ export function composeCellEligibility(args: {
         repaired: false,
       });
     }
-    decisions.push(d);
+  };
+
+  const isIssuer = (d: EligibilityDecision): boolean =>
+    d.sourceClass === "issuer_self" || d.sourceClass === "issuer_filed";
+
+  // ── Pass 1: classify every source in input order, writing tenant bindings
+  //    through to the shared cache as self-confirming sources are seen.
+  const decisions: EligibilityDecision[] = sources.map(classifyOne);
+
+  // ── Pass 2: retro-cover. A tenant confirmed by a LATER source in pass 1 was
+  //    not yet in the cache when EARLIER siblings were classified, so re-run any
+  //    non-issuer source now that the cache is warm. This makes propagation
+  //    order-independent. Only ADOPT the re-run when it upgrades provenance to
+  //    issuer — never downgrade an existing decision. Original source indices
+  //    are preserved (in-place replacement at the same position).
+  if (knownIrTenants.size > 0) {
+    for (let i = 0; i < decisions.length; i++) {
+      if (isIssuer(decisions[i])) continue;
+      const redo = classifyOne(sources[i]);
+      if (isIssuer(redo)) decisions[i] = redo;
+    }
   }
 
   const sourceCount = decisions.length;

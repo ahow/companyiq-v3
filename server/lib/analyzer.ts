@@ -33,6 +33,7 @@ import {
   type EligibilityDecision,
   type EligibilityStatus,
 } from "./eligibility-decision.js";
+import type { IrTenantBinding } from "./provenance.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
 import { extractGuidanceObject, stripStructuredGuidanceBlock } from "./framework-guidance-audit.js";
@@ -2179,6 +2180,16 @@ export async function analyzeCompanyMeasures(opts: {
     if (u) existingDocUrlSet.add(u);
   }
 
+  // A3 / R5c: ONE IR-platform tenant-propagation cache per company, created
+  // outside the per-measure loop and shared across every measure's cell-level
+  // eligibility composition. Effect: once ANY source (on ANY measure) confirms
+  // this issuer's IR-platform tenant (via title/URL/content/full-name identity),
+  // sibling URLs on the same tenant — on this or any OTHER measure — are accepted
+  // without re-establishing identity. Framework-level and company-agnostic: it
+  // holds only tenant bindings earned at runtime from the sources themselves,
+  // never any per-company seed data.
+  const companyIrTenantCache = new Map<string, IrTenantBinding>();
+
   // Group measures by category
   const categoryMap = new Map<string, FrameworkMeasure[]>();
   for (const measure of measures) {
@@ -2828,6 +2839,8 @@ export async function analyzeCompanyMeasures(opts: {
             isin: company?.isin ?? null,
           },
           sources,
+          // R5c: per-company tenant cache shared across all measures (see above).
+          knownIrTenants: companyIrTenantCache,
           // Framework scope defaults (entity_only, no current-state/issuer
           // requirement) keep the guardrail from over-firing on undated
           // evidence; stricter per-framework scope can be threaded later.

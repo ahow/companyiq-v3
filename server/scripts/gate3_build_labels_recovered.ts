@@ -50,6 +50,7 @@ import {
   type EligibilitySource,
   type EligibilityTarget,
 } from "../lib/eligibility-decision.js";
+import type { IrTenantBinding } from "../lib/provenance.js";
 import { isPositiveVerdict } from "../lib/eligibility-flags.js";
 
 const { Pool } = pg;
@@ -328,6 +329,10 @@ async function main() {
       };
       const corpus = await loadCorpus(pool, batchId, companyId);
 
+      // R5c: ONE IR-platform tenant cache per company, shared across all of this
+      // company's measures (mirrors analyzer.ts). Offline == live.
+      const companyIrTenantCache = new Map<string, IrTenantBinding>();
+
       const measures = (co.measureScores ?? co.measures ?? []) as any[];
       const sortedMeasures = [...measures].sort((a, b) => String(a.measureId).localeCompare(String(b.measureId)));
 
@@ -349,7 +354,7 @@ async function main() {
         totalRecovered += recoveredUrlCount;
         for (const r of recovered) if (r.tier) tierCounts[r.tier] = (tierCounts[r.tier] || 0) + 1;
 
-        const cell = composeCellEligibility({ target, sources });
+        const cell = composeCellEligibility({ target, sources, knownIrTenants: companyIrTenantCache });
         let label = classify(cell);
 
         // Cited (first) quote eligibility = decision[0] eligible.

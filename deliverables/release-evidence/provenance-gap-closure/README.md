@@ -1,5 +1,63 @@
 # Provenance-gap closure — offline re-verify (batch 1287, companies 9–18)
 
+> ## ⭐ SUPERSEDING FIX — framework-level, zero per-company data (2026-10-16)
+>
+> The per-company `related_domains` tenant declaration described further down
+> (the `AFTER_code-fix-plus-SP-tenant-declaration.*` run) was **REJECTED** as
+> company-specific. It has been **replaced by a framework-level code mechanism**
+> that needs **no per-company data and no DB write** and applies identically to
+> every issuer on every IR platform. Evidence:
+> `AFTER_framework-phrase-and-propagation.json` / `.md`.
+>
+> ### What the framework fix does
+> Two name-derived, company-/topic-agnostic code mechanisms, both in the general
+> classifier path:
+>
+> 1. **Full-name phrase identity** (`server/lib/provenance.ts`
+>    `fullNamePhraseMatch`). An issuer's complete legal name — minus generic
+>    corporate-form suffixes (Inc/Corp/PLC/Co/…) — is matched as a **contiguous
+>    phrase** against a document's title, URL path and content. This lets an
+>    issuer whose name produces no distinctive single token and whose ticker is
+>    absent from the URL (e.g. S&P Global, ticker `SPGI`, on
+>    `s29.q4cdn.com/690959130/.../S-P-Global-Inc-2026-Proxy-Statement.pdf`)
+>    self-confirm its *own* IR document. Guarded: ≥2 name tokens and ≥6 joined
+>    characters, so short/ambiguous names (`AT&T`, `Visa`) do not over-fire.
+> 2. **IR-tenant propagation through the A3 eligibility composer**
+>    (`composeCellEligibility`, two-pass, order-independent). The existing R5c
+>    `knownIrTenants` cache — populated by write-through whenever ANY source
+>    self-confirms a Q4/IR-CDN tenant (via the phrase match above, or tokens,
+>    ticker, or path identity) — is now threaded through the composer and shared
+>    across all sources of a company (one cache per company in `analyzer.ts` and
+>    in the GATE3 builder, so offline == live). A confirmed tenant then covers
+>    *sibling* documents on the same tenant that carry no self-identifying name.
+>    The cross-company reuse guard (`companyMatchesBinding`) still blocks a
+>    different issuer from borrowing another issuer's bound tenant.
+>
+> Both signals are derived purely from the issuer's own name and the document —
+> **no company-specific list, no topic-specific rule, no related_domains row.**
+>
+> ### Before / after (framework fix only — NO overlay, NO DB write)
+>
+> | Bucket (64 positive cells) | BEFORE | AFTER |
+> |---|---|---|
+> | STAY | 56 | **63** |
+> | QUOTE_CORRECT | 5 | **1** |
+> | VERDICT_CHANGE | 3 | **0** |
+> | REVIEW | 0 | **0** |
+>
+> **Directional:** Yes→No flips **3 → 0**; No→Yes **0** (A3 acts only on positive
+> cells). Genuine verdict-change = 0 before and after. Only S&P Global (id 12)
+> changed; the other 9 companies (CSX, Magna, Southern, Martin Marietta, Darden,
+> BCE, Stryker, Amphenol, Aflac) are **byte-identical before/after — zero
+> regressions**. Verified by the a3 + provenance unit suites (34 + 49 tests pass,
+> incl. R5c sibling-propagation order-independence and negative guards) and by a
+> free GATE3 replay over the batch-1287 snapshot (no paid batch, no overlay).
+>
+> Everything below documents the earlier, now-superseded per-company approach and
+> is retained for history only.
+
+---
+
 This folder is the offline, no-cost evidence for the 2026-10 provenance-gap closure
 (redirect-mask unwrapping + data-driven IR-CDN tenant declaration) and the
 enforcement default-ON change.

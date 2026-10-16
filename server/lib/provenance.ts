@@ -406,6 +406,60 @@ function distinctiveNameTokens(name: string | null | undefined): string[] {
     .filter(w => w.length >= 4 && !GENERIC_TOKENS.has(w));
 }
 
+// Corporate-form / legal-suffix tokens that carry no identity on their own.
+// Stripped from the leading/trailing edges of a name before building the
+// full-name identity phrase. Topic/company-agnostic: a closed list of legal
+// entity forms and the leading article, present across issuer names worldwide.
+const CORP_FORM_TOKENS = new Set([
+  "the", "inc", "incorporated", "corp", "corporation", "co", "company",
+  "companies", "ltd", "limited", "llc", "lp", "llp", "plc", "sa", "se",
+  "ag", "nv", "spa", "oyj", "asa", "ab", "as", "bv", "kg", "gmbh", "sas",
+  "sarl", "pte", "pty", "kk", "aps", "oy", "srl",
+]);
+
+// Full-name identity phrase: the issuer's complete name with leading/trailing
+// corporate-form words stripped, as an ordered token list. This is the GENERAL
+// signal for issuers whose INDIVIDUAL name tokens are all generic/short and so
+// yield no `distinctiveNameTokens` (e.g. "S&P Global Inc." → ["s","p","global"],
+// "Coca-Cola Co" → ["coca","cola"]). A contiguous match of the whole phrase is
+// a far stronger identity assertion than any single generic word, so it can be
+// trusted where token matching cannot. Company/topic-agnostic: derived purely
+// from the name, applies to every issuer, needs no per-company data.
+function namePhraseTokens(name: string | null | undefined): string[] {
+  if (!name) return [];
+  let toks = normalise(name)
+    .replace(/[\/\\,.'()&]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  while (toks.length && CORP_FORM_TOKENS.has(toks[toks.length - 1])) toks.pop();
+  while (toks.length && CORP_FORM_TOKENS.has(toks[0])) toks.shift();
+  return toks;
+}
+
+// True when the issuer's full name (minus corporate-form words) appears as a
+// contiguous phrase in `text`, with `minOccurrences` repetitions. Guarded
+// against over-fire: requires >= 2 phrase tokens AND >= 6 non-separator chars,
+// so short/single-word names ("Visa", "Nike", "3M", "AT&T") never fire — only
+// multi-token names where the full sequence is genuinely distinctive.
+function fullNamePhraseMatch(
+  name: string | null | undefined,
+  text: string,
+  minOccurrences: number,
+): { matched: boolean; matchedOn: string | null } {
+  const phrase = namePhraseTokens(name);
+  if (phrase.length < 2) return { matched: false, matchedOn: null };
+  if (phrase.join("").length < 6) return { matched: false, matchedOn: null };
+  const body = phrase
+    .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^a-z0-9]+");
+  const re = new RegExp(`(^|[^a-z0-9])${body}([^a-z0-9]|$)`, "gi");
+  const matches = text.match(re) || [];
+  if (matches.length >= minOccurrences) {
+    return { matched: true, matchedOn: `full-name:${phrase.join(" ")}` };
+  }
+  return { matched: false, matchedOn: null };
+}
+
 // Identity match against a single text field (title, URL path, or content).
 // Applies the same ticker / alias / name-token rules as documentReferencesIssuer
 // but on ONE field so the caller can control which signal fires and record
@@ -479,6 +533,15 @@ function identityMatch(
       return { matched: true, matchedOn: minOccurrences === 1 ? `name-token:${t}` : `name-token:${t}(x2)` };
     }
   }
+
+  // Full-name phrase match (general fallback). Fires when the issuer's complete
+  // name appears as a contiguous phrase even though no single token is
+  // distinctive enough on its own — the only identity signal available for
+  // issuers like "S&P Global Inc." whose words are all generic/short. Last
+  // because it is the broadest; guarded to >=2 tokens / >=6 chars so it never
+  // fires for short single-word names.
+  const phraseHit = fullNamePhraseMatch(input.companyName, text, minOccurrences);
+  if (phraseHit.matched) return phraseHit;
 
   return { matched: false, matchedOn: null };
 }
