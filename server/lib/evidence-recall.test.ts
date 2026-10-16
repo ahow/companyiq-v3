@@ -383,19 +383,30 @@ test("RT06: dedup drops only pure duplicates; unique facts/links/negation are pr
   assert.ok(plan2.droppedDuplicate >= 1, "the dropped duplicate is accounted for");
 });
 
-// ─── Kill-switch default (verdict-invariant default behaviour) ────────────────
-test("kill-switch default is 'off' (current production behaviour, verdict-invariant)", () => {
+// ─── Kill-switch default (standing production behaviour post-GATE5) ────────────
+test("kill-switch default is 'on' (post-GATE5 prod behaviour) and env fully overrides", () => {
   const saved = process.env.RECALL_EXPANSION_POLICY;
   delete process.env.RECALL_EXPANSION_POLICY;
   try {
-    assert.equal(DEFAULT_RECALL_EXPANSION_POLICY, "off");
-    assert.equal(resolveRecallExpansionPolicy(), "off", "no env → off (prod default)");
-    assert.equal(isRecallExpansionEnforced(), false, "default never changes the pack");
+    // Default is now "on": unset env resolves to on and enforces expansion.
+    assert.equal(DEFAULT_RECALL_EXPANSION_POLICY, "on");
+    assert.equal(resolveRecallExpansionPolicy(), "on", "no env → on (post-GATE5 prod default)");
+    assert.equal(isRecallExpansionEnforced(), true, "default now applies the bounded expansion");
+    // Unrecognised / typo values fail safe to the shipped default ("on").
     process.env.RECALL_EXPANSION_POLICY = "garbage";
-    assert.equal(resolveRecallExpansionPolicy(), "off", "unrecognised value fails safe to off");
-    process.env.RECALL_EXPANSION_POLICY = "on";
-    assert.equal(isRecallExpansionEnforced(), true, "explicit on enables enforcement");
-    assert.equal(resolveRecallExpansionPolicy("shadow"), "shadow", "explicit arg wins over env");
+    assert.equal(resolveRecallExpansionPolicy(), "on", "unrecognised value fails safe to default on");
+    // Kill-switch still fully overrides without a redeploy: =off restores pre-A5 pack.
+    process.env.RECALL_EXPANSION_POLICY = "off";
+    assert.equal(resolveRecallExpansionPolicy(), "off", "env off overrides to restore pre-A5 pack");
+    assert.equal(isRecallExpansionEnforced(), false, "env off never changes the pack");
+    // =shadow overrides to telemetry-only (verdict-invariant).
+    process.env.RECALL_EXPANSION_POLICY = "shadow";
+    assert.equal(resolveRecallExpansionPolicy(), "shadow", "env shadow overrides to telemetry-only");
+    assert.equal(isRecallExpansionEnforced(), false, "shadow never changes the pack");
+    // Explicit arg wins over env in every direction.
+    assert.equal(resolveRecallExpansionPolicy("off"), "off", "explicit off arg wins over env");
+    process.env.RECALL_EXPANSION_POLICY = "off";
+    assert.equal(resolveRecallExpansionPolicy("on"), "on", "explicit on arg wins over env off");
   } finally {
     if (saved === undefined) delete process.env.RECALL_EXPANSION_POLICY;
     else process.env.RECALL_EXPANSION_POLICY = saved;

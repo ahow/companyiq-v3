@@ -36,15 +36,17 @@
  *          - is DETERMINISTIC: stable passage identity + stable ordering (RT05).
  *
  * VERSIONED KILL-SWITCH (mirrors the A2 EVIDENCE_GATE_POLICY / A3
- * ELIGIBILITY_ENFORCE precedent), DEFAULTING TO CURRENT PRODUCTION BEHAVIOUR:
+ * ELIGIBILITY_ENFORCE precedent). As of GATE5 the shipped default is "on":
  *   resolveRecallExpansionPolicy() reads env RECALL_EXPANSION_POLICY:
- *     - "off"    (DEFAULT): expansion disabled — byte-identical to current prod.
+ *     - "on"     (DEFAULT): apply the bounded expansion (behaviour-changing).
  *     - "shadow": compute the expansion plan + recall telemetry but DO NOT change
  *                 the evidence pack (observability only; verdict-invariant).
- *     - "on":     apply the bounded expansion (behaviour-changing).
- *   The shipped default is "off", so the production verdict surface is unchanged
- *   until a measurement run explicitly opts in. Verdict-changing retrieval is
- *   NEVER the default and is NOT enabled in the prod env.
+ *     - "off":    expansion disabled — byte-identical to the pre-A5 prod pack.
+ *   The shipped default is "on" after GATE5 validation, so bounded recall
+ *   expansion is the standing production behaviour. The kill-switch still fully
+ *   overrides without a redeploy: set RECALL_EXPANSION_POLICY=off to restore the
+ *   exact pre-A5 pack, or =shadow for telemetry-only. A typo or unrecognised
+ *   value fails safe to the shipped default ("on"), never to an unintended mode.
  *
  * SAFETY: every exported function is pure and total (never throws on bad input),
  * returns plain data, performs no I/O, and never calls a model.
@@ -59,16 +61,17 @@ import type { FrameworkMeasure } from "../../shared/schema.js";
 
 export type RecallExpansionPolicy = "off" | "shadow" | "on";
 
-/** DEFAULT = current production behaviour (expansion disabled). */
-export const DEFAULT_RECALL_EXPANSION_POLICY: RecallExpansionPolicy = "off";
+/** DEFAULT = standing production behaviour post-GATE5 (bounded expansion applied). */
+export const DEFAULT_RECALL_EXPANSION_POLICY: RecallExpansionPolicy = "on";
 
 /** Env var name for the kill-switch (documented in the ledger). */
 export const RECALL_EXPANSION_ENV = "RECALL_EXPANSION_POLICY";
 
 /**
  * Resolve the active policy: explicit arg > env RECALL_EXPANSION_POLICY > default.
- * Any unrecognised value falls back to the default ("off" — fail-safe to current
- * production behaviour, so a typo can never silently turn expansion on).
+ * Any unrecognised value falls back to the shipped default ("on" post-GATE5 —
+ * fail-safe to the standing production behaviour, so a typo can never silently
+ * change the mode). Set RECALL_EXPANSION_POLICY=off (or =shadow) to override.
  */
 export function resolveRecallExpansionPolicy(
   explicit?: RecallExpansionPolicy | null,

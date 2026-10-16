@@ -35,8 +35,9 @@ import {
   type EligibilityStatus,
 } from "./eligibility-decision.js";
 // A5 / WP04 (WP06): bounded, A3-composing, append-only evidence-pack recall
-// expansion. Kill-switch RECALL_EXPANSION_POLICY DEFAULTS to "off" (current
-// production behaviour — byte-identical). See server/lib/evidence-recall.ts.
+// expansion. Kill-switch RECALL_EXPANSION_POLICY DEFAULTS to "on" post-GATE5
+// (standing production behaviour); set =off to restore the byte-identical pre-A5
+// pack, or =shadow for telemetry-only. See server/lib/evidence-recall.ts.
 import {
   resolveRecallExpansionPolicy,
   computeDecisivePassages,
@@ -2355,13 +2356,13 @@ export async function analyzeCompanyMeasures(opts: {
       let finalEvidence = evidenceText;
 
       // ── A5 / WP06: bounded evidence-pack recall expansion (kill-switch gated) ──
-      // DEFAULT = "off": this entire block is skipped, so finalEvidence stays
-      // byte-identical to current production and NO extra work is done. "shadow"
-      // computes recall telemetry WITHOUT changing the pack (verdict-invariant).
-      // "on" APPENDS a BOUNDED set of eligible decisive passages that the corpus
-      // contains but the budgeted pack missed — append-only (never shrinks top-k
-      // or pack length, never reorders), composes with A3 (excluded material is
-      // never reintroduced), and framework-level (zero per-company/per-topic logic).
+      // DEFAULT = "on" (post-GATE5): this block runs and APPENDS a BOUNDED set of
+      // eligible decisive passages that the corpus contains but the budgeted pack
+      // missed — append-only (never shrinks top-k or pack length, never reorders),
+      // composes with A3 (excluded material is never reintroduced), and
+      // framework-level (zero per-company/per-topic logic). Override via env:
+      // "off" skips this entire block (byte-identical pre-A5 pack, no extra work);
+      // "shadow" computes recall telemetry WITHOUT changing the pack (verdict-invariant).
       const recallPolicy = resolveRecallExpansionPolicy();
       if (recallPolicy !== "off" && settings.useBm25Retrieval && evidenceText) {
         try {
