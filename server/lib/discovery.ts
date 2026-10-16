@@ -8,6 +8,12 @@ import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
 import { assertDispatchAllowed, requestAbortSignal, isLifecycleCancelledError, revokeAttempt } from "./lifecycle-fence.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
+import {
+  resolveDiscoveryParallelPolicy,
+  resolveDiscoveryMaxParallel,
+  runDiscoveryQueryPlan,
+  type QuerySpec,
+} from "./discovery-parallel.js";
 import { recordPaidCall } from "./paid-call-attribution.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { traceKeep, traceDrop, traceInfo, traceSessionHeader, traceMatches, TRACE_ENABLED, flushTraceBuffer } from "./discovery-tracer.js";
@@ -1196,6 +1202,91 @@ function traceOnHits(results: SearchResult[], query: string, provenance: string)
       traceInfo("[serper]", `S00.serperHit${provenance}`, r.link, `rank=${i + 1} query="${query}"`);
     }
   }
+}
+
+type WebSearchOpts = { num?: number; tbs?: string; gl?: string; hl?: string };
+
+/**
+ * B3 / WP11 — Batched web search behind the DISCOVERY_PARALLEL_POLICY kill-switch.
+ *
+ * Runs a LIST of queries and returns their results in the SAME ORDER as the input
+ * list (results[i] is the result of queries[i]), so a caller can iterate the
+ * returned array exactly as it would iterate a serial `for … await webSearch` loop
+ * — the candidate-accumulation sequence (and therefore the discovered SET) is
+ * byte-identical regardless of policy.
+ *
+ *   - policy "serial" (SHIPPED DEFAULT): dispatch each query one-after-another via
+ *     webSearch(), exactly as today. The dedupe/parallel path is SKIPPED ENTIRELY.
+ *   - policy "shadow"/"on": dedupe provably-identical queries (same provider+normal
+ *     form+opts), dispatch cache-miss units with bounded parallelism (canonical
+ *     sources first), and expand back to per-original-query results in input order.
+ *     Each underlying call still goes through webSearch() → webSearchInner() → the
+ *     per-provider token buckets, so real concurrency is min(DISCOVERY_MAX_PARALLEL,
+ *     bucket tokens) and rate limits are respected.
+ *
+ * Determinism: output order is always the caller's input order (never completion
+ * order), and dedupe collapses only effectively-identical queries, so the result
+ * SET matches the serial baseline (B3 Lane-B equivalence). Query COUNT is never
+ * reduced — only redundant CALLS are.
+ */
+async function webSearchBatch(
+  queries: string[],
+  optsFor: WebSearchOpts | ((query: string, index: number) => WebSearchOpts) = {},
+  batchOpts: {
+    canonicalFor?: (query: string, index: number) => boolean;
+    /**
+     * When true, a thrown error from an individual query is swallowed (that query
+     * yields []) instead of aborting the batch. Set this to match the ORIGINAL
+     * call site: a per-query try/catch → bestEffort:true; a bare loop with no
+     * try/catch → bestEffort:false (the throw must still propagate). This keeps
+     * both the serial-default path AND the on/shadow path semantically identical
+     * to the code they replace.
+     */
+    bestEffort?: boolean;
+  } = {},
+): Promise<SearchResult[][]> {
+  const resolveOpts = (q: string, i: number): WebSearchOpts =>
+    typeof optsFor === "function" ? optsFor(q, i) : optsFor;
+  const bestEffort = !!batchOpts.bestEffort;
+
+  const policy = resolveDiscoveryParallelPolicy();
+  if (policy === "serial") {
+    // SHIPPED DEFAULT: identical to a plain serial loop (same per-query error
+    // semantics as the original call site).
+    const out: SearchResult[][] = [];
+    for (let i = 0; i < queries.length; i++) {
+      if (bestEffort) {
+        try {
+          out.push(await webSearch(queries[i], resolveOpts(queries[i], i)));
+        } catch {
+          out.push([]);
+        }
+      } else {
+        out.push(await webSearch(queries[i], resolveOpts(queries[i], i)));
+      }
+    }
+    return out;
+  }
+
+  // policy = "on" | "shadow": dedupe + bounded parallel + canonical-first.
+  // "serper" is the primary provider key for canonicalisation; the actual
+  // provider/failover inside webSearchInner is unchanged.
+  const specs: QuerySpec[] = queries.map((q, i) => ({
+    query: q,
+    provider: "serper",
+    opts: resolveOpts(q, i) as Record<string, unknown>,
+    canonical: batchOpts.canonicalFor ? batchOpts.canonicalFor(q, i) : false,
+  }));
+
+  const { results } = await runDiscoveryQueryPlan<SearchResult[]>(
+    specs,
+    (spec) => webSearch(spec.query, (spec.opts || {}) as WebSearchOpts),
+    {
+      maxParallel: resolveDiscoveryMaxParallel(),
+      onItemError: bestEffort ? () => [] : undefined,
+    },
+  );
+  return results;
 }
 
 async function webSearchInner(
@@ -3842,9 +3933,15 @@ async function searchCompanyDocumentsInner(opts: {
     `"${companyName}" corporate governance charter`,
   ];
   console.log(`[${companyName}] Running generic-artefact discovery lane (${GENERIC_ARTEFACT_QUERIES.length} queries)`);
-  for (const query of GENERIC_ARTEFACT_QUERIES) {
-    const results = await webSearch(query, { num: searchDepth });
-    for (const r of results) addCandidate(r, "generic-artefact");
+  // B3/WP11: batched behind DISCOVERY_PARALLEL_POLICY. Under the shipped default
+  // (serial) this is a plain in-order loop; under on/shadow the queries dedupe +
+  // run bounded-parallel, but results are consumed in the SAME input order so the
+  // candidate SET is identical.
+  {
+    const _genResults = await webSearchBatch(GENERIC_ARTEFACT_QUERIES, { num: searchDepth });
+    for (const results of _genResults) {
+      for (const r of results) addCandidate(r, "generic-artefact");
+    }
   }
 
   // Lane 2: Domain-anchored search (with auto-detection if no domain set)
@@ -4580,11 +4677,17 @@ async function searchCompanyDocumentsInner(opts: {
     const irQueries = buildIRPlatformSeedQueries(companyName, persistedTenants, topicPhrases);
     if (irQueries.length > 0) {
       console.log(`[${companyName}] R6a Running IR-platform tenant lane (${irQueries.length} queries, ${persistedTenants.length} persisted tenants)`);
-      for (const q of irQueries.slice(0, 12)) {
-        try {
-          const results = await webSearch(q, { num: Math.min(searchDepth, 10) });
-          for (const r of results) addCandidate(r, "r6a-ir-platform");
-        } catch { /* best-effort */ }
+      // B3/WP11: batched behind DISCOVERY_PARALLEL_POLICY (serial default = in-order
+      // loop; on/shadow = dedupe + bounded parallel). IR-platform site: queries
+      // target canonical issuer tenants, so they are flagged canonical-first.
+      const _irQueries = irQueries.slice(0, 12);
+      const _irResults = await webSearchBatch(
+        _irQueries,
+        { num: Math.min(searchDepth, 10) },
+        { canonicalFor: () => true, bestEffort: true },
+      );
+      for (const results of _irResults) {
+        for (const r of results) addCandidate(r, "r6a-ir-platform");
       }
     }
   } catch (e: any) {
