@@ -1118,6 +1118,28 @@ function applyRationaleConsistencyFlags(opts: {
 // (and drifting from) the doc-prioritisation + chunk-sanity + capping logic.
 // Behaviour-preserving change: only the `export` keyword is added.
 /**
+ * Topic identity salt for the retrieval-corpus cache key (index seam + summary
+ * cache). RATIONALE: `summarizeDocumentsCompute` trims a company's document pool
+ * down to the retrieval budget in a TOPIC-AWARE way (priority ordering + BM25
+ * pre-filter keyed off `topicDescription`). The document pool is per-company and
+ * SHARED across frameworks, but the trimmed corpus that comes out is a function
+ * of the topic. The cache key must therefore carry the topic, or a large-corpus
+ * company's corpus built under framework A (topic A) could be served to
+ * framework B (topic B) for the same documents — a cross-topic leak that can
+ * change which sources/passages reach topic B's scorer. Folding this salt into
+ * the key segregates entries per topic so such a hit is impossible BY
+ * CONSTRUCTION. Framework-level (derived from framework.topicDescription ||
+ * framework.name); not company- or topic-specific. The value is normalised
+ * (trim + lowercase + whitespace-collapse) so cosmetic edits don't needlessly
+ * invalidate, then hashed. Small corpora below the BM25-skip threshold never
+ * reach this seam, so they are unaffected either way.
+ */
+export function topicCacheSalt(topicDescription: string | null | undefined): string {
+  const norm = String(topicDescription ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  return createHash("sha256").update(norm).digest("hex").slice(0, 16);
+}
+
+/**
  * B4/WP12 index seam — public entry point. Wraps the deterministic BM25 corpus
  * build (summarizeDocumentsCompute) in the content-hash cache layer, STRICTLY
  * GATED by CACHE_LAYER_POLICY. Under the shipped default ("off"), cacheRetrieval-
@@ -1125,9 +1147,11 @@ function applyRationaleConsistencyFlags(opts: {
  * wrapper is a provable pass-through and the pipeline is identical to today. The
  * key is tenant-isolated by companyId and derived from the content-stable hash of
  * the document-set texts, salted by PIPELINE_VERSION so a retrieval/code change
- * invalidates the entry. (The corpus is a pure function of the doc texts — the
- * model tag is "bm25-headers-*", no model call — so a hit is byte-identical to a
- * cold build, satisfying deterministic equivalence.)
+ * invalidates the entry, AND by a topic salt (topicCacheSalt) so a different
+ * framework/topic can never be served another topic's topic-aware trimmed corpus
+ * for the same documents. (The corpus is a pure function of the doc texts + topic
+ * — the model tag is "bm25-headers-*", no model call — so a hit is byte-identical
+ * to a cold build, satisfying deterministic equivalence.)
  */
 export async function summarizeDocuments(
   opts: Parameters<typeof summarizeDocumentsCompute>[0],
@@ -1135,7 +1159,7 @@ export async function summarizeDocuments(
   return cacheRetrievalIndex({
     workspaceId: opts.companyId,
     dependencyHashes: [generateContentStableHash(opts.documentTexts)],
-    extra: { corpus: PIPELINE_VERSION },
+    extra: { corpus: PIPELINE_VERSION, topic: topicCacheSalt(opts.topicDescription) },
     compute: () => summarizeDocumentsCompute(opts),
   });
 }
@@ -1177,8 +1201,14 @@ async function summarizeDocumentsCompute(opts: {
   const hashBasis = contentStableHashEnabled
     ? generateContentStableHash(documentTexts)
     : generateDocumentHash(documentUrls);
+  // TOPIC-SALT (Option 2): fold the framework/topic identity into the summary
+  // cache key too. The summary IS the topic-aware trimmed corpus, so without
+  // this salt a large company (> bm25SkipSummarizationBelowChars) scored under
+  // framework A could serve its A-trimmed corpus to framework B on the identical
+  // document set. Deriving the salt from topicDescription (= framework.topic-
+  // Description || framework.name) segregates the entry per framework/topic.
   const docHash = createHash("sha256")
-    .update(hashBasis + `:corpus-${PIPELINE_VERSION}`)
+    .update(hashBasis + `:corpus-${PIPELINE_VERSION}` + `:topic-${topicCacheSalt(topicDescription)}`)
     .digest("hex")
     .slice(0, 16);
   const cached = await storage.getCachedSummary(companyId, docHash);
