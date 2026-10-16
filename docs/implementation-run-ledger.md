@@ -229,7 +229,7 @@ accuracy/completeness = **rollback** (hard rule).
 | A3 | 3990bcd | prod (app + worker, both SUCCESS) | 1287 | ELIGIBILITY COMPOSITION GUARDRAIL added as a standalone module (`server/lib/eligibility-decision.ts`) that carries an **immutable, frozen eligibility decision** (entity · issuer/author · source class · as-of/version · scope) through compose → recompute-per-target (I1) → bounded repair (I2); repair can fill missing provenance but **can never override an exclusion**; applies framework parent/subsidiary scope (`entity_only` vs `group_consolidated`); recomputes per target so reused source bytes can't carry stale eligibility. Versioned kill-switches: `ELIGIBILITY_POLICY` (v2 default = compose+enforce logic available / v1 = legacy passthrough) and `ELIGIBILITY_ENFORCE` (unset/off = **shadow**: compose & attach decision, zero verdict mutation / on = downgrade excluded positives to No). **Correctness proven by 20 unit tests (EP01–EP06 + kill-switch/immutability/totality/serialization), 20/20 pass; legacy suites still green (evidence-gate 14/14, evidence-gate-a2 17/17, provenance-gate 15/15, provenance 40/40).** tsc gate: 61 baseline == 61 current, **zero new diagnostics**. Live batch 1287 ran in **shadow mode** (no `ELIGIBILITY_ENFORCE` in prod env ⇒ zero verdict impact by construction): 10/10 first-attempt, all ms=36 (no measure collapse), cost $3.8945/13.52M tok (≈baseline $3.95/13.7M — checks are string/compute-cheap, zero LLM overhead). **Cell-flip vs baseline 1284: Yes 56→64, Net +8, Y→N=10, N→Y=18, Total Flips=28; vs A2 1286: Yes 58→64, Net +6, Y→N=9, N→Y=15, Total Flips=24** (see tables below). These flips are **run-to-run model variance, not A3-caused** — shadow mode mutates no verdict. **No collapse / over-rejection**: the three all-No cos (Martin Marietta/Darden/Amphenol) stay 0/0 where expected; the only loss (Aflac −3 vs baseline) is already present in A2 (6→3 at 1286) and is stable A2→A3 (3→3), i.e. reproducible corpus variance independent of A3. | ✅ keep — now **enforce-ON** via `15bbcc0` (framework-level provenance fix; VERDICT_CHANGE=0, Y→N=0, N→Y=0, zero regressions — see 2026-10-16 section) | kill switches intact: `ELIGIBILITY_ENFORCE=off` (shadow) / `ELIGIBILITY_POLICY=v1` (legacy passthrough); or revert 3990bcd/15bbcc0 |
 | B1 | — | — | — | — | pending | — |
 | A4 | (pending push) | pending deploy | n/a (no batch — verdict-invariant) | WP05/A4 extraction/table/OCR/translation fidelity. Framework-level outcome-classifier resolves the small-PDF runtime gap at ROOT CAUSE (pdf-parse xref rejection ≠ empty doc); recovery-boundary guard preserved by non-interference (B1-1..B1-7 green); subprocess timeout now marks result incomplete (partial stdout never promoted to complete); adaptive per-page OCR (gated on text-layer check, all pages, no 8-page cap); table/translation/boilerplate fidelity asserted. **EX01–EX07 all green (10/10)**, regression suites 12/12 (recovery-boundary B1, equivalence B6, stalled-extraction B3/B2, table-horizon). tsc: 0 new diagnostics in changed files. Verdict-invariant: extraction layer returns `.text` byte-for-byte to all 11 callers; ExtractionFidelity is additive metadata only — scoring untouched. | ✅ keep | revert the A4 commit (processor.ts extraction-layer refactor is self-contained; no schema/env change) |
-| A5 | — | — | — | — | pending | — |
+| A5 | ca0939c | prod (all 4 svc, push 2026-10-16 09:16 UTC; health `{"status":"ok","version":"3.0.0"}`) | n/a (no batch — default kill-switch `off` ⇒ verdict-invariant) | WP06/A5 retrieval & evidence-pack recall. New pure DB-free/LLM-free module `server/lib/evidence-recall.ts`: framework-level decisive-passage oracle (measure `title`+`evidenceKeywords` only), passage-level recall measurement AT THE ACTUAL PROMPT BUDGET, and a BOUNDED append-only expansion planner that COMPOSES with A3 (injected eligibility predicate ⇒ excluded material never reintroduced), never shrinks top-k/pack length, dedups only when every unique decisive fact+source link stays recoverable, deterministic stable passage id+order. Versioned kill-switch **`RECALL_EXPANSION_POLICY`** (`off` DEFAULT = current prod/byte-identical / `shadow` = telemetry only / `on` = apply expansion); verdict-changing retrieval NEVER default, NOT set in prod env. analyzer.ts wiring strictly gated at the pre-scoring evidence seam — when `off` the block is skipped entirely (no extra work, pack byte-identical). **RT01–RT06 + kill-switch-default + no-op-append: 8/8 pass.** Free/offline GATE2 recall benchmark over the frozen 13-company fixture corpus (real `summarizeDocuments` BM25, no LLM): 377 (company×measure) cells, **micro-recall 74.2%** (3334/4493 decisive passages recalled), macro 74.3%, 1159 misses of which **537 recoverable** by the bounded shadow expansion. tsc: 0 new diagnostics in changed files (62 pre-existing elsewhere). **Total cells changing Y→N = 0, N→Y = 0** (default `off` ⇒ no scoring surface touched). | ✅ keep (default `off`) | `RECALL_EXPANSION_POLICY` unset/`off` restores current behaviour (no redeploy); or revert ca0939c (self-contained: 1 new module + 1 new test + 1 new script + gated analyzer seam; no schema change) |
 | B3 | — | — | — | — | pending | — |
 | B4 | — | — | — | — | pending | — |
 | A6 | — | — | — | — | pending | — |
@@ -691,3 +691,121 @@ truncation) is produced and available but not yet threaded into `storage.recordF
 `extraction_state` — intentionally out of scope for this surgical, verdict-invariant change. The
 `extraction_state` column already supports `partial`; wiring the completeness label through is a
 follow-up and would remain verdict-invariant.
+
+
+
+### A5 / WP06 — ESTABLISHED (2026-10-16): retrieval & evidence-pack recall
+
+**Scope.** Framework-level only — ZERO per-company/per-topic logic or data patches. A valid document can
+sit in the corpus while its DECISIVE passage never reaches the model prompt; smarter models cannot fix
+missing input. A5 does NOT add a new retriever — it (a) MEASURES passage-level recall of decisive
+passages AT THE ACTUAL PROMPT BUDGET, and (b) closes measured misses with a BOUNDED, append-only
+evidence-expansion that EXTENDS the existing BM25/deep-read path and COMPOSES with A3 eligibility and A4
+fidelity — never by shrinking top-k or pack length.
+
+**Files changed**
+- `server/lib/evidence-recall.ts` — new. Pure, DB-free, LLM-free toolkit (oracle + recall + planner).
+- `server/lib/evidence-recall.test.ts` — new. RT01–RT06 + kill-switch-default + no-op-append (8 tests).
+- `server/scripts/evidence_recall_benchmark.ts` — new. Free/offline/deterministic recall benchmark.
+- `server/lib/analyzer.ts` — strictly gated wiring at the pre-scoring evidence seam (details below).
+- `docs/implementation-run-ledger.md` — this section + A5 row.
+
+**Kill-switch and shipped default.**
+`RECALL_EXPANSION_POLICY` (resolved by `resolveRecallExpansionPolicy()`), three values:
+- **`off` — DEFAULT = current production behaviour.** The analyzer block is skipped ENTIRELY: no extra
+  compute, no extra retrieval, the evidence pack is byte-identical, the verdict surface is unchanged.
+- `shadow` — compute recall telemetry + the expansion plan but DO NOT modify the pack (verdict-invariant;
+  observability only).
+- `on` — APPLY the bounded expansion (behaviour-changing; append-only).
+Any unrecognised value falls back to `off` (fail-safe — a typo can never silently enable expansion).
+Verdict-changing retrieval is NEVER the default and is NOT set in the prod env. **To enable:
+`RECALL_EXPANSION_POLICY=on`** (or `=shadow` for telemetry); unsetting it restores current behaviour with
+no redeploy.
+
+**Decisive-passage oracle (framework-level).**
+`computeDecisivePassages({measure,chunks})` marks a passage decisive when it carries ≥ 2 distinct decisive
+tokens OR a verbatim multi-word `evidenceKeyword` phrase. The decisive signal is drawn ONLY from the
+measure's own framework-authored fields (`title` + `evidenceKeywords`) — no company names, no topic
+hardcoding. Ranked (phraseHit, distinctTokens, stable id) and capped (`RECALL_DECISIVE_MAX`, default 12),
+so it is deterministic and bounded. This single definition is BOTH the recall ground-truth AND the
+candidate universe for expansion, so "what should have reached the model" and "what expansion may add"
+can never diverge.
+
+**Recall measurement at the actual prompt budget.**
+`measurePackRecall({decisive,packPassageIds})` reports |decisive ∩ pack| / |decisive| by STABLE passage
+identity (`stablePassageId` = `docUrl#seq#sha1(text)`, mirrors the evidence-pack fingerprint scheme), plus
+the exact misses in oracle order. `packPassageIds` are the ids of the chunks that ACTUALLY reached the
+pack shown to the scoring role (membership recovered by verbatim substring against the assembled pack
+text).
+
+**Bounded expansion planner (A3-composing, append-only, deterministic).**
+`planBoundedExpansion(...)` fires only on DEMONSTRATED insufficiency (an eligible decisive passage exists
+in the corpus but missed the pack). It:
+- COMPOSES with A3: an injected eligibility predicate filters excluded material BEFORE selection, so
+  expansion can NEVER reintroduce what A3 excluded (RT04). The analyzer injects the real A3 predicate
+  (`composeEligibilityDecision` per candidate; `status==="excluded"` ⇒ ineligible), fail-open on error.
+- is BOUNDED: ≤ `RECALL_EXPANSION_MAX_PASSAGES` (default 6) and ≤ `RECALL_EXPANSION_MAX_CHARS` (default
+  12000) per measure — no unlimited retrieval.
+- NEVER shrinks top-k or pack length (append-only; the original pack is intact, order preserved).
+- dedups ONLY when a candidate adds no new decisive token AND its source link is already represented —
+  so every unique decisive fact AND source link stays recoverable; qualifiers/negation in a distinct
+  passage are never dropped (RT06).
+- is DETERMINISTIC: stable identity + stable ordering, re-runs byte-identical (RT05).
+
+**analyzer.ts wiring (strictly gated).**
+At the pre-scoring seam (`finalEvidence = evidenceText`), guarded by
+`if (recallPolicy !== "off" && settings.useBm25Retrieval && evidenceText)`. When `off` the whole block is
+skipped (no `buildDeepIndex()`, no oracle, no plan) ⇒ zero added cost and byte-identical packs. When
+`shadow` it logs recall telemetry only; when `on` it appends `formatExpansionAppend(plan)` (a provenance-
+headed block) to `finalEvidence`. No existing pack content is removed or reordered.
+
+**Deterministic test results (RT01–RT06 + extras) — 8/8 pass**
+| Test | Result | Proves |
+|------|--------|--------|
+| RT01 | ok | synonym/sector-language passage is decisive and recalled at the budget |
+| RT02 | ok | a low-frequency phrase-hit (table cell) is decisive and recoverable by bounded expansion |
+| RT03 | ok | negative/contradictory evidence is decisive and never suppressed |
+| RT04 | ok | bounded expansion composes with A3 — excluded material is never reintroduced |
+| RT05 | ok | stable passage identity and deterministic ordering under input shuffling |
+| RT06 | ok | dedup drops only pure duplicates; unique facts/links/negation preserved |
+| kill-switch | ok | default is `off` (current production behaviour, verdict-invariant) |
+| no-op append | ok | `formatExpansionAppend` returns `""` for a non-firing plan (byte-identical pack) |
+
+Run: `DATABASE_URL=postgres://stub:stub@127.0.0.1:1/stub npx tsx server/lib/evidence-recall.test.ts`
+(the tests never touch the DB; the stub only satisfies the pool constructor).
+
+**GATE2 — free/offline/deterministic recall benchmark.**
+`server/scripts/evidence_recall_benchmark.ts` builds the EXACT pack the scorer sees using the REAL,
+deterministic `summarizeDocuments` (retrievalV2 BM25 corpus selection — NO LLM) + the REAL
+`buildEvidencePacksForCategory`, over the frozen fixture corpus (`var_corpus/*`), and reports
+passage-level recall + shadow recoverability. Read-only w.r.t. the production DB (needs only an empty
+throwaway `summary_cache`; a cache miss is the normal path). Full 13-company fixture roster, all 29
+measures, 0 company errors:
+
+| Metric | Value |
+|---|---|
+| Companies evaluated | 13 (ids 1, 20, 120, 22, 107, 21, 14, 18, 11, 12, 13, 102, 16) |
+| (company × measure) cells | 377 |
+| Decisive passages (corpus total) | 4493 |
+| Recalled into the budgeted pack | 3334 |
+| **Micro-averaged recall** | **74.2%** |
+| Macro-averaged recall | 74.3% |
+| Decisive misses | 1159 |
+| Recoverable by A5 bounded expansion (shadow) | 537 (46.3% of misses) |
+| Budget | corpusMaxChars 560000, top-k 45, evidenceMaxChars 45000 |
+| Resolved policy during run | `off` (expansion run in SHADOW for measurement; pack never modified) |
+
+Outputs: `var_out/evidence_recall_benchmark.{json,md}` (per-cell + aggregate). Re-runs are byte-identical.
+
+**Typecheck:** `tsc --noEmit` — 0 new diagnostics in `evidence-recall.ts` / `evidence-recall.test.ts` /
+`evidence_recall_benchmark.ts` / `analyzer.ts` (repo has 62 unrelated pre-existing errors in other
+scripts/files).
+
+**Adjacent regression suites — all green:** evidence-gate 14/14, evidence-gate-a2 17/17,
+eligibility-decision-a3 34/34, passage-retrieval 35/35, retrieval-stability 5/5, retrieval-review-queue
+(green). No regression in the retrieval/evidence-gate/eligibility surfaces A5 sits next to.
+
+**Cell-flip impact:** n/a — no live batch run, and none is required. The shipped default
+`RECALL_EXPANSION_POLICY=off` skips the analyzer block entirely, so the evidence pack and verdict surface
+are byte-identical to current production. **Total cells changing Y→N = 0, N→Y = 0** (no scoring surface
+touched at the default). Behaviour-changing recall (`on`) is opt-in and NOT enabled in prod.
