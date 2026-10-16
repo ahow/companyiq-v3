@@ -16,6 +16,7 @@ import { normalizeVerdict, normalizedScore } from "../../shared/verdict.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash, generateContentStableHash } from "./processor.js";
+import { cacheRetrievalIndex } from "./pipeline-cache.js";
 import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
 import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./corpus-hygiene.js";
@@ -1116,7 +1117,30 @@ function applyRationaleConsistencyFlags(opts: {
 // the harness reproduce production's exact combinedText rather than reimplementing
 // (and drifting from) the doc-prioritisation + chunk-sanity + capping logic.
 // Behaviour-preserving change: only the `export` keyword is added.
-export async function summarizeDocuments(opts: {
+/**
+ * B4/WP12 index seam — public entry point. Wraps the deterministic BM25 corpus
+ * build (summarizeDocumentsCompute) in the content-hash cache layer, STRICTLY
+ * GATED by CACHE_LAYER_POLICY. Under the shipped default ("off"), cacheRetrieval-
+ * Index runs the compute directly and returns its result byte-for-byte — this
+ * wrapper is a provable pass-through and the pipeline is identical to today. The
+ * key is tenant-isolated by companyId and derived from the content-stable hash of
+ * the document-set texts, salted by PIPELINE_VERSION so a retrieval/code change
+ * invalidates the entry. (The corpus is a pure function of the doc texts — the
+ * model tag is "bm25-headers-*", no model call — so a hit is byte-identical to a
+ * cold build, satisfying deterministic equivalence.)
+ */
+export async function summarizeDocuments(
+  opts: Parameters<typeof summarizeDocumentsCompute>[0],
+): ReturnType<typeof summarizeDocumentsCompute> {
+  return cacheRetrievalIndex({
+    workspaceId: opts.companyId,
+    dependencyHashes: [generateContentStableHash(opts.documentTexts)],
+    extra: { corpus: PIPELINE_VERSION },
+    compute: () => summarizeDocumentsCompute(opts),
+  });
+}
+
+async function summarizeDocumentsCompute(opts: {
   companyName: string;
   companyId: number;
   documentTexts: string[];

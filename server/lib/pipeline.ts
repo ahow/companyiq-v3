@@ -36,6 +36,7 @@ import {
   verifyLatestPrimaryDisclosure,
 } from "./primary-disclosure-check.js";
 import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError } from "./processor.js";
+import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
 import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
@@ -1339,10 +1340,24 @@ async function runFetchPhase(opts: {
           // Promise.race: whichever settles first wins. whenAborted() rejects with an
           // OperationAbortedError at the deadline; processDocument itself also observes
           // the scope and aborts its in-flight work, so the permit is actually freed.
-          content = await Promise.race([
-            processDocument(doc.url, type, { forceHeadless: forceHeadless2a, scope }),
-            scope.whenAborted(`[${companyName}] fetch ${doc.url.slice(0, 80)}`),
-          ]);
+          //
+          // B4/WP12 bytes seam: the fetch+extract is wrapped in the content-hash cache
+          // layer, STRICTLY GATED by CACHE_LAYER_POLICY and tenant-isolated by
+          // workspaceId + source url. Under the shipped default ("off"), cacheDocument-
+          // Fetch runs the compute directly, so this is byte-identical to the bare
+          // Promise.race it replaces (same inputs, same result, same error/abort
+          // propagation, scope.dispose() still runs in finally). Under "on", a hit for
+          // the same {workspace, url} returns the already-extracted text and skips the
+          // network fetch AND the downstream pdf-parse / pdftotext / OCR extraction.
+          content = await cacheDocumentFetch({
+            workspaceId,
+            sourceUrl: doc.url,
+            compute: () =>
+              Promise.race([
+                processDocument(doc.url, type, { forceHeadless: forceHeadless2a, scope }),
+                scope.whenAborted(`[${companyName}] fetch ${doc.url.slice(0, 80)}`),
+              ]),
+          });
         } finally {
           scope.dispose();
         }
