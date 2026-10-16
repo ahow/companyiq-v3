@@ -30,9 +30,21 @@ import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from
 // mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
 import {
   composeCellEligibility,
+  composeEligibilityDecision,
   type EligibilityDecision,
   type EligibilityStatus,
 } from "./eligibility-decision.js";
+// A5 / WP04 (WP06): bounded, A3-composing, append-only evidence-pack recall
+// expansion. Kill-switch RECALL_EXPANSION_POLICY DEFAULTS to "off" (current
+// production behaviour — byte-identical). See server/lib/evidence-recall.ts.
+import {
+  resolveRecallExpansionPolicy,
+  computeDecisivePassages,
+  measurePackRecall,
+  planBoundedExpansion,
+  formatExpansionAppend,
+  stablePassageId,
+} from "./evidence-recall.js";
 import type { IrTenantBinding } from "./provenance.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
@@ -2340,7 +2352,84 @@ export async function analyzeCompanyMeasures(opts: {
       // as-is — the scorer will see insufficient evidence and score accordingly.
       // The deep-read second pass (below) handles the genuine under-evidenced case
       // where topic content exists in the corpus but wasn't surfaced by normal BM25.
-      const finalEvidence = evidenceText;
+      let finalEvidence = evidenceText;
+
+      // ── A5 / WP06: bounded evidence-pack recall expansion (kill-switch gated) ──
+      // DEFAULT = "off": this entire block is skipped, so finalEvidence stays
+      // byte-identical to current production and NO extra work is done. "shadow"
+      // computes recall telemetry WITHOUT changing the pack (verdict-invariant).
+      // "on" APPENDS a BOUNDED set of eligible decisive passages that the corpus
+      // contains but the budgeted pack missed — append-only (never shrinks top-k
+      // or pack length, never reorders), composes with A3 (excluded material is
+      // never reintroduced), and framework-level (zero per-company/per-topic logic).
+      const recallPolicy = resolveRecallExpansionPolicy();
+      if (recallPolicy !== "off" && settings.useBm25Retrieval && evidenceText) {
+        try {
+          buildDeepIndex();
+          const corpusChunks: Chunk[] = deepChunks || [];
+          // Membership: which full-corpus chunks actually reached THIS pack. The
+          // pack text is assembled verbatim from selected chunk texts, so a chunk
+          // is in the pack iff its exact text is a substring of the pack text.
+          const packChunks = corpusChunks.filter((c) => c.text && evidenceText.includes(c.text));
+          const packIds = new Set(packChunks.map((c) => stablePassageId(c)));
+          const decisive = computeDecisivePassages({ measure, chunks: corpusChunks });
+          const recall = measurePackRecall({ decisive, packPassageIds: packIds });
+          // A3-COMPOSING eligibility predicate: a candidate chunk is eligible unless
+          // A3 marks its (url,title,content) source EXCLUDED for this company — so
+          // expansion can NEVER reintroduce what A3 excluded (RT04). Fail-open on
+          // predicate error so a defect can only reduce to current behaviour.
+          const isEligible = (chunk: Chunk): boolean => {
+            try {
+              const d = composeEligibilityDecision({
+                target: {
+                  id: company?.id ?? companyId ?? null,
+                  name: company?.name || companyName,
+                  ticker: company?.ticker ?? null,
+                  domain: company?.domain ?? null,
+                  relatedDomains: company?.relatedDomains ?? null,
+                  isin: company?.isin ?? null,
+                },
+                source: {
+                  url: chunk.docUrl ?? null,
+                  title: chunk.docTitle ?? null,
+                  content: chunk.text ?? null,
+                },
+                knownIrTenants: companyIrTenantCache,
+              });
+              return d.status !== "excluded";
+            } catch {
+              return true;
+            }
+          };
+          const plan = planBoundedExpansion({
+            misses: recall.misses,
+            chunks: corpusChunks,
+            packPassageIds: packIds,
+            packChunks,
+            measure,
+            isEligible,
+          });
+          if (recallPolicy === "on" && plan.fired) {
+            // ENFORCE: append-only. finalEvidence grows; the original pack is intact.
+            finalEvidence = evidenceText + formatExpansionAppend(plan);
+            console.log(
+              `[${companyName}] A5-EXPAND ${measure.measureId}: recall ${(recall.recall * 100).toFixed(0)}% ` +
+                `(+${plan.added.length} passage(s), +${plan.addedChars} chars) ${plan.reason}`,
+            );
+          } else {
+            // SHADOW (or "on" with nothing eligible to add): telemetry only, the
+            // pack is NOT modified — verdict surface unchanged.
+            console.log(
+              `[${companyName}] A5-SHADOW ${measure.measureId}: recall ${(recall.recall * 100).toFixed(0)}% ` +
+                `misses=${recall.misses.length} recoverable=${plan.added.length} policy=${recallPolicy}`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[${companyName}] A5 recall-expansion ${measure.measureId}: skipped (${(err as Error)?.message ?? "error"}) — pack unchanged`,
+          );
+        }
+      }
 
       let measureResult: MeasureResult;
 
