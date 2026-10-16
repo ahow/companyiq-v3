@@ -1,0 +1,487 @@
+{
+  "baselineBatchId": 1284,
+  "variantBatchId": 1287,
+  "baselineAnalysisResultId": 800,
+  "variantAnalysisResultId": 803,
+  "generatedAt": "2026-10-16T07:12:58.040Z",
+  "cellCount": 360,
+  "companyCount": 10,
+  "measureCount": 36,
+  "perCompany": [
+    {
+      "companyId": 9,
+      "companyName": "CSX Corporation",
+      "cells": 36,
+      "yesBaseline": 3,
+      "yesVariant": 5,
+      "net": 2,
+      "yToN": 0,
+      "nToY": 2,
+      "totalFlips": 2,
+      "flipCells": [
+        {
+          "cell": "9|1.4-strategic-objectives",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "9|2.2-business-function-deployment",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        }
+      ]
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "cells": 36,
+      "yesBaseline": 10,
+      "yesVariant": 12,
+      "net": 2,
+      "yToN": 1,
+      "nToY": 3,
+      "totalFlips": 4,
+      "flipCells": [
+        {
+          "cell": "10|1.2-board-oversight",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "10|2.2-business-function-deployment",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "10|3.1-ai-governance-body",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "10|3.2-ai-risk-framework",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        }
+      ]
+    },
+    {
+      "companyId": 11,
+      "companyName": "THE SOUTHERN COMPANY",
+      "cells": 36,
+      "yesBaseline": 2,
+      "yesVariant": 3,
+      "net": 1,
+      "yToN": 1,
+      "nToY": 2,
+      "totalFlips": 3,
+      "flipCells": [
+        {
+          "cell": "11|2.11-ai-research-activity",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "11|2.5-generative-ai-use",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "11|2.8-ai-partnerships",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "cells": 36,
+      "yesBaseline": 14,
+      "yesVariant": 13,
+      "net": -1,
+      "yToN": 4,
+      "nToY": 3,
+      "totalFlips": 7,
+      "flipCells": [
+        {
+          "cell": "12|1.1-ai-strategy-document",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "12|1.2-board-oversight",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "12|1.4-strategic-objectives",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "12|1.5-investment-commitment",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "12|2.10-operational-efficiency",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "12|2.13-ai-portfolio-inventory",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "12|2.2-business-function-deployment",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        }
+      ]
+    },
+    {
+      "companyId": 13,
+      "companyName": "MARTIN MARIETTA MATERIALS, INC.",
+      "cells": 36,
+      "yesBaseline": 0,
+      "yesVariant": 0,
+      "net": 0,
+      "yToN": 0,
+      "nToY": 0,
+      "totalFlips": 0,
+      "flipCells": []
+    },
+    {
+      "companyId": 14,
+      "companyName": "DARDEN RESTAURANTS, INC.",
+      "cells": 36,
+      "yesBaseline": 0,
+      "yesVariant": 5,
+      "net": 5,
+      "yToN": 0,
+      "nToY": 5,
+      "totalFlips": 5,
+      "flipCells": [
+        {
+          "cell": "14|1.3-executive-accountability",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "14|1.4-strategic-objectives",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "14|1.7-responsible-ai-commitment",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "14|2.5-generative-ai-use",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "14|3.1-ai-governance-body",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        }
+      ]
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "cells": 36,
+      "yesBaseline": 14,
+      "yesVariant": 16,
+      "net": 2,
+      "yToN": 1,
+      "nToY": 3,
+      "totalFlips": 4,
+      "flipCells": [
+        {
+          "cell": "15|1.3-executive-accountability",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "15|2.1-deployed-systems",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "15|2.8-ai-partnerships",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "15|3.5-explainability-transparency",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "cells": 36,
+      "yesBaseline": 7,
+      "yesVariant": 7,
+      "net": 0,
+      "yToN": 0,
+      "nToY": 0,
+      "totalFlips": 0,
+      "flipCells": []
+    },
+    {
+      "companyId": 17,
+      "companyName": "AMPHENOL CORPORATION",
+      "cells": 36,
+      "yesBaseline": 0,
+      "yesVariant": 0,
+      "net": 0,
+      "yToN": 0,
+      "nToY": 0,
+      "totalFlips": 0,
+      "flipCells": []
+    },
+    {
+      "companyId": 18,
+      "companyName": "AFLAC INCORPORATED",
+      "cells": 36,
+      "yesBaseline": 6,
+      "yesVariant": 3,
+      "net": -3,
+      "yToN": 3,
+      "nToY": 0,
+      "totalFlips": 3,
+      "flipCells": [
+        {
+          "cell": "18|1.4-strategic-objectives",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "18|2.8-ai-partnerships",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "18|2.9-ai-product-innovation",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        }
+      ]
+    }
+  ],
+  "aggregate": {
+    "cells": 360,
+    "yesBaseline": 56,
+    "yesVariant": 64,
+    "net": 8,
+    "yToN": 10,
+    "nToY": 18,
+    "totalFlips": 28,
+    "flipCells": [
+      {
+        "cell": "9|1.4-strategic-objectives",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "9|2.2-business-function-deployment",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "10|1.2-board-oversight",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "10|2.2-business-function-deployment",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "10|3.1-ai-governance-body",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "10|3.2-ai-risk-framework",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "11|2.11-ai-research-activity",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "11|2.5-generative-ai-use",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "11|2.8-ai-partnerships",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "12|1.1-ai-strategy-document",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "12|1.2-board-oversight",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "12|1.4-strategic-objectives",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "12|1.5-investment-commitment",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "12|2.10-operational-efficiency",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "12|2.13-ai-portfolio-inventory",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "12|2.2-business-function-deployment",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "14|1.3-executive-accountability",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "14|1.4-strategic-objectives",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "14|1.7-responsible-ai-commitment",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "14|2.5-generative-ai-use",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "14|3.1-ai-governance-body",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "15|1.3-executive-accountability",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "15|2.1-deployed-systems",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "15|2.8-ai-partnerships",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "15|3.5-explainability-transparency",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "18|1.4-strategic-objectives",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "18|2.8-ai-partnerships",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "18|2.9-ai-product-innovation",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      }
+    ]
+  },
+  "consistencyOk": true
+}

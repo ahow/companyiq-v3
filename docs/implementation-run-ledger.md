@@ -226,9 +226,9 @@ accuracy/completeness = **rollback** (hard rule).
 
 **A1 reuse-path completeness fix (08b56ee):** verification found `markLinkedDocumentVerified` (cache-reuse promote path) left `extraction_state` NULL on reused docs — 292/338 fetch=ok docs (77%) unlabeled in batch 1285, breaking A1's "every required source has a traceable outcome" acceptance + coverage denominator. Fixed via scalar-subquery derivation (promotion to 'ok' never gated on the join; mirrors recordFetchSuccess). Live-validated by backfilling batch 1285: all 292 → 'complete', now **338/338 fetch=ok docs (100%) labeled**, remaining 42 NULL = exactly the 19 dead + 23 rejected (never extracted ⇒ correctly NULL). In-pipeline behaviour of the promote-path write will be confirmed incidentally in the next WP's batch (warm corpus ⇒ heavy reuse).
 | A2 | 7702606 | prod (all 4 svc) | 1286 | EVIDENCE-GATE HARDENED, versioned (v2 default; v1 via `EVIDENCE_GATE_POLICY=v1`). Fixes E6 #1/#2/#3: NFKC Unicode-aware normalisation (preserves digits/−/%/decimals/non-Latin; removed ASCII-only strip), removed fuzzy `lcs≥120` escape hatch + honest-ellipsis span validation, explicit source-attribution failure instead of silent pack-wide fallback, anti-echo override for authoritative provenance. **Correctness proven by 17 unit tests (QI01–QI09 + idempotence/non-mutation/fail-open), legacy gate+provenance tests still green under v1.** Live batch 1286: 10/10 first-attempt, 38m24s, all ms=36 (no measure collapse), docs gate 403 accept/29 reject (6.7%), cost $3.9531/13.72M tok (≈baseline — pure string gate, zero LLM overhead). Aggregate 58 yes vs baseline 56/A1 55 (within run-to-run band). **Cell-flip vs baseline 1284: Y→N=9, N→Y=11, Total Flips=20** (net +2 Yes conceals 20 changed cells; vs A1 1285: Y→N=7, N→Y=10, Total Flips=17 — see Comparison methodology + table below). **No over-rejection**: three 0/0 cos (MartinMarietta/Darden/Amphenol) are baseline-stable (0/0 in 1284 & 1285 too — see L281), NOT caused by A2. | ✅ keep (v2 on) | revert to v1 via env flag (no redeploy) or revert 7702606 |
-| A3 | 3990bcd | prod (app + worker, both SUCCESS) | 1287 | ELIGIBILITY COMPOSITION GUARDRAIL added as a standalone module (`server/lib/eligibility-decision.ts`) that carries an **immutable, frozen eligibility decision** (entity · issuer/author · source class · as-of/version · scope) through compose → recompute-per-target (I1) → bounded repair (I2); repair can fill missing provenance but **can never override an exclusion**; applies framework parent/subsidiary scope (`entity_only` vs `group_consolidated`); recomputes per target so reused source bytes can't carry stale eligibility. Versioned kill-switches: `ELIGIBILITY_POLICY` (v2 default = compose+enforce logic available / v1 = legacy passthrough) and `ELIGIBILITY_ENFORCE` (unset/off = **shadow**: compose & attach decision, zero verdict mutation / on = downgrade excluded positives to No). **Correctness proven by 20 unit tests (EP01–EP06 + kill-switch/immutability/totality/serialization), 20/20 pass; legacy suites still green (evidence-gate 14/14, evidence-gate-a2 17/17, provenance-gate 15/15, provenance 40/40).** tsc gate: 61 baseline == 61 current, **zero new diagnostics**. Live batch 1287 ran in **shadow mode** (no `ELIGIBILITY_ENFORCE` in prod env ⇒ zero verdict impact by construction): 10/10 first-attempt, all ms=36 (no measure collapse), cost $3.8945/13.52M tok (≈baseline $3.95/13.7M — checks are string/compute-cheap, zero LLM overhead). **Cell-flip vs baseline 1284: Yes 56→64, Net +8, Y→N=10, N→Y=18, Total Flips=28; vs A2 1286: Yes 58→64, Net +6, Y→N=9, N→Y=15, Total Flips=24** (see tables below). These flips are **run-to-run model variance, not A3-caused** — shadow mode mutates no verdict. **No collapse / over-rejection**: the three all-No cos (Martin Marietta/Darden/Amphenol) stay 0/0 where expected; the only loss (Aflac −3 vs baseline) is already present in A2 (6→3 at 1286) and is stable A2→A3 (3→3), i.e. reproducible corpus variance independent of A3. | ✅ keep (v2 default, shadow) | revert to v1/off via env flag (no redeploy) or revert 3990bcd (additive module + one optional field + env-gated shadow block) |
+| A3 | 3990bcd | prod (app + worker, both SUCCESS) | 1287 | ELIGIBILITY COMPOSITION GUARDRAIL added as a standalone module (`server/lib/eligibility-decision.ts`) that carries an **immutable, frozen eligibility decision** (entity · issuer/author · source class · as-of/version · scope) through compose → recompute-per-target (I1) → bounded repair (I2); repair can fill missing provenance but **can never override an exclusion**; applies framework parent/subsidiary scope (`entity_only` vs `group_consolidated`); recomputes per target so reused source bytes can't carry stale eligibility. Versioned kill-switches: `ELIGIBILITY_POLICY` (v2 default = compose+enforce logic available / v1 = legacy passthrough) and `ELIGIBILITY_ENFORCE` (unset/off = **shadow**: compose & attach decision, zero verdict mutation / on = downgrade excluded positives to No). **Correctness proven by 20 unit tests (EP01–EP06 + kill-switch/immutability/totality/serialization), 20/20 pass; legacy suites still green (evidence-gate 14/14, evidence-gate-a2 17/17, provenance-gate 15/15, provenance 40/40).** tsc gate: 61 baseline == 61 current, **zero new diagnostics**. Live batch 1287 ran in **shadow mode** (no `ELIGIBILITY_ENFORCE` in prod env ⇒ zero verdict impact by construction): 10/10 first-attempt, all ms=36 (no measure collapse), cost $3.8945/13.52M tok (≈baseline $3.95/13.7M — checks are string/compute-cheap, zero LLM overhead). **Cell-flip vs baseline 1284: Yes 56→64, Net +8, Y→N=10, N→Y=18, Total Flips=28; vs A2 1286: Yes 58→64, Net +6, Y→N=9, N→Y=15, Total Flips=24** (see tables below). These flips are **run-to-run model variance, not A3-caused** — shadow mode mutates no verdict. **No collapse / over-rejection**: the three all-No cos (Martin Marietta/Darden/Amphenol) stay 0/0 where expected; the only loss (Aflac −3 vs baseline) is already present in A2 (6→3 at 1286) and is stable A2→A3 (3→3), i.e. reproducible corpus variance independent of A3. | ✅ keep — now **enforce-ON** via `15bbcc0` (framework-level provenance fix; VERDICT_CHANGE=0, Y→N=0, N→Y=0, zero regressions — see 2026-10-16 section) | kill switches intact: `ELIGIBILITY_ENFORCE=off` (shadow) / `ELIGIBILITY_POLICY=v1` (legacy passthrough); or revert 3990bcd/15bbcc0 |
 | B1 | — | — | — | — | pending | — |
-| A4 | — | — | — | — | pending | — |
+| A4 | — | — | — | WP05/A4 behavioral recovery-boundary guard + small-PDF subprocess-extraction runtime gap (EX04/EX06) | in progress | — |
 | A5 | — | — | — | — | pending | — |
 | B3 | — | — | — | — | pending | — |
 | B4 | — | — | — | — | pending | — |
@@ -508,3 +508,101 @@ gated on:
 
 **Carried forward unchanged:** WP05/A4 (behavioral recovery-boundary guard + small-PDF
 runtime gap) remains OUTSTANDING and does not intersect A3.
+
+---
+
+## WP04 / A3 — Framework-level provenance fix SHIPPED + enforcement ENABLED + validated — ESTABLISHED (2026-10-16)
+
+**Decision taken.** The provenance-gap closure of the section above was executed, and the
+in-code enforcement default was flipped to **enforce-ON** (both prerequisites resolved).
+Crucially, the fix was made **framework-level, with zero per-company / per-topic data** —
+the earlier proposed 1-row `related_domains` tenant declaration for S&P Global (id 12) was
+**REJECTED by the user as company-specific** and was **never written** (production DB guard
+also blocked it). It is fully superseded.
+
+**Commits on `origin/main` (auto-deploy to all 4 Railway services; dev==prod):**
+`58236a2` (GATE3 label-set docs) → `e06a78f` (enforcement default-ON + redirect-mask
+unwrap + IR-platform recognition) → **`15bbcc0`** ("feat(provenance+A3): framework-level
+full-name phrase identity + IR-tenant propagation through eligibility composer") — the
+superseding framework fix.
+
+**What `15bbcc0` ships (all name-derived, company-/topic-agnostic, NO data rows):**
+1. **Full-name phrase identity** (`server/lib/provenance.ts` `fullNamePhraseMatch`) — an
+   issuer's complete legal name minus generic corporate-form suffixes (Inc/Corp/PLC/Co) is
+   matched as a contiguous phrase against a document's title/URL-path/content, so an issuer
+   with no distinctive single token and no ticker in the URL (e.g. S&P Global, ticker SPGI,
+   on `s29.q4cdn.com/690959130/.../S-P-Global-Inc-2026-Proxy-Statement.pdf`) self-confirms
+   its own IR document. Guarded ≥2 tokens & ≥6 joined chars so short names (AT&T, Visa) do
+   not over-fire.
+2. **IR-tenant propagation through the A3 eligibility composer**
+   (`composeCellEligibility`, two-pass, order-independent) — the existing R5c
+   `knownIrTenants` cache (write-through whenever ANY source self-confirms a Q4/IR-CDN
+   tenant) is now threaded through the composer and shared across all of a company's
+   sources (one cache per company in `analyzer.ts` AND in the GATE3 builder, so offline ==
+   live). A confirmed tenant then covers sibling documents on the same tenant that carry no
+   self-identifying name. Cross-company reuse guard (`companyMatchesBinding`) still blocks a
+   different issuer borrowing another's bound tenant.
+3. **Enforcement default-ON** (`server/lib/analyzer.ts`) — unset/empty `ELIGIBILITY_ENFORCE`
+   now enforces; kill switches intact: `ELIGIBILITY_ENFORCE=off` restores shadow mode,
+   `ELIGIBILITY_POLICY=v1` restores legacy passthrough.
+
+**Tests:** `eligibility-decision-a3.test.ts` (34) + `provenance.test.ts` (49) pass, incl. 6
+new R5c cases (order-independent sibling propagation; cross-company reuse over-fire guard),
+plus kill-switch and default-ON cases.
+
+### Validation — deterministic isolation over intact snapshot 1287 (free, zero-confound)
+
+The fix lives **purely in post-scoring eligibility composition** — it changes neither
+retrieval nor LLM scoring. The defensible validation is therefore a **deterministic replay
+of the fixed composer over a fixed snapshot**, which isolates the fix's directional flips
+with **zero LLM-noise confound**. Snapshot **1287** (analysis_results id 803) is the
+frozen roster (FW18, companies 9–18, full run) with a **byte-intact corpus** (457/457 docs
+join, 59.19M chars recovered at 99.34% URL-recovery).
+
+| Bucket (64 positive cells, snapshot 1287) | Pre-framework-fix | **Post-fix (`15bbcc0`, enforce-ON)** |
+|---|---|---|
+| STAY | 56 | **63** |
+| QUOTE_CORRECT | 5 | **1** |
+| VERDICT_CHANGE | 3 | **0** |
+| REVIEW (genuine) | 0 | **0** |
+
+**Directional verdict flips from enabling enforcement (standing reporting constraint):**
+- **Yes→No = 0**  (pre-fix would have been **3**, all S&P provenance-attribution artifacts, **0 genuine**)
+- **No→Yes = 0**  (A3 acts only on positive cells)
+- **Total cells changing verdict = 0**
+
+Only S&P Global (id 12) changed between pre-fix and post-fix; the other 9 companies are
+**byte-identical — zero regressions**. The one QUOTE_CORRECT (Magna id 10) is the intended
+remedy (promote an eligible quote, verdict unchanged). Evidence:
+`deliverables/release-evidence/provenance-gap-closure/AFTER_framework-phrase-and-propagation.{json,md}`.
+
+### Why NOT a fresh paid batch — the LLM noise floor swamps the signal
+
+Two fresh runs of the **identical frozen roster with no code change** — baseline **1284**
+(snapshot 800) vs **1287** (snapshot 803), both run 2026-10-15 — differ by **28 cell
+flips**:
+
+| | Yes (1284) | Yes (1287) | Net | Y→N | N→Y | Total Flips |
+|---|---|---|---|---|---|---|
+| **Aggregate (10 cos)** | 56 | 64 | +8 | **10** | **18** | **28** |
+
+This 28-flip run-to-run variance is **pure LLM nondeterminism** (no code differs between the
+two runs). It is ~10× the fix's isolated effect (0–3 cells), so a fresh paid batch would
+make the fix's directional flips **unattributable** — the noise would mask the signal. This
+is why the deterministic composer replay over a fixed snapshot is strictly more defensible
+for an eligibility-layer change, consistent with the isolation-reliability discipline.
+
+### Why baseline 1284 itself could not host the deterministic replay
+
+Baseline **1284**'s underlying corpus **documents have been pruned** from the DB: its
+`batch_corpus` id-rows survive (333 across 10 companies) but the
+`batch_corpus → documents → document_content` join returns **0/333** (vs 457/457 intact for
+1287). Free URL recovery over 1284 is therefore impossible (measured 0/140 quotes resolved).
+Snapshot 1287 — the **same frozen roster** — is byte-intact and is the correct validation
+snapshot. The raw-verdict snapshots for both batches survive (used in the noise-floor table
+above); only the corpus text for 1284 is gone.
+
+**Status: A3 COMPLETE.** Framework-level provenance fix shipped (`15bbcc0`), enforcement
+enabled (default-ON, kill switches intact), validated at VERDICT_CHANGE=0 / Y→N=0 / N→Y=0
+with zero regressions. **Next: WP05/A4** (behavioral recovery-boundary guard + small-PDF
+subprocess-extraction runtime gap, EX04/EX06).
