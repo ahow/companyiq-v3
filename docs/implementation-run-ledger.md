@@ -229,7 +229,7 @@ accuracy/completeness = **rollback** (hard rule).
 | A3 | 3990bcd | prod (app + worker, both SUCCESS) | 1287 | ELIGIBILITY COMPOSITION GUARDRAIL added as a standalone module (`server/lib/eligibility-decision.ts`) that carries an **immutable, frozen eligibility decision** (entity · issuer/author · source class · as-of/version · scope) through compose → recompute-per-target (I1) → bounded repair (I2); repair can fill missing provenance but **can never override an exclusion**; applies framework parent/subsidiary scope (`entity_only` vs `group_consolidated`); recomputes per target so reused source bytes can't carry stale eligibility. Versioned kill-switches: `ELIGIBILITY_POLICY` (v2 default = compose+enforce logic available / v1 = legacy passthrough) and `ELIGIBILITY_ENFORCE` (unset/off = **shadow**: compose & attach decision, zero verdict mutation / on = downgrade excluded positives to No). **Correctness proven by 20 unit tests (EP01–EP06 + kill-switch/immutability/totality/serialization), 20/20 pass; legacy suites still green (evidence-gate 14/14, evidence-gate-a2 17/17, provenance-gate 15/15, provenance 40/40).** tsc gate: 61 baseline == 61 current, **zero new diagnostics**. Live batch 1287 ran in **shadow mode** (no `ELIGIBILITY_ENFORCE` in prod env ⇒ zero verdict impact by construction): 10/10 first-attempt, all ms=36 (no measure collapse), cost $3.8945/13.52M tok (≈baseline $3.95/13.7M — checks are string/compute-cheap, zero LLM overhead). **Cell-flip vs baseline 1284: Yes 56→64, Net +8, Y→N=10, N→Y=18, Total Flips=28; vs A2 1286: Yes 58→64, Net +6, Y→N=9, N→Y=15, Total Flips=24** (see tables below). These flips are **run-to-run model variance, not A3-caused** — shadow mode mutates no verdict. **No collapse / over-rejection**: the three all-No cos (Martin Marietta/Darden/Amphenol) stay 0/0 where expected; the only loss (Aflac −3 vs baseline) is already present in A2 (6→3 at 1286) and is stable A2→A3 (3→3), i.e. reproducible corpus variance independent of A3. | ✅ keep — now **enforce-ON** via `15bbcc0` (framework-level provenance fix; VERDICT_CHANGE=0, Y→N=0, N→Y=0, zero regressions — see 2026-10-16 section) | kill switches intact: `ELIGIBILITY_ENFORCE=off` (shadow) / `ELIGIBILITY_POLICY=v1` (legacy passthrough); or revert 3990bcd/15bbcc0 |
 | B1 | — | — | — | — | pending | — |
 | A4 | (pending push) | pending deploy | n/a (no batch — verdict-invariant) | WP05/A4 extraction/table/OCR/translation fidelity. Framework-level outcome-classifier resolves the small-PDF runtime gap at ROOT CAUSE (pdf-parse xref rejection ≠ empty doc); recovery-boundary guard preserved by non-interference (B1-1..B1-7 green); subprocess timeout now marks result incomplete (partial stdout never promoted to complete); adaptive per-page OCR (gated on text-layer check, all pages, no 8-page cap); table/translation/boilerplate fidelity asserted. **EX01–EX07 all green (10/10)**, regression suites 12/12 (recovery-boundary B1, equivalence B6, stalled-extraction B3/B2, table-horizon). tsc: 0 new diagnostics in changed files. Verdict-invariant: extraction layer returns `.text` byte-for-byte to all 11 callers; ExtractionFidelity is additive metadata only — scoring untouched. | ✅ keep | revert the A4 commit (processor.ts extraction-layer refactor is self-contained; no schema/env change) |
-| A5 | ca0939c | prod (all 4 svc, push 2026-10-16 09:16 UTC; health `{"status":"ok","version":"3.0.0"}`) | n/a (no batch — default kill-switch `off` ⇒ verdict-invariant) | WP06/A5 retrieval & evidence-pack recall. New pure DB-free/LLM-free module `server/lib/evidence-recall.ts`: framework-level decisive-passage oracle (measure `title`+`evidenceKeywords` only), passage-level recall measurement AT THE ACTUAL PROMPT BUDGET, and a BOUNDED append-only expansion planner that COMPOSES with A3 (injected eligibility predicate ⇒ excluded material never reintroduced), never shrinks top-k/pack length, dedups only when every unique decisive fact+source link stays recoverable, deterministic stable passage id+order. Versioned kill-switch **`RECALL_EXPANSION_POLICY`** (`off` DEFAULT = current prod/byte-identical / `shadow` = telemetry only / `on` = apply expansion); verdict-changing retrieval NEVER default, NOT set in prod env. analyzer.ts wiring strictly gated at the pre-scoring evidence seam — when `off` the block is skipped entirely (no extra work, pack byte-identical). **RT01–RT06 + kill-switch-default + no-op-append: 8/8 pass.** Free/offline GATE2 recall benchmark over the frozen 13-company fixture corpus (real `summarizeDocuments` BM25, no LLM): 377 (company×measure) cells, **micro-recall 74.2%** (3334/4493 decisive passages recalled), macro 74.3%, 1159 misses of which **537 recoverable** by the bounded shadow expansion. tsc: 0 new diagnostics in changed files (62 pre-existing elsewhere). **Total cells changing Y→N = 0, N→Y = 0** (default `off` ⇒ no scoring surface touched). | ✅ keep (default `off`) | `RECALL_EXPANSION_POLICY` unset/`off` restores current behaviour (no redeploy); or revert ca0939c (self-contained: 1 new module + 1 new test + 1 new script + gated analyzer seam; no schema change) |
+| A5 | ca0939c → on: f15f8b6 | prod (all 4 svc, push 2026-10-16 09:16 UTC; GATE5 flip push 2026-10-16 14:56 UTC; health `{"status":"ok","version":"3.0.0"}`) | 1288 (corpus-replay off 1287; snapshot gitSha=f15f8b6 all 10 co ⇒ worker on new code ⇒ policy=on) | WP06/A5 retrieval & evidence-pack recall. New pure DB-free/LLM-free module `server/lib/evidence-recall.ts`: framework-level decisive-passage oracle (measure `title`+`evidenceKeywords` only), passage-level recall measurement AT THE ACTUAL PROMPT BUDGET, and a BOUNDED append-only expansion planner that COMPOSES with A3 (injected eligibility predicate ⇒ excluded material never reintroduced), never shrinks top-k/pack length, dedups only when every unique decisive fact+source link stays recoverable, deterministic stable passage id+order. Versioned kill-switch **`RECALL_EXPANSION_POLICY`** (`off` DEFAULT = current prod/byte-identical / `shadow` = telemetry only / `on` = apply expansion); verdict-changing retrieval NEVER default, NOT set in prod env. analyzer.ts wiring strictly gated at the pre-scoring evidence seam — when `off` the block is skipped entirely (no extra work, pack byte-identical). **RT01–RT06 + kill-switch-default + no-op-append: 8/8 pass.** Free/offline GATE2 recall benchmark over the frozen 13-company fixture corpus (real `summarizeDocuments` BM25, no LLM): 377 (company×measure) cells, **micro-recall 74.2%** (3334/4493 decisive passages recalled), macro 74.3%, 1159 misses of which **537 recoverable** by the bounded shadow expansion. tsc: 0 new diagnostics in changed files (62 pre-existing elsewhere). At the shipped-off default: **Total cells changing Y→N = 0, N→Y = 0** (no scoring surface touched). **GATE5 (2026-10-16, user-approved): default flipped `off`→`on` via code (`f15f8b6`); env still overrides.** Live corpus-replay batch 1288 off 1287's frozen corpus (1284/1285 corpora pruned ⇒ replay off 1287 instead): 10/10, all ms=36, snapshot gitSha=f15f8b6 on all 10 co confirms policy=on, cost $4.23/14.74M tok. **Cell-flip vs 1287 baseline: Yes 64→70, Net +6, Y→N=5, N→Y=11, Total Flips=16** (bounded expansion adds decisive evidence ⇒ more No→Yes than Yes→No; see 2026-10-16 section). | ✅ keep — now default **on** via `f15f8b6` (GATE5 live batch 1288; Y→N=5, N→Y=11, Total Flips=16, Yes 64→70; see 2026-10-16 section) | `RECALL_EXPANSION_POLICY=off` (or `=shadow`) restores prior behaviour with NO redeploy; or revert `f15f8b6` (3-file default+comments+test, no schema change) then ca0939c for the whole feature |
 | B3 | — | — | — | — | pending | — |
 | B4 | — | — | — | — | pending | — |
 | A6 | — | — | — | — | pending | — |
@@ -809,3 +809,89 @@ eligibility-decision-a3 34/34, passage-retrieval 35/35, retrieval-stability 5/5,
 `RECALL_EXPANSION_POLICY=off` skips the analyzer block entirely, so the evidence pack and verdict surface
 are byte-identical to current production. **Total cells changing Y→N = 0, N→Y = 0** (no scoring surface
 touched at the default). Behaviour-changing recall (`on`) is opt-in and NOT enabled in prod.
+
+
+
+### A5 / WP06 — live validation batch: RECALL_EXPANSION_POLICY flipped `off`→`on` (2026-10-16, GATE5)
+
+**Decision.** User-approved GATE5: flip the A5 kill-switch default from `off` to `on` in production and run ONE
+paid live validation batch to measure the real cell-flip impact of the bounded evidence-expansion.
+
+**How the flip was shipped (code default, not env).** The Railway CLI on this VM is unauthenticated and there
+is no token available, and env vars cannot be set on the worker service from here, so — exactly as the A3
+enforce-on precedent (`15bbcc0`) — the default was flipped **in code** and deployed via push→auto-deploy:
+- commit **`f15f8b6`** `feat(WP06/A5): flip RECALL_EXPANSION_POLICY default off->on (GATE5)`.
+- 3 files only: `server/lib/evidence-recall.ts` (constant `DEFAULT_RECALL_EXPANSION_POLICY = "on"` + doc
+  comments), `server/lib/analyzer.ts` (gate-region + import comments updated to the new default; the runtime
+  gate `recallPolicy !== "off" && settings.useBm25Retrieval && evidenceText` is unchanged), and
+  `server/lib/evidence-recall.test.ts` (default-assertion test rewritten to assert default `on` and still
+  prove env `off`/`shadow`/explicit-arg override). Framework-level only — zero per-company/topic strings.
+- `RECALL_EXPANSION_POLICY` env **still overrides** the default (unset ⇒ resolves to `on`; `=off`/`=shadow`
+  restores prior behaviour with no redeploy). Unrecognised values still fail-safe — now to `on`.
+- Validation before push: unit 8/8; adjacent suites green (evidence-gate 14/14, evidence-gate-a2 17/17,
+  eligibility-decision-a3 34/34, passage-retrieval 35/35, retrieval-stability 5/5); `tsc --noEmit` 0 new
+  diagnostics in the changed files. Pushed `8a8a4a6..f15f8b6 main`. All 4 Railway services redeployed;
+  health `{"status":"ok","version":"3.0.0"}`.
+
+**Policy=on confirmed empirically before the full spend (gitSha signal).** Prod has no
+`RECALL_EXPANSION_POLICY` env var, so the resolved policy on the worker == the deployed code default. There
+is no pre-batch SHA signal (Railway unauth; health has no SHA; expansion telemetry is console-log-only). The
+earliest empirical confirmation is the per-company snapshot `analysis_results.results_data[].manifest.gitSha`
+(written by the worker from `RAILWAY_GIT_COMMIT_SHA`). To cap waste under worker concurrency=10, the batch
+was enqueued **canary-first**: company 9 alone was queued; it completed healthy (ms=36) and its scores
+differed from the 1287 baseline (1 verdict flip) — then the remaining 9 were released. On completion, the
+snapshot gitSha = **`f15f8b6`** on **all 10** companies ⇒ the worker ran the new code ⇒ policy resolved to
+`on`.
+
+**Batch method — corpus-replay off 1287 (deviation: 1284 corpus pruned).** The canonical GATE plan was a
+corpus-replay off baseline **1284**'s frozen corpus, but **1284's and 1285's corpora are pruned** (0 of the
+snapshot `document_id`s still exist in `documents`; cf. commit `525ac7b` "baseline-1284 corpus pruned"), so a
+replay off 1284 is impossible. **1287** has a fully intact frozen corpus (457/457 docs present, all 10
+companies) and was itself scored pre-A5-on (gitSha `3990bcd`, A3-shadow ⇒ its pack reflects policy-`off`
+behaviour), making it the correct isolated baseline. The replay re-scores **1287's exact frozen corpus** with
+the current deployed code:
+- replay batch **1288**, score-only, `skipFetch:true`, `sourceBatchId:1287`; the worker loads the frozen
+  corpus from `batch_corpus[1287]` (throws if missing — no live-doc fallback) and forces fresh LLM re-scoring
+  (`freshScoring = !!sourceBatchId`). This isolates the pure A5-on expansion effect from discovery/corpus
+  variance — the same isolation 1284-replay would have given.
+- source corpus fingerprint `7811721a4ba3941af2772b8f44a067fc32c4b44f7b2a8b7a88e93fd9ad364c8b`;
+  run key `run_a180249bb00d51f1c7bbbbb8074b11a21559bb68a05fab7b427a563bfc86ce85`.
+- enqueued storage-direct (mirrors `/api/analyze/replay`) because the admin/session auth paths are not
+  reachable from this VM — precedent `validate-enqueue.ts`.
+- **10/10 completed**, all 10 companies **ms=36** (no measure collapse). Cost **$4.23 / 14.74M tokens**
+  (deepseek-chat, 1,579 calls) vs baseline 1287 $3.89 / 13.52M — the ~+9% token delta is the bounded
+  expansion appending decisive evidence to scoring prompts, as designed.
+
+**Cell-flip impact — variant 1288 (policy=on) vs baseline 1287 (policy=off), 10 companies × 36 measures = 360 cells:**
+
+| Company ID | Company | Yes (baseline 1287) | Yes (variant 1288) | Net | Y→N | N→Y | Total Flips |
+|---|---|---|---|---|---|---|---|
+| 9 | CSX Corporation | 5 | 4 | −1 | 1 | 0 | 1 |
+| 10 | MAGNA INTERNATIONAL INC. | 12 | 15 | +3 | 0 | 3 | 3 |
+| 11 | THE SOUTHERN COMPANY | 3 | 5 | +2 | 0 | 2 | 2 |
+| 12 | S&P GLOBAL INC. | 13 | 14 | +1 | 2 | 3 | 5 |
+| 13 | MARTIN MARIETTA MATERIALS, INC. | 0 | 1 | +1 | 0 | 1 | 1 |
+| 14 | DARDEN RESTAURANTS, INC. | 5 | 4 | −1 | 1 | 0 | 1 |
+| 15 | BCE INC. | 16 | 15 | −1 | 1 | 0 | 1 |
+| 16 | STRYKER CORPORATION | 7 | 8 | +1 | 0 | 1 | 1 |
+| 17 | AMPHENOL CORPORATION | 0 | 0 | +0 | 0 | 0 | 0 |
+| 18 | AFLAC INCORPORATED | 3 | 4 | +1 | 0 | 1 | 1 |
+| **ALL** | **Aggregate (10 companies)** | **64** | **70** | **+6** | **5** | **11** | **16** |
+
+Consistency check (Net == N→Y − Y→N): **PASS** (6 == 11 − 5). Compare artifacts:
+`/home/ubuntu/a5_gate5_replay.{json,md}` (built by `server/scripts/compare_run_flips.ts 1287 1288`).
+
+**Reading.** Policy=on produces **16 changed cells (11 No→Yes, 5 Yes→No), net +6 Yes (64→70)**. The bias
+toward No→Yes (11 vs 5) is the designed signature of the bounded, append-only expansion: it adds
+previously-missed decisive passages to the pack (GATE2 measured 537 recoverable misses), lifting more
+measures over the Yes threshold than it displaces. No measure collapse (all ms=36); no company zeroed that
+was non-zero in a way inconsistent with the baseline (Amphenol stays 0/0 as in every prior run). Because
+fresh re-scoring carries run-to-run LLM variance, some of the 5 Y→N and a share of the N→Y are variance
+rather than pure expansion effect; the net direction and No→Yes skew are the expansion signal.
+
+**Pass bar / outcome.** ✅ Keep policy **on**. 10/10 clean, ms=36 throughout, expansion effect is coherent
+and net-positive for recall with no collapse or mass over-flip.
+
+**Rollback.** `RECALL_EXPANSION_POLICY=off` (or `=shadow`) in the prod env restores prior behaviour with **no
+redeploy**; or revert `f15f8b6` (3-file default+comments+test change, no schema change), and `ca0939c` to
+remove the whole A5 feature.
