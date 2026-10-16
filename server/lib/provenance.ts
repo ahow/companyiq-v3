@@ -181,6 +181,60 @@ function pathOf(url: string): string {
   }
 }
 
+// ─── Search-engine redirect unwrapping (2026-10) ─────────────────────────────
+//
+// Discovery / grounding sometimes surfaces an issuer document behind a
+// search-engine redirect mask rather than the document's own URL, e.g.
+//   https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Freport.pdf
+//   https://www.google.com/goto?url=<encoded target>&gsessionid=...
+//   https://www.bing.com/ck/a?...&u=a1aHR0cHM...   (base64url, "a1" version tag)
+// Classifying the mask host (google.com / bing.com) instead of the true target
+// systematically tags the issuer's own disclosure third_party. We unwrap the
+// mask to the real target URL BEFORE host classification.
+//
+// Only masks whose target is a plainly-decodable absolute http(s) URL are
+// unwrapped. Some Google redirect tokens (the `/goto?url=CAES…` protobuf form)
+// carry an OPAQUE/ENCRYPTED target that cannot be resolved client-side; those
+// are left unchanged (honest no-op) and fall through to normal classification.
+const REDIRECT_MASK_HOSTS: RegExp = /^(?:www\.)?(?:google\.[a-z.]+|bing\.com|duckduckgo\.com)$/i;
+const REDIRECT_TARGET_PARAMS = ["url", "q", "u", "continue", "uddg", "target"];
+
+function decodeMaybeBase64UrlTarget(v: string): string | null {
+  // Bing /ck/a wraps the target as base64url, usually with a leading "a1"
+  // version tag. Decode defensively; return a URL only if one actually falls out.
+  const candidate = v.replace(/^a1/, "");
+  try {
+    const b64 = candidate.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const decoded = Buffer.from(padded, "base64").toString("utf8");
+    if (/^https?:\/\/\S+$/i.test(decoded)) return decoded;
+  } catch {
+    /* not base64 */
+  }
+  return null;
+}
+
+export function unwrapRedirectUrl(url: string, depth = 0): string {
+  if (depth >= 3) return url;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (!REDIRECT_MASK_HOSTS.test(parsed.hostname.toLowerCase())) return url;
+  for (const p of REDIRECT_TARGET_PARAMS) {
+    const raw = parsed.searchParams.get(p); // URLSearchParams already %-decodes
+    if (!raw) continue;
+    let target: string | null = /^https?:\/\//i.test(raw) ? raw : null;
+    if (!target) target = decodeMaybeBase64UrlTarget(raw);
+    if (target) return unwrapRedirectUrl(target, depth + 1); // target may itself be a mask
+    // param present but not a client-side-resolvable URL (e.g. Google's
+    // encrypted protobuf token) — cannot unwrap; leave the URL unchanged.
+  }
+  return url;
+}
+
 function matchRegulatorHost(url: string): string | null {
   const host = hostOf(url);
   if (!host) return null;
@@ -470,6 +524,14 @@ function documentReferencesIssuer(
  * company by name without being authored by them.
  */
 export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
+  // Unwrap any search-engine redirect mask to the true target URL before host
+  // classification (2026-10). No-op when the URL is not a mask or its target is
+  // not client-side resolvable (e.g. Google's encrypted protobuf redirect token).
+  const unwrappedUrl = unwrapRedirectUrl(input.url);
+  if (unwrappedUrl !== input.url) {
+    input = { ...input, url: unwrappedUrl };
+  }
+
   const host = hostOf(input.url);
 
   // Rule 1: hostname match on primary or related domain.
@@ -627,11 +689,24 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
         identitySignal: pathIdentity.signal,
       };
     }
+    // IR-platform tenant explicitly declared in the issuer's related_domains.
+    // Precise, per-issuer, data-driven binding (see helper) — closes the recall
+    // gap for issuers whose name yields no distinctive identity tokens.
+    const declaredTenant = irTenantDeclaredInRelatedDomains(input, irPlatform);
+    if (declaredTenant.matched) {
+      return {
+        provenance: "issuer",
+        reason: `IR-platform (${irPlatform.label}) + tenant ${declaredTenant.tenant} declared in issuer related_domains`,
+        regulatorHost: null,
+        irPlatformHost: irPlatform.label,
+        identitySignal: "tenant-match",
+      };
+    }
     // IR-platform but no issuer identity confirmed. Fall through to
     // third_party — could be a competitor's filing surfaced by mistake.
     return {
       provenance: "third_party",
-      reason: `IR-platform (${irPlatform.label}) but no title/URL/content/CIK/tenant-cache match for issuer`,
+      reason: `IR-platform (${irPlatform.label}) but no title/URL/content/CIK/tenant-cache/declared-tenant match for issuer`,
       regulatorHost: null,
       irPlatformHost: irPlatform.label,
       identitySignal: "none",
@@ -747,6 +822,42 @@ function irPlatformPathIdentityMatch(
   // that dropped legitimate first-party Q4 URLs (Newmont's Sustainability
   // Report). See `Q4_CDN_HOSTS` for the fix.
   return { matched: false, reason: `${extracted.kind} identifier present but no company-side value to compare`, signal: "none" };
+}
+
+// IR-platform tenant explicitly declared in the issuer's related_domains
+// (2026-10). Issuers that distribute their own filings through a shared IR CDN
+// (Q4 Inc, MZiQ, PrecisionIR) can DECLARE the specific tenant they own by adding
+// a `<cdn-host>/<tenant-id>` entry to related_domains — e.g. S&P Global declares
+// `s29.q4cdn.com/690959130`. This is a precise, per-issuer, data-driven binding
+// (NOT a blanket acceptance of the CDN host): it fires only when the URL's
+// extracted tenant identifier EXACTLY equals a declared tenant on the SAME
+// platform. It closes the recall gap for issuers whose corporate name yields no
+// distinctive identity tokens (e.g. "S&P Global Inc." → no usable tokens), so
+// neither the three-tier text check nor the alias check can self-confirm a Q4
+// URL even though the tenant is unambiguously the issuer's own.
+function irTenantDeclaredInRelatedDomains(
+  input: ProvenanceInput,
+  irPlatform: { spec: IrPlatformSpec; label: string },
+): { matched: boolean; tenant: string | null } {
+  const extracted = irPlatform.spec.extractIdentifier(input.url);
+  if (!extracted) return { matched: false, tenant: null };
+  const related = (input.relatedDomains || [])
+    .map(d => (d || "").trim().toLowerCase())
+    .filter(Boolean);
+  for (const rd of related) {
+    const noScheme = rd.replace(/^https?:\/\//, "").replace(/^www\./, "");
+    const slash = noScheme.indexOf("/");
+    if (slash < 0) continue; // a bare host declares no tenant
+    const rdHost = noScheme.slice(0, slash);
+    if (!irPlatform.spec.hostRegex.test(rdHost)) continue; // declaration must be on the same platform
+    // Reuse the platform's OWN extractor on both sides so the match is exactly
+    // as precise as the platform's identifier scheme.
+    const rdExtract = irPlatform.spec.extractIdentifier("https://" + noScheme);
+    if (rdExtract && rdExtract.kind === extracted.kind && rdExtract.value === extracted.value) {
+      return { matched: true, tenant: extracted.value };
+    }
+  }
+  return { matched: false, tenant: null };
 }
 
 // R5c: shared helpers for the tenant propagation cache. Exported so the

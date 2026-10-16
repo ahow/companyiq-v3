@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyProvenance } from "./provenance.js";
+import { classifyProvenance, unwrapRedirectUrl } from "./provenance.js";
 
 const NEWMONT = {
   companyName: "Newmont Corporation",
@@ -685,4 +685,103 @@ test("R3.2 is a clean no-op when PROVENANCE_ROBUSTNESS=false", () => {
     if (prev === undefined) delete process.env.PROVENANCE_ROBUSTNESS;
     else process.env.PROVENANCE_ROBUSTNESS = prev;
   }
+});
+
+// ─── Search-engine redirect unwrapping (2026-10) ────────────────────────────
+// Fixture: an issuer with no distinctive name tokens that distributes its own
+// filings through a Q4 Inc IR CDN tenant, declared in related_domains.
+const SPGLOBAL = {
+  companyName: "S&P Global Inc.",
+  companyDomain: "spglobal.com",
+  relatedDomains: [
+    "investor.spglobal.com",
+    "press.spglobal.com",
+    "s29.q4cdn.com/690959130",
+  ],
+  companyTicker: "SPGI",
+  companyAliases: ["s&p global"],
+};
+
+test("unwrapRedirectUrl: google /url?q= → real target host", () => {
+  const masked =
+    "https://www.google.com/url?q=https%3A%2F%2Fs29.q4cdn.com%2F690959130%2Ffiles%2Freport.pdf&sa=D";
+  const out = unwrapRedirectUrl(masked);
+  assert.equal(new URL(out).hostname, "s29.q4cdn.com");
+});
+
+test("unwrapRedirectUrl: bing /ck/a base64url u= → real target host", () => {
+  const masked =
+    "https://www.bing.com/ck/a?!&&p=abc&u=a1aHR0cHM6Ly9zMjkucTRjZG4uY29tLzY5MDk1OTEzMC9maWxlcy9kb2NfZmluYW5jaWFscy8yMDI1L2FyL3JlcG9ydC5wZGY&ntb=1";
+  const out = unwrapRedirectUrl(masked);
+  assert.equal(new URL(out).hostname, "s29.q4cdn.com");
+});
+
+test("unwrapRedirectUrl: encrypted google /goto protobuf token is left UNCHANGED (honest no-op)", () => {
+  // Google's `/goto?url=CAES...` carries an opaque/encrypted protobuf target
+  // that cannot be resolved client-side; we must not fabricate a target.
+  const masked =
+    "https://www.google.com/goto?url=CAESEHt9_opaque-binary-token-not-a-url&gsessionid=x";
+  const out = unwrapRedirectUrl(masked);
+  assert.equal(out, masked);
+});
+
+test("unwrapRedirectUrl: a non-mask URL is returned unchanged", () => {
+  const u = "https://s29.q4cdn.com/690959130/files/report.pdf";
+  assert.equal(unwrapRedirectUrl(u), u);
+});
+
+test("classifyProvenance: google-masked issuer doc unwraps then classifies as issuer via declared tenant", () => {
+  // Neutral title (no company name/alias) so the match is forced down the
+  // declared-tenant path rather than resolving earlier via title identity.
+  const r = classifyProvenance({
+    url: "https://www.google.com/url?q=https%3A%2F%2Fs29.q4cdn.com%2F690959130%2Ffiles%2Freport.pdf&sa=D",
+    title: "2025 Proxy Statement",
+    ...SPGLOBAL,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /declared in issuer related_domains/);
+});
+
+// ─── Data-driven IR-CDN tenant declaration (2026-10) ─────────────────────────
+test("IR-CDN tenant declared in related_domains → issuer (not a blanket whitelist)", () => {
+  // Neutral title so the classifier cannot self-confirm via title identity and
+  // must rely on the declared-tenant binding.
+  const r = classifyProvenance({
+    url: "https://s29.q4cdn.com/690959130/files/doc_financials/2025/ar/annual-report.pdf",
+    title: "2025 Annual Report",
+    ...SPGLOBAL,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /tenant 690959130 declared/);
+});
+
+test("IR-CDN with a DIFFERENT tenant than declared → third_party (precise, not host-wide)", () => {
+  const r = classifyProvenance({
+    url: "https://s29.q4cdn.com/111111111/files/some-other-issuer-report.pdf",
+    title: "Some other issuer report",
+    ...SPGLOBAL,
+  });
+  assert.equal(r.provenance, "third_party");
+});
+
+test("IR-CDN tenant NOT declared (bare host only in related_domains) → third_party", () => {
+  const r = classifyProvenance({
+    url: "https://s29.q4cdn.com/690959130/files/report.pdf",
+    title: "A report",
+    companyName: "S&P Global Inc.",
+    companyDomain: "spglobal.com",
+    relatedDomains: ["investor.spglobal.com"], // no tenant declaration
+    companyTicker: "SPGI",
+    companyAliases: ["s&p global"],
+  });
+  assert.equal(r.provenance, "third_party");
+});
+
+test("genuine third_party (reuters) stays third_party even with tenant declaration present", () => {
+  const r = classifyProvenance({
+    url: "https://www.reuters.com/markets/sp-global-raises-guidance-2025-05-01/",
+    title: "S&P Global raises guidance",
+    ...SPGLOBAL,
+  });
+  assert.equal(r.provenance, "third_party");
 });

@@ -2838,7 +2838,13 @@ export async function analyzeCompanyMeasures(opts: {
         result.eligibilityDecisions = cell.decisions as EligibilityDecision[];
         result.eligibilityCellStatus = cell.status;
 
-        const enforce = (process.env.ELIGIBILITY_ENFORCE || "").trim().toLowerCase() === "on";
+        // Enforcement is DEFAULT-ON (2026-10). Unset/empty enforces; an explicit
+        // ELIGIBILITY_ENFORCE=off is the kill switch that restores shadow mode.
+        // (The ELIGIBILITY_POLICY=v1 kill switch inside composeEligibilityDecision
+        // remains independent: v1 passes every source through as eligible, so even
+        // with enforce ON there are no downgrades under v1.)
+        const rawEnforce = (process.env.ELIGIBILITY_ENFORCE || "").trim().toLowerCase();
+        const enforce = rawEnforce === "" ? true : rawEnforce === "on";
 
         if (!enforce) {
           // SHADOW: no output mutation. Log only when there is observable churn —
