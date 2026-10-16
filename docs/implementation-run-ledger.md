@@ -228,7 +228,7 @@ accuracy/completeness = **rollback** (hard rule).
 | A2 | 7702606 | prod (all 4 svc) | 1286 | EVIDENCE-GATE HARDENED, versioned (v2 default; v1 via `EVIDENCE_GATE_POLICY=v1`). Fixes E6 #1/#2/#3: NFKC Unicode-aware normalisation (preserves digits/−/%/decimals/non-Latin; removed ASCII-only strip), removed fuzzy `lcs≥120` escape hatch + honest-ellipsis span validation, explicit source-attribution failure instead of silent pack-wide fallback, anti-echo override for authoritative provenance. **Correctness proven by 17 unit tests (QI01–QI09 + idempotence/non-mutation/fail-open), legacy gate+provenance tests still green under v1.** Live batch 1286: 10/10 first-attempt, 38m24s, all ms=36 (no measure collapse), docs gate 403 accept/29 reject (6.7%), cost $3.9531/13.72M tok (≈baseline — pure string gate, zero LLM overhead). Aggregate 58 yes vs baseline 56/A1 55 (within run-to-run band). **Cell-flip vs baseline 1284: Y→N=9, N→Y=11, Total Flips=20** (net +2 Yes conceals 20 changed cells; vs A1 1285: Y→N=7, N→Y=10, Total Flips=17 — see Comparison methodology + table below). **No over-rejection**: three 0/0 cos (MartinMarietta/Darden/Amphenol) are baseline-stable (0/0 in 1284 & 1285 too — see L281), NOT caused by A2. | ✅ keep (v2 on) | revert to v1 via env flag (no redeploy) or revert 7702606 |
 | A3 | 3990bcd | prod (app + worker, both SUCCESS) | 1287 | ELIGIBILITY COMPOSITION GUARDRAIL added as a standalone module (`server/lib/eligibility-decision.ts`) that carries an **immutable, frozen eligibility decision** (entity · issuer/author · source class · as-of/version · scope) through compose → recompute-per-target (I1) → bounded repair (I2); repair can fill missing provenance but **can never override an exclusion**; applies framework parent/subsidiary scope (`entity_only` vs `group_consolidated`); recomputes per target so reused source bytes can't carry stale eligibility. Versioned kill-switches: `ELIGIBILITY_POLICY` (v2 default = compose+enforce logic available / v1 = legacy passthrough) and `ELIGIBILITY_ENFORCE` (unset/off = **shadow**: compose & attach decision, zero verdict mutation / on = downgrade excluded positives to No). **Correctness proven by 20 unit tests (EP01–EP06 + kill-switch/immutability/totality/serialization), 20/20 pass; legacy suites still green (evidence-gate 14/14, evidence-gate-a2 17/17, provenance-gate 15/15, provenance 40/40).** tsc gate: 61 baseline == 61 current, **zero new diagnostics**. Live batch 1287 ran in **shadow mode** (no `ELIGIBILITY_ENFORCE` in prod env ⇒ zero verdict impact by construction): 10/10 first-attempt, all ms=36 (no measure collapse), cost $3.8945/13.52M tok (≈baseline $3.95/13.7M — checks are string/compute-cheap, zero LLM overhead). **Cell-flip vs baseline 1284: Yes 56→64, Net +8, Y→N=10, N→Y=18, Total Flips=28; vs A2 1286: Yes 58→64, Net +6, Y→N=9, N→Y=15, Total Flips=24** (see tables below). These flips are **run-to-run model variance, not A3-caused** — shadow mode mutates no verdict. **No collapse / over-rejection**: the three all-No cos (Martin Marietta/Darden/Amphenol) stay 0/0 where expected; the only loss (Aflac −3 vs baseline) is already present in A2 (6→3 at 1286) and is stable A2→A3 (3→3), i.e. reproducible corpus variance independent of A3. | ✅ keep — now **enforce-ON** via `15bbcc0` (framework-level provenance fix; VERDICT_CHANGE=0, Y→N=0, N→Y=0, zero regressions — see 2026-10-16 section) | kill switches intact: `ELIGIBILITY_ENFORCE=off` (shadow) / `ELIGIBILITY_POLICY=v1` (legacy passthrough); or revert 3990bcd/15bbcc0 |
 | B1 | — | — | — | — | pending | — |
-| A4 | — | — | — | WP05/A4 behavioral recovery-boundary guard + small-PDF subprocess-extraction runtime gap (EX04/EX06) | in progress | — |
+| A4 | (pending push) | pending deploy | n/a (no batch — verdict-invariant) | WP05/A4 extraction/table/OCR/translation fidelity. Framework-level outcome-classifier resolves the small-PDF runtime gap at ROOT CAUSE (pdf-parse xref rejection ≠ empty doc); recovery-boundary guard preserved by non-interference (B1-1..B1-7 green); subprocess timeout now marks result incomplete (partial stdout never promoted to complete); adaptive per-page OCR (gated on text-layer check, all pages, no 8-page cap); table/translation/boilerplate fidelity asserted. **EX01–EX07 all green (10/10)**, regression suites 12/12 (recovery-boundary B1, equivalence B6, stalled-extraction B3/B2, table-horizon). tsc: 0 new diagnostics in changed files. Verdict-invariant: extraction layer returns `.text` byte-for-byte to all 11 callers; ExtractionFidelity is additive metadata only — scoring untouched. | ✅ keep | revert the A4 commit (processor.ts extraction-layer refactor is self-contained; no schema/env change) |
 | A5 | — | — | — | — | pending | — |
 | B3 | — | — | — | — | pending | — |
 | B4 | — | — | — | — | pending | — |
@@ -606,3 +606,88 @@ above); only the corpus text for 1284 is gone.
 enabled (default-ON, kill switches intact), validated at VERDICT_CHANGE=0 / Y→N=0 / N→Y=0
 with zero regressions. **Next: WP05/A4** (behavioral recovery-boundary guard + small-PDF
 subprocess-extraction runtime gap, EX04/EX06).
+
+
+
+---
+
+### A4 / WP05 — ESTABLISHED (2026-10-16): extraction / table / OCR / translation fidelity
+
+**Scope.** Framework-level only — ZERO per-company/per-topic logic or data patches. All change confined
+to the extraction layer in `server/lib/processor.ts` plus a new test file
+`server/lib/extraction-fidelity.test.ts`. No schema change, no env-var change, no scoring/analyzer
+touched. Verdict-invariant by construction.
+
+**Files changed**
+- `server/lib/processor.ts` — extraction-engine layer reworked (details below).
+- `server/lib/extraction-fidelity.test.ts` — new, EX01–EX07 + boilerplate-safety (10 tests).
+- `docs/implementation-run-ledger.md` — this section + A4 row.
+
+**Small-PDF runtime gap — ROOT CAUSE and framework fix.**
+Empirically confirmed: `pdf-parse@1.1.4` bundles an old pdfjs whose xref reader REJECTS minimal
+hand-built xref tables ("bad XRef entry") — even after the worker's retry-once. A 767-byte fixture
+fails pdf-parse yet `pdftotext` recovers its full text. The earlier REJECTED approach was a
+size-special-case bound. The shipped fix is NOT size-based: a pure, exported outcome-classifier
+`classifyExtractionCompleteness({textLen,minChars,timedOut,failed,pagesAvailable?,pagesProcessed?})`
+keyed on the *outcome* (parser rejected structure vs. document genuinely empty vs. timed-out partial),
+not on byte size. "Parser rejected" → `unknown` (retry/review, never a false `empty`); clean run with
+no text → `empty`; timed-out with partial text → `partial`, never promoted to `complete`. The
+orchestrator `extractPdfWithFidelity` chains pdf-parse → pdftotext → adaptive OCR and feeds the
+classifier, so a small PDF rejected by pdf-parse is recovered by pdftotext and labelled `complete`.
+
+**Recovery-boundary guard — preserved by non-interference.**
+The behavioural guard lives in `pipeline.ts` (`runCompanyPdfRecovery`, `remainingFetchBudgetMs`,
+`RECOVERY_WINDOW_FLOOR_MS`) and is proven by `company-pdf-recovery-boundary.test.ts` (B1-1..B1-7).
+`pipeline.ts` was NOT touched. Confirmed green: **B1-1..B1-7 all pass** post-change.
+
+**Subprocess timeout fidelity (EX06).**
+Previously `extractViaPdftotext` silently returned partial stdout on timeout (accepted as success).
+Now `extractViaPdftotextDetailed` returns `{text, timedOut:true, failed:true}` on timeout; the
+classifier never promotes timed-out partial stdout to `complete`. `runProcessCollect` still captures
+partial stdout and flags `timedOut` (verified) — the fix is in how the outcome is *classified*, not in
+discarding the bytes.
+
+**Adaptive OCR (EX02, Lane-B speed gated on Lane-A fidelity).**
+`extractViaOcrDetailed` is per-page: tries the `pdftotext -f p -l p` text layer first and skips OCR for
+any page already carrying ≥20 chars (text pages preserved verbatim), else rasterises just that page
+(`pdftoppm`) and OCRs it (`tesseract`). No 8-page cap — all pages processed, budget-bounded; flags
+`partial` when budget/scope cuts it short (`pagesProcessed < pagesAvailable`). Strictly ⊇ old content.
+
+**Table / translation / boilerplate fidelity (f).**
+Asserted against existing framework helpers (not rewritten): `normaliseTableHorizonMarkers` annotates
+bullet-only horizon rows with their column relationship; `translation.ts` keeps the aligned derivative
+(`looksNonEnglish` detects foreign text; translation never replaces the original source carrying
+numbers/negation/scope); `stripRepeatedStructuralBlocks` dedupes repeated headers but NEVER strips a
+repeated line containing a quantified figure (policy/decisive note preserved).
+
+**Test results (EX01–EX07 + safety) — all green, 10/10**
+| Test | Result | Proves |
+|------|--------|--------|
+| EX01 | ok | decisive evidence on a later page survives (no truncation) |
+| EX02 | ok | mixed doc: text page verbatim AND scanned page recovered by adaptive OCR |
+| EX03 | ok | table units/headers preserved; horizon row→column relationship annotated |
+| EX04 (small) | ok | pathological pdf-parse-rejected xref recovered via pdftotext, labelled `complete` (no false empty) |
+| EX04 (large) | ok | benign 40-page PDF fully extracted, first AND last page markers present (no silent truncation) |
+| EX05 | ok | translation is an aligned derivative; detector flags foreign text, original source preserved |
+| EX06 (capture) | ok | `runProcessCollect` captures partial stdout on timeout and flags `timedOut` |
+| EX06 (rule) | ok | completeness rule NEVER promotes timed-out partial stdout to `complete` |
+| EX07 | ok | downstream passage recall = 10/10 = 100% across ordinary/multipage/table/OCR/non-Latin |
+| A4 safety | ok | boilerplate dedupe removes repeated headers but KEEPS a repeated policy line with a figure |
+
+**Regression suites — 12/12 green:** `company-pdf-recovery-boundary` (B1-1..B1-7, guard preserved),
+`pdf-parse-subprocess-equivalence` (B6 byte-identical + B3/B2 slot handling), `stalled-extraction-boundary`,
+`table-horizon-normaliser`.
+
+**Typecheck:** `tsc --noEmit` — 0 new diagnostics in `processor.ts` / `translation.ts` /
+`extraction-fidelity.test.ts` (repo has unrelated pre-existing errors in other files).
+
+**Cell-flip impact:** n/a — no live batch run. The change is verdict-invariant by construction:
+`extractTextFromPdf` is a thin wrapper returning `ExtractionFidelity.text` byte-for-byte to all 11
+existing callers; the fidelity record is additive metadata consumed by nothing in the scoring path.
+**Total cells changing Y→N = 0, N→Y = 0** (no scoring surface touched).
+
+**Boundary noted (not a gap):** the `ExtractionFidelity` record (completeness/pages/engine/language/
+truncation) is produced and available but not yet threaded into `storage.recordFetchSuccess` /
+`extraction_state` — intentionally out of scope for this surgical, verdict-invariant change. The
+`extraction_state` column already supports `partial`; wiring the completeness label through is a
+follow-up and would remain verdict-invariant.

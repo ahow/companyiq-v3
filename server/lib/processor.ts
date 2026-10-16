@@ -4,6 +4,7 @@ import * as cheerio from "cheerio";
 // batch-1277 (B6): pdf-parse is no longer imported in-process here — Path 1 now
 // runs it in pdf-parse-worker.cjs through the killable runProcessCollect boundary.
 import { normaliseTableHorizonMarkers } from "./table-horizon-normaliser";
+import { looksNonEnglish } from "./translation.js";
 import crypto from "crypto";
 import puppeteer from "puppeteer-core";
 import { spawn } from "child_process";
@@ -798,7 +799,21 @@ export async function runProcessCollect(
  * guards (runProcessCollect surfaces abort via the empty-stdout + aborted-scope
  * combination, and extractTextFromPdf re-checks scope.aborted()).
  */
-export async function extractViaPdfParseSubprocess(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
+/**
+ * WP05/A4 — per-engine extraction outcome. `failed` means the engine REJECTED the
+ * document structure or errored (non-zero exit / parse error) — distinct from a
+ * clean run that found no text. `timedOut` means the subprocess was SIGKILLed on
+ * its deadline: whatever text came back is PARTIAL and must NOT be promoted to a
+ * "complete" extraction (EX06). Callers that only want the text use the thin
+ * string wrappers below; the orchestrator uses the detailed shape to classify.
+ */
+export interface EngineOutcome {
+  text: string;
+  timedOut: boolean;
+  failed: boolean;
+}
+
+export async function extractViaPdfParseSubprocessDetailed(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<EngineOutcome> {
   // Bound the worker by the operation's remaining budget (same ceiling the old
   // in-process parse lacked). 60s matches the pdftotext ceiling.
   const timeoutMs = budgetMs != null ? Math.max(1, Math.min(60_000, Math.floor(budgetMs))) : 60_000;
@@ -810,17 +825,27 @@ export async function extractViaPdfParseSubprocess(buffer: Buffer, budgetMs?: nu
   );
   if (res.timedOut) {
     console.log(`[Processor] pdf-parse subprocess timed out (${timeoutMs}ms) — falling through`);
-    return "";
+    // Partial stdout captured before the SIGKILL is returned but flagged timedOut:
+    // the orchestrator must never treat it as complete.
+    return { text: res.stdout.toString("utf8"), timedOut: true, failed: true };
   }
   if (res.code !== 0) {
     // Worker signalled a parse error (exit 1) or was SIGKILLed (code null). If the
     // scope aborted, extractTextFromPdf's abortIfExpired re-throws; otherwise this
-    // is a genuine parse failure and we fall through to pdftotext.
+    // is a genuine parser rejection and we fall through to pdftotext. `failed:true`
+    // means we CANNOT later assert the document is empty — a minimal/pathological
+    // xref (which pdf-parse's bundled pdfjs rejects) is a rejection, not an "empty".
     if (res.error) console.log(`[Processor] pdf-parse subprocess exit ${res.code}: ${res.error.slice(0, 160)}`);
-    return "";
+    return { text: "", timedOut: false, failed: true };
   }
   // RAW text only — normalisation is applied by the caller (parity with in-process).
-  return res.stdout.toString("utf8");
+  return { text: res.stdout.toString("utf8"), timedOut: false, failed: false };
+}
+
+/** Back-compat thin wrapper (string). Returns "" on timeout/failure as before. */
+export async function extractViaPdfParseSubprocess(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
+  const r = await extractViaPdfParseSubprocessDetailed(buffer, budgetMs, scope);
+  return r.timedOut || r.failed ? "" : r.text;
 }
 
 /**
@@ -828,7 +853,7 @@ export async function extractViaPdfParseSubprocess(buffer: Buffer, budgetMs?: nu
  * plain text to stdout. Handles many PDFs that pdf-parse mishandles (compressed
  * object streams, unusual encodings). Returns "" on any failure.
  */
-async function extractViaPdftotext(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
+async function extractViaPdftotextDetailed(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<EngineOutcome> {
   try {
     // batch-1277: cap the subprocess timeout by the operation's remaining budget
     // so an expired operation does not keep a pdftotext child alive past deadline.
@@ -843,19 +868,29 @@ async function extractViaPdftotext(buffer: Buffer, budgetMs?: number, scope?: Op
     );
     const text = res.stdout.toString("utf8");
     if (res.timedOut) {
-      console.log(`[Processor] pdftotext fallback timed out after 60s (${text.length} chars captured)`);
-    } else if (res.error) {
-      console.log(`[Processor] pdftotext fallback stderr: ${res.error}`);
+      // WP05/A4 (EX06): a SIGKILLed pdftotext leaves PARTIAL stdout. Return it so it
+      // is not thrown away, but flag timedOut so the orchestrator refuses to treat
+      // this partial capture as a complete extraction.
+      console.log(`[Processor] pdftotext fallback timed out after ${timeoutMs}ms (${text.length} chars captured — PARTIAL)`);
+      return { text, timedOut: true, failed: true };
     }
-    return text;
+    if (res.error) console.log(`[Processor] pdftotext fallback stderr: ${res.error}`);
+    // code!=0 without a timeout is a genuine parser rejection.
+    const failed = res.code !== 0;
+    return { text, timedOut: false, failed };
   } catch (e: any) {
     // Cancellation (deadline elapsed / attempt revoked while queued for a proc
     // slot) must NOT be swallowed into an empty-result fallback — re-throw so the
     // caller records a retryable abort rather than a false "no text extracted".
     if (isOperationAbortedError(e)) throw e;
     console.log(`[Processor] pdftotext fallback threw: ${e?.message}`);
-    return "";
+    return { text: "", timedOut: false, failed: true };
   }
+}
+
+/** Back-compat thin wrapper (string). */
+async function extractViaPdftotext(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
+  return (await extractViaPdftotextDetailed(buffer, budgetMs, scope)).text;
 }
 
 /**
@@ -865,72 +900,137 @@ async function extractViaPdftotext(buffer: Buffer, budgetMs?: number, scope?: Op
  * OCR budget so a pathological document cannot stall the pipeline. Always cleans
  * up temp files. Returns whatever text was recognised (may be short).
  */
-async function extractViaOcr(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
+/** OCR outcome carries page-coverage so the orchestrator can tell a fully-OCR'd
+ *  document (every page processed) from a budget-truncated one (pages remaining). */
+export interface OcrOutcome extends EngineOutcome {
+  pagesAvailable: number | null;
+  pagesProcessed: number;
+}
+
+/** Read the PDF's page count via pdfinfo. Returns null when it cannot be determined
+ *  (so the caller treats page coverage as unknown rather than inventing a number). */
+async function getPdfPageCount(tmpPdf: string, timeoutMs: number, scope?: OperationScope): Promise<number | null> {
+  try {
+    const info = await runProcessCollect("pdfinfo", [tmpPdf], { input: undefined, timeoutMs, maxBuffer: 256 * 1024 }, scope);
+    if (info.timedOut || info.code !== 0) return null;
+    const m = info.stdout.toString("utf8").match(/^Pages:\s+(\d+)/m);
+    return m ? parseInt(m[1], 10) : null;
+  } catch (e: any) {
+    if (isOperationAbortedError(e)) throw e;
+    return null;
+  }
+}
+
+// A page whose embedded text layer yields at least this many chars is taken as a
+// real text page — OCR is SKIPPED for it (adaptive: OCR only the pages that need
+// it). Generic, size/topic-independent.
+const OCR_PAGE_TEXT_LAYER_MIN_CHARS = 20;
+
+/**
+ * Fallback 2 (WP05/A4): ADAPTIVE OCR. For each page, first try its embedded text
+ * layer (pdftotext -f p -l p); only pages WITHOUT a usable text layer are
+ * rasterised and OCR'd. This provably loses no content — text pages are carried
+ * through verbatim and image pages are recovered via tesseract — and it processes
+ * EVERY page (no blanket first-8 cap that silently dropped later pages). Work is
+ * bounded by the operation budget and scope: if the budget is exhausted with pages
+ * still unprocessed, the result is flagged incomplete (pagesProcessed < pagesAvailable)
+ * rather than silently truncated. Always cleans up temp files.
+ */
+async function extractViaOcrDetailed(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<OcrOutcome> {
   const tmpDir = os.tmpdir();
   const token = crypto.randomBytes(8).toString("hex");
   const tmpPdf = path.join(tmpDir, `ciq_ocr_${token}.pdf`);
-  const tmpBase = path.join(tmpDir, `ciq_ocr_${token}`);
   const createdFiles: string[] = [tmpPdf];
   // batch-1277: bound the overall OCR budget (and each child timeout below) by the
   // operation's remaining budget so an expired operation cannot keep rasterising.
   const OCR_TOTAL_BUDGET_MS = budgetMs != null ? Math.max(1, Math.min(120_000, Math.floor(budgetMs))) : 120_000;
   const started = Date.now();
-  // batch-1277 (B3): stop the OCR page loop immediately on scope abort, and thread
+  const remainingBudget = () => OCR_TOTAL_BUDGET_MS - (Date.now() - started);
+  // batch-1277 (B3): stop the page loop immediately on scope abort, and thread
   // scope into every child spawn so pdftoppm/tesseract are SIGKILLed on abort.
   const abortedReason = () => scope?.aborted();
+  let timedOut = false;
+  let pagesProcessed = 0;
+  let pagesAvailable: number | null = null;
   try {
     await fsp.writeFile(tmpPdf, buffer);
-
-    // Rasterise first 8 pages to JPEG at 150dpi → <tmpBase>-1.jpg, -2.jpg, ...
-    const ppm = await runProcessCollect(
-      "pdftoppm",
-      ["-jpeg", "-r", "150", "-l", "8", tmpPdf, tmpBase],
-      { input: undefined, timeoutMs: Math.max(1, Math.min(60_000, OCR_TOTAL_BUDGET_MS)), maxBuffer: 1024 },
-      scope,
-    );
-    if (ppm.timedOut) {
-      console.log(`[Processor] OCR: pdftoppm timed out — aborting OCR`);
-    }
-
-    // Collect generated page images.
-    const entries = await fsp.readdir(tmpDir).catch(() => [] as string[]);
-    const baseName = path.basename(tmpBase);
-    const pageImages = entries
-      .filter((f) => f.startsWith(baseName) && f.toLowerCase().endsWith(".jpg"))
-      .sort()
-      .map((f) => path.join(tmpDir, f));
-    for (const img of pageImages) createdFiles.push(img);
-
-    if (pageImages.length === 0) {
-      console.log(`[Processor] OCR: no page images produced by pdftoppm`);
-      return "";
-    }
+    pagesAvailable = await getPdfPageCount(tmpPdf, Math.max(1, Math.min(15_000, OCR_TOTAL_BUDGET_MS)), scope);
+    // When the page count is unknown, fall back to a bounded scan up to a generous
+    // ceiling, stopping at the first page that yields no image (end of document).
+    const pageCap = pagesAvailable ?? 2000;
 
     const parts: string[] = [];
-    for (const img of pageImages) {
+    for (let p = 1; p <= pageCap; p++) {
       if (abortedReason()) {
-        console.log(`[Processor] OCR: operation aborted — stopping at ${parts.length} page(s)`);
+        console.log(`[Processor] OCR: operation aborted — stopping at ${pagesProcessed} page(s)`);
+        timedOut = true;
         break;
       }
-      if (Date.now() - started > OCR_TOTAL_BUDGET_MS) {
-        console.log(`[Processor] OCR: overall 120s budget exceeded — stopping at ${parts.length} page(s)`);
+      if (remainingBudget() <= 0) {
+        console.log(`[Processor] OCR: budget exhausted — stopping at ${pagesProcessed}/${pagesAvailable ?? "?"} page(s)`);
+        timedOut = true;
         break;
       }
-      const t = await runProcessCollect(
-        "tesseract",
-        [img, "stdout", "-l", "eng", "--psm", "1"],
-        { input: undefined, timeoutMs: Math.max(1, Math.min(30_000, OCR_TOTAL_BUDGET_MS - (Date.now() - started))), maxBuffer: 20 * 1024 * 1024 },
+
+      // (1) adaptive: try the embedded text layer for THIS page first.
+      const tt = await runProcessCollect(
+        "pdftotext",
+        ["-q", "-enc", "UTF-8", "-f", String(p), "-l", String(p), tmpPdf, "-"],
+        { input: undefined, timeoutMs: Math.max(1, Math.min(20_000, remainingBudget())), maxBuffer: 20 * 1024 * 1024 },
         scope,
       );
-      const pageText = t.stdout.toString("utf8").trim();
-      if (pageText) parts.push(pageText);
+      const layerText = tt.stdout.toString("utf8").trim();
+      if (!tt.timedOut && layerText.length >= OCR_PAGE_TEXT_LAYER_MIN_CHARS) {
+        parts.push(layerText);
+        pagesProcessed++;
+        continue; // text page preserved verbatim — no OCR needed
+      }
+
+      // (2) this page has no usable text layer → rasterise + OCR just this page.
+      const imgBase = path.join(tmpDir, `ciq_ocr_${token}_p${p}`);
+      const ppm = await runProcessCollect(
+        "pdftoppm",
+        ["-jpeg", "-r", "150", "-f", String(p), "-l", String(p), tmpPdf, imgBase],
+        { input: undefined, timeoutMs: Math.max(1, Math.min(30_000, remainingBudget())), maxBuffer: 1024 },
+        scope,
+      );
+      const entries = await fsp.readdir(tmpDir).catch(() => [] as string[]);
+      const baseName = path.basename(imgBase);
+      const imgs = entries.filter((f) => f.startsWith(baseName) && f.toLowerCase().endsWith(".jpg")).sort().map((f) => path.join(tmpDir, f));
+      for (const img of imgs) createdFiles.push(img);
+      if (imgs.length === 0) {
+        // No image for this page: if the page count was UNKNOWN we have run off the
+        // end of the document (normal stop); if it was known this page simply
+        // produced nothing.
+        if (pagesAvailable == null) { pagesAvailable = p - 1; break; }
+        pagesProcessed++;
+        continue;
+      }
+      if (ppm.timedOut) { timedOut = true; break; }
+      const pageParts: string[] = [];
+      for (const img of imgs) {
+        if (abortedReason() || remainingBudget() <= 0) { timedOut = true; break; }
+        const t = await runProcessCollect(
+          "tesseract",
+          [img, "stdout", "-l", "eng", "--psm", "1"],
+          { input: undefined, timeoutMs: Math.max(1, Math.min(30_000, remainingBudget())), maxBuffer: 20 * 1024 * 1024 },
+          scope,
+        );
+        if (t.timedOut) { timedOut = true; break; }
+        const pageText = t.stdout.toString("utf8").trim();
+        if (pageText) pageParts.push(pageText);
+      }
+      if (pageParts.length) parts.push(pageParts.join("\n"));
+      pagesProcessed++;
+      if (timedOut) break;
     }
     const ocrText = parts.join("\n\n");
-    console.log(`[Processor] OCR fallback recognised ${ocrText.length} chars across ${parts.length} page(s)`);
-    return ocrText;
+    console.log(`[Processor] Adaptive OCR recognised ${ocrText.length} chars across ${pagesProcessed}/${pagesAvailable ?? "?"} page(s)${timedOut ? " (INCOMPLETE)" : ""}`);
+    return { text: ocrText, timedOut, failed: ocrText.length === 0 && pagesProcessed === 0, pagesAvailable, pagesProcessed };
   } catch (e: any) {
+    if (isOperationAbortedError(e)) throw e;
     console.log(`[Processor] OCR fallback threw: ${e?.message}`);
-    return "";
+    return { text: "", timedOut, failed: true, pagesAvailable, pagesProcessed };
   } finally {
     for (const f of createdFiles) {
       await fsp.unlink(f).catch(() => {});
@@ -938,66 +1038,224 @@ async function extractViaOcr(buffer: Buffer, budgetMs?: number, scope?: Operatio
   }
 }
 
-async function extractTextFromPdf(buffer: Buffer, scope?: OperationScope): Promise<string> {
+/** Back-compat thin wrapper (string). */
+async function extractViaOcr(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<string> {
+  return (await extractViaOcrDetailed(buffer, budgetMs, scope)).text;
+}
+
+// ─── WP05/A4 — extraction fidelity classification ────────────────────────────
+
+export type ExtractionCompleteness = "complete" | "partial" | "empty" | "unknown";
+
+/**
+ * Pure, framework-level completeness classifier — the ROOT-CAUSE mechanism for
+ * both the small-PDF runtime gap (EX04) and the timeout rule (EX06). It is keyed
+ * ENTIRELY on the extraction OUTCOME (did an engine time out? did one reject the
+ * document structure? how much text came back? were all pages processed?) and
+ * NEVER on document byte-size — a size threshold was the rejected earlier approach.
+ *
+ *  - timedOut OR pages-incomplete  → NEVER "complete": a SIGKILLed engine leaves
+ *    only PARTIAL stdout and that must not be promoted to a complete extraction.
+ *  - enough text, clean run        → "complete".
+ *  - some text, clean run          → "partial".
+ *  - NO text but an engine REJECTED the structure (failed) → "unknown": we cannot
+ *    assert the document is empty (a minimal/pathological xref that pdf-parse's
+ *    bundled pdfjs rejects is a rejection, not a genuine empty) → retry/review.
+ *  - NO text and every engine ran clean → "empty": genuinely no extractable text.
+ */
+export function classifyExtractionCompleteness(o: {
+  textLen: number;
+  minChars: number;
+  timedOut: boolean;
+  failed: boolean;
+  pagesAvailable?: number | null;
+  pagesProcessed?: number | null;
+}): ExtractionCompleteness {
+  const pagesKnown = o.pagesAvailable != null && o.pagesProcessed != null;
+  const pagesIncomplete = pagesKnown && (o.pagesProcessed as number) < (o.pagesAvailable as number);
+  if (o.timedOut || pagesIncomplete) {
+    return o.textLen > 0 ? "partial" : "unknown";
+  }
+  if (o.textLen >= o.minChars) return "complete";
+  if (o.textLen > 0) return "partial";
+  return o.failed ? "unknown" : "empty";
+}
+
+/** Honest, coarse language label. null when no text; never a fabricated ISO code. */
+function detectLanguageLabel(text: string): string | null {
+  const t = (text || "").trim();
+  if (!t) return null;
+  return looksNonEnglish(t) ? "non-english (heuristic)" : "english (heuristic)";
+}
+
+/**
+ * WP05/A4 — full extraction fidelity record. Additive and verdict-invariant: the
+ * scoring/analyzer path consumes ONLY `.text` (via extractTextFromPdf), so these
+ * fields can be recorded for research-state accounting without affecting any
+ * score or verdict. Where completeness is genuinely uncertain we label it
+ * unknown/partial rather than inventing a percentage.
+ */
+export interface ExtractionFidelity {
+  text: string;
+  engine: "pdf-parse" | "pdftotext" | "ocr" | "none";
+  completeness: ExtractionCompleteness;
+  bytesAvailable: number;
+  pagesAvailable: number | null;
+  pagesProcessed: number | null;
+  language: string | null;
+  textQuality: "ok" | "low" | "unknown";
+  tableStructureAnnotated: boolean;
+  truncationReason: string | null;
+  timedOut: boolean;
+}
+
+/**
+ * WP05/A4 orchestrator. Tries pdf-parse → pdftotext → adaptive OCR, applying the
+ * horizon-marker table normaliser on the pdf-parse path (unchanged), and returns
+ * a fidelity record classified by the pure rule above. `extractTextFromPdf` is a
+ * thin `.text` wrapper so every existing caller is byte-for-byte unchanged.
+ */
+export async function extractPdfWithFidelity(buffer: Buffer, scope?: OperationScope): Promise<ExtractionFidelity> {
+  const bytesAvailable = buffer.length;
+  const base = {
+    bytesAvailable,
+    pagesAvailable: null as number | null,
+    pagesProcessed: null as number | null,
+    language: null as string | null,
+    textQuality: "unknown" as "ok" | "low" | "unknown",
+    tableStructureAnnotated: false,
+    truncationReason: null as string | null,
+    timedOut: false,
+  };
   const abortIfExpired = (where: string) => {
     if (scope?.aborted()) throw new OperationAbortedError(scope.abortReason() || "aborted", where);
   };
   abortIfExpired("extract_start");
+
+  // Cumulative outcome flags used ONLY for the final no-text classification, so a
+  // parser rejection / timeout anywhere is never misreported as a confident "empty".
+  let anyTimedOut = false;
+  let anyFailed = false;
+
   // ── Path 1: pdf-parse (primary), via the killable subprocess boundary ─────
-  // batch-1277 (B6): pdf-parse runs in pdf-parse-worker.cjs through runProcessCollect
-  // (same boundary as pdftotext/OCR). Cancellation applies on admission AND active
-  // execution; an oversized/pathological PDF is bounded by the remaining budget and
-  // SIGKILLed on abort rather than blocking the event loop. Normalisation is applied
-  // HERE (parent) to the raw worker stdout — identical to the old in-process path.
   try {
-    const raw = await extractViaPdfParseSubprocess(buffer, scope?.remainingMs(), scope);
-    // I81: horizon-marker table normaliser — inlines time-horizon markers
-    // next to bullet-only rows so the flattened PDF preserves the table's
-    // short/medium/long-term semantics after chunking. Format-agnostic: a
-    // no-op on documents that don't contain such a header. Applied ONLY on
-    // the pdf-parse path (the fallbacks below produce plain OCR/CLI text).
-    const normalised = normaliseTableHorizonMarkers(raw);
+    const r1 = await extractViaPdfParseSubprocessDetailed(buffer, scope?.remainingMs(), scope);
+    if (r1.timedOut) anyTimedOut = true;
+    if (r1.failed) anyFailed = true;
+    // I81: horizon-marker table normaliser — format-agnostic no-op unless the doc
+    // uses a short/medium/long-term horizon table. Applied ONLY on the pdf-parse path.
+    const normalised = normaliseTableHorizonMarkers(r1.text);
     if (normalised.detected && normalised.annotationsAdded > 0) {
       console.log(`[Processor] Structured horizon-marker table detected — annotated ${normalised.annotationsAdded} rows`);
     }
-    if (normalised.text && normalised.text.trim().length >= PDF_TEXT_MIN_CHARS) {
-      return normalised.text;
+    const len = normalised.text.trim().length;
+    // A timed-out pdf-parse never counts as complete even if it captured enough text.
+    if (!r1.timedOut && len >= PDF_TEXT_MIN_CHARS) {
+      return {
+        ...base,
+        text: normalised.text,
+        engine: "pdf-parse",
+        completeness: "complete",
+        textQuality: "ok",
+        tableStructureAnnotated: normalised.detected && normalised.annotationsAdded > 0,
+        language: detectLanguageLabel(normalised.text),
+      };
     }
-    console.log(`[Processor] pdf-parse yielded ${normalised.text.trim().length} chars (< ${PDF_TEXT_MIN_CHARS}) — trying pdftotext fallback`);
+    console.log(`[Processor] pdf-parse yielded ${len} chars (< ${PDF_TEXT_MIN_CHARS}) — trying pdftotext fallback`);
   } catch (error: any) {
-    // Cancellation must bypass the pdftotext/OCR fallback — propagate as retryable abort.
     if (isOperationAbortedError(error)) throw error;
+    anyFailed = true;
     console.warn(`[Processor] PDF parse error: ${error.message} — trying pdftotext fallback`);
   }
 
   // ── Path 2: pdftotext (poppler-utils) fallback ───────────────────────────
   abortIfExpired("extract_before_pdftotext");
   try {
-    const viaCli = await extractViaPdftotext(buffer, scope?.remainingMs(), scope);
-    if (viaCli && viaCli.trim().length >= PDF_TEXT_MIN_CHARS) {
-      console.log(`[Processor] pdftotext fallback succeeded (${viaCli.trim().length} chars)`);
-      return viaCli;
+    const r2 = await extractViaPdftotextDetailed(buffer, scope?.remainingMs(), scope);
+    if (r2.timedOut) anyTimedOut = true;
+    if (r2.failed) anyFailed = true;
+    const len = r2.text.trim().length;
+    // EX06: a timed-out pdftotext yields PARTIAL stdout — never promote it to complete.
+    if (!r2.timedOut && len >= PDF_TEXT_MIN_CHARS) {
+      console.log(`[Processor] pdftotext fallback succeeded (${len} chars)`);
+      return {
+        ...base,
+        text: r2.text,
+        engine: "pdftotext",
+        completeness: "complete",
+        textQuality: "ok",
+        language: detectLanguageLabel(r2.text),
+      };
     }
-    console.log(`[Processor] pdftotext yielded ${viaCli.trim().length} chars (< ${PDF_TEXT_MIN_CHARS}) — trying OCR fallback`);
+    console.log(`[Processor] pdftotext yielded ${len} chars${r2.timedOut ? " (PARTIAL/timed-out)" : ""} (< ${PDF_TEXT_MIN_CHARS}) — trying OCR fallback`);
   } catch (e: any) {
-    // Cancellation must bypass the OCR fallback — propagate as a retryable abort.
     if (isOperationAbortedError(e)) throw e;
+    anyFailed = true;
     console.log(`[Processor] pdftotext fallback error: ${e?.message} — trying OCR fallback`);
   }
 
-  // ── Path 3: OCR (pdftoppm + tesseract) fallback ──────────────────────────
-  // For image-based/scanned PDFs. Return whatever OCR recovers — any text is
-  // more useful than empty for these documents.
+  // ── Path 3: adaptive OCR (text-layer-first, per-page) fallback ────────────
   abortIfExpired("extract_before_ocr");
   try {
-    const viaOcr = await extractViaOcr(buffer, scope?.remainingMs(), scope);
-    return viaOcr || "";
+    const r3 = await extractViaOcrDetailed(buffer, scope?.remainingMs(), scope);
+    if (r3.timedOut) anyTimedOut = true;
+    if (r3.failed) anyFailed = true;
+    const len = r3.text.trim().length;
+    if (len > 0) {
+      const completeness = classifyExtractionCompleteness({
+        textLen: len,
+        minChars: PDF_TEXT_MIN_CHARS,
+        timedOut: r3.timedOut,
+        failed: r3.failed,
+        pagesAvailable: r3.pagesAvailable,
+        pagesProcessed: r3.pagesProcessed,
+      });
+      const pagesIncomplete = r3.pagesAvailable != null && r3.pagesProcessed < r3.pagesAvailable;
+      return {
+        ...base,
+        text: r3.text,
+        engine: "ocr",
+        completeness,
+        pagesAvailable: r3.pagesAvailable,
+        pagesProcessed: r3.pagesProcessed,
+        textQuality: "low", // OCR output is inherently lower fidelity than a text layer
+        truncationReason: r3.timedOut ? "ocr_timeout" : pagesIncomplete ? "ocr_pages_remaining" : null,
+        timedOut: r3.timedOut,
+        language: detectLanguageLabel(r3.text),
+      };
+    }
   } catch (e: any) {
-    // Cancellation must not be masked as an empty extraction result.
     if (isOperationAbortedError(e)) throw e;
+    anyFailed = true;
     console.log(`[Processor] OCR fallback error: ${e?.message}`);
-    return "";
   }
+
+  // ── No path produced usable text ──────────────────────────────────────────
+  // Distinguish a timeout / parser-rejection (source NOT confirmed absent) from a
+  // document that genuinely has no extractable text.
+  const completeness = classifyExtractionCompleteness({
+    textLen: 0,
+    minChars: PDF_TEXT_MIN_CHARS,
+    timedOut: anyTimedOut,
+    failed: anyFailed,
+  });
+  return {
+    ...base,
+    text: "",
+    engine: "none",
+    completeness,
+    timedOut: anyTimedOut,
+    truncationReason: anyTimedOut ? "extraction_timeout" : anyFailed ? "all_engines_rejected" : null,
+  };
+}
+
+/**
+ * Back-compat text-only entry point. Returns the SAME string the old function
+ * returned for every input (verdict-invariant): scoring/analyzer consume text
+ * only; the fidelity metadata rides alongside via extractPdfWithFidelity.
+ */
+async function extractTextFromPdf(buffer: Buffer, scope?: OperationScope): Promise<string> {
+  return (await extractPdfWithFidelity(buffer, scope)).text;
 }
 
 // ─── Browser-Based Fetching (Puppeteer Fallback) ────────────────────────────
