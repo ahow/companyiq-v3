@@ -35,7 +35,7 @@ import {
   getRequirementsForJurisdiction,
   verifyLatestPrimaryDisclosure,
 } from "./primary-disclosure-check.js";
-import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError } from "./processor.js";
+import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError, getExtractionCompleteness, type ExtractionCompleteness } from "./processor.js";
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
@@ -1488,6 +1488,20 @@ async function runFetchPhase(opts: {
           } else {
             await storage.recordFetchFailure(companyId, doc.url, "fetch_returned_empty");
           }
+          // EX04: distinguish a FAILED text-extraction (engine rejected the PDF
+          // structure / OCR rejected / timed out) from a genuinely empty document.
+          // The processor records the completeness label per URL during extraction;
+          // persist it ONLY when the read actually failed ('unknown'/'partial') so
+          // the analyze phase can fire one bounded targeted re-retrieval. 'complete'
+          // /'empty' are never persisted here, keeping the change verdict-invariant.
+          try {
+            const ex04Completeness = getExtractionCompleteness(doc.url);
+            if (ex04Completeness === "unknown" || ex04Completeness === "partial") {
+              await storage.recordExtractionState(companyId, doc.url, ex04Completeness);
+            }
+          } catch (ecErr) {
+            console.warn(`[${companyName}] EX04 completeness persist failed (non-fatal): ${ecErr instanceof Error ? ecErr.message : String(ecErr)}`);
+          }
         }
       } catch (error: any) {
         if (isOperationAbortedError(error)) {
@@ -2802,6 +2816,26 @@ async function runAnalyzePhase(opts: {
   // per company; skipped-when-inert cost is negligible.
   const trustedSourcesForRetrieval = await storage.getTrustedSources(workspaceId);
 
+  // EX04: gather extraction-completeness labels across ALL accepted docs for this
+  // company — including failed-read ones, which carry extraction_state
+  // 'unknown'/'partial' but no usable content (so they never reach documentTexts).
+  // The analyzer uses this to fire ONE bounded, framework-level targeted
+  // re-retrieval when a confirmed failed-read means absence of evidence is
+  // unproven. Guarded by !skipFetch so replay runs stay byte-identical (frozen
+  // corpus, no network) — a replay must behave identically before and after EX04.
+  let documentCompleteness: ExtractionCompleteness[] | undefined;
+  if (!skipFetch) {
+    try {
+      const validCompleteness: ExtractionCompleteness[] = ["complete", "partial", "empty", "unknown"];
+      const acceptedForCompleteness = await storage.getAcceptedDocuments(companyId);
+      documentCompleteness = acceptedForCompleteness
+        .map((d) => (d as { extractionState?: string | null }).extractionState)
+        .filter((s): s is ExtractionCompleteness => !!s && (validCompleteness as string[]).includes(s));
+    } catch (ecErr) {
+      console.warn(`[${companyName}] EX04 completeness load failed (non-fatal): ${ecErr instanceof Error ? ecErr.message : String(ecErr)}`);
+    }
+  }
+
   const analysis = await analyzeCompanyMeasures({
     workspaceId,
     companyName,
@@ -2826,6 +2860,9 @@ async function runAnalyzePhase(opts: {
     company,
     trustedSources: trustedSourcesForRetrieval,
     skipFetch,
+    // EX04: completeness labels so the analyzer can fire ONE bounded doc-level
+    // targeted re-retrieval on a confirmed failed-read. Undefined on replay.
+    documentCompleteness,
   });
 
   // ─── I49: PRESERVE PRE-ADJUSTMENT CONFIDENCE ────────────────────────────────

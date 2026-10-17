@@ -665,6 +665,22 @@ export async function recordFetchSuccess(companyId: number, url: string, content
   `);
 }
 
+/**
+ * EX04: persist a confirmed extraction completeness onto a document row WITHOUT
+ * touching fetch_status or any other field. Used only for a confirmed failed-read
+ * ('unknown'/'partial') on the empty-fetch branch, where recordFetchSuccess (which
+ * derives 'complete'/'empty' from content length) was never called — so the real
+ * completeness would otherwise be lost. The analyze phase reads extraction_state
+ * via getAcceptedDocuments to route failed-reads to targeted re-retrieval. Additive
+ * and verdict-invariant: 'complete'/'empty' rows are untouched by this path.
+ */
+export async function recordExtractionState(companyId: number, url: string, state: string) {
+  await db.execute(sql`
+    UPDATE documents SET extraction_state = ${state}
+    WHERE company_id = ${companyId} AND url = ${url}
+  `);
+}
+
 export async function recordFetchFailure(companyId: number, url: string, failureReason?: string) {
   await db.execute(sql`
     UPDATE documents SET fetch_failures = fetch_failures + 1,

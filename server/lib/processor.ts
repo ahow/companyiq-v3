@@ -1258,6 +1258,35 @@ async function extractTextFromPdf(buffer: Buffer, scope?: OperationScope): Promi
   return (await extractPdfWithFidelity(buffer, scope)).text;
 }
 
+// ─── EX04: per-URL extraction completeness capture ───────────────────────────
+// The thin extractTextFromPdf wrapper returns ONLY .text, discarding the
+// fidelity classifier's completeness label. For the small-PDF runtime gap (EX04)
+// the analyze phase needs to distinguish a confirmed failed-read ('unknown' /
+// 'partial' — an engine rejected the PDF structure or timed out) from a document
+// that is genuinely empty, so it can route the former — and ONLY the former — to
+// targeted re-retrieval. We stash the per-URL completeness here during the fetch
+// phase (processDocumentUncached) and the pipeline reads it right after the fetch
+// to persist it on the document row. In-memory, best-effort and verdict-invariant:
+// the extracted text is byte-identical to before; only this side-channel is added.
+const extractionCompletenessByUrl = new Map<string, ExtractionCompleteness>();
+
+function recordExtractionCompletenessForUrl(url: string, completeness: ExtractionCompleteness): void {
+  // Bound memory on long-running workers — this is a transient fetch-phase signal,
+  // not a durable store (durability is the document row's extraction_state column).
+  if (extractionCompletenessByUrl.size > 5000) extractionCompletenessByUrl.clear();
+  extractionCompletenessByUrl.set(url, completeness);
+}
+
+/**
+ * EX04: the last-known extraction completeness for a URL from this process's
+ * fetch phase, or undefined when the URL was not PDF-extracted here (e.g. HTML,
+ * or a content-cache hit that skipped extraction). Read by the pipeline to
+ * persist a confirmed failed-read ('unknown'/'partial') onto the document row.
+ */
+export function getExtractionCompleteness(url: string): ExtractionCompleteness | undefined {
+  return extractionCompletenessByUrl.get(url);
+}
+
 // ─── Browser-Based Fetching (Puppeteer Fallback) ────────────────────────────
 
 // Fix C: env-driven (default 45s) so large WAF-defended issuer PDFs (20+ MB
@@ -2931,6 +2960,15 @@ async function processDocumentUncached(
 
   try {
     let content = "";
+    // EX04: extract PDF text while capturing the fidelity classifier's completeness
+    // for this URL. Returns the SAME .text as extractTextFromPdf (byte-identical,
+    // verdict-invariant); the only added effect is recording the per-URL label the
+    // pipeline later persists so a failed-read can be routed to re-retrieval.
+    const extractPdfForUrl = async (b: Buffer): Promise<string> => {
+      const fid = await extractPdfWithFidelity(b, scope);
+      recordExtractionCompletenessForUrl(url, fid.completeness);
+      return fid.text;
+    };
 
     if (type === "pdf" || url.toLowerCase().endsWith(".pdf")) {
       let data: any, contentType: string;
@@ -2995,7 +3033,7 @@ async function processDocumentUncached(
         const warmBuf = warm ? Buffer.from(warm.data) : null;
         if (warmBuf && warmBuf.slice(0, 5).toString("latin1") === "%PDF-") {
           console.log(`[Processor] Cookie warm-up retry succeeded for ${url} (${warmBuf.length}B PDF)`);
-          content = await extractTextFromPdf(warmBuf, scope);
+          content = await extractPdfForUrl(warmBuf);
         } else {
           console.log(`[Processor] Cookie warm-up retry did not yield a PDF for ${url} — trying browser-PDF fetch`);
           // Use the WAF-aware browser PDF path (real browser session reads the
@@ -3003,7 +3041,7 @@ async function processDocumentUncached(
           content = await fetchPdfViaBrowser(url, scope);
         }
       } else {
-        content = await extractTextFromPdf(buf, scope);
+        content = await extractPdfForUrl(buf);
       }
     } else {
       try {
@@ -3012,14 +3050,14 @@ async function processDocumentUncached(
         // Check if response is actually a PDF
         if (contentType.includes("application/pdf")) {
           const { data: pdfData } = await fetchWithRetry(url, { responseType: "arraybuffer" });
-          content = await extractTextFromPdf(Buffer.from(pdfData), scope);
+          content = await extractPdfForUrl(Buffer.from(pdfData));
         } else if (looksLikeChallenge(String(data))) {
           // Bot-protection challenge interstitial returned for an HTML page.
           // Warm cookies and retry before falling back to the browser.
           console.log(`[Processor] HTML page returned a bot-challenge interstitial for ${url} — trying cookie warm-up retry`);
           const warm = await fetchWithWarmCookies(url);
           if (warm && warm.contentType.includes("application/pdf")) {
-            content = await extractTextFromPdf(Buffer.from(warm.data), scope);
+            content = await extractPdfForUrl(Buffer.from(warm.data));
           } else if (warm && !looksLikeChallenge(String(warm.data))) {
             content = extractTextFromHtml(String(warm.data));
           } else {

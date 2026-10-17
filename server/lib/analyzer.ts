@@ -10,12 +10,12 @@ import { stripRepeatedStructuralBlocks, computeAssemblyPenaltyFactors, containsQ
 // Approach 4: semantic candidate generation (embed + cosine rerank) at corpus assembly.
 import { isSemanticHybridEnabled, isEmbeddingConfigured, embedTextsCached, cosineSim, hybridRankScores } from "./corpus-semantic.js";
 // PR 1 · Change 4: auto re-retrieval on Low-confidence cells (behind autoReretrieval flag).
-import { runTargetedReretrieval, type RetrievalReviewQueue } from "./retrieval-review-queue.js";
+import { runTargetedReretrieval, type RetrievalReviewQueue, type ReretrievalResult } from "./retrieval-review-queue.js";
 import type { Company, TrustedSource } from "../../shared/schema.js";
 import { normalizeVerdict, normalizedScore } from "../../shared/verdict.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
-import { generateDocumentHash, generateContentStableHash } from "./processor.js";
+import { generateDocumentHash, generateContentStableHash, type ExtractionCompleteness } from "./processor.js";
 import { cacheRetrievalIndex } from "./pipeline-cache.js";
 import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
@@ -1965,6 +1965,113 @@ async function summarizeDocumentsCompute(opts: {
   };
 }
 
+// ─── EX04: document-level completeness re-retrieval ──────────────────────────
+// Reserved pseudo-measureId for the document-level (whole-corpus) re-retrieval
+// that EX04 fires when a PDF's extraction is a confirmed failed-read. It shares
+// the SAME per-batch dedupe registry (RetrievalReviewQueue) as the cell-level
+// re-retrieval but under a key that can never equal a real measureId, so the two
+// paths never double-fire for the same company and each stays independently
+// bounded to one fire per company per batch.
+export const DOC_COMPLETENESS_RERETRIEVAL_KEY = "__ex04_doc_completeness__";
+
+/**
+ * Pick a representative measure to seed the whole-corpus targeted query.
+ * Framework-level and deterministic: the measure with the richest definition
+ * text, else the first. Never keyed on company/topic.
+ */
+function pickRepresentativeMeasure(measures: FrameworkMeasure[]): FrameworkMeasure | undefined {
+  if (!measures || measures.length === 0) return undefined;
+  const defLen = (m: FrameworkMeasure): number => {
+    const mm = m as { substantiveDefinition?: string | null; definition?: string | null; title?: string | null };
+    return (mm.substantiveDefinition || mm.definition || mm.title || "").length;
+  };
+  let best = measures[0];
+  let bestLen = defLen(best);
+  for (const m of measures) {
+    const len = defLen(m);
+    if (len > bestLen) { best = m; bestLen = len; }
+  }
+  return best;
+}
+
+/**
+ * EX04 — decide whether a company's extraction results warrant ONE document-level
+ * targeted re-retrieval, and if so fire it. A confirmed failed-read ('unknown' or
+ * 'partial') means absence of evidence is NOT confirmed, so we recover via the
+ * SAME runTargetedReretrieval path the cell-level handler uses, bounded by the
+ * SAME reviewQueue registry under DOC_COMPLETENESS_RERETRIEVAL_KEY.
+ *
+ * Invariants (mirrors the cell-level guards exactly):
+ *   - skipFetch/replay                                   → never fires.
+ *   - retrievalV2/autoReretrieval off, no queue/company  → never fires.
+ *   - every doc 'complete'/'empty'                       → never fires (verdict-invariant).
+ *   - at most ONE fire per company per batch             → dedupe key + markFired.
+ *
+ * Exported and dependency-injectable (reretrievalFn) so the behaviour is testable
+ * without live discovery/network.
+ */
+export async function maybeFireDocumentCompletenessReretrieval(
+  args: {
+    documentCompleteness?: ExtractionCompleteness[];
+    reviewQueue?: RetrievalReviewQueue;
+    company?: Company;
+    framework: Framework;
+    measures: FrameworkMeasure[];
+    trustedSources?: TrustedSource[];
+    issuerProfile?: IssuerProfile;
+    existingCorpusText: string;
+    existingDocUrls: Set<string>;
+    retrievalV2: boolean;
+    autoReretrieval: boolean;
+    skipFetch?: boolean;
+  },
+  reretrievalFn: typeof runTargetedReretrieval = runTargetedReretrieval,
+): Promise<{ fired: boolean; reason: string; result?: ReretrievalResult }> {
+  // (1) Replay / skip-fetch suppression — FIRST, exactly like the cell-level path.
+  if (args.skipFetch) return { fired: false, reason: "skipFetch" };
+  // (2) Feature + dependency gating — identical to the cell-level eligibility set.
+  if (!args.retrievalV2 || !args.autoReretrieval) return { fired: false, reason: "flag-off" };
+  if (!args.reviewQueue || !args.company) return { fired: false, reason: "no-queue-or-company" };
+  // (3) Only a CONFIRMED failed-read warrants a re-fetch. 'complete'/'empty' never do.
+  const needsReretrieval = (args.documentCompleteness ?? []).some(
+    (c) => c === "unknown" || c === "partial",
+  );
+  if (!needsReretrieval) return { fired: false, reason: "no-failed-extraction" };
+  // (4) Bound: one fire per company per batch for THIS reason.
+  if (args.reviewQueue.hasFired(args.company.id, DOC_COMPLETENESS_RERETRIEVAL_KEY)) {
+    return { fired: false, reason: "already-fired" };
+  }
+  const measure = pickRepresentativeMeasure(args.measures);
+  if (!measure) return { fired: false, reason: "no-measure" };
+  const company = args.company;
+  const result = await reretrievalFn(
+    {
+      company: {
+        id: company.id,
+        name: company.name,
+        domain: company.domain,
+        isin: company.isin,
+        ticker: company.ticker,
+        sector: company.sector,
+        country: company.country,
+      },
+      measure,
+      framework: args.framework,
+      trustedSources: args.trustedSources || [],
+      issuerProfile: args.issuerProfile,
+      existingCorpusText: args.existingCorpusText,
+      existingDocUrls: args.existingDocUrls,
+      fingerprintKey: `${company.id}:${DOC_COMPLETENESS_RERETRIEVAL_KEY}`,
+    },
+    args.reviewQueue.getFiredSet(),
+  );
+  // Belt-and-braces bound: runTargetedReretrieval already adds the fingerprintKey
+  // to the shared set, but mark explicitly too so the one-per-company guard holds
+  // regardless of the injected fn's behaviour.
+  args.reviewQueue.markFired(company.id, DOC_COMPLETENESS_RERETRIEVAL_KEY);
+  return { fired: true, reason: "fired", result };
+}
+
 // ─── Main Analysis Entry Point ───────────────────────────────────────────────
 
 export async function analyzeCompanyMeasures(opts: {
@@ -2005,8 +2112,15 @@ export async function analyzeCompanyMeasures(opts: {
   // replay would defeat determinism, so re-retrieval is suppressed regardless
   // of flags.
   skipFetch?: boolean;
+  // EX04: completeness labels for the company's accepted documents (from
+  // extraction_state, threaded by the pipeline). A confirmed failed-read
+  // ('unknown'/'partial') anywhere in this list routes the company to ONE
+  // document-level targeted re-retrieval. Order-independent (only presence of a
+  // failed-read matters). Absent on replay/skip-fetch; re-retrieval is suppressed
+  // there regardless. Framework-level — never keyed on company/topic/measure.
+  documentCompleteness?: ExtractionCompleteness[];
 }): Promise<AnalysisResult> {
-  const { workspaceId, companyName, companyId, documentIds, framework, measures, temporalContext, freshScoring, issuerProfile, reviewQueue, company, trustedSources, skipFetch } = opts;
+  const { workspaceId, companyName, companyId, documentIds, framework, measures, temporalContext, freshScoring, issuerProfile, reviewQueue, company, trustedSources, skipFetch, documentCompleteness } = opts;
   // Opt2 hygiene may reassign these three, so bind them mutably (positionally aligned).
   let { documentTexts, documentUrls, documentTitles } = opts;
 
@@ -2245,6 +2359,45 @@ export async function analyzeCompanyMeasures(opts: {
   const existingDocUrlSet = new Set<string>();
   for (const u of documentUrls) {
     if (u) existingDocUrlSet.add(u);
+  }
+
+  // ─── EX04: document-level completeness re-retrieval ─────────────────────────
+  // A confirmed failed-read PDF (completeness 'unknown'/'partial') means the
+  // absence of evidence is NOT confirmed. Fire ONE targeted re-retrieval for the
+  // company (bounded via the same reviewQueue registry under a reserved key) and
+  // merge any recovered documents into the corpus BEFORE per-measure scoring, so
+  // every measure sees the recovered evidence. 'complete'/'empty' never fire, and
+  // skipFetch/replay is fully suppressed inside the helper. Framework-level.
+  try {
+    const ex04 = await maybeFireDocumentCompletenessReretrieval({
+      documentCompleteness,
+      reviewQueue,
+      company,
+      framework,
+      measures,
+      trustedSources,
+      issuerProfile,
+      existingCorpusText: combinedText,
+      existingDocUrls: existingDocUrlSet,
+      retrievalV2: settings.retrievalV2,
+      autoReretrieval: settings.autoReretrieval,
+      skipFetch,
+    });
+    if (
+      ex04.fired &&
+      ex04.result?.reason === "success" &&
+      ex04.result.augmentedCorpusText &&
+      ex04.result.newDocsAdded > 0
+    ) {
+      combinedText = ex04.result.augmentedCorpusText;
+      for (const d of ex04.result.newDocs ?? []) {
+        if (d.url) existingDocUrlSet.add(d.url);
+      }
+      console.log(`[${companyName}] EX04 doc-completeness re-retrieval merged ${ex04.result.newDocsAdded} recovered doc(s) into corpus`);
+    }
+  } catch (ex04Err: unknown) {
+    if (isLifecycleCancelledError(ex04Err)) throw ex04Err;
+    console.warn(`[${companyName}] EX04 doc-completeness re-retrieval error: ${ex04Err instanceof Error ? ex04Err.message : String(ex04Err)}`);
   }
 
   // A3 / R5c: ONE IR-platform tenant-propagation cache per company, created

@@ -63,6 +63,12 @@ export interface ReretrievalResult {
   augmentedCorpusText?: string;
   /** Count of NEW docs successfully fetched and merged into the corpus. */
   newDocsAdded: number;
+  /**
+   * EX04 (additive): the NEW docs merged into the corpus on a `success` result,
+   * so a document-level caller can update its own existing-URL dedupe set. The
+   * cell-level caller ignores this field, so pre-change behaviour is unaffected.
+   */
+  newDocs?: Array<{ url: string; title: string; text: string }>;
   targetedQuery: string;
   reason: "skipped-already-fired" | "no-new-docs" | "success" | "search-failed";
   detail?: string;
@@ -276,6 +282,7 @@ export async function runTargetedReretrieval(
     newEvidencePack: evidencePack,
     augmentedCorpusText,
     newDocsAdded: fetched.length,
+    newDocs: fetched,
     targetedQuery,
     reason: "success",
   };
