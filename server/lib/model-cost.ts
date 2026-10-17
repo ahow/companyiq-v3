@@ -9,9 +9,12 @@
  *    ship after held-out proof per measure/topic/language, verification stays on."
  *
  * WHAT THIS MODULE IS:
- *   Three framework-level, DB-free, deterministic levers, all DORMANT behind a
- *   single default-OFF kill-switch so prod behaviour is byte-identical at the
- *   default (the prompt/pack is unchanged, the strong model is always used):
+ *   Three framework-level, DB-free, deterministic levers behind a single
+ *   kill-switch. As of GATE5 the shipped default is "on", so the headline lever
+ *   (C, context-trim) is the standing production behaviour; levers D and E remain
+ *   scaffold-only (D is wired but conservative, E is not wired). The kill-switch
+ *   still fully overrides without a redeploy: CONTEXT_COST_POLICY=off restores the
+ *   byte-identical pre-B5 pack (strong model always used), =shadow is telemetry-only:
  *
  *     LEVER C (headline) — planContextTrim: trim ONLY provably-redundant repeated
  *        context, NEVER decisive context. Reuses evidence-recall's decisive-passage
@@ -40,11 +43,14 @@
  *   "looks irrelevant" heuristic.
  *
  * KILL-SWITCH (mirrors eligibility-decision.ts / evidence-recall.ts exactly):
- *   resolveContextCostPolicy() reads env CONTEXT_COST_POLICY (default "off").
- *     - off (default): every lever is a passthrough ⇒ pack byte-identical, prompt
- *       order byte-identical, strong model always. No verdict surface change.
+ *   resolveContextCostPolicy() reads env CONTEXT_COST_POLICY. As of GATE5 the
+ *   shipped default is "on" (context-trim is standing production behaviour).
+ *     - on (default): apply lever C (trim provably-redundant repeats). Verdict-
+ *       invariant by the HARD INVARIANT — no decisive passage is ever trimmed.
  *     - shadow: compute savings/telemetry but DO NOT apply (verdict-invariant).
- *     - on: apply.
+ *     - off: every lever is a passthrough ⇒ pack byte-identical, prompt order
+ *       byte-identical, strong model always — restores the exact pre-B5 behaviour
+ *       with no redeploy (rollback path).
  *
  * SAFETY: every exported function is total (never throws on bad input) and returns
  * a frozen object for structured results, so a plan cannot be mutated downstream.
@@ -66,11 +72,14 @@ import type { FrameworkMeasure } from "../../shared/schema.js";
 export type ContextCostPolicy = "off" | "shadow" | "on";
 
 /**
- * DEFAULT = "off": B5 is DORMANT. At the default every lever is a passthrough, so
- * the prompt/pack is byte-identical to current production and no verdict can
- * change. B5 only ships "on" after held-out proof per measure/topic/language.
+ * DEFAULT = "on": standing production behaviour post-GATE5 (context-trim applied).
+ * GATE5 proved the HARD INVARIANT over the frozen corpus (360/360 cells: no
+ * decisive passage trimmed, recall preserved, identical misses) and confirmed a
+ * measurable token/cost reduction with no structured cell flips, so the headline
+ * lever (C) is the shipped default. Set CONTEXT_COST_POLICY=off to fail-safe back
+ * to the byte-identical pre-B5 pack with no redeploy (rollback path).
  */
-export const DEFAULT_CONTEXT_COST_POLICY: ContextCostPolicy = "off";
+export const DEFAULT_CONTEXT_COST_POLICY: ContextCostPolicy = "on";
 
 /** Env var name for the kill-switch (documented in the ledger). */
 export const CONTEXT_COST_POLICY_ENV = "CONTEXT_COST_POLICY";
@@ -80,9 +89,10 @@ export const CONTEXT_COST_POLICY_VERSION = 1;
 
 /**
  * Resolve the active policy: explicit arg > env CONTEXT_COST_POLICY > default.
- * Any unrecognised/empty value falls back to the shipped default ("off" —
- * fail-safe to the byte-identical passthrough, so a typo can never silently
- * enable trimming or reordering). Total: never throws.
+ * Any unrecognised/empty value falls back to the shipped default ("on" post-GATE5
+ * — fail-safe to the standing production behaviour, so a typo can never silently
+ * disable the proven context-trim). Set CONTEXT_COST_POLICY=off (or =shadow) to
+ * override. Total: never throws.
  */
 export function resolveContextCostPolicy(
   explicit?: ContextCostPolicy | null,

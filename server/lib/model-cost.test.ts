@@ -167,25 +167,50 @@ test("CC02b: passage with a UNIQUE source link is NOT trimmed", () => {
   assert.equal(plan.trimmedIds.length, 0);
 });
 
-// ─── CC03 — kill-switch default (off) passthrough ─────────────────────────────
+// ─── CC03 — kill-switch default (on, post-GATE5) + env/explicit override ───────
 
-test("CC03: off default → all three levers passthrough (byte-identical)", () => {
-  assert.equal(DEFAULT_CONTEXT_COST_POLICY, "off");
+test("CC03: on default (GATE5); env off/shadow + explicit arg override", () => {
+  // As of GATE5 the shipped default is "on" (context-trim is standing production).
+  assert.equal(DEFAULT_CONTEXT_COST_POLICY, "on");
   assert.equal(CONTEXT_COST_POLICY_VERSION, 1);
   assert.equal(CONTEXT_COST_POLICY_ENV, "CONTEXT_COST_POLICY");
 
+  const prev = process.env[CONTEXT_COST_POLICY_ENV];
+  try {
+    // env UNSET → resolves to the shipped default "on".
+    delete process.env[CONTEXT_COST_POLICY_ENV];
+    assert.equal(resolveContextCostPolicy(), "on", "unset env should resolve to default on");
+    assert.equal(isContextCostEnforced(), true);
+
+    // env can still override back to off (rollback path) or shadow, no redeploy.
+    process.env[CONTEXT_COST_POLICY_ENV] = "off";
+    assert.equal(resolveContextCostPolicy(), "off", "env=off must override default on");
+    assert.equal(isContextCostEnforced(), false);
+    process.env[CONTEXT_COST_POLICY_ENV] = "shadow";
+    assert.equal(resolveContextCostPolicy(), "shadow", "env=shadow must override default on");
+
+    // explicit arg wins over env (env=shadow here).
+    assert.equal(resolveContextCostPolicy("off"), "off", "explicit off must win over env");
+    assert.equal(resolveContextCostPolicy("on"), "on", "explicit on must win over env");
+  } finally {
+    if (prev === undefined) delete process.env[CONTEXT_COST_POLICY_ENV];
+    else process.env[CONTEXT_COST_POLICY_ENV] = prev;
+  }
+
+  // Levers are passthrough whenever NOT applied (apply=false), independent of the
+  // policy default — this is what the analyzer relies on for the =off skip path.
   const anchor = chunk("The risk committee reports to board oversight.", "https://d/1");
   const redundant = chunk("committee", "https://d/1");
   const pack = [anchor, redundant];
   const corpus = [...pack];
-  // apply omitted → off semantics → pack unchanged, every passage kept.
+  // apply omitted → passthrough → pack unchanged, every passage kept.
   const plan = planContextTrim({ measure: MEASURE, packChunks: pack, corpusChunks: corpus });
   assert.equal(plan.fired, false);
   assert.deepEqual(plan.keptIds, ids(pack));
   assert.equal(plan.trimmedIds.length, 0);
   assert.equal(plan.bytesSaved, 0);
 
-  // lever D off → original order byte-identical
+  // lever D not applied → original order byte-identical
   const segs: PromptSegment[] = [
     { text: "EVIDENCE", kind: "volatile" },
     { text: "SYSTEM", kind: "stable" },
@@ -193,7 +218,7 @@ test("CC03: off default → all three levers passthrough (byte-identical)", () =
   const outD = stablePrefixOrder(segs); // apply defaults false
   assert.deepEqual(outD.map((s) => s.text), ["EVIDENCE", "SYSTEM"]);
 
-  // lever E off → strong always
+  // lever E not applied → strong always
   assert.equal(routeModel({ stage: "scoring", apply: false }).model, "strong");
 });
 
@@ -271,7 +296,9 @@ test("CC07: resolveContextCostPolicy fail-safe + total + frozen returns", () => 
   try {
     for (const bad of ["", "   ", "garbage", "ON2", "shadowy", "0", "true"]) {
       process.env[CONTEXT_COST_POLICY_ENV] = bad;
-      assert.equal(resolveContextCostPolicy(), "off", `env="${bad}" should resolve off`);
+      // Post-GATE5 the fail-safe is the shipped default "on" (never silently
+      // disables the proven context-trim from a typo).
+      assert.equal(resolveContextCostPolicy(), "on", `env="${bad}" should resolve to default on`);
     }
     for (const good of ["off", "shadow", "on", "  ON  ", "Shadow"]) {
       process.env[CONTEXT_COST_POLICY_ENV] = good;
@@ -333,7 +360,7 @@ test("CC-G3: at CONTEXT_COST_POLICY=off, planContextTrim leaves pack byte-identi
 
   const prev = process.env[CONTEXT_COST_POLICY_ENV];
   try {
-    delete process.env[CONTEXT_COST_POLICY_ENV]; // unset → DEFAULT off
+    process.env[CONTEXT_COST_POLICY_ENV] = "off"; // explicit off = rollback path
     assert.equal(resolveContextCostPolicy(), "off");
     // At off, the analyzer SKIPS the block entirely; modelled here as apply omitted.
     const plan = planContextTrim({ measure: MEASURE, packChunks, corpusChunks: [...packChunks] });
