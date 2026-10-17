@@ -48,9 +48,19 @@ import { computeBatchFingerprint } from "./lib/corpus-replay.js";
 import { getPromptHash } from "./lib/analyzer.js";
 import { getProviderStatus } from "./lib/ai-providers.js";
 import { getConfiguredFallbackOrder } from "./lib/provider-resilience.js";
+// WP14 / B6 — connection-budget-aware worker concurrency (kill-switch CAPACITY_POLICY).
+import { resolveEffectiveConcurrency, loadCapacityConfig } from "./lib/capacity-config.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
+// WP14 / B6 — connection-budget-aware worker concurrency behind CAPACITY_POLICY.
+// At the SHIPPED DEFAULT (static) this resolves to exactly MAX_CONCURRENT, so the
+// worker behaves byte-identically to prior production. `shadow` logs the budget-
+// derived value but still USES MAX_CONCURRENT; `dynamic` applies the budget-derived
+// value (which can only ever LOWER concurrency as replicas scale, never raise it).
+// Pure/DB-free; does NOT touch the analyzer/evidence/scoring path or any pool max.
+const CAPACITY = resolveEffectiveConcurrency(loadCapacityConfig());
+const EFFECTIVE_CONCURRENCY = CAPACITY.effectiveConcurrency;
 const JOB_TIMEOUT = parseInt(process.env.JOB_TIMEOUT_MS || "600000", 10); // 10 min default
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 30000; // 30 seconds between retries
@@ -1567,7 +1577,8 @@ export async function startWorker(workerId?: string): Promise<Worker> {
     processAnalysisJob,
     {
       connection: connection as any,
-      concurrency: MAX_CONCURRENT,
+      // WP14/B6: at default static this === MAX_CONCURRENT (byte-identical to prod).
+      concurrency: EFFECTIVE_CONCURRENCY,
       // Short lock (auto-renewed by BullMQ while the event loop is alive) + short
       // stalled-check, so a job orphaned by a dead/OOM-killed worker is reclaimed
       // within ~1–2 min instead of waiting the full JOB_TIMEOUT window. Long jobs
@@ -1619,7 +1630,7 @@ export async function startWorker(workerId?: string): Promise<Worker> {
       // as wedged when it has FREE slots AND work is waiting AND nothing has
       // happened for MAX_IDLE_TIME. `effectiveConcurrency` tracks the live
       // (possibly adaptive-adjusted) concurrency, not just the configured max.
-      const effectiveConcurrency = Number((worker as any).concurrency) || MAX_CONCURRENT;
+      const effectiveConcurrency = Number((worker as any).concurrency) || EFFECTIVE_CONCURRENCY;
       const hasFreeSlots = activeJobCount < effectiveConcurrency;
 
       if (waitingCount > 0 && hasFreeSlots && timeSinceActivity > MAX_IDLE_TIME) {
@@ -1648,7 +1659,7 @@ export async function startWorker(workerId?: string): Promise<Worker> {
   // concurrency (MAX_CONCURRENT) and this controller is never consulted.
   const adaptiveConfig = loadAdaptiveConfig();
   if (adaptiveConfig.enabled) {
-    let currentConcurrency = MAX_CONCURRENT;
+    let currentConcurrency = EFFECTIVE_CONCURRENCY;
     adaptiveInterval = setInterval(() => {
       if (!worker) { if (adaptiveInterval) { clearInterval(adaptiveInterval); adaptiveInterval = null; } return; }
       try {
@@ -1673,7 +1684,10 @@ export async function startWorker(workerId?: string): Promise<Worker> {
   // relied on a graceful close that could hang, which is exactly what allowed
   // Workers and intervals to accumulate.
 
-  console.log("[Worker] Started with concurrency=" + MAX_CONCURRENT + ", timeout=" + JOB_TIMEOUT + "ms, maxRetries=" + MAX_RETRY_ATTEMPTS + ", lockDuration=" + WORKER_LOCK_DURATION_MS + "ms, stalledInterval=" + WORKER_STALLED_INTERVAL_MS + "ms, maxStalledCount=" + WORKER_MAX_STALLED_COUNT);
+  // WP14/B6: surface the capacity policy + the budget-derived value (shadow/dynamic
+  // observability). At default static, effective === MAX_CONCURRENT.
+  console.log("[Worker] CAPACITY_POLICY=" + CAPACITY.policy + " replicaCount=" + loadCapacityConfig().replicaCount + " static=" + CAPACITY.staticConcurrency + " dynamic=" + CAPACITY.dynamicConcurrency + " effective=" + EFFECTIVE_CONCURRENCY + " withinBudget=" + CAPACITY.withinBudget + " maxSafeReplicas=" + CAPACITY.maxSafeReplicas);
+  console.log("[Worker] Started with concurrency=" + EFFECTIVE_CONCURRENCY + ", timeout=" + JOB_TIMEOUT + "ms, maxRetries=" + MAX_RETRY_ATTEMPTS + ", lockDuration=" + WORKER_LOCK_DURATION_MS + "ms, stalledInterval=" + WORKER_STALLED_INTERVAL_MS + "ms, maxStalledCount=" + WORKER_MAX_STALLED_COUNT);
   return worker;
   } finally {
     workerStarting = false;

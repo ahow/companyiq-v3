@@ -1,0 +1,49 @@
+{
+  "generatedAt": "2026-10-18",
+  "workPackage": "B6 / WP14 Capacity experiments",
+  "database": {
+    "engine": "Railway-hosted PostgreSQL (project db04e5b1, DATABASE_URL host caboose.proxy.rlwy.net)",
+    "max_connections": 100,
+    "superuser_reserved_connections": 3,
+    "usable_non_superuser_connections": 97,
+    "note": "Confirmed LIVE via `SHOW max_connections;` (=100) and `SHOW superuser_reserved_connections;` (=3) against production DB on 2026-10-18. The app's real ceiling is 97, NOT the Abacus platform 25/DB default — this app runs on its own Railway Postgres. The documented '88-vs-97 failure' is a pool bump that pushed worst-case total connections toward the 97 usable ceiling."
+  },
+  "productionPools": [
+    {"module": "server/db.ts", "export": "pool (main, drizzle)", "envVar": "PG_POOL_MAX", "defaultMax": 20, "services": ["app", "worker"], "lazy": false, "notes": "Dominant pool. Opens up to max on demand; idle conns closed after idleTimeoutMillis=30s. Under worker-isolation child-process mode the parent reserves PG_PARENT_RESERVE(=4) and each job child gets floor((PG_POOL_MAX-reserve)/WORKER_CONCURRENCY) — partitioned, never grown."},
+    {"module": "server/lib/llm-usage.ts", "export": "usagePool", "envVar": "PG_USAGE_POOL_MAX", "defaultMax": 2, "services": ["app", "worker"], "lazy": true, "gate": "LLM_USAGE_LOGGING_ENABLED (default true)"},
+    {"module": "server/lib/stage-profile-sink.ts", "export": "pool", "envVar": "PG_STAGE_PROFILE_POOL_MAX", "defaultMax": 2, "services": ["app", "worker"], "lazy": true, "gate": "STAGE_PROFILE_PERSIST_ENABLED (default true)"},
+    {"module": "server/lib/paid-call-attribution.ts", "export": "pool", "envVar": "PG_PAID_CALL_POOL_MAX", "defaultMax": 2, "services": ["app", "worker"], "lazy": true, "gate": "PAID_CALL_ATTRIBUTION_ENABLED (default true)"},
+    {"module": "server/lib/run-manifest.ts", "export": "pool", "envVar": "PG_RUN_MANIFEST_POOL_MAX", "defaultMax": 1, "services": ["worker"], "lazy": true, "gate": "RUN_MANIFEST_ENABLED (default true)"}
+  ],
+  "scriptPools_notInProd": "server/scripts/*.ts and *.cjs create their own short-lived pools (max 2-5) for offline gates/benchmarks; they do NOT run inside the app/worker services and are excluded from the live budget.",
+  "perProcessWorstCase": {
+    "worker": {"main": 20, "llm-usage": 2, "stage-profile": 2, "paid-call": 2, "run-manifest": 1, "total": 27},
+    "app": {"main": 20, "llm-usage": 2, "stage-profile": 2, "paid-call": 2, "run-manifest": 0, "total": 26}
+  },
+  "appWideWorstCase": {
+    "formula": "(appReplicas x 26) + (workerReplicas x 27)",
+    "example_2app_2worker": 106,
+    "example_1app_2worker": 80,
+    "example_1app_3worker": 107,
+    "verdict": "With default PG_POOL_MAX=20, even 2 app + 2 worker replicas (=106) EXCEEDS the 97 usable ceiling in the saturated worst case. This is exactly the 88-vs-97 class of failure."
+  },
+  "bindingBottleneck": {
+    "candidates": {
+      "dbConnections": "97 usable (BINDING). Saturating pools across replicas breaches this first.",
+      "workerConcurrency": "Static 10 jobs/replica; each job fans ~100 sequential drizzle queries through the shared pool — bounded by pool max, not an independent ceiling.",
+      "llmApi": "Governed separately by LLM_MAX_CONCURRENCY x replica_count against the provider account; not the DB-side constraint B6 addresses."
+    },
+    "conclusion": "DB connections (97 usable) is the binding ceiling. B6 governs WORKER JOB CONCURRENCY against a connection budget so that effectiveConcurrency x replicaCount x connectionsPerJob + reservedOverhead can never exceed the budget as replicas scale."
+  },
+  "derivedSafeBudget": {
+    "DB_CONNECTION_BUDGET": 90,
+    "reservedOverhead": 10,
+    "connectionsPerJob": 2,
+    "HARD_MAX": 10,
+    "replicaCountFallback": 1,
+    "rationale": "Budget 90 sits safely under the 97 usable ceiling (matches server/db.ts guidance 'comfortably under ~90'). reservedOverhead=10 covers the app service's main pool share + worker control-plane (claim/heartbeat/reaper) + the small telemetry pools. connectionsPerJob=2 = PG_POOL_MAX(20) / static concurrency(10). HARD_MAX=10 pins the ceiling at today's static concurrency so dynamic mode can only ever LOWER concurrency as replicas grow, never raise it above the historical value.",
+    "maxSafeReplicas": 40,
+    "maxSafeReplicasFormula": "floor((DB_CONNECTION_BUDGET - reservedOverhead) / connectionsPerJob) = floor(80/2) = 40",
+    "note": "B6 does NOT change any pool max in this WP (approval-gated tuned-matrix decision). It only derives safe per-replica worker concurrency from the known budget."
+  }
+}
