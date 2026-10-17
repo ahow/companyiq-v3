@@ -7,6 +7,14 @@ import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironm
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 import { diagTags, getDiagContext } from "./lib/diag-context.js";
 import { type AttemptOwnership, type FenceDb, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason, lockJobAndBatch, claimPredicate, successCompletionPredicate, failureRecordPredicate, ownershipFromContext } from "./lib/lifecycle-fence.js";
+import {
+  documentUpsertFingerprint,
+  shouldSkipDocumentUpsert,
+  recordDocumentUpsert,
+  invalidateDocumentUpsertForCompany,
+  invalidateDocumentUpsertByDocId,
+  clearDocumentUpsertDedupe,
+} from "./lib/prep-compute-cache.js";
 
 // ─── URL Hashing for Content Deduplication ─────────────────────────────────
 
@@ -517,6 +525,10 @@ export async function updateDocumentSourceType(
   await db.execute(sql`
     UPDATE documents SET source_type = ${sourceType} WHERE id = ${docId}
   `);
+  // B1/WP10: source_type is one of the upsert-fingerprinted fields, so this write
+  // makes any recorded upsert fingerprint for this row stale. Invalidate it so a
+  // later upsert is never skipped against an out-of-date fingerprint.
+  invalidateDocumentUpsertByDocId(docId);
 }
 
 /**
@@ -605,6 +617,23 @@ export async function getCorpusCharCount(companyId: number): Promise<number> {
 }
 
 export async function upsertDocument(data: { companyId: number; url: string; title?: string; type: string; gateVerdict: string; gateReason?: string; sourceType?: string }) {
+  // B1/WP10: skip genuine no-op upserts. The documents table has no updatedAt/
+  // auto-timestamp, and ON CONFLICT updates only {title, gateVerdict, gateReason,
+  // sourceType}; re-writing byte-identical values for those four fields is a true
+  // no-op on observable DB state. We skip ONLY when THIS process already persisted
+  // the exact same fingerprint for this (companyId,url) and nothing has invalidated
+  // it since (row deletions and source_type mutations invalidate — see below). On
+  // any miss, policy OFF, or doubt, the write proceeds ("when in doubt, write").
+  // The off path is the exact pre-B1 code below, unconditionally.
+  const fingerprint = documentUpsertFingerprint({
+    title: data.title,
+    gateVerdict: data.gateVerdict,
+    gateReason: data.gateReason,
+    sourceType: data.sourceType,
+  });
+  if (shouldSkipDocumentUpsert(data.companyId, data.url, fingerprint)) {
+    return undefined;
+  }
   const [doc] = await db
     .insert(schema.documents)
     .values(data)
@@ -613,6 +642,7 @@ export async function upsertDocument(data: { companyId: number; url: string; tit
       set: { title: data.title, gateVerdict: data.gateVerdict, gateReason: data.gateReason, sourceType: data.sourceType },
     })
     .returning();
+  recordDocumentUpsert(data.companyId, data.url, fingerprint, doc?.id);
   return doc;
 }
 
@@ -876,6 +906,10 @@ export async function clearDiscoveredDocuments(companyId: number) {
   await db.delete(schema.documents).where(
     and(eq(schema.documents.companyId, companyId), eq(schema.documents.fetchStatus, "needs_verify"))
   );
+  // B1/WP10: rows for this company were deleted, so any recorded upsert
+  // fingerprints for it are stale — invalidate them so the next upsert really
+  // re-writes the row ("never drop a real write").
+  invalidateDocumentUpsertForCompany(companyId);
 }
 
 // Full reset: purge ALL documents including successfully fetched ones
@@ -883,6 +917,8 @@ export async function fullResetCompanyDocuments(companyId: number) {
   const [company] = await db.select({ workspaceId: schema.companies.workspaceId }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1);
   const count = await db.execute(sql`SELECT COUNT(*)::int AS n FROM documents WHERE company_id = ${companyId}`);
   await db.delete(schema.documents).where(eq(schema.documents.companyId, companyId));
+  // B1/WP10: all documents for this company deleted — invalidate its fingerprints.
+  invalidateDocumentUpsertForCompany(companyId);
   if (company) {
     await recordReliabilityAuditEvent({ workspaceId: company.workspaceId, eventType: "deletion", reason: "explicit company full reset deleted document artifacts", metadata: { companyId, deletedDocumentCount: Number((count.rows[0] as any)?.n || 0) } });
   }
@@ -904,6 +940,9 @@ export async function fullResetAllCompanies(workspaceId: number): Promise<number
       )
     `);
     await recordReliabilityAuditEvent({ workspaceId, eventType: "deletion", reason: "explicit workspace full reset deleted document artifacts", metadata: { deletedDocumentCount: Number((deletedDocs.rows[0] as any)?.n || 0) } });
+  // B1/WP10: a bulk delete spanning many companies — clear the whole in-process
+  // upsert dedupe registry so no stale fingerprint can suppress a later real write.
+  clearDocumentUpsertDedupe();
   // Reset all companies (42-C: also clear FIGI + domain caches)
   await db.execute(sql`
     UPDATE companies SET
@@ -942,6 +981,9 @@ export async function fullResetListCompanies(listId: number, workspaceId: number
       )
     `);
   await recordReliabilityAuditEvent({ workspaceId, eventType: "deletion", reason: "explicit list full reset deleted document artifacts", metadata: { listId, deletedDocumentCount: Number((deletedDocs.rows[0] as any)?.n || 0) } });
+  // B1/WP10: a bulk delete spanning many companies — clear the whole in-process
+  // upsert dedupe registry so no stale fingerprint can suppress a later real write.
+  clearDocumentUpsertDedupe();
   // Reset companies in this list (42-C: also clear FIGI + domain caches)
   await db.execute(sql`
     UPDATE companies SET
@@ -1079,6 +1121,9 @@ export async function resetAllCompanies(workspaceId: number): Promise<number> {
       SELECT id FROM companies WHERE workspace_id = ${workspaceId}
     ) AND fetch_status IN ('pending', 'dead')
   `);
+  // B1/WP10: bulk delete spanning many companies — clear the in-process upsert
+  // dedupe registry so no stale fingerprint can suppress a later real write.
+  clearDocumentUpsertDedupe();
   // Reset all companies in one UPDATE
   const result = await db.execute(sql`
     UPDATE companies SET
@@ -1119,6 +1164,9 @@ export async function resetListCompanies(listId: number, workspaceId: number): P
       SELECT company_id FROM company_list_members WHERE list_id = ${listId}
     ) AND fetch_status IN ('pending', 'dead')
   `);
+  // B1/WP10: bulk delete spanning many companies — clear the in-process upsert
+  // dedupe registry so no stale fingerprint can suppress a later real write.
+  clearDocumentUpsertDedupe();
   // Reset companies in this list
   await db.execute(sql`
     UPDATE companies SET

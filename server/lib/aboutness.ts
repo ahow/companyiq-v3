@@ -10,6 +10,8 @@
 // ABOUTNESS_DOMINANCE_REJECT×. An over-tight gate would recreate keystone misses.
 // Topic-agnostic: keys only off company identity (name/aliases/peers).
 
+import { getCachedRegex } from "./prep-compute-cache.js";
+
 export const ABOUTNESS_ENABLED = (process.env.ABOUTNESS_ENABLED || "true").toLowerCase() !== "false";
 export const ABOUTNESS_MIN_DENSITY = (() => {
   const v = parseFloat(process.env.ABOUTNESS_MIN_DENSITY || "0.5"); // weighted hits / 1k words
@@ -40,9 +42,23 @@ const STOP = new Set(["inc", "ltd", "plc", "corp", "group", "the", "and", "compa
 const ORG_RE = /\b([A-Z][\w&.\-]+(?:\s+[A-Z][\w&.\-]+){0,4})\s+(?:S\.A\.|SA|plc|PLC|Inc\.?|AG|N\.V\.|SE|Ltd\.?|LLC|Corp\.?)(?![\w])/g;
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// B1/WP10: the Unicode word-boundary pattern for a term is a PURE function of the
+// term, yet countTerm() is called once per term per document across the full
+// ~2,675-peer universe — recompiling the SAME RegExp every time. getCachedRegex()
+// memoises the compiled pattern (bounded, FIFO-evicted) when the prep-compute
+// cache is ON; when OFF it compiles fresh every call (exact pre-B1 behaviour).
+// The RegExp source + flags are identical either way, so matches are byte-for-byte
+// the same. Safe to reuse: String#match with a global RegExp resets lastIndex
+// before and after matching, so a cached global pattern carries no state.
+const REGEX_PATTERN_VERSION = "aboutness.countTerm.v1";
 function countTerm(hay: string, term: string): number {
   if (term.length < 3) return 0;
-  const m = hay.match(new RegExp(`(?<![\\p{L}\\p{N}])${esc(term)}(?![\\p{L}\\p{N}])`, "giu"));
+  const re = getCachedRegex(
+    `${REGEX_PATTERN_VERSION}\u0000${term}`,
+    () => new RegExp(`(?<![\\p{L}\\p{N}])${esc(term)}(?![\\p{L}\\p{N}])`, "giu"),
+  );
+  const m = hay.match(re);
   return m ? m.length : 0;
 }
 

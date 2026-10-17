@@ -5,6 +5,7 @@ import type { TerminologyMap } from "./terminology-discovery.js";
 import { flattenTerms } from "./terminology-discovery.js";
 import type { IssuerProfile } from "./issuer-profile.js";
 import { scoreEntityMatch } from "./issuer-profile.js";
+import { isPrepComputeCacheEnabled } from "./prep-compute-cache.js";
 
 /**
  * CHANGE 2 flag — chunk-gate fail-open safety net + preserveIfOnlySource.
@@ -26,6 +27,14 @@ export interface BM25Index {
   docLengths: number[];
   avgDocLength: number;
   totalDocs: number;
+  // B1/WP10 (exact-equivalence optimisation): per-document term-frequency maps,
+  // precomputed ONCE at index-build time. bm25Score() otherwise re-tokenises and
+  // rebuilds this map on EVERY (chunk × measure) call. Present only when the
+  // prep-compute cache policy is ON; when absent, bm25Score() falls back to the
+  // exact pre-B1 recompute path. Byte-identical by construction: each entry is
+  // built from the SAME tokenize(chunk) that produced docFreqs/docLengths, so the
+  // score is identical whether read from here or recomputed.
+  termFreqsByDoc?: Array<Map<string, number>>;
 }
 
 // CJK Unicode ranges: CJK Unified Ideographs, Extension A, Hiragana, Katakana,
@@ -344,18 +353,30 @@ export function buildBM25Index(chunks: string[]): BM25Index {
   const docLengths: number[] = [];
   let totalLength = 0;
 
+  // B1/WP10: when the prep-compute cache is ON, memoise each document's
+  // term-frequency Map here — reusing the SAME tokenize(chunk) that produces
+  // docFreqs/docLengths — so bm25Score() need not re-tokenise and rebuild it on
+  // every (chunk × measure) call. Byte-identical by construction: identical
+  // tokens → identical termFreqs → identical score. When OFF, termFreqsByDoc is
+  // left undefined and bm25Score() takes the exact pre-B1 recompute path.
+  const cacheEnabled = isPrepComputeCacheEnabled();
+  const termFreqsByDoc: Array<Map<string, number>> | undefined = cacheEnabled ? [] : undefined;
+
   for (const chunk of chunks) {
     const tokens = tokenize(chunk);
     docLengths.push(tokens.length);
     totalLength += tokens.length;
 
     const seen = new Set<string>();
+    const termFreqs = cacheEnabled ? new Map<string, number>() : undefined;
     for (const token of tokens) {
+      if (termFreqs) termFreqs.set(token, (termFreqs.get(token) || 0) + 1);
       if (!seen.has(token)) {
         seen.add(token);
         docFreqs.set(token, (docFreqs.get(token) || 0) + 1);
       }
     }
+    if (termFreqsByDoc && termFreqs) termFreqsByDoc.push(termFreqs);
   }
 
   return {
@@ -364,6 +385,7 @@ export function buildBM25Index(chunks: string[]): BM25Index {
     docLengths,
     avgDocLength: totalLength / (chunks.length || 1),
     totalDocs: chunks.length,
+    ...(termFreqsByDoc ? { termFreqsByDoc } : {}),
   };
 }
 
@@ -374,14 +396,20 @@ export function bm25Score(
   k1: number = 1.5,
   b: number = 0.75
 ): number {
-  const docTokens = tokenize(index.documents[docIndex]);
   const docLength = index.docLengths[docIndex];
   let score = 0;
 
-  // Count term frequencies in this document
-  const termFreqs = new Map<string, number>();
-  for (const token of docTokens) {
-    termFreqs.set(token, (termFreqs.get(token) || 0) + 1);
+  // B1/WP10: reuse the precomputed per-doc term-frequency Map when present (cache
+  // ON), else take the exact pre-B1 path — re-tokenise the document and rebuild
+  // the term-frequency Map. Both produce identical termFreqs for identical input,
+  // so the score below is byte-identical whichever branch runs.
+  let termFreqs = index.termFreqsByDoc?.[docIndex];
+  if (!termFreqs) {
+    const docTokens = tokenize(index.documents[docIndex]);
+    termFreqs = new Map<string, number>();
+    for (const token of docTokens) {
+      termFreqs.set(token, (termFreqs.get(token) || 0) + 1);
+    }
   }
 
   for (const term of query) {
