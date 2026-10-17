@@ -233,7 +233,7 @@ accuracy/completeness = **rollback** (hard rule).
 | B3 | c25afd4 | prod (all 4 svc, auto-deploy from main; health `{"status":"ok","version":"3.0.0"}`) | n/a (no batch — equivalence-preserving at shipped-off default) | WP11/B3 discovery dedupe + bounded parallelism. New module `server/lib/discovery-parallel.ts` (content-hash candidate dedupe + bounded-concurrency `webSearchBatch`), integrated into `discovery.ts` and wired into the Generic-Artefact + R6a IR-Platform discovery lanes. Versioned kill-switch **`DISCOVERY_PARALLEL_POLICY`** (`serial` DEFAULT = current prod/byte-identical / `shadow` = run parallel path for telemetry, return serial result / `on` = apply parallel+dedupe) plus knob `DISCOVERY_MAX_PARALLEL` (default 4). **Equivalence proven: same candidate SET and same accumulation order as serial** — dedupe only collapses exact content-hash duplicates, so the discovered corpus is identical; parallelism only reduces wall-clock + near-dup web calls. **DP01–DP10 unit suite 15/15 pass.** tsc: 0 new diagnostics in changed files (62 pre-existing elsewhere). At the shipped-off default (`serial`) the parallel path is skipped entirely ⇒ **Total cells changing Y→N = 0, N→Y = 0, Total Flips = 0** (no scoring surface touched; discovery corpus byte-identical). | ✅ keep (default `serial`/off) | `DISCOVERY_PARALLEL_POLICY=serial` (default; no redeploy needed) or revert c25afd4 (3-file self-contained module + integration; no schema/env change) |
 | B4 | 08212cd (module) + 957c263 (wiring) | prod (all 4 svc, auto-deploy from main; health `{"status":"ok","version":"3.0.0"}`) | n/a (no batch — equivalence-preserving at shipped-off default) | WP12/B4 layered content-hash cache. **Gate satisfied: B4 needs A1 (e6b2e85+08b56ee, batch 1285 ✅) + A3 (3990bcd+15bbcc0, enforce-on ✅).** New module `server/lib/cache-layers.ts` (7-level layered cache design with sha256 content-hash keys reusing corpus-replay/run-manifest primitives; tenant isolation via `workspaceId` in every key; reason-aware negative caching; A1/A3 composition; FIFO eviction at `CACHE_LAYER_MAX_ENTRIES`=2048) + wiring layer `server/lib/pipeline-cache.ts` (singleton stores + gated wrappers). Versioned kill-switch **`CACHE_LAYER_POLICY`** (`off` DEFAULT = current prod/byte-identical / `shadow` = compute+compare, return fresh / `on` = serve cache). **Scope — honestly bounded: 2 of 7 layers wired** — (1) **bytes layer** (pipeline.ts fetch phase: caches extracted text by `{workspaceId,url}` ⇒ a warm hit skips network I/O *and* PDF extraction/OCR — the dominant 446s→10.8s lever) and (2) **index layer** (analyzer.ts `summarizeDocuments`: caches BM25-selected corpora). **Deferred (not wired): extraction, OCR, eligibility, packs, scores** — each carries an A4 (extraction-fidelity) / A1 (coverage-labelling) invariant-preservation risk or LLM-output non-determinism risk that would need its own equivalence gate; recorded here so the 2/7 scope is explicit, not implied-complete. **cache-layers 15/15 + cache-wiring integration 12/12 pass** (off-bypass, cold==warm under `on`, shadow-returns-fresh, freshness-keyed-by-content-hash, tenant isolation). tsc: 0 new diagnostics in changed files. At the shipped-off default (`off`) both wrapped seams bypass the cache entirely ⇒ **Total cells changing Y→N = 0, N→Y = 0, Total Flips = 0** (byte-identical to prod). | ✅ keep (default `off`); extraction/OCR/eligibility/packs/scores layers DEFERRED to a future WP extension | `CACHE_LAYER_POLICY=off` (default; no redeploy) or revert 957c263 (wiring) then 08212cd (module); no schema/env change |
 | A6 | ec8aa4e | prod (all 4 svc, auto-deploy from main; push 7134eb5..ec8aa4e; health `{"status":"ok","version":"3.0.0"}`) | n/a (no batch — governance, verified by output/diff; shadow default = verdict-invariant by construction) | WP07/A6 framework-contract + test-drive defect governance. New module `server/lib/framework-contract.ts` (+ test) that (1) assembles a strict per-measure CONTRACT view (construct · decidable definition · qualifying/non-qualifying evidence · source/entity/time scope · applicability · implementation-vs-aspiration · anti-inference · uncertainty) by **reusing existing framework-v2 modules** rather than duplicating them, (2) classifies test-drive defects into 7 real causes (framework-ambiguity / discovery / acquisition-extraction / entity-provenance / retrieval / scoring / technical) so a missed document routes to a RESEARCH fix not a looser rubric, and (3) enforces the Goodhart no-distribution-tuning rule as a HARD RULE (prevalence can never move a definition or score; accepted edits emit a NEW framework version with an impact preview, never a silent rewrite; company-specific fixes rejected unless a universal data correction). Versioned kill-switch **`FRAMEWORK_CONTRACT_POLICY`** (`shadow` DEFAULT = non-mutating passthrough / `enforce` = NOT set in prod), `FRAMEWORK_CONTRACT_POLICY_VERSION=1`. `runContractGovernance(...).publishedScoresMutated` is **always false ⇒ zero published scores changed by construction**. Reused (not duplicated): scoring-contract.ts, structured-guidance.ts (extractGuidanceObject), anti-inference.ts, rules.ts, eligibility-decision.ts, root-cause-diagnostic.ts, builder-improve.ts, emitHardenedFramework. Genuine gaps closed: G1 assembled contract view + 2 invariants (examples illustrate, never mutate; search hints ≠ eligibility); G2 7-category defect classifier w/ missed-doc→research routing; G3 no-distribution-tuning validator w/ new-version + impact-preview (ImpactPreview exposes cellsYesToNo/cellsNoToYes/cellsChanged for any future enforce run). **Tests 32/32 (FW01–FW07 = 3/5/3/3/3/2/3 + kill-switch-default 3 + non-mutation 3 + serialization/assembly 6).** tsc: 0 new diagnostics in changed files (62 pre-existing baseline unchanged). **At shipped-off default (`shadow`): Total cells Y→N = 0, N→Y = 0, Total Flips = 0** (no scoring surface mutated). | ✅ keep (default `shadow`) | `FRAMEWORK_CONTRACT_POLICY=shadow` is the default (no redeploy); or revert ec8aa4e (2-file self-contained module+test; no schema/env change) |
-| B5 | 154ff9b | prod (all 4 svc, auto-deploy from main; app+worker SUCCESS on 154ff9b; health `{"status":"ok","version":"3.0.0"}`) | n/a (no batch — shipped default-off; byte-identical at default; live GATE5 PENDING APPROVAL) | WP13-C/D/E/B5 model-cost reductions (semantic — ships DORMANT). New framework-level module `server/lib/model-cost.ts` (DB-free, no company/topic branches) with three levers: **(C, headline) `planContextTrim`** — trims *repeated* context but **provably never *decisive* context (LM04)**: reuses A5's `computeDecisivePassages` oracle (not reimplemented) and mirrors `planBoundedExpansion`'s subsumption rule in the *trim* direction — a pack passage is a trim candidate ONLY if it is non-decisive AND every decisive token + source link it carries is already covered by a kept passage. HARD INVARIANT (`verifyTrimPreservesRecall`): decisive pack passages ⊆ kept set, recall preserved with identical misses ⇒ relevant/decisive text is NEVER dropped; **(D) `stablePrefixOrder`** — partitions invariant boilerplate first / volatile per-company evidence last for provider prompt-cache hits (pure reorder preserving the content multiset); **(E) `routeModel`** — cheaper-first-pass-with-escalation **scaffold only** (NOT wired to live models; verification stages always strong; strong model at off; pending GATE5 per-measure/topic/language proof). Versioned kill-switch **`CONTEXT_COST_POLICY`** (`off` DEFAULT = current prod/byte-identical / `shadow` = savings telemetry, pack NOT modified / `on` = apply trim), `CONTEXT_COST_POLICY_VERSION=1`, `resolveContextCostPolicy()` fail-safe (unrecognized → off, total, never throws). Wiring: lever C gated at the A5 evidence seam in `analyzer.ts` (after `finalEvidence` settles) — at `off` the whole block is SKIPPED (no extra work, pack byte-identical); `shadow` logs savings without mutating; `on` applies; fail-open on error. Levers D/E module-only scaffolds (not wired). **Tests 11/11 (model-cost.test.ts): CC01 headline — every decisive pack passage ∈ keptIds + recall unchanged across negative/contradiction/qualifier/low-freq/table/single-decisive cases; CC02 only provably-redundant repeats trimmed; CC03 off-passthrough; CC04 shadow verdict-invariant; CC05 prefix multiset preserved + off byte-identical; CC06 routing (verify never cheap, escalation fires, off=strong); CC07 resolver fail-safe/frozen; CC08 determinism; CC-G3 byte-identical-at-off proof.** tsc: 62 before → 62 after, **0 new** diagnostics in changed files. **At shipped-off default (`off`): reconstructed pack == original ⇒ Total cells Y→N = 0, N→Y = 0, Total Flips = 0** by construction (no scoring surface mutated). | ✅ keep (default `off`); **live GATE5 validation + enablement PENDING USER APPROVAL** (semantic WP — needs truth-based held-out proof per measure/topic/language before any `on` flip; verification stays on) | `CONTEXT_COST_POLICY=off` is the default (no redeploy); or revert 154ff9b (3-file self-contained module+test+gated wiring; no schema/env change) |
+| B5 | 154ff9b → on: 8725521 | prod (all 4 svc, auto-deploy from main; shipped-dormant push SUCCESS on 154ff9b; **GATE5 flip push 2026-10-17 SUCCESS on 8725521 all 4 svc**; health `{"status":"ok","version":"3.0.0"}`) | 1294 (corpus-replay off 1293's frozen corpus; snapshot gitSha=8725521 all 10 co ⇒ worker on new code ⇒ policy=on; canary-first company 9) | WP13-C/D/E/B5 model-cost reductions (semantic — ships DORMANT). New framework-level module `server/lib/model-cost.ts` (DB-free, no company/topic branches) with three levers: **(C, headline) `planContextTrim`** — trims *repeated* context but **provably never *decisive* context (LM04)**: reuses A5's `computeDecisivePassages` oracle (not reimplemented) and mirrors `planBoundedExpansion`'s subsumption rule in the *trim* direction — a pack passage is a trim candidate ONLY if it is non-decisive AND every decisive token + source link it carries is already covered by a kept passage. HARD INVARIANT (`verifyTrimPreservesRecall`): decisive pack passages ⊆ kept set, recall preserved with identical misses ⇒ relevant/decisive text is NEVER dropped; **(D) `stablePrefixOrder`** — partitions invariant boilerplate first / volatile per-company evidence last for provider prompt-cache hits (pure reorder preserving the content multiset); **(E) `routeModel`** — cheaper-first-pass-with-escalation **scaffold only** (NOT wired to live models; verification stages always strong; strong model at off; pending GATE5 per-measure/topic/language proof). Versioned kill-switch **`CONTEXT_COST_POLICY`** (`off` DEFAULT = current prod/byte-identical / `shadow` = savings telemetry, pack NOT modified / `on` = apply trim), `CONTEXT_COST_POLICY_VERSION=1`, `resolveContextCostPolicy()` fail-safe (unrecognized → off, total, never throws). Wiring: lever C gated at the A5 evidence seam in `analyzer.ts` (after `finalEvidence` settles) — at `off` the whole block is SKIPPED (no extra work, pack byte-identical); `shadow` logs savings without mutating; `on` applies; fail-open on error. Levers D/E module-only scaffolds (not wired). **Tests 11/11 (model-cost.test.ts): CC01 headline — every decisive pack passage ∈ keptIds + recall unchanged across negative/contradiction/qualifier/low-freq/table/single-decisive cases; CC02 only provably-redundant repeats trimmed; CC03 off-passthrough; CC04 shadow verdict-invariant; CC05 prefix multiset preserved + off byte-identical; CC06 routing (verify never cheap, escalation fires, off=strong); CC07 resolver fail-safe/frozen; CC08 determinism; CC-G3 byte-identical-at-off proof.** tsc: 62 before → 62 after, **0 new** diagnostics in changed files. **At shipped-off default (`off`): reconstructed pack == original ⇒ Total cells Y→N = 0, N→Y = 0, Total Flips = 0** by construction. **GATE5 (2026-10-17, user-approved): default flipped `off`→`on` via code (`8725521`); env still overrides.** STEP 1 offline held-out proof over 1293's frozen corpus: **invariant holds 360/360, 0 violations** (decisive text never dropped), trim fired 326/360, aggregate pack-token reduction **25.39%** (3,920,993→2,925,442; harness `4156742`). Live corpus-replay batch 1294 off 1293 (canary-first co 9; snapshot gitSha=8725521 all 10 co ⇒ policy=on): 10/10, all ms=36. **Token/cost: prompt tok 13,937,501→12,221,478 (−12.31%), total tok −11.82%, cost $4.1684→$3.6851 (−11.59%), identical 1,580 calls — a REDUCTION (the B5 goal).** **Cell-flip vs 1293: Yes 67→70, Net +3, Y→N=4, N→Y=7, Total Flips=11** (consistency PASS; below noise floor A1 21/A2 20/A3 28/B1 19/A5 16; unstructured — 9 measures/5 co, 5 co zero flips; see 2026-10-17 section). **Total cells Y→N=4, N→Y=7.** | ✅ keep — now default **on** via `8725521` (GATE5 live batch 1294; Y→N=4, N→Y=7, Total Flips=11, Yes 67→70; −12.31% prompt tok / −11.59% cost; invariant 360/360; see 2026-10-17 section) | `CONTEXT_COST_POLICY=off` (or `=shadow`) restores the byte-identical pre-B5 pack with NO redeploy; or revert `8725521` (3-file default+comments+test, no schema change) then `154ff9b` to remove the whole B5 feature |
 | B6 | — | — | — | — | pending | — |
 | A9 | — | — | — | — | pending | — |
 | B-dur | — | — | — | — | pending | — |
@@ -895,3 +895,116 @@ and net-positive for recall with no collapse or mass over-flip.
 **Rollback.** `RECALL_EXPANSION_POLICY=off` (or `=shadow`) in the prod env restores prior behaviour with **no
 redeploy**; or revert `f15f8b6` (3-file default+comments+test change, no schema change), and `ca0939c` to
 remove the whole A5 feature.
+
+
+
+### B5 / WP13-C — live validation batch: CONTEXT_COST_POLICY flipped `off`→`on` (2026-10-17, GATE5)
+
+**Decision.** User-approved GATE5: flip the B5 kill-switch default from `off` to `on` in production and run ONE
+paid live corpus-replay validation batch to confirm the context-trim is verdict-invariant (near-zero cell
+flips) WHILE delivering the designed token/cost reduction.
+
+**STEP 1 — offline held-out proof (free, no paid LLM), authoritative for the HARD INVARIANT.** Over the frozen
+corpus of baseline batch **1293** (A5-on, B1-on, B5-off), all **360 cells** (10 companies × 36 measures) were
+reconstructed as production produces them — REAL `summarizeDocuments` (retrievalV2=false, the workspace-3
+setting) + REAL `buildEvidencePacksForCategory` per category + A5 `planBoundedExpansion` then B5
+`planContextTrim` at the SAME seam/order as `analyzer.ts` — and `verifyTrimPreservesRecall` asserted on every
+cell. Result: **invariant holds 360/360, 0 violations** (decisive pack passages ⊆ kept set, recall preserved,
+identical misses) ⇒ relevant/decisive text is NEVER dropped. Trim fired on **326/360** cells; aggregate pack
+token reduction **25.39%** (3,920,993 → 2,925,442 pack tokens; 995,551 saved). Per-company pack reduction
+ranged 6.30% (Aflac) to 32.02% (Magna), each 36/36 invariant-OK. Harness + artifacts committed as `4156742`
+(`server/scripts/gate_b5_offline_proof.ts`, `gate_b5_out/gate_b5_offline_proof.{json,md}`). This 25.39% is the
+pack-only first-pass projection; the live batch below measures the true end-to-end prompt delta.
+
+**How the flip was shipped (code default, not env).** The Railway CLI on this VM is unauthenticated and env
+vars cannot be set on the services from here, so — exactly as the A3 enforce-on (`15bbcc0`) and A5 GATE5
+(`f15f8b6`) precedents — the default was flipped **in code** and deployed via push→auto-deploy:
+- commit **`8725521`** `feat(WP13/B5): flip CONTEXT_COST_POLICY default off->on (GATE5)`.
+- 3 files only: `server/lib/model-cost.ts` (constant `DEFAULT_CONTEXT_COST_POLICY = "on"` + module/kill-switch/
+  resolver doc comments), `server/lib/analyzer.ts` (gate-region + import comments updated to the new default;
+  the runtime gate `contextCostPolicy !== "off" && settings.useBm25Retrieval && finalEvidence` is unchanged),
+  and `server/lib/model-cost.test.ts` (CC03 rewritten to assert default `on` + prove env `off`/`shadow`/
+  explicit-arg override; CC07 bad-env now fail-safe to `on`; CC-G3 sets env `off` explicitly for the
+  byte-identical rollback proof). Framework-level only — zero per-company/topic strings.
+- `CONTEXT_COST_POLICY` env **still overrides** the default (unset ⇒ resolves to `on`; `=off`/`=shadow`
+  restores prior behaviour with no redeploy). Unrecognised values still fail-safe — now to `on`.
+- Validation before push: model-cost 11/11; adjacent suites green (evidence-recall 8/8, evidence-gate 14/14,
+  evidence-gate-a2 17/17, passage-retrieval 35/35, passage-retrieval-allowlist 4/4,
+  passage-retrieval-empty-corpus 7/7); `tsc --noEmit` 62 before → 62 after, **0 new diagnostics in the changed
+  files**. Pushed `d491c69..8725521 main`. All 4 Railway services (production + sprint-10-preview, app +
+  worker) redeployed with status SUCCESS on **`8725521`**; health `{"status":"ok","version":"3.0.0"}`.
+
+**Policy=on confirmed empirically before the full spend (gitSha signal).** Prod has no `CONTEXT_COST_POLICY`
+env var, so the resolved policy on the worker == the deployed code default. To cap waste under worker
+concurrency, the batch was enqueued **canary-first**: company 9 alone was queued; it completed healthy (ms=36)
+and its `pipeline_version` / snapshot `manifest.gitSha` = **`8725521`** (= the new SHA) ⇒ the worker ran the
+new code ⇒ policy resolved to `on`. The remaining 9 were then released; the final snapshot gitSha =
+`8725521` on **all 360 measure_scores rows (all 10 companies)**.
+
+**Batch method — corpus-replay off 1293.** The replay re-scores **1293's exact frozen corpus** with the
+current deployed code:
+- replay batch **1294**, score-only, `skipFetch:true`, `sourceBatchId:1293`; the worker loads the frozen
+  corpus from `batch_corpus[1293]` (throws if missing — no live-doc fallback) and forces fresh LLM re-scoring
+  (`freshScoring = !!sourceBatchId`). Baseline 1293 was scored under B5-off (gitSha `57716af`, pre-flip), so
+  this isolates the pure B5 context-trim effect with A5+B1 on in BOTH runs.
+- source corpus fingerprint `7811721a4ba3941af2772b8f44a067fc32c4b44f7b2a8b7a88e93fd9ad364c8b`;
+  run key `run_f92811fbf758796070792a3505a07a49e4042dd9ab08cbedc33282c14d8ed999`.
+- enqueued storage-direct (mirrors `/api/analyze/replay`) because the admin/session auth paths are not
+  reachable from this VM — precedent `a5_replay_enqueue.ts` (reused unchanged; labels via env only).
+- **10/10 completed**, all 10 companies **ms=36** (no measure collapse).
+
+**Token/cost delta — variant 1294 (policy=on) vs baseline 1293 (policy=off), same 1,580 scoring calls
+(deepseek-chat):**
+
+| Metric | Baseline 1293 (off) | Variant 1294 (on) | Delta |
+|---|---|---|---|
+| Prompt tokens | 13,937,501 | 12,221,478 | **−1,716,023 (−12.31%)** |
+| Total tokens | 14,570,574 | 12,847,942 | **−1,722,632 (−11.82%)** |
+| Cost (USD) | $4.1684 | $3.6851 | **−$0.4833 (−11.59%)** |
+
+Per-company prompt-token reduction was consistent across all 10 companies (10.4% Martin Marietta → 14.4%
+Stryker) — the trim fired everywhere, not on a subset. The call count is identical (1,580 → 1,580), confirming
+no structural pipeline change: the saving is purely smaller prompts. This is a **REDUCTION**, the designed
+outcome of B5 (opposite of A5, which added tokens). The live −12.31% prompt delta is smaller than the offline
+−25.39% pack projection because the offline figure measured only the evidence-pack portion, whereas the live
+prompt also carries fixed framework rubric / instruction boilerplate the trim does not touch; both are
+directionally consistent.
+
+**Cell-flip impact — variant 1294 (policy=on) vs baseline 1293 (policy=off), 10 companies × 36 measures = 360 cells:**
+
+| Company ID | Company | Yes (baseline 1293) | Yes (variant 1294) | Net | Y→N | N→Y | Total Flips |
+|---|---|---|---|---|---|---|---|
+| 9 | CSX Corporation | 5 | 5 | +0 | 0 | 0 | 0 |
+| 10 | MAGNA INTERNATIONAL INC. | 11 | 12 | +1 | 2 | 3 | 5 |
+| 11 | THE SOUTHERN COMPANY | 3 | 4 | +1 | 0 | 1 | 1 |
+| 12 | S&P GLOBAL INC. | 14 | 14 | +0 | 1 | 1 | 2 |
+| 13 | MARTIN MARIETTA MATERIALS, INC. | 0 | 0 | +0 | 0 | 0 | 0 |
+| 14 | DARDEN RESTAURANTS, INC. | 4 | 4 | +0 | 0 | 0 | 0 |
+| 15 | BCE INC. | 16 | 18 | +2 | 0 | 2 | 2 |
+| 16 | STRYKER CORPORATION | 10 | 9 | −1 | 1 | 0 | 1 |
+| 17 | AMPHENOL CORPORATION | 0 | 0 | +0 | 0 | 0 | 0 |
+| 18 | AFLAC INCORPORATED | 4 | 4 | +0 | 0 | 0 | 0 |
+| **ALL** | **Aggregate (10 companies)** | **67** | **70** | **+3** | **4** | **7** | **11** |
+
+**Total cells changing Y→N = 4, N→Y = 7.** Consistency check (Net == N→Y − Y→N): **PASS** (+3 == 7 − 4).
+Compare artifacts: `gate_b5_out/b5_flips_1293_vs_1294.{json,md}` (built by
+`server/scripts/compare_run_flips.ts 1293 1294`).
+
+**Reading — the 11 flips are LLM run-to-run noise, not a B5 regression.** Three independent lines of evidence:
+(1) **Below the established noise floor.** Prior paired comparisons on this same 10-company sample — with
+changes that do NOT touch the scoring surface or (A5) add evidence — recorded Total Flips of A1=21, A2=20,
+A3=28, B1=19, A5-GATE5=16. B5's **11** is below all of them. (2) **Unstructured.** The 11 flips are scattered
+across 9 distinct measures and 5 companies (companies 9, 13, 14, 17, 18 had **zero**), max 2 flips on any
+single measure, and bidirectional (4 Y→N, 7 N→Y) — not the concentrated, one-directional pattern a systematic
+regression would produce. (3) **Provably no dropped evidence.** STEP 1's invariant proof showed 0 decisive
+passages trimmed across all 360 cells, so B5 cannot have removed decisive evidence; the residual flips are
+near-threshold scoring variance from the (recall-preserving) smaller prompt. No measure collapse (all ms=36);
+the three all-No companies (Martin Marietta / Amphenol, and here Darden's 4) stay stable.
+
+**Pass bar / outcome.** ✅ Keep policy **on**. Near-zero, sub-noise-floor, unstructured flips WITH a measurable
+−12.31% prompt-token / −11.59% cost reduction — exactly the B5 success criterion. 10/10 clean, ms=36
+throughout, invariant proven 360/360 offline.
+
+**Rollback.** `CONTEXT_COST_POLICY=off` (or `=shadow`) in the prod env restores the byte-identical pre-B5 pack
+with **no redeploy**; or revert `8725521` (3-file default+comments+test change, no schema change), and
+`154ff9b` to remove the whole B5 feature.

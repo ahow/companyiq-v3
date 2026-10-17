@@ -1,0 +1,281 @@
+{
+  "baselineBatchId": 1293,
+  "variantBatchId": 1294,
+  "baselineAnalysisResultId": 810,
+  "variantAnalysisResultId": 811,
+  "generatedAt": "2026-10-17T23:19:36.121Z",
+  "cellCount": 360,
+  "companyCount": 10,
+  "measureCount": 36,
+  "perCompany": [
+    {
+      "companyId": 9,
+      "companyName": "CSX Corporation",
+      "cells": 36,
+      "yesBaseline": 5,
+      "yesVariant": 5,
+      "net": 0,
+      "yToN": 0,
+      "nToY": 0,
+      "totalFlips": 0,
+      "flipCells": []
+    },
+    {
+      "companyId": 10,
+      "companyName": "MAGNA INTERNATIONAL INC.",
+      "cells": 36,
+      "yesBaseline": 11,
+      "yesVariant": 12,
+      "net": 1,
+      "yToN": 2,
+      "nToY": 3,
+      "totalFlips": 5,
+      "flipCells": [
+        {
+          "cell": "10|1.2-board-oversight",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "10|2.5-generative-ai-use",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "10|2.7-ai-infrastructure",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "10|3.2-ai-risk-framework",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "10|3.7-ai-incident-management",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        }
+      ]
+    },
+    {
+      "companyId": 11,
+      "companyName": "THE SOUTHERN COMPANY",
+      "cells": 36,
+      "yesBaseline": 3,
+      "yesVariant": 4,
+      "net": 1,
+      "yToN": 0,
+      "nToY": 1,
+      "totalFlips": 1,
+      "flipCells": [
+        {
+          "cell": "11|2.5-generative-ai-use",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        }
+      ]
+    },
+    {
+      "companyId": 12,
+      "companyName": "S&P GLOBAL INC.",
+      "cells": 36,
+      "yesBaseline": 14,
+      "yesVariant": 14,
+      "net": 0,
+      "yToN": 1,
+      "nToY": 1,
+      "totalFlips": 2,
+      "flipCells": [
+        {
+          "cell": "12|1.2-board-oversight",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        },
+        {
+          "cell": "12|1.4-strategic-objectives",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        }
+      ]
+    },
+    {
+      "companyId": 13,
+      "companyName": "MARTIN MARIETTA MATERIALS, INC.",
+      "cells": 36,
+      "yesBaseline": 0,
+      "yesVariant": 0,
+      "net": 0,
+      "yToN": 0,
+      "nToY": 0,
+      "totalFlips": 0,
+      "flipCells": []
+    },
+    {
+      "companyId": 14,
+      "companyName": "DARDEN RESTAURANTS, INC.",
+      "cells": 36,
+      "yesBaseline": 4,
+      "yesVariant": 4,
+      "net": 0,
+      "yToN": 0,
+      "nToY": 0,
+      "totalFlips": 0,
+      "flipCells": []
+    },
+    {
+      "companyId": 15,
+      "companyName": "BCE INC.",
+      "cells": 36,
+      "yesBaseline": 16,
+      "yesVariant": 18,
+      "net": 2,
+      "yToN": 0,
+      "nToY": 2,
+      "totalFlips": 2,
+      "flipCells": [
+        {
+          "cell": "15|1.1-ai-strategy-document",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        },
+        {
+          "cell": "15|2.10-operational-efficiency",
+          "from": "No",
+          "to": "Yes",
+          "dir": "N->Y"
+        }
+      ]
+    },
+    {
+      "companyId": 16,
+      "companyName": "STRYKER CORPORATION",
+      "cells": 36,
+      "yesBaseline": 10,
+      "yesVariant": 9,
+      "net": -1,
+      "yToN": 1,
+      "nToY": 0,
+      "totalFlips": 1,
+      "flipCells": [
+        {
+          "cell": "16|2.4-customer-facing-ai",
+          "from": "Yes",
+          "to": "No",
+          "dir": "Y->N"
+        }
+      ]
+    },
+    {
+      "companyId": 17,
+      "companyName": "AMPHENOL CORPORATION",
+      "cells": 36,
+      "yesBaseline": 0,
+      "yesVariant": 0,
+      "net": 0,
+      "yToN": 0,
+      "nToY": 0,
+      "totalFlips": 0,
+      "flipCells": []
+    },
+    {
+      "companyId": 18,
+      "companyName": "AFLAC INCORPORATED",
+      "cells": 36,
+      "yesBaseline": 4,
+      "yesVariant": 4,
+      "net": 0,
+      "yToN": 0,
+      "nToY": 0,
+      "totalFlips": 0,
+      "flipCells": []
+    }
+  ],
+  "aggregate": {
+    "cells": 360,
+    "yesBaseline": 67,
+    "yesVariant": 70,
+    "net": 3,
+    "yToN": 4,
+    "nToY": 7,
+    "totalFlips": 11,
+    "flipCells": [
+      {
+        "cell": "10|1.2-board-oversight",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "10|2.5-generative-ai-use",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "10|2.7-ai-infrastructure",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "10|3.2-ai-risk-framework",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "10|3.7-ai-incident-management",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "11|2.5-generative-ai-use",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "12|1.2-board-oversight",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      },
+      {
+        "cell": "12|1.4-strategic-objectives",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "15|1.1-ai-strategy-document",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "15|2.10-operational-efficiency",
+        "from": "No",
+        "to": "Yes",
+        "dir": "N->Y"
+      },
+      {
+        "cell": "16|2.4-customer-facing-ai",
+        "from": "Yes",
+        "to": "No",
+        "dir": "Y->N"
+      }
+    ]
+  },
+  "consistencyOk": true
+}
