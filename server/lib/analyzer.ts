@@ -47,6 +47,15 @@ import {
   formatExpansionAppend,
   stablePassageId,
 } from "./evidence-recall.js";
+// B5 / WP13-C/D/E: model-cost context-trim. Kill-switch CONTEXT_COST_POLICY
+// DEFAULTS to "off" (DORMANT) — at the default this import's lever C block is
+// SKIPPED entirely, so the pack is byte-identical to current production. Only
+// =on applies the trim; =shadow computes savings telemetry without modifying
+// the pack. Lever C never drops a decisive passage. See server/lib/model-cost.ts.
+import {
+  resolveContextCostPolicy,
+  planContextTrim,
+} from "./model-cost.js";
 import type { IrTenantBinding } from "./provenance.js";
 import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
@@ -2635,6 +2644,58 @@ export async function analyzeCompanyMeasures(opts: {
         } catch (err) {
           console.warn(
             `[${companyName}] A5 recall-expansion ${measure.measureId}: skipped (${(err as Error)?.message ?? "error"}) — pack unchanged`,
+          );
+        }
+      }
+
+      // ── B5 / WP13-C: bounded context-trim (never-decisive) (kill-switch gated) ─
+      // DEFAULT = "off" (DORMANT): this entire block is SKIPPED, so finalEvidence is
+      // BYTE-IDENTICAL to the A5-settled pack (no extra work, no verdict change).
+      // "shadow": compute the trim plan + savings telemetry but DO NOT modify the
+      // pack (verdict-invariant). "on": trim ONLY provably-redundant repeats, never
+      // a decisive passage (planContextTrim's hard invariant). Framework-level: the
+      // decisive set is the reused A5 oracle — zero per-company/per-topic logic.
+      // Fail-open: any error leaves finalEvidence unchanged.
+      const contextCostPolicy = resolveContextCostPolicy();
+      if (contextCostPolicy !== "off" && settings.useBm25Retrieval && finalEvidence) {
+        try {
+          buildDeepIndex();
+          const corpusChunks: Chunk[] = deepChunks || [];
+          // Pack membership against the A5-settled finalEvidence (same seam rule as
+          // A5): a corpus chunk is in the pack iff its exact text is present. Order
+          // is the pack order so the trim preserves a stable kept-order.
+          const trimPackChunks = corpusChunks.filter((c) => c.text && finalEvidence.includes(c.text));
+          const trimPlan = planContextTrim({
+            measure,
+            packChunks: trimPackChunks,
+            corpusChunks,
+            apply: true, // compute the real plan (telemetry for shadow, applied only under "on")
+          });
+          if (contextCostPolicy === "on" && trimPlan.fired) {
+            // APPLY: drop ONLY the provably-redundant trimmed passages' text. The
+            // decisive set is a subset of keptIds by construction, so recall is
+            // preserved exactly. Remove each trimmed chunk's verbatim text.
+            const keptSet = new Set(trimPlan.keptIds);
+            let trimmed = finalEvidence;
+            for (const c of trimPackChunks) {
+              if (!c.text) continue;
+              if (keptSet.has(stablePassageId(c))) continue;
+              trimmed = trimmed.split(c.text).join("");
+            }
+            finalEvidence = trimmed;
+            console.log(
+              `[${companyName}] B5-TRIM ${measure.measureId}: ${trimPlan.reason}`,
+            );
+          } else {
+            // SHADOW (or "on" with nothing trimmable): telemetry only, pack NOT modified.
+            console.log(
+              `[${companyName}] B5-SHADOW ${measure.measureId}: trimmable=${trimPlan.trimmedIds.length} ` +
+                `bytesSaved=${trimPlan.bytesSaved} decisiveKept=${trimPlan.decisivePackCount} policy=${contextCostPolicy}`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[${companyName}] B5 context-trim ${measure.measureId}: skipped (${(err as Error)?.message ?? "error"}) — pack unchanged`,
           );
         }
       }
