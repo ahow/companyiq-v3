@@ -298,3 +298,32 @@ export function formatHeartbeatLog(rec: HeartbeatRecord): string {
     `total=${Math.round(rec.totalElapsedMs)}ms waits[${waits}] fp=${rec.fingerprint.slice(0, 8)}`
   );
 }
+
+/**
+ * Pure M1 wiring helper — turn one shared-resource broker reading (the shape
+ * returned by processorSlotBroker.<resource>.state(): `{active, waiting, max}`)
+ * into a queue-wait sample for the worker heartbeat. This is what finally gives
+ * recordQueueWait() a caller and closes the empty-`waits[]` gap called out in
+ * Issue 3 part (1) ("Log queue wait time for every shared resource").
+ *
+ * Semantics: when at least one task is WAITING for a permit at the sampling
+ * instant, the resource is under contention and the in-flight job accrued ~
+ * `intervalMs` of additional wait during this heartbeat window, so we emit a
+ * still-queued sample (grantedAt=null, waitedMs≈intervalMs). When nothing is
+ * waiting there is no contention to record and it returns null (no sample).
+ * Pure, deterministic, never throws — safe to call from the heartbeat timer.
+ * At the shipped-off default the heartbeat never builds a ledger, so this is
+ * never invoked ⇒ byte-identical.
+ */
+export function observeResourceWait(input: {
+  resource: SharedResource;
+  waiting: number;
+  intervalMs: number;
+}): QueueWaitSample | null {
+  if (!SHARED_RESOURCES.includes(input.resource)) return null;
+  const waiting = Number(input.waiting);
+  if (!Number.isFinite(waiting) || waiting <= 0) return null;
+  const intervalMs = Number(input.intervalMs);
+  const waitedMs = Number.isFinite(intervalMs) && intervalMs > 0 ? Math.floor(intervalMs) : 0;
+  return { resource: input.resource, waitedMs, grantedAt: null };
+}

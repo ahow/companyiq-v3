@@ -334,6 +334,41 @@ export function evaluateTimeBudget(input: {
   };
 }
 
+// ─── Span → progress adapter (the heartbeat wiring seam) ─────────────────────
+
+/** Minimal structural shape of a stage span (cf. stage-instrumentation StageSpan). */
+export interface StageSpanLike {
+  stage: string;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+/**
+ * Pure adapter — convert the StageLedger's live spans (as captured at a worker
+ * heartbeat snapshot) into the StageProgress[] evaluateTimeBudget consumes. This
+ * is the wiring seam that lets "budgeted"/"shadow" evaluate a REAL run's stage
+ * timing at the heartbeat (not a synthetic input): an open span (endedAt === null)
+ * is a still-running stage whose elapsed is measured to `now`; a closed span is
+ * completed and is therefore never degraded. Deterministic; never throws.
+ */
+export function stageProgressFromSpans(
+  spans: readonly StageSpanLike[] | undefined,
+  now: number,
+): StageProgress[] {
+  if (!spans || !spans.length) return [];
+  const out: StageProgress[] = [];
+  for (const s of spans) {
+    if (!s || typeof s.stage !== "string") continue;
+    const started = Number(s.startedAt);
+    if (!Number.isFinite(started)) continue;
+    const completed = s.endedAt !== null && s.endedAt !== undefined;
+    const end = completed ? Number(s.endedAt) : Number(now);
+    const elapsedMs = Math.max(0, (Number.isFinite(end) ? end : started) - started);
+    out.push({ stage: s.stage, elapsedMs, completed });
+  }
+  return out;
+}
+
 // ─── Evidence-retention guard (explicit, test-asserted) ──────────────────────
 
 /**

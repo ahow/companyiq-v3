@@ -28,6 +28,10 @@ import {
 import { noteRateLimited } from "./adaptive-concurrency.js";
 import { dispatchRevokedReason, OperationAbortedError, isOperationAbortedError, type OperationScope } from "./lifecycle-fence.js";
 import { beginStage } from "./diag-context.js";
+// Phase 3 / Issue 3 (Scale) — M4 pool-separation lever. At the SHIPPED DEFAULT
+// (RESOURCE_POOL_POLICY unset → "shared") resolveBrowserPoolSlots returns exactly
+// the env/default MAX_CONCURRENT_BROWSER value, so this seam is byte-identical.
+import { resolveBrowserPoolSlots } from "./resource-pools.js";
 import { recordPaidCall } from "./paid-call-attribution.js";
 import { isIsolatedChild, remoteAcquire, remoteRelease, registerDescendantGroup, emitLeaseEvent, nextOpId } from "./isolation-ipc.js";
 
@@ -1305,7 +1309,19 @@ const BROWSER_FETCH_TIMEOUT = parseInt(process.env.BROWSER_FETCH_TIMEOUT_MS || "
 // The shared-browser model is safe for concurrent pages: each fetch opens its
 // own page (browser.newPage()) on the one shared Chromium instance, and
 // getSharedBrowser() serialises the launch itself behind sharedBrowserLaunching.
-const MAX_CONCURRENT_BROWSER = parseInt(process.env.MAX_CONCURRENT_BROWSER || "1", 10);
+// M4 pool-separation lever (RESOURCE_POOL_POLICY). At the DEFAULT "shared" this is
+// byte-identical to `parseInt(process.env.MAX_CONCURRENT_BROWSER||"1")`. At
+// "separated" it becomes the bounded browser-recovery pool size (clamped into
+// [sharedDefault, BROWSER_SEPARATED_MAX], default cap 3) so slow browser recovery
+// for one company cannot serialise the whole worker behind a single slot, while
+// the B6 connection ceiling is preserved by construction. "shadow" is non-mutating.
+const _browserPool = resolveBrowserPoolSlots({
+  sharedDefault: parseInt(process.env.MAX_CONCURRENT_BROWSER || "1", 10),
+});
+const MAX_CONCURRENT_BROWSER = _browserPool.slots;
+if (_browserPool.policy !== "shared") {
+  console.log(`[RESOURCE-POOL] policy=${_browserPool.policy} browser slots=${MAX_CONCURRENT_BROWSER} (sharedDefault=${_browserPool.sharedDefault}) — ${_browserPool.reason}`);
+}
 let activeBrowserFetches = 0;
 // batch-1277: queued waiters are now cancellable objects (not bare resolvers) so
 // a waiter whose operation scope aborts (deadline elapsed / attempt revoked)

@@ -33,9 +33,11 @@ import { loadAdaptiveConfig, decideConcurrency, getSignalSnapshot } from "./lib/
 import { runWithLlmContext } from "./lib/llm-usage.js";
 import { isolationEnabled, runPipelineIsolated } from "./lib/job-isolation.js";
 import { isRetriableError, fenceCancelledResult } from "./lib/retry-policy.js";
-import { enforceBatchStopRule, readStopRuleThreshold, runStopRuleCancelSequence, COUNT_BATCH_FAILURES_SQL } from "./lib/batch-stop-rule.js";
+import { enforceBatchStopRule, readStopRuleThreshold, runStopRuleCancelSequence, COUNT_BATCH_FAILURES_SQL, isStopRuleFailure } from "./lib/batch-stop-rule.js";
 import { resolveBatchResiliencePolicy, decideBatchContinuation, resolveResilienceConfig } from "./lib/batch-resilience-policy.js";
-import { resolveStageInstrumentationPolicy, StageLedger, formatHeartbeatLog } from "./lib/stage-instrumentation.js";
+import { resolveStageInstrumentationPolicy, StageLedger, formatHeartbeatLog, observeResourceWait } from "./lib/stage-instrumentation.js";
+import { resolvePipelineTimeBudgetPolicy, resolveEffectiveBudget, evaluateTimeBudget, stageProgressFromSpans } from "./lib/pipeline-time-budget.js";
+import { processorSlotBroker } from "./lib/processor.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
 import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
 import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
@@ -413,6 +415,15 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     : new StageLedger({ workspaceId, batchId, jobId: jobId as number, attemptId, attemptNumber: currentAttempt, companyId, frameworkId });
   if (stageLedger) stageLedger.startStage("pipeline", Date.now());
 
+  // Phase 3 / Issue 3 — M2 per-stage time-budget lever, consulted at the heartbeat
+  // for OBSERVABILITY only. DEFAULT ("wallclock") skips the evaluation entirely;
+  // the hard guillotine is owned by job-isolation.ts::pipelineTimeoutMs (which
+  // itself returns the legacy value at wallclock), so wiring the decision here
+  // never changes control flow — it surfaces, on real in-flight spans, which
+  // stage WOULD be degraded to a retryable transient source under "budgeted".
+  const timeBudgetPolicy = resolvePipelineTimeBudgetPolicy();
+  const timeBudget = timeBudgetPolicy === "wallclock" ? null : resolveEffectiveBudget({ policy: timeBudgetPolicy });
+
   const heartbeatIntervalMs = parseInt(process.env.JOB_HEARTBEAT_MS || "30000", 10);
   const heartbeatTimer = setInterval(() => {
     void storage.updateJobProgress(jobId, { stage: "pipeline", companyId, frameworkId }, ownership).catch((error: any) => {
@@ -420,7 +431,28 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     });
     if (stageLedger) {
       try {
-        console.log(formatHeartbeatLog(stageLedger.snapshot(Date.now())));
+        // M1: close the empty-waits[] gap — sample the shared browser-slot broker
+        // (the batch-1295 bottleneck) and record a queue-wait sample whenever a
+        // task is queued for a permit. Pure helper; telemetry only.
+        try {
+          const bs = processorSlotBroker.browser.state();
+          const sample = observeResourceWait({ resource: "browser", waiting: bs.waiting, intervalMs: heartbeatIntervalMs });
+          if (sample) stageLedger.recordQueueWait(sample.resource, sample.waitedMs, sample.grantedAt);
+        } catch { /* broker read is best-effort telemetry */ }
+        const snap = stageLedger.snapshot(Date.now());
+        console.log(formatHeartbeatLog(snap));
+        // M2: evaluate the budgeted decision on the REAL in-flight spans (shadow or
+        // budgeted). Telemetry only — the returned action is not acted on here.
+        if (timeBudget) {
+          try {
+            const decision = evaluateTimeBudget({
+              budget: timeBudget,
+              elapsedMs: snap.totalElapsedMs,
+              stages: stageProgressFromSpans(snap.stages, snap.snapshotAt),
+            });
+            console.log(`[TIME-BUDGET] policy=${decision.policy} job=${jobId} action=${decision.action} degraded=[${decision.degradedStages.join(",")}] source='${decision.degradedSourceState}' evidenceRetained=${decision.evidenceRetained} — ${decision.reason}`);
+          } catch { /* time-budget telemetry only; never disturb the job */ }
+        }
       } catch { /* instrumentation is telemetry-only; never disturb the job */ }
     }
   }, heartbeatIntervalMs);
@@ -1712,6 +1744,21 @@ export async function startWorker(workerId?: string): Promise<Worker> {
 }
 
 /**
+ * Phase 3 / Issue 3 — batch resilience stats (M3). Read-only replica-wide count
+ * for decideBatchContinuation(): the batch total plus the number of jobs that
+ * have conclusively failed or been quarantined-with-reason. Cancellation and
+ * provider-quota pauses are excluded (they are not company failures), matching
+ * COUNT_BATCH_FAILURES_SQL's exclusions. Kept local to worker.ts so
+ * batch-resilience-policy.ts stays pure (no DB dependency).
+ */
+const COUNT_BATCH_RESILIENCE_STATS_SQL = `
+  SELECT
+    count(*)::int AS total_jobs,
+    count(*) FILTER (WHERE status = 'failed' AND last_error IS NOT NULL
+                       AND last_error NOT LIKE 'Cancelled%' AND last_error NOT LIKE 'provider_paused:%')::int AS failed_or_quarantined
+  FROM analysis_jobs WHERE batch_id = $1`;
+
+/**
  * Validation stop rule S4 (lib/batch-stop-rule.ts). Inert unless
  * BATCH_STOP_RULE_FAILED_JOBS > 0. When tripped it runs the same sequence as
  * POST /batch/cancel and the caller skips the retry re-enqueue.
@@ -1719,26 +1766,67 @@ export async function startWorker(workerId?: string): Promise<Worker> {
 export async function stopRuleTripped(batchId: number, jobId: number, error: string, frameworkId: number, workspaceId: number): Promise<boolean> {
   // Phase 3 / Issue 3 — batch resilience lever (consulted at the decision point).
   // DEFAULT (BATCH_RESILIENCE_POLICY unset → "legacy") falls straight through to
-  // enforceBatchStopRule below — byte-identical to today. In shadow/resilient we
-  // surface the resilient decision (retry → quarantine-with-reason → systemic-only
-  // cancel); ARMING the resilient executor is gated on the paid instrumented
-  // diagnostic run (Issue-3 part 2, out of scope this ship), so the legacy stop
-  // rule remains the executed path until then.
+  // enforceBatchStopRule below — byte-identical to today.
+  //   - "shadow"    : surface the resilient decision for telemetry, then fall
+  //                   through to the legacy executor (non-mutating).
+  //   - "resilient" : ARMED. An isolated failure NEVER cancels the batch (retry →
+  //                   quarantine-with-reason proceed via the normal BullMQ retry
+  //                   path, return false); the batch is cancelled ONLY on a
+  //                   systemic signal (>systemicFailFraction of the batch failing/
+  //                   quarantined, or a cost overrun), via the SAME durable cancel
+  //                   sequence legacy uses. Fail-open to legacy on any error.
   const resiliencePolicy = resolveBatchResiliencePolicy();
-  if (resiliencePolicy !== "legacy") {
+  if (resiliencePolicy === "resilient" && isStopRuleFailure(error)) {
     try {
       const { pool } = await import("./db.js");
-      const r = await pool.query(COUNT_BATCH_FAILURES_SQL, [batchId]);
+      const r = await pool.query(COUNT_BATCH_RESILIENCE_STATS_SQL, [batchId]);
       const row = r.rows[0] ?? {};
-      const legacyCounts = { failedAttemptJobs: Number(row.failed_attempt_jobs ?? 0), retryExhaustedJobs: Number(row.retry_exhausted_jobs ?? 0) };
+      const stats = {
+        total: Number(row.total_jobs ?? 0),
+        failedOrQuarantined: Number(row.failed_or_quarantined ?? 0),
+      };
       const decision = decideBatchContinuation({
-        policy: resiliencePolicy,
-        stats: { total: legacyCounts.failedAttemptJobs, failedOrQuarantined: legacyCounts.failedAttemptJobs, legacyCounts },
+        policy: "resilient",
+        stats,
         cfg: resolveResilienceConfig(),
       });
-      console.log(`[BATCH-RESILIENCE] batch=${batchId} job=${jobId} policy=${resiliencePolicy} cancel=${decision.cancel} systemic=${decision.systemic} — ${decision.reason} (executor: legacy, pending diagnostic-run arming)`);
+      console.log(`[BATCH-RESILIENCE] ARMED batch=${batchId} job=${jobId} total=${stats.total} failedOrQuarantined=${stats.failedOrQuarantined} cancel=${decision.cancel} systemic=${decision.systemic} — ${decision.reason}`);
+      if (!decision.cancel) {
+        // Isolated failure: do not cancel the batch — let retry/quarantine proceed.
+        return false;
+      }
+      // Systemic: cancel the whole batch via the same durable-first sequence as S4.
+      await runStopRuleCancelSequence(batchId, `resilience ${decision.reason}`, {
+        flag: cancelBatch,
+        purge: async (bid) => { const { removeBatchJobs } = await import("./queue.js"); await removeBatchJobs(bid); },
+        snapshot: (bid, rr) => saveStopRuleSnapshot(bid, frameworkId, workspaceId, rr),
+        pgCancel: (bid, rr) => storage.cancelBatchRun(bid, rr),
+      });
+      return true;
     } catch (e: any) {
-      console.warn(`[BATCH-RESILIENCE] batch=${batchId} telemetry failed (non-fatal): ${e?.message ?? e}`);
+      // Fail-open to the legacy executor (standing production behaviour).
+      console.warn(`[BATCH-RESILIENCE] ARMED batch=${batchId} decision failed (non-fatal, fail-open to legacy): ${e?.message ?? e}`);
+    }
+  } else if (resiliencePolicy === "shadow") {
+    try {
+      const { pool } = await import("./db.js");
+      const r = await pool.query(COUNT_BATCH_RESILIENCE_STATS_SQL, [batchId]);
+      const row = r.rows[0] ?? {};
+      const legacyRow = await pool.query(COUNT_BATCH_FAILURES_SQL, [batchId]);
+      const lr = legacyRow.rows[0] ?? {};
+      const legacyCounts = { failedAttemptJobs: Number(lr.failed_attempt_jobs ?? 0), retryExhaustedJobs: Number(lr.retry_exhausted_jobs ?? 0) };
+      const decision = decideBatchContinuation({
+        policy: "shadow",
+        stats: {
+          total: Number(row.total_jobs ?? 0),
+          failedOrQuarantined: Number(row.failed_or_quarantined ?? 0),
+          legacyCounts,
+        },
+        cfg: resolveResilienceConfig(),
+      });
+      console.log(`[BATCH-RESILIENCE] shadow batch=${batchId} job=${jobId} cancel=${decision.cancel} systemic=${decision.systemic} — ${decision.reason} (executor: legacy)`);
+    } catch (e: any) {
+      console.warn(`[BATCH-RESILIENCE] shadow batch=${batchId} telemetry failed (non-fatal): ${e?.message ?? e}`);
     }
   }
   return enforceBatchStopRule(batchId, jobId, error, {

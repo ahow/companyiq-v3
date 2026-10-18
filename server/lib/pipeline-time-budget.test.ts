@@ -16,7 +16,9 @@ import {
   retainEvidence,
   TIME_DEGRADED_SOURCE_STATE,
   DEFAULT_STAGE_BUDGET_SPECS,
+  stageProgressFromSpans,
   type ResolvedPipelineBudget,
+  type StageSpanLike,
 } from "./pipeline-time-budget.js";
 import { isRetryable, isConclusiveAbsence } from "../../shared/research-state.js";
 
@@ -170,4 +172,85 @@ test("PTB09 a completed stage is never degraded even if it ran long", () => {
   });
   assert.equal(d.action, "continue");
   assert.deepEqual(d.degradedStages, []);
+});
+
+// ─── M2 WIRING SEAM — stageProgressFromSpans + budgeted evaluation on REAL spans ───
+
+// PTB11: adapter maps open/closed ledger spans to StageProgress correctly.
+test("PTB11 stageProgressFromSpans: open span measured to now, closed span completed", () => {
+  const spans: StageSpanLike[] = [
+    { stage: "discovery", startedAt: 0, endedAt: 1000 },   // completed, 1000ms
+    { stage: "fetch", startedAt: 1000, endedAt: null },     // still running
+  ];
+  const prog = stageProgressFromSpans(spans, 5000);
+  assert.equal(prog.length, 2);
+  assert.deepEqual(prog[0], { stage: "discovery", elapsedMs: 1000, completed: true });
+  assert.deepEqual(prog[1], { stage: "fetch", elapsedMs: 4000, completed: false });
+  // total guards
+  assert.deepEqual(stageProgressFromSpans(undefined, 10), []);
+  assert.deepEqual(stageProgressFromSpans([], 10), []);
+});
+
+// PTB12: adapter is total — malformed spans are skipped, never throws.
+test("PTB12 stageProgressFromSpans skips malformed spans without throwing", () => {
+  const spans: any[] = [
+    { stage: "ok", startedAt: 0, endedAt: null },
+    { stage: 123, startedAt: 0, endedAt: null },      // bad stage
+    { stage: "nan", startedAt: NaN, endedAt: null },   // bad start
+  ];
+  const prog = stageProgressFromSpans(spans, 100);
+  assert.equal(prog.length, 1);
+  assert.equal(prog[0].stage, "ok");
+});
+
+// PTB13: ARMED budgeted on real spans — a stalled stage degrades to a RETRYABLE
+// transient source, pipeline CONTINUES, evidence retained. Exactly the heartbeat seam.
+test("PTB13 budgeted on real spans degrades the stalled stage (retryable, continues)", () => {
+  const budget = resolveEffectiveBudget({ policy: "budgeted", totalBudgetMs: 100000 });
+  // fetch gets the biggest slice (weight 4); make it blow its budget while open.
+  const fetchBudget = budget.perStageBudgetMs["fetch"];
+  assert.ok(fetchBudget > 0);
+  const now = 1000 + fetchBudget + 1;
+  const spans: StageSpanLike[] = [
+    { stage: "discovery", startedAt: 0, endedAt: 1000 },        // done
+    { stage: "fetch", startedAt: 1000, endedAt: null },          // stalled, over budget
+  ];
+  const decision = evaluateTimeBudget({
+    budget,
+    elapsedMs: now,
+    stages: stageProgressFromSpans(spans, now),
+  });
+  assert.equal(decision.action, "degrade_stage", "stalled stage degraded, not stopped");
+  assert.deepEqual(decision.degradedStages, ["fetch"]);
+  assert.equal(decision.degradedSourceState, TIME_DEGRADED_SOURCE_STATE);
+  // Constraint 4/5: degraded source is RETRYABLE and NOT a conclusive absence.
+  assert.ok(isRetryable(decision.degradedSourceState));
+  assert.ok(!isConclusiveAbsence(decision.degradedSourceState));
+  assert.equal(decision.evidenceRetained, true);
+});
+
+// PTB14: completed stages are NEVER degraded even if they ran long (only OPEN stages).
+test("PTB14 budgeted never degrades an already-completed stage", () => {
+  const budget = resolveEffectiveBudget({ policy: "budgeted", totalBudgetMs: 100000 });
+  const fetchBudget = budget.perStageBudgetMs["fetch"];
+  const spans: StageSpanLike[] = [
+    { stage: "fetch", startedAt: 0, endedAt: fetchBudget + 5000 }, // long but DONE
+  ];
+  const now = fetchBudget + 6000;
+  const decision = evaluateTimeBudget({ budget, elapsedMs: now, stages: stageProgressFromSpans(spans, now) });
+  assert.equal(decision.action, "continue");
+  assert.deepEqual(decision.degradedStages, []);
+});
+
+// PTB15: shadow on the same spans is NON-MUTATING — action mirrors wall-clock,
+// but it surfaces which stage WOULD degrade (telemetry). Byte-identical control flow.
+test("PTB15 shadow on real spans mirrors wall-clock action, surfaces would-degrade set", () => {
+  const budget = resolveEffectiveBudget({ policy: "shadow", totalBudgetMs: 100000 });
+  const fetchBudget = budget.perStageBudgetMs["fetch"];
+  const now = 1000 + fetchBudget + 1;
+  const spans: StageSpanLike[] = [{ stage: "fetch", startedAt: 1000, endedAt: null }];
+  const decision = evaluateTimeBudget({ budget, elapsedMs: now, stages: stageProgressFromSpans(spans, now) });
+  assert.equal(decision.action, "continue", "non-mutating: within hard total → continue like wall-clock");
+  assert.deepEqual(decision.degradedStages, ["fetch"], "but surfaces the would-degrade stage");
+  assert.equal(decision.evidenceRetained, true);
 });

@@ -1,3 +1,83 @@
+# CompanyIQ-v3: Production Deployment Verification (candidate 6e09ced — HTML-path bounded in-flight interrupt)
+
+**Date:** 2026-10-13 (UTC)
+**Scope:** merge + deploy of the validated cancellation candidate only. **No run was launched; no extraction pipeline, paid-provider call, or live fetch was performed.** The only live HTTP calls made were read-only `GET /api/health` probes and read-only Railway GraphQL status queries.
+**Authorization:** The user (Andy Howard) explicitly approved this merge and the consequent app + worker redeployments, and approved inclusion of inert trial scaffolding, tests and evidence in `main` history.
+
+## 0. Summary of this deploy
+
+| Item | Value |
+|---|---|
+| New `main` SHA (merge commit) | **`64d0b9d856ca72a7b34fa40d40b396106fa372e9`** |
+| Merge parents | `8c03b07…` (old main) + `3c84ecf…` (feature tip) |
+| Candidate code commit shipped | **`6e09ced4bf42d036c257cb35772335600215ff30`** (confirmed ancestor of new main) |
+| Docs commit shipped | `3c84ecf400f8ecc459c87c4cb6dad8f89cb87f2f` |
+| `origin/main` before | `8c03b07449701a7fb83dc062abbfe6726cf7c208` |
+| `origin/main` after | `64d0b9d856ca72a7b34fa40d40b396106fa372e9` — **moved off 8c03b07: YES** |
+
+## 1. Merge method and lineage (fast-forward was NOT possible)
+
+`origin/main` (`8c03b07`) is **not** an ancestor of the feature tip (`3c84ecf`), so a fast-forward was impossible. `8c03b07` is itself a merge commit (parents `b676c2d` + `c86787b`); the feature branch is built on `c86787b`. A standard **`--no-ff` merge commit** was therefore created: `64d0b9d`.
+
+### Runtime-equivalence check against the validated candidate (not build-file equality alone)
+Performed on the merge result **before pushing**:
+```
+# Runtime source (server/ shared/ client/ Dockerfile package.json package-lock.json tsconfig.json):
+$ git diff --cached --name-only 3c84ecf -- server/ shared/ client/ Dockerfile package.json package-lock.json tsconfig.json
+(empty)   -> merged runtime source is BYTE-IDENTICAL to validated candidate 3c84ecf
+
+# Full tree (any path):
+$ git diff --cached --name-only 3c84ecf
+(empty)   -> entire merged tree is identical to the validated candidate tip
+```
+Direct runtime-content checks on the merged `server/lib/processor.ts`:
+- Contains the HTML-path fix (6e09ced): `installBoundedPageInterrupt` defined (`BROWSER_ABORT_GRACE_MS = 500`) and **wired at 3 call sites** (lines ~1506, ~2021, ~2298).
+- Worker-isolation code preserved: `remoteAcquire`, `WORKER_ISOLATION_ENABLED` path, child close+reap all present.
+
+### Credentials check: PASS
+No production credentials in the shipped diff. The only matches were documentation comments in test files showing example invocation (`DATABASE_URL=<any pg url; not connected>` and a local dummy `postgres://ciq:ciq@127.0.0.1:55432/ciq`) — inert test scaffolding the user explicitly approved.
+
+### Start/deploy commands: UNCHANGED
+`git diff --cached --name-only origin/main -- railway.json Procfile Dockerfile package.json` returned empty. `Procfile` = `web: npx tsx server/index.ts`; `package.json` `start` = `tsx server/index.ts`; `railway.json` builder = DOCKERFILE. None altered by this merge.
+
+## 2. Push
+```
+$ git push origin main
+   8c03b07..64d0b9d  main -> main
+$ git ls-remote origin refs/heads/main
+64d0b9d856ca72a7b34fa40d40b396106fa372e9  refs/heads/main
+```
+
+## 3. Deployment mechanism (discovered, not assumed)
+**Railway git-integration auto-deploy** on push to `main`. Evidence:
+- `railway.json` present with `"builder": "DOCKERFILE"` and `dockerBuildArgs.CACHEBUST = ${{RAILWAY_GIT_COMMIT_SHA}}`. No GitHub Actions workflow exists (`.github/workflows` absent). No manual CLI deploy was run.
+- Project `companyiq-v3` (`db04e5b1-416b-4335-b3bc-056dd81e5bbf`), production env `c1166ef6-…`. Both `app` (`66371757-…`) and `worker` (`27920e1f-…`) deploy from branch `main`.
+- **The push itself was the deploy trigger.** Within seconds of the push, Railway created new BUILDING deployments on both services carrying `branch=main, sha=64d0b9d` — no deploy command was issued by this task.
+
+## 4. Deployment verification (every actual instance)
+Queried via Railway GraphQL (`backboard.railway.app/graphql/v2`, read-only), polled to terminal state:
+
+| Service | Deployment | Final status | Built commit (platform-reported) |
+|---|---|---|---|
+| app | `4195f8f0` | **SUCCESS (current)** | `64d0b9d856ca…` |
+| worker | `44a213a4` | **SUCCESS (current)** | `64d0b9d856ca…` |
+
+The prior `8c03b07` deployments (app `d54446bb`, worker `18a827b7`) are now **REMOVED** — i.e. traffic is served by the new `64d0b9d` deployments, not the old ones. Redis/Postgres/pgbouncer services were untouched.
+
+Live app response (read-only):
+```
+GET https://companyiq.online/api/health            -> HTTP 200 {"status":"ok","version":"3.0.0",...}
+GET https://app-production-9929.up.railway.app/api/health -> HTTP 200 {"status":"ok","version":"3.0.0",...}
+```
+
+## 5. Verification level — honest statement of what IS and is NOT proven
+- **Pushed:** PROVEN — `origin/main` = `64d0b9d`, off `8c03b07`.
+- **Built / deployed:** PROVEN — Railway reports both `app` and `worker` production deployments SUCCESS, built from `sha=64d0b9d`, with the previous `8c03b07` deployments REMOVED.
+- **Running app reachable:** PROVEN — `/api/health` returns HTTP 200 on both the custom domain and the Railway domain.
+- **Running code verified to contain `6e09ced` by in-process introspection:** **NOT POSSIBLE from here.** `/api/health` reports a hard-coded `version: "3.0.0"` and the app exposes **no commit/version endpoint**. The strongest available evidence that the running code contains `6e09ced` is the **platform-reported deployed commit** `64d0b9d` (a confirmed git-ancestor of `6e09ced`) on a SUCCESS deployment now serving traffic, combined with the pre-push proof that the `64d0b9d` tree is byte-identical to the validated candidate. There is no independent in-process confirmation of the commit hash, and this document does not claim one.
+
+---
+
 # CompanyIQ-v3: Production Deployment Verification (fix 9a1b931)
 
 **Date:** 2026-10-12 (UTC)

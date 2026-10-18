@@ -1,0 +1,40 @@
+{
+  "captured_at": "2026-10-15T12:10:53.694Z",
+  "note": "Pre-change snapshot of dev (sprint-10-preview) vars being aligned to production. Only non-secret behavioural/config vars listed. null value = var did not exist on dev before (restore = delete it).",
+  "dev_worker_replicas_before": 8,
+  "dev_app_vars_before": {
+    "FRAMEWORK_V2_MEASURES_PER_CALL": "1",
+    "SCORING_CANONICAL_RULE_GOVERNS": null,
+    "EVOMI_PROXY_PORT": null,
+    "SCORING_BASE_RATE_PRIOR": "true",
+    "FRAMEWORK_V2_TWO_STEP": "1",
+    "FRAMEWORK_V2_CONTEXT_EXPAND": "1",
+    "FRAMEWORK_V2_EVIDENCE_ABSENT": "1"
+  },
+  "dev_worker_vars_before": {
+    "WORKER_ISOLATION_ENABLED": null,
+    "RECONCILE_ENABLED": "false",
+    "WORKER_LOCK_DURATION_MS": null,
+    "WORKER_STALLED_INTERVAL_MS": null,
+    "JOB_TIMEOUT_MS": "3900000",
+    "PIPELINE_TIMEOUT_MS": "3600000",
+    "LLM_USAGE_LOGGING_ENABLED": null,
+    "WORKER_CONCURRENCY": "2",
+    "DISCOVERY_DEEP_NUM": null,
+    "ISSUER_SWEEP_MAX": null,
+    "FIRECRAWL_BASE_URL": null,
+    "FRAMEWORK_V2_MEASURES_PER_CALL": "1",
+    "EVOMI_PROXY_PORT": null,
+    "ADAPTIVE_CONCURRENCY_MIN": null,
+    "ADAPTIVE_CONCURRENCY_ENABLED": null,
+    "MAX_CONCURRENT_SUBPROC": null,
+    "ISSUER_SWEEP_SITEMAP": null,
+    "PG_POOL_MAX": "5",
+    "SCORING_BASE_RATE_PRIOR": "true",
+    "FRAMEWORK_V2_TWO_STEP": "1",
+    "FRAMEWORK_V2_CONTEXT_EXPAND": "1",
+    "FRAMEWORK_V2_EVIDENCE_ABSENT": "1"
+  },
+  "dev_worker_startCommand_before": "/usr/bin/tini -g -- node --import tsx server/worker-main.ts",
+  "restore_instructions": "To restore dev worker: set startCommand back to dev_worker_startCommand_before and numReplicas back to dev_worker_replicas_before (8); re-add vars whose rollback value is non-null, delete vars whose rollback value is null."
+}

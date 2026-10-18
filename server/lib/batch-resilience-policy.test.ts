@@ -143,3 +143,43 @@ test("RP07 shadow returns legacy action while surfacing resilient telemetry", ()
   assert.equal(d.systemic, true, "but telemetry flags it WOULD be systemic");
   assert.ok(d.reason.includes("would CANCEL"));
 });
+
+// ─── M3 EXECUTOR CONTRACT — the exact row→stats→decision mapping worker.ts uses ───
+// worker.ts::stopRuleTripped (resilient) builds stats from COUNT_BATCH_RESILIENCE_STATS_SQL
+// rows ({ total_jobs, failed_or_quarantined }) and acts ONLY on decision.cancel:
+//   cancel === false → return false (no batch cancel; retry/quarantine proceeds)
+//   cancel === true  → run the SAME durable cancel sequence S4 uses, return true
+// These tests pin that mapping so the armed executor cannot silently drift.
+
+/** Mirror of the worker.ts stats builder (Number() coercion over the SQL row). */
+function statsFromRow(row: Record<string, unknown>) {
+  return {
+    total: Number((row as any).total_jobs ?? 0),
+    failedOrQuarantined: Number((row as any).failed_or_quarantined ?? 0),
+  };
+}
+
+test("RP08 executor contract: isolated failure row → cancel=false (batch continues)", () => {
+  const cfg = resolveResilienceConfig({ systemicFailFraction: 0.2 });
+  // 1 of 25 failed — an isolated failure. SQL returns ::int columns.
+  const d = decideBatchContinuation({ policy: "resilient", stats: statsFromRow({ total_jobs: 25, failed_or_quarantined: 1 }), cfg });
+  assert.equal(d.cancel, false, "worker returns false → retry/quarantine proceeds, batch NOT cancelled");
+  assert.equal(d.systemic, false);
+});
+
+test("RP09 executor contract: systemic failure row → cancel=true (durable cancel sequence)", () => {
+  const cfg = resolveResilienceConfig({ systemicFailFraction: 0.2 });
+  const d = decideBatchContinuation({ policy: "resilient", stats: statsFromRow({ total_jobs: 25, failed_or_quarantined: 10 }), cfg });
+  assert.equal(d.cancel, true, "worker runs runStopRuleCancelSequence → return true");
+  assert.equal(d.systemic, true);
+  // cost overrun is also systemic (independent of count)
+  const costCfg = resolveResilienceConfig({ systemicFailFraction: 0.99, costBudget: 50 });
+  const dc = decideBatchContinuation({ policy: "resilient", stats: { ...statsFromRow({ total_jobs: 100, failed_or_quarantined: 0 }), costSpent: 60 }, cfg: costCfg });
+  assert.equal(dc.cancel, true);
+});
+
+test("RP10 executor contract: empty/NULL row coerces to zero → no cancel (fail-open safe)", () => {
+  const cfg = resolveResilienceConfig();
+  const d = decideBatchContinuation({ policy: "resilient", stats: statsFromRow({}), cfg });
+  assert.equal(d.cancel, false, "no rows → total 0, nothing failed → never cancels");
+});

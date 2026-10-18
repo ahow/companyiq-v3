@@ -13,6 +13,7 @@ import {
   summarizeQueueWaits,
   buildHeartbeatRow,
   formatHeartbeatLog,
+  observeResourceWait,
   SHARED_RESOURCES,
   type QueueWaitSample,
 } from "./stage-instrumentation.js";
@@ -157,3 +158,48 @@ test("SI05b formatHeartbeatLog is a compact deterministic string (shadow mode)",
 });
 
 console.log("stage-instrumentation.test.ts — all tests defined");
+
+// ─── M1 WIRING SEAM — observeResourceWait (the heartbeat caller that closes empty waits[]) ───
+
+// SI10: contention → a still-queued sample; this is what finally gives
+// recordQueueWait() a caller so a timed-out job no longer leaves waits[] empty.
+test("SI10 observeResourceWait emits a still-queued sample under contention", () => {
+  const s = observeResourceWait({ resource: "browser", waiting: 2, intervalMs: 30000 });
+  assert.ok(s, "sample emitted when waiting > 0");
+  assert.equal(s!.resource, "browser");
+  assert.equal(s!.waitedMs, 30000, "accrues ~one heartbeat interval of wait");
+  assert.equal(s!.grantedAt, null, "still queued at the snapshot instant");
+});
+
+// SI11: no contention → no sample (null).
+test("SI11 observeResourceWait returns null when nothing is waiting", () => {
+  assert.equal(observeResourceWait({ resource: "browser", waiting: 0, intervalMs: 30000 }), null);
+  assert.equal(observeResourceWait({ resource: "browser", waiting: -1, intervalMs: 30000 }), null);
+});
+
+// SI12: fail-safe — unknown resource / bad interval never throw.
+test("SI12 observeResourceWait is total (bad inputs → null / 0 wait)", () => {
+  assert.equal(observeResourceWait({ resource: "nope" as any, waiting: 3, intervalMs: 1000 }), null);
+  const s = observeResourceWait({ resource: "llm", waiting: 1, intervalMs: NaN });
+  assert.ok(s);
+  assert.equal(s!.waitedMs, 0, "non-finite interval clamps to 0, not NaN");
+});
+
+// SI13: end-to-end — samples from observeResourceWait feed the ledger and surface
+// in the snapshot's queueWaits (the gap the diagnostic flagged, now closed).
+test("SI13 observeResourceWait samples flow into the ledger snapshot queueWaits", () => {
+  const led = new StageLedger({ jobId: 1 });
+  led.startStage("pipeline", 0);
+  for (const t of [30000, 60000]) {
+    const s = observeResourceWait({ resource: "browser", waiting: 1, intervalMs: 30000 });
+    if (s) led.recordQueueWait(s.resource, s.waitedMs, s.grantedAt);
+    void t;
+  }
+  const snap = led.snapshot(60000);
+  const browser = snap.queueWaits.find((q) => q.resource === "browser");
+  assert.ok(browser, "browser queue-wait now present (was empty before wiring)");
+  assert.equal(browser!.samples, 2);
+  assert.equal(browser!.totalWaitMs, 60000);
+  assert.equal(browser!.stillQueued, 2);
+  assert.ok(SHARED_RESOURCES.includes("browser"));
+});

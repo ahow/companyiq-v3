@@ -181,3 +181,127 @@ export function poolsRespectCeiling(
   const total = Object.values(pools).reduce((a, b) => a + (b > 0 ? b : 0), 0);
   return checkCeilingInvariant(cfg, total, replicaCount);
 }
+
+// ─── Browser-recovery slot resolution (the processor.ts wiring seam) ──────────
+
+/**
+ * Conservative upper bound on the SEPARATED browser-recovery slot count. Chromium
+ * is memory-heavy, so arming separation must never raise live-browser concurrency
+ * without a bound — this caps the browser-recovery pool regardless of what the B6
+ * split would otherwise yield. Read from BROWSER_SEPARATED_MAX (default 3): the
+ * diagnostic (batch 1295) found a single serialised slot (1) was the bottleneck;
+ * a small bounded increase (1 → ≤3) is what the evidence supports.
+ */
+export const BROWSER_SEPARATED_MAX_ENV = "BROWSER_SEPARATED_MAX";
+export const DEFAULT_BROWSER_SEPARATED_MAX = 3;
+
+function intEnv(env: NodeJS.ProcessEnv | undefined, key: string, fallback: number): number {
+  try {
+    const raw = env?.[key];
+    if (raw === undefined || raw === null || String(raw).trim() === "") return fallback;
+    const n = parseInt(String(raw).trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export interface ResolvedBrowserPoolSlots {
+  policy: ResourcePoolPolicy;
+  /** The MAX_CONCURRENT_BROWSER value the processor should actually use. */
+  slots: number;
+  /** Today's shipped default (= parseInt(MAX_CONCURRENT_BROWSER||"1")); the shared value. */
+  sharedDefault: number;
+  /** True only when the separated browser-recovery pool is actually applied. */
+  separated: boolean;
+  /** The B6-derived browser-recovery pool size (always computed; surfaced for telemetry). */
+  plannedBrowserRecovery: number;
+  /** Conservative cap actually applied to the separated slot count. */
+  maxSeparated: number;
+  /** Does the effective pool layout satisfy the B6 ceiling invariant? */
+  withinBudget: boolean;
+  reason: string;
+}
+
+/**
+ * Resolve how many concurrent browser slots the processor should run, honouring
+ * the RESOURCE_POOL_POLICY kill-switch. This is the single wiring seam M4 arms.
+ *
+ * - "shared" (DEFAULT): slots = sharedDefault, byte-identical to today (the
+ *   processor keeps its single-slot — or env-configured — path untouched).
+ * - "shadow": compute the separated plan for telemetry but RETURN sharedDefault
+ *   (non-mutating — concurrency is unchanged).
+ * - "separated": slots = the B6 browser-recovery pool size, CLAMPED to
+ *   [sharedDefault, maxSeparated] so it never drops below today's value and never
+ *   exceeds the conservative memory cap. If the effective layout would breach the
+ *   B6 ceiling (never, since the split sums to the shared slots) it falls back to
+ *   sharedDefault. Pure + total (never throws).
+ */
+export function resolveBrowserPoolSlots(input: {
+  sharedDefault: number;
+  policy?: ResourcePoolPolicy;
+  cfg?: CapacityConfig;
+  maxSeparated?: number;
+  browserRecoveryFraction?: number;
+  env?: NodeJS.ProcessEnv;
+}): ResolvedBrowserPoolSlots {
+  const env = input.env ?? process.env;
+  const sharedDefault = Math.max(1, Math.floor(input.sharedDefault || 1));
+  const policy = input.policy ?? resolveResourcePoolPolicy();
+  const maxSeparated = Math.max(
+    1,
+    Math.floor(input.maxSeparated ?? intEnv(env, BROWSER_SEPARATED_MAX_ENV, DEFAULT_BROWSER_SEPARATED_MAX)),
+  );
+  const resolved = resolveResourcePools({
+    policy,
+    cfg: input.cfg,
+    browserRecoveryFraction: input.browserRecoveryFraction,
+  });
+  const plannedBrowserRecovery = resolved.separatedPlan.browser_recovery;
+
+  // shared / shadow: byte-identical — the processor keeps sharedDefault.
+  if (policy !== "separated") {
+    return {
+      policy,
+      slots: sharedDefault,
+      sharedDefault,
+      separated: false,
+      plannedBrowserRecovery,
+      maxSeparated,
+      withinBudget: resolved.withinBudget,
+      reason:
+        policy === "shadow"
+          ? `shadow: would use browser_recovery=${plannedBrowserRecovery} (clamped≤${maxSeparated}); slots stay ${sharedDefault}`
+          : `shared: slots=${sharedDefault} (unchanged)`,
+    };
+  }
+
+  // separated (armed): clamp the B6 pool size into [sharedDefault, maxSeparated].
+  const lo = sharedDefault;
+  const hi = Math.max(sharedDefault, maxSeparated);
+  const slots = Math.min(Math.max(plannedBrowserRecovery, lo), hi);
+  // Safety: never apply a layout that would breach the B6 ceiling (the split sums
+  // to the shared slots, so this holds — but fail safe to sharedDefault if not).
+  if (!resolved.withinBudget) {
+    return {
+      policy,
+      slots: sharedDefault,
+      sharedDefault,
+      separated: false,
+      plannedBrowserRecovery,
+      maxSeparated,
+      withinBudget: false,
+      reason: `separated layout over B6 ceiling — fail-safe to shared slots=${sharedDefault}`,
+    };
+  }
+  return {
+    policy,
+    slots,
+    sharedDefault,
+    separated: slots !== sharedDefault,
+    plannedBrowserRecovery,
+    maxSeparated,
+    withinBudget: true,
+    reason: `separated: browser_recovery=${plannedBrowserRecovery} clamped to [${lo},${hi}] → slots=${slots}`,
+  };
+}
