@@ -48,6 +48,16 @@ for (const req of ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "ZAI_API_KEY", "DAT
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
 import { createHash } from "crypto";
 import type { ChunkRankAudit, ChunkRankAuditEntry } from "../lib/passage-retrieval.js";
+// Phase 1.1 — pure per-measure stability-table builder (Yes→No / No→Yes totals).
+// Additive: only used in the VARIABILITY_REPEATS>1 diagnostics path below; it runs
+// offline on the passVerdicts this harness already collects and changes nothing on
+// the default (N=1) path.
+import {
+  buildStabilityTable,
+  formatStabilityTableMarkdown,
+  normaliseVerdict,
+  type RunRecord as StabilityRunRecord,
+} from "../lib/variability-stability.js";
 
 const HOME = "/home/ubuntu";
 // Output dir override (reversible; defaults to var_out so baseline behaviour is
@@ -609,6 +619,22 @@ async function main() {
       .map((r) => r.stdev)
       .filter((x): x is number => x != null);
     const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+
+    // Phase 1.1 — per-measure stability table (Yes→No / No→Yes totals per measure)
+    // across the N repeat passes, baseline = pass 0. Purely additive diagnostics
+    // derived from the passVerdicts already collected above; does not alter OUT or
+    // any verdict. Each repeat pass is treated as one "run" for the pure builder.
+    const stabilityRuns: StabilityRunRecord[] = [];
+    for (let p = 0; p < VARIABILITY_REPEATS; p++) {
+      stabilityRuns.push({
+        runIndex: p,
+        cells: variabilityRecords
+          .filter((r) => Array.isArray(r.passVerdicts) && r.passVerdicts.length > p)
+          .map((r) => ({ measureId: r.measureId, verdict: normaliseVerdict(r.passVerdicts[p]) })),
+      });
+    }
+    const stabilityTable = buildStabilityTable(stabilityRuns, { baselineRunIndex: 0 });
+
     const varOut = {
       meta: {
         companyId, companyName, runIndex, framework: framework.name, frameworkId: framework.id,
@@ -623,8 +649,11 @@ async function main() {
         ts: new Date().toISOString(),
       },
       measures: variabilityRecords,
+      // Phase 1.1 additive diagnostics — per-measure Yes→No / No→Yes split.
+      stabilityTable,
     };
     writeFileSync(VAR_OUT, JSON.stringify(varOut, null, 2));
+    console.error("\n" + formatStabilityTableMarkdown(stabilityTable));
     console.error(
       `\nVARIABILITY (N=${VARIABILITY_REPEATS}) SAVED ${VAR_OUT}\n` +
         `  measures=${variabilityRecords.length} withVariance=${measuresWithVariance} ` +

@@ -45,6 +45,8 @@
  *   memory cannot grow unboundedly across a batch.
  */
 
+import { createHash } from "node:crypto";
+
 // ─── Policy / kill-switch ─────────────────────────────────────────────────────
 
 export type PrepComputeCachePolicy = "off" | "on";
@@ -293,4 +295,138 @@ export function clearDocumentUpsertDedupe(): void {
 /** Test/diagnostic helper: current dedupe registry size. */
 export function documentUpsertDedupeSize(): number {
   return upsertDedupe.size;
+}
+
+// ─── Score/verdict cache (Phase 1.2 — the MISSING 3rd layer) ──────────────────
+//
+// WHY (plan §"Phase 1 — Reproducibility", step 1.2):
+//   A single run over a company must be reproducible. The scorer re-rolls the
+//   dice for an evidence pack even when every input that determines the verdict
+//   is unchanged, which is a source of run-to-run wobble (28/360 cells flip on a
+//   fresh re-run). This layer "remembers the answer for an identical evidence
+//   pack so we don't re-roll the dice." It sits alongside the two existing B1
+//   layers (peer-scan regex + document-upsert dedupe) in this same module, under
+//   the SAME PREP_COMPUTE_CACHE_POLICY kill-switch.
+//
+// KEY (framework-level / company- & topic-agnostic):
+//   key = sha256( evidence-pack content hash
+//               + measure version
+//               + prompt version
+//               + model id )
+//   Only GENERIC inputs — no company name, no topic term, nothing bespoke. Two
+//   byte-identical evidence packs scored under the same measure/prompt/model
+//   therefore map to the same key and yield the SAME verdict.
+//
+// VERDICT-SAFE BY CONSTRUCTION:
+//   getOrComputeVerdict() returns, on a HIT, exactly the value a cold recompute
+//   produced and stored — there is no transformation on the hit path. Any change
+//   to ANY of the four key inputs changes the key ⇒ miss ⇒ recompute, so a stale
+//   verdict can never be served (freshness by hash; no TTL, no time component).
+//   When the policy is OFF the cache is skipped entirely and compute() runs every
+//   time, byte-identical to the pre-Phase-1 path.
+//
+// SAFETY: pure/in-memory, bounded (FIFO eviction), no I/O, no model calls. The
+//   expensive scoring is an INJECTED compute fn so this wrapper runs fully
+//   offline in tests (see phase1-reproducibility.test.ts).
+
+/** Max distinct verdicts held in memory (FIFO eviction beyond the cap). */
+export const PREP_VERDICT_CACHE_MAX = readPositiveInt("PREP_VERDICT_CACHE_MAX", 20000);
+
+/** The four GENERIC inputs that fully determine a verdict for a pack. */
+export interface VerdictCacheKeyInput {
+  /** Content hash (e.g. sha256) of the assembled evidence pack text. */
+  evidencePackHash: string;
+  /** Measure/framework content version (hash or monotonic version). */
+  measureVersion: string | number;
+  /** Scoring-prompt version (hash or monotonic version). */
+  promptVersion: string | number;
+  /** Provider:model identifier (e.g. "deepseek:deepseek-chat"). */
+  modelId: string;
+}
+
+/**
+ * Field separator chosen to never appear in a sha256 hex digest or a normal
+ * version/model id, so no two distinct inputs can alias to the same joined
+ * string. (U+0001 start-of-heading.)
+ */
+const VERDICT_KEY_SEP = "\u0001";
+
+/**
+ * Build the deterministic verdict cache key. Field order is FIXED (pack, measure,
+ * prompt, model), so the key is a pure, canonical function of the four generic
+ * inputs — order-stable and company/topic-agnostic. A change to any field yields
+ * a different key (no false hits).
+ */
+export function buildVerdictCacheKey(input: VerdictCacheKeyInput): string {
+  const parts = [
+    String(input.evidencePackHash ?? ""),
+    String(input.measureVersion ?? ""),
+    String(input.promptVersion ?? ""),
+    String(input.modelId ?? ""),
+  ].join(VERDICT_KEY_SEP);
+  return createHash("sha256").update(parts).digest("hex");
+}
+
+/** A cached verdict payload. `verdict` is the scorer's output, carried verbatim. */
+export interface VerdictCacheEntry<V> {
+  verdict: V;
+}
+
+const verdictCache = new BoundedCache<string, VerdictCacheEntry<unknown>>(PREP_VERDICT_CACHE_MAX);
+
+export type VerdictCacheOutcome = "hit" | "miss" | "skip";
+
+export interface GetOrComputeVerdictResult<V> {
+  value: V;
+  outcome: VerdictCacheOutcome;
+  key: string;
+}
+
+/**
+ * Get-or-compute a verdict for a pack, keyed by the four generic inputs.
+ *
+ *   - policy OFF : SKIP the cache entirely; just run compute() (pre-Phase-1 path).
+ *                  Returns outcome "skip". Byte-identical to no cache.
+ *   - policy ON  : serve a validated HIT if present (identical key ⇒ identical
+ *                  verdict); else compute, store, and return outcome "miss".
+ *
+ * A HIT returns the stored value with NO transformation — exactly what the
+ * uncached path would produce (verdict-safe). `onHit` is an optional telemetry
+ * hook ("cache hit logged") invoked only when a hit is served.
+ */
+export async function getOrComputeVerdict<V>(args: {
+  keyInput: VerdictCacheKeyInput;
+  compute: () => Promise<V> | V;
+  explicit?: PrepComputeCachePolicy | null;
+  onHit?: (key: string) => void;
+  onMiss?: (key: string) => void;
+}): Promise<GetOrComputeVerdictResult<V>> {
+  const key = buildVerdictCacheKey(args.keyInput);
+
+  // OFF: skip the cache entirely — identical to the pre-Phase-1 scorer.
+  if (!isPrepComputeCacheEnabled(args.explicit)) {
+    const value = await args.compute();
+    return { value, outcome: "skip", key };
+  }
+
+  const existing = verdictCache.get(key) as VerdictCacheEntry<V> | undefined;
+  if (existing !== undefined) {
+    args.onHit?.(key);
+    return { value: existing.verdict, outcome: "hit", key };
+  }
+
+  args.onMiss?.(key);
+  const value = await args.compute();
+  verdictCache.set(key, { verdict: value });
+  return { value, outcome: "miss", key };
+}
+
+/** Test/diagnostic helper: current verdict-cache size. */
+export function verdictCacheSize(): number {
+  return verdictCache.size;
+}
+
+/** Test helper: clear the verdict cache (no effect on correctness). */
+export function clearVerdictCache(): void {
+  verdictCache.clear();
 }
