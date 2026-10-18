@@ -376,9 +376,10 @@ function toMarkdown(r: Report): string {
   );
   lines.push("");
   lines.push(
-    `Note: QUOTE_CORRECT and VERDICT_CHANGE are the actionable buckets. Under the ` +
-      `current shadow configuration (ELIGIBILITY_ENFORCE=OFF) NONE of these actions ` +
-      `are applied — this set is a pre-enforcement forecast only.`,
+    `Note: QUOTE_CORRECT and VERDICT_CHANGE are the actionable buckets. A3 eligibility ` +
+      `enforcement is DEFAULT-ON (unset/empty ELIGIBILITY_ENFORCE enforces; an explicit ` +
+      `ELIGIBILITY_ENFORCE=off is the kill switch that restores shadow mode). This label ` +
+      `set is a standalone forecast of the A3 actions, independent of the live batch env.`,
   );
   return lines.join("\n") + "\n";
 }

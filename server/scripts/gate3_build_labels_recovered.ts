@@ -539,7 +539,7 @@ function toMarkdown(r: any): string {
     L.push(`**Root-cause caveat (strengthens the confirmation):** of the ${t.verdictChange} apparent verdict-change cell(s), **${t.verdictChangeProvenanceGap} are provenance-attribution artifacts, not genuine ineligibility** — every excluded quote is the issuer's OWN disclosure whose recovered URL the classifier cannot map to the issuer (unmapped Q4-Inc IR-CDN tenants such as \`s29.q4cdn.com\`, and \`www.google.com/goto\` redirect masks). **Genuine verdict-change after removing these artifacts = ${t.verdictChangeGenuine}** (${pct(t.verdictChangeGenuine, cc)} of classified cells). Before enabling enforcement these are classifier provenance gaps to close (map the issuer's Q4/IR-CDN tenants into \`related_domains\`; resolve search-engine redirect URLs to their target), NOT evidence the verdict should flip.`);
     L.push("");
   }
-  L.push(`Note: under the current shadow configuration (ELIGIBILITY_ENFORCE=OFF) NONE of these actions are applied — this set is a pre-enforcement forecast of what A3 would do.`);
+  L.push(`Note: A3 eligibility enforcement is DEFAULT-ON (unset/empty ELIGIBILITY_ENFORCE enforces; an explicit ELIGIBILITY_ENFORCE=off is the kill switch that restores shadow mode). This set is a standalone forecast of what A3 would do, independent of the live batch env.`);
   return L.join("\n") + "\n";
 }
 

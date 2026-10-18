@@ -661,7 +661,33 @@ export async function addDiscoveredDocument(companyId: number, url: string, titl
   `);
 }
 
-export async function recordFetchSuccess(companyId: number, url: string, content: string) {
+/**
+ * WP05/Phase0 — pure derivation of the persisted `extraction_state` label.
+ *
+ * Prefers the REAL classifier label (`classifyExtractionCompleteness`) threaded
+ * from the extraction call site: a truncated / timed-out-but-non-empty read
+ * classifies 'partial' and MUST persist as such (this is what closes the
+ * "small-PDF runtime gap"), NEVER silently 'complete'. Falls back to the legacy
+ * binary length derivation ONLY when no classified label is supplied, so unrelated
+ * callers are byte-for-byte unaffected. The column is never read by scoring /
+ * analyzer, so this is verdict-invariant — it only feeds research-state accounting
+ * and EX04 targeted re-retrieval routing.
+ */
+export type ExtractionStateLabel = "complete" | "partial" | "empty" | "unknown";
+export function deriveExtractionState(
+  contentLength: number,
+  classifiedCompleteness?: ExtractionStateLabel | null,
+): ExtractionStateLabel {
+  if (classifiedCompleteness) return classifiedCompleteness;
+  return contentLength > 0 ? "complete" : "empty";
+}
+
+export async function recordFetchSuccess(
+  companyId: number,
+  url: string,
+  content: string,
+  classifiedCompleteness?: ExtractionStateLabel | null,
+) {
   // Step 1: Upsert content into the deduplicated document_content table
   const urlHash = hashUrl(url);
   const contentLength = content.length;
@@ -678,12 +704,14 @@ export async function recordFetchSuccess(companyId: number, url: string, content
   const contentId = (dcResult.rows[0] as any)?.id;
 
   // Step 2: Update the documents row to reference the content and mark as fetched
-  // WP02/A1 (additive): record extraction completeness. A successful fetch with
-  // extracted content is 'complete'; an empty extraction is 'empty' (looked, got
-  // nothing usable). 'partial' is reserved for future truncation detection
-  // (WP05). This column is never read by scoring/analyzer, so verdicts/scores
-  // are unaffected — it only feeds research-state accounting.
-  const extractionState = contentLength > 0 ? "complete" : "empty";
+  // WP02/A1 + WP05/Phase0 (additive): record extraction completeness using the REAL
+  // classifier label when the extraction call site supplied one. A
+  // truncated/timed-out-but-non-empty read now persists 'partial' (closing the
+  // small-PDF runtime gap) instead of being mislabelled 'complete'. When no label
+  // is supplied we keep the legacy binary derivation (content>0 => 'complete', else
+  // 'empty') so unrelated callers are unaffected. Never read by scoring/analyzer, so
+  // verdicts/scores are unaffected — it only feeds research-state accounting + EX04.
+  const extractionState = deriveExtractionState(contentLength, classifiedCompleteness);
   await db.execute(sql`
     UPDATE documents SET
       fetch_status = 'ok',
@@ -874,11 +902,20 @@ export async function markLinkedDocumentVerified(companyId: number, url: string)
   // Derivation mirrors recordFetchSuccess: content_length>0 => 'complete', an
   // empty linked body => 'empty', and if somehow no content is linked we leave
   // the column unchanged. Never read by scoring/analyzer => verdicts unaffected.
+  //
+  // WP05/Phase0 (research-gap correctness): a document whose ORIGINAL extraction was
+  // a confirmed failed-read ('partial'/'unknown') must stay a research gap even when
+  // its content is later reused via the cache. The cache carries the raw bytes but
+  // not a fresh classification, and a partial read still has content_length>0 — so
+  // the naive length derivation would silently PROMOTE it to 'complete' and hide the
+  // gap. We therefore PRESERVE an existing 'partial'/'unknown' label (first CASE
+  // branch) rather than overwrite it; EX04 then routes it to targeted re-retrieval.
   await db.execute(sql`
     UPDATE documents SET
       fetch_status = 'ok',
       fetched_at = NOW(),
       extraction_state = CASE
+        WHEN documents.extraction_state IN ('partial', 'unknown') THEN documents.extraction_state
         WHEN (SELECT dc.content_length FROM document_content dc WHERE dc.id = documents.content_id) > 0 THEN 'complete'
         WHEN documents.content_id IS NOT NULL THEN 'empty'
         ELSE extraction_state

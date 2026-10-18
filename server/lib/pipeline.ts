@@ -1048,7 +1048,7 @@ async function runFetchPhase(opts: {
     for (const doc of pendingBefore) {
       const cached = await storage.getContentByUrl(doc.url);
       if (cached && cached.length > 50) {
-        await storage.recordFetchSuccess(companyId, doc.url, cached);
+        await storage.recordFetchSuccess(companyId, doc.url, cached, getExtractionCompleteness(doc.url));
         contentCache.set(doc.url, cached);
         cacheHits++;
       }
@@ -1404,7 +1404,7 @@ async function runFetchPhase(opts: {
             await storage.recordFetchFailure(companyId, doc.url, "aboutness_reject");
           } else if (!needsVerify) {
             // On the company's own verified domain — accept without LLM cost.
-            await storage.recordFetchSuccess(companyId, doc.url, content);
+            await storage.recordFetchSuccess(companyId, doc.url, content, getExtractionCompleteness(doc.url));
             newFetchCount++;
           } else {
             const vr = await verifyDocumentCompany(
@@ -1420,7 +1420,7 @@ async function runFetchPhase(opts: {
             );
 
             if (vr.verdict === "match") {
-              await storage.recordFetchSuccess(companyId, doc.url, content);
+              await storage.recordFetchSuccess(companyId, doc.url, content, getExtractionCompleteness(doc.url));
               newFetchCount++;
             } else if (vr.verdict === "error") {
               // Fail-safe: the verifier itself failed (LLM/parse error). Fall back
@@ -1438,7 +1438,7 @@ async function runFetchPhase(opts: {
                   || nameWords.some(w => contentLower.includes(w)));
               if (fallbackMentions) {
                 console.warn(`[${companyName}] VERIFY ERROR (${vr.reason}); kept via name-mention fallback: ${doc.url.slice(0, 80)}`);
-                await storage.recordFetchSuccess(companyId, doc.url, content);
+                await storage.recordFetchSuccess(companyId, doc.url, content, getExtractionCompleteness(doc.url));
                 newFetchCount++;
               } else {
                 console.warn(`[${companyName}] VERIFY ERROR (${vr.reason}); no name mention — rejected: ${doc.url.slice(0, 80)}`);
@@ -1749,7 +1749,7 @@ async function runFetchPhase(opts: {
               directText = await fetchPdfDirectRetry(pdfUrl, getOrigin(pdfUrl));
             }
             if (directText && directText.length > 200) {
-              await storage.recordFetchSuccess(companyId, pdfUrl, directText);
+              await storage.recordFetchSuccess(companyId, pdfUrl, directText, getExtractionCompleteness(pdfUrl));
               pdfRecovered++;
               preBrowserRecovered.add(pdfUrl);
               console.log(`[${companyName}] Fix 2b/D: direct-retry recovered ${directText.length} chars from ${pdfUrl.slice(0, 80)}`);
@@ -1830,7 +1830,7 @@ async function runFetchPhase(opts: {
         }
         for (const { url: pdfUrl, text: pdfText } of recoveryResult.recovered) {
           if (pdfText && pdfText.length > 200) {
-            await storage.recordFetchSuccess(companyId, pdfUrl, pdfText);
+            await storage.recordFetchSuccess(companyId, pdfUrl, pdfText, getExtractionCompleteness(pdfUrl));
             pdfRecovered++;
             console.log(`[${companyName}] Fix 2b: PDF fallback recovered ${pdfText.length} chars from ${pdfUrl.slice(0, 80)}`);
           }
@@ -1991,7 +1991,7 @@ async function runFetchPhase(opts: {
               // (deadline passed) we must NOT call recordFetchSuccess, even if a
               // straggling result arrived — the URL stays budget-starved/retryable.
               if (content && content.length > 50 && !scope.aborted()) {
-                await storage.recordFetchSuccess(companyId, doc.url, content);
+                await storage.recordFetchSuccess(companyId, doc.url, content, getExtractionCompleteness(doc.url));
                 deferredRecovered++;
                 console.log(`[${companyName}] CHANGE 5: deferred retry recovered ${content.length} chars from ${doc.url.slice(0, 80)}`);
               }
@@ -2259,7 +2259,7 @@ async function runFetchPhase(opts: {
                 text = await fetchPdfDirectRetry(doc.url, getOrigin(doc.url));
               }
               if (text && text.length > 200) {
-                await storage.recordFetchSuccess(companyId, doc.url, text);
+                await storage.recordFetchSuccess(companyId, doc.url, text, getExtractionCompleteness(doc.url));
                 console.log(`[${companyName}] CORPUS-READINESS: re-fetch recovered ${text.length} chars from ${doc.url.slice(0, 80)}`);
               }
             } catch { /* per-URL non-fatal */ }
