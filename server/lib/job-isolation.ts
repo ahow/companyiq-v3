@@ -34,6 +34,7 @@ import { ingestSignalFromChild } from "./adaptive-concurrency.js";
 import { ProviderScoringError } from "./credit-breaker.js";
 import { PG_PARENT_RESERVE } from "../db.js";
 import type { PermitKind } from "./isolation-ipc.js";
+import { resolvePipelineTimeBudgetPolicy, resolveEffectiveBudget } from "./pipeline-time-budget.js";
 
 export function isolationEnabled(): boolean {
   return process.env.WORKER_ISOLATION_ENABLED === "true";
@@ -49,9 +50,19 @@ export function childPgBudget(env: NodeJS.ProcessEnv = process.env): number {
   return Math.floor((total - reserve) / conc);
 }
 
-/** Same env + default as pipeline.ts PIPELINE_TIMEOUT_MS. */
+/**
+ * Same env + default as pipeline.ts PIPELINE_TIMEOUT_MS. Phase 3 / Issue 3 routes
+ * the parent's single hard deadline through the time-budget lever. At the DEFAULT
+ * (PIPELINE_TIME_BUDGET_POLICY unset → "wallclock") this returns exactly
+ * parseInt(env.PIPELINE_TIMEOUT_MS||"540000") — byte-identical to today. The
+ * per-stage budgets / progress-based degradation that "budgeted" adds operate on
+ * the heartbeat evaluation path (evaluateTimeBudget), not on this hard ceiling, so
+ * the parent's guillotine is unchanged regardless of policy.
+ */
 export function pipelineTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  return parseInt(env.PIPELINE_TIMEOUT_MS || "540000", 10);
+  const legacy = parseInt(env.PIPELINE_TIMEOUT_MS || "540000", 10);
+  if (resolvePipelineTimeBudgetPolicy() === "wallclock") return legacy;
+  return resolveEffectiveBudget({ env, totalBudgetMs: legacy }).totalBudgetMs;
 }
 
 /** Why the parent terminated the child (null = it was never asked to stop). */

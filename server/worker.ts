@@ -34,6 +34,8 @@ import { runWithLlmContext } from "./lib/llm-usage.js";
 import { isolationEnabled, runPipelineIsolated } from "./lib/job-isolation.js";
 import { isRetriableError, fenceCancelledResult } from "./lib/retry-policy.js";
 import { enforceBatchStopRule, readStopRuleThreshold, runStopRuleCancelSequence, COUNT_BATCH_FAILURES_SQL } from "./lib/batch-stop-rule.js";
+import { resolveBatchResiliencePolicy, decideBatchContinuation, resolveResilienceConfig } from "./lib/batch-resilience-policy.js";
+import { resolveStageInstrumentationPolicy, StageLedger, formatHeartbeatLog } from "./lib/stage-instrumentation.js";
 import { runWithDiagContext, setDiagStage, diagTags } from "./lib/diag-context.js";
 import { createAttemptLifecycle, revokeAttempt, ownershipFromContext, dispatchRevokedReason, startOwnershipWatch, raceWithWatchdog } from "./lib/lifecycle-fence.js";
 import { cancelTrace, maskToken, attachBullLockDiag, registerRedisForDiag } from "./lib/runtime-diag.js";
@@ -401,11 +403,26 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   let jobWatchdogFired = false;
   const cancelCheck = () => cancelledBatches.has(batchId) || isBatchCancelledCached(batchId) || jobWatchdogFired || lifecycle.revoked;
 
+  // Phase 3 / Issue 3 — stage instrumentation lever. DEFAULT (STAGE_INSTRUMENTATION_POLICY
+  // unset → "off") leaves stageLedger null so the heartbeat below runs byte-identically
+  // to today (updateJobProgress only). In shadow/on it also emits a durable heartbeat
+  // snapshot of the in-flight stage spans — telemetry only, never affects the job.
+  const stageInstrPolicy = resolveStageInstrumentationPolicy();
+  const stageLedger = stageInstrPolicy === "off"
+    ? null
+    : new StageLedger({ workspaceId, batchId, jobId: jobId as number, attemptId, attemptNumber: currentAttempt, companyId, frameworkId });
+  if (stageLedger) stageLedger.startStage("pipeline", Date.now());
+
   const heartbeatIntervalMs = parseInt(process.env.JOB_HEARTBEAT_MS || "30000", 10);
   const heartbeatTimer = setInterval(() => {
     void storage.updateJobProgress(jobId, { stage: "pipeline", companyId, frameworkId }, ownership).catch((error: any) => {
       console.warn(`[Worker] heartbeat failed for job ${jobId}: ${error?.message || error}`);
     });
+    if (stageLedger) {
+      try {
+        console.log(formatHeartbeatLog(stageLedger.snapshot(Date.now())));
+      } catch { /* instrumentation is telemetry-only; never disturb the job */ }
+    }
   }, heartbeatIntervalMs);
   // Revocation path #4 (cross-replica reclaim): re-read this attempt's own
   // analysis_jobs row every OWNERSHIP_WATCH_MS (default 30s, 0 disables) and
@@ -1700,6 +1717,30 @@ export async function startWorker(workerId?: string): Promise<Worker> {
  * POST /batch/cancel and the caller skips the retry re-enqueue.
  */
 export async function stopRuleTripped(batchId: number, jobId: number, error: string, frameworkId: number, workspaceId: number): Promise<boolean> {
+  // Phase 3 / Issue 3 — batch resilience lever (consulted at the decision point).
+  // DEFAULT (BATCH_RESILIENCE_POLICY unset → "legacy") falls straight through to
+  // enforceBatchStopRule below — byte-identical to today. In shadow/resilient we
+  // surface the resilient decision (retry → quarantine-with-reason → systemic-only
+  // cancel); ARMING the resilient executor is gated on the paid instrumented
+  // diagnostic run (Issue-3 part 2, out of scope this ship), so the legacy stop
+  // rule remains the executed path until then.
+  const resiliencePolicy = resolveBatchResiliencePolicy();
+  if (resiliencePolicy !== "legacy") {
+    try {
+      const { pool } = await import("./db.js");
+      const r = await pool.query(COUNT_BATCH_FAILURES_SQL, [batchId]);
+      const row = r.rows[0] ?? {};
+      const legacyCounts = { failedAttemptJobs: Number(row.failed_attempt_jobs ?? 0), retryExhaustedJobs: Number(row.retry_exhausted_jobs ?? 0) };
+      const decision = decideBatchContinuation({
+        policy: resiliencePolicy,
+        stats: { total: legacyCounts.failedAttemptJobs, failedOrQuarantined: legacyCounts.failedAttemptJobs, legacyCounts },
+        cfg: resolveResilienceConfig(),
+      });
+      console.log(`[BATCH-RESILIENCE] batch=${batchId} job=${jobId} policy=${resiliencePolicy} cancel=${decision.cancel} systemic=${decision.systemic} — ${decision.reason} (executor: legacy, pending diagnostic-run arming)`);
+    } catch (e: any) {
+      console.warn(`[BATCH-RESILIENCE] batch=${batchId} telemetry failed (non-fatal): ${e?.message ?? e}`);
+    }
+  }
   return enforceBatchStopRule(batchId, jobId, error, {
     threshold: readStopRuleThreshold(),
     countFailures: async (id) => {
