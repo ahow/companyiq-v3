@@ -14,6 +14,7 @@ import {
   MoreHorizontal,
   ChevronDown,
   HelpCircle,
+  Info,
 } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 
@@ -195,6 +196,14 @@ export default function Navbar({ currentPage, onNavigate }: NavbarProps) {
               </span>
             )}
             <span className="text-sm text-gray-600 dark:text-gray-300 hidden md:inline">{user?.name || user?.email}</span>
+            <a
+              href="/how-it-works"
+              title="How CompanyIQ works"
+              aria-label="How CompanyIQ works"
+              className={cornerBtn(false)}
+            >
+              <Info className="w-5 h-5" />
+            </a>
             <button
               type="button"
               onClick={() => onNavigate("guide")}

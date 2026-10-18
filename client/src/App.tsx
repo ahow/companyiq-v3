@@ -12,6 +12,7 @@ import FrameworkBuilderV2Page from "./pages/FrameworkBuilderV2Page";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import DomainsPage from "./pages/DomainsPage";
 import GuidePage from "./pages/GuidePage";
+import HowItWorksPage from "./pages/HowItWorksPage";
 import Navbar from "./components/Navbar";
 
 interface User {
@@ -49,6 +50,13 @@ type Page =
   | "guide";
 
 export default function App() {
+  // Public, no-login route. Served by the SPA catch-all (server/index.ts) which
+  // returns index.html for any non-API path, so this renders before the auth gate
+  // below and a lay reader can open /how-it-works without an account.
+  if (typeof window !== "undefined" && window.location.pathname === "/how-it-works") {
+    return <HowItWorksPage />;
+  }
+
   const [page, setPage] = useState<Page>("dashboard");
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
 

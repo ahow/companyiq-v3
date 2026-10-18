@@ -187,6 +187,12 @@ export default function LoginPage({ onSuccess }: LoginPageProps) {
             {isSignup ? "Already have an account? Sign in" : "Need an account? Sign up"}
           </button>
         </div>
+
+        <div className="mt-4 pt-4 border-t border-gray-100 text-center">
+          <a href="/how-it-works" className="text-sm text-gray-500 hover:text-blue-600 transition-colors">
+            How CompanyIQ works →
+          </a>
+        </div>
       </div>
     </div>
   );
