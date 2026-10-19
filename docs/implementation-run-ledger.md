@@ -1441,3 +1441,12 @@ desired (cosmetic; would force a redeploy).
 **Closure commit.** Docs-only (this ledger entry + `deliverables/41-issue5-completeness-signals-result.{md,docx,pdf}`); production runtime byte-identical to the validated `a3476f6`.
 
 **Deliverable.** `deliverables/41-issue5-completeness-signals-result.md` (+ .docx / .pdf).
+
+
+### Issue 4 — owner decision recorded: option A, B5 context-trim stays in `shadow` (permanent) (2026-10-19)
+
+**Decision.** Presented the Issue 4 on-flip choice (deliverable 40 §6) to the system owner: **(A)** keep `shadow` [recommended], **(B)** build the Issue 2 human holdout then flip `on` gated, **(C)** override and flip `on` now on offline+structural evidence. **Owner selected (A).**
+
+**Effect.** B5 remains in `shadow` on all four Railway targets as the **accepted permanent state** — it logs what it would trim but applies no trim, so it drops no relevant text and changes **zero** verdicts (yes→no = 0, no→yes = 0) by construction. **No env change, no redeploy, no paid batch** performed for this decision; production runtime is byte-identical to the validated `a3476f6`. Verified live at decision time: `CONTEXT_COST_POLICY = shadow` on production app and worker.
+
+**On-flip gate.** Deliberately left **unarmed**. The corrected ≥90%-shingle-containment predicate and its offline validation (360/360 recall invariant, 870 more passages kept, 7.65% token reduction on true near-duplicates only) stay in the codebase, ready. A future flip to `on` remains gated on building the Issue 2 human-analyst-labelled holdout (Review sequence Steps 3 + 5); it will be made only on explicit owner instruction. **Issue 4 is closed on the basis of `shadow`-permanent.**
