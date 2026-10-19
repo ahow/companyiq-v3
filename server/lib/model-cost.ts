@@ -10,18 +10,21 @@
  *
  * WHAT THIS MODULE IS:
  *   Three framework-level, DB-free, deterministic levers behind a single
- *   kill-switch. As of GATE5 the shipped default is "on", so the headline lever
- *   (C, context-trim) is the standing production behaviour; levers D and E remain
- *   scaffold-only (D is wired but conservative, E is not wired). The kill-switch
- *   still fully overrides without a redeploy: CONTEXT_COST_POLICY=off restores the
- *   byte-identical pre-B5 pack (strong model always used), =shadow is telemetry-only:
+ *   kill-switch. As of the Issue-4 fix the shipped default is "shadow", so the
+ *   headline lever (C, context-trim) DROPS NOTHING out of the box — it only logs
+ *   what it would trim; levers D and E remain scaffold-only (D is wired but
+ *   conservative, E is not wired). The kill-switch fully overrides without a
+ *   redeploy: CONTEXT_COST_POLICY=off restores the byte-identical pre-B5 pack
+ *   (no telemetry), =on actually trims true >=90% near-duplicates:
  *
- *     LEVER C (headline) — planContextTrim: trim ONLY provably-redundant repeated
- *        context, NEVER decisive context. Reuses evidence-recall's decisive-passage
- *        oracle (computeDecisivePassages) as the single source of "what is
- *        decisive", and mirrors planBoundedExpansion's subsumption/dedup rule in
- *        the TRIM direction. HARD INVARIANT: no decisive pack passage is EVER
- *        trimmed; pack recall of decisive passages is preserved exactly.
+ *     LEVER C (headline) — planContextTrim: trim ONLY genuine NEAR-DUPLICATE
+ *        context (>=90% word-shingle containment within an already-KEPT passage),
+ *        NEVER context that carries new information. Reuses evidence-recall's
+ *        decisive-passage oracle (computeDecisivePassages) to force-keep decisive
+ *        passages. HARD INVARIANT: a passage that is NOT a >=90% near-duplicate of
+ *        a kept passage is NEVER trimmed — regardless of keyword hits or whether
+ *        its source document is already cited (the Issue-4 fix); and no decisive
+ *        pack passage is EVER trimmed (recall preserved exactly).
  *
  *     LEVER D — stablePrefixOrder: reorder prompt segments so invariant/boilerplate
  *        segments (identical across companies) come FIRST and the volatile
@@ -43,14 +46,16 @@
  *   "looks irrelevant" heuristic.
  *
  * KILL-SWITCH (mirrors eligibility-decision.ts / evidence-recall.ts exactly):
- *   resolveContextCostPolicy() reads env CONTEXT_COST_POLICY. As of GATE5 the
- *   shipped default is "on" (context-trim is standing production behaviour).
- *     - on (default): apply lever C (trim provably-redundant repeats). Verdict-
- *       invariant by the HARD INVARIANT — no decisive passage is ever trimmed.
- *     - shadow: compute savings/telemetry but DO NOT apply (verdict-invariant).
+ *   resolveContextCostPolicy() reads env CONTEXT_COST_POLICY. As of the Issue-4
+ *   fix the shipped default is "shadow" (drops nothing — safe out of the box).
+ *     - shadow (default): run the near-duplicate detection but DO NOT apply —
+ *       return the FULL pack unchanged and log what it WOULD trim (verdict-
+ *       invariant; the drop-nothing default the Issue-4 fix requires).
+ *     - on: apply lever C — trim ONLY true >=90% near-duplicates of a kept
+ *       passage. Must be validated against the Issue-2 holdout before enabling.
  *     - off: every lever is a passthrough ⇒ pack byte-identical, prompt order
  *       byte-identical, strong model always — restores the exact pre-B5 behaviour
- *       with no redeploy (rollback path).
+ *       with no telemetry (pure rollback path).
  *
  * SAFETY: every exported function is total (never throws on bad input) and returns
  * a frozen object for structured results, so a plan cannot be mutated downstream.
@@ -60,8 +65,6 @@ import {
   computeDecisivePassages,
   measurePackRecall,
   stablePassageId,
-  decisiveSignal,
-  passageDecisiveHits,
   type DecisivePassage,
 } from "./evidence-recall.js";
 import type { Chunk } from "./passage-retrieval.js";
@@ -72,14 +75,20 @@ import type { FrameworkMeasure } from "../../shared/schema.js";
 export type ContextCostPolicy = "off" | "shadow" | "on";
 
 /**
- * DEFAULT = "on": standing production behaviour post-GATE5 (context-trim applied).
- * GATE5 proved the HARD INVARIANT over the frozen corpus (360/360 cells: no
- * decisive passage trimmed, recall preserved, identical misses) and confirmed a
- * measurable token/cost reduction with no structured cell flips, so the headline
- * lever (C) is the shipped default. Set CONTEXT_COST_POLICY=off to fail-safe back
- * to the byte-identical pre-B5 pack with no redeploy (rollback path).
+ * DEFAULT = "shadow" (Issue 4 fix): the DEFAULT NEVER drops a passage.
+ *
+ * Issue 4 (Readiness Review) found the previous predicate could trim a passage
+ * that carried genuinely NEW information (a qualifier, date, scope limitation or
+ * negation) merely because it had no decisive keyword and came from an already-
+ * cited document — overstating what "redundant" checked. The predicate is now a
+ * GENUINE near-duplicate test (>=90% word-shingle containment within an already-
+ * KEPT passage; see planContextTrim), and the shipped default is "shadow" so the
+ * out-of-the-box behaviour DROPS NOTHING: it computes + logs what it WOULD trim
+ * and returns the full pack unchanged. Switch to "on" only after the Issue 2
+ * holdout validates that trimming true >=90% near-duplicates does not move scores.
+ * Set CONTEXT_COST_POLICY=off for a byte-identical passthrough (no telemetry).
  */
-export const DEFAULT_CONTEXT_COST_POLICY: ContextCostPolicy = "on";
+export const DEFAULT_CONTEXT_COST_POLICY: ContextCostPolicy = "shadow";
 
 /** Env var name for the kill-switch (documented in the ledger). */
 export const CONTEXT_COST_POLICY_ENV = "CONTEXT_COST_POLICY";
@@ -89,10 +98,10 @@ export const CONTEXT_COST_POLICY_VERSION = 1;
 
 /**
  * Resolve the active policy: explicit arg > env CONTEXT_COST_POLICY > default.
- * Any unrecognised/empty value falls back to the shipped default ("on" post-GATE5
- * — fail-safe to the standing production behaviour, so a typo can never silently
- * disable the proven context-trim). Set CONTEXT_COST_POLICY=off (or =shadow) to
- * override. Total: never throws.
+ * Any unrecognised/empty value falls back to the shipped default ("shadow" post-
+ * Issue-4 — fail-safe to the DROP-NOTHING behaviour, so a typo can never silently
+ * drop evidence). Set CONTEXT_COST_POLICY=on to actually trim true >=90% near-
+ * duplicates, or =off for a byte-identical passthrough. Total: never throws.
  */
 export function resolveContextCostPolicy(
   explicit?: ContextCostPolicy | null,
@@ -138,25 +147,67 @@ const EMPTY_TRIM_PLAN: ContextTrimPlan = Object.freeze({
   decisivePackCount: 0,
 });
 
+// ── Word-shingle near-duplicate primitives (Issue 4) ───────────────────────────
+//
+// The ONLY definition of "redundant": a passage is redundant iff its content is a
+// genuine NEAR-DUPLICATE of a passage that is ALREADY being KEPT. "Near-duplicate"
+// is pure, deterministic word-shingle containment — no company/topic/keyword-list
+// special-casing, so the test is identical for every framework.
+
+/** Word-shingle size (k=4). A passage with fewer than k word tokens forms NO
+ *  shingle and is therefore NEVER trimmable (short-passage guarantee). */
+export const NEAR_DUP_SHINGLE_K = 4;
+/** Containment threshold: trim only when >=90% of the candidate's shingles are
+ *  contained within a SINGLE already-kept passage. */
+export const NEAR_DUP_CONTAINMENT = 0.9;
+
+/** Lower-cased alphanumeric word-token k-shingles of `text` (a Set, deduped).
+ *  Returns an EMPTY set when the passage has fewer than k tokens (too short to
+ *  form a shingle) — such passages are treated as NOT trimmable. Deterministic. */
+export function wordShingles(text: string, k: number = NEAR_DUP_SHINGLE_K): Set<string> {
+  const words = (text || "").toLowerCase().match(/[a-z0-9]+/g) || [];
+  const out = new Set<string>();
+  if (words.length < k) return out;
+  for (let i = 0; i + k <= words.length; i++) {
+    out.add(words.slice(i, i + k).join(" "));
+  }
+  return out;
+}
+
+/** Containment of `cand` within `kept` = |cand ∩ kept| / |cand|, in [0,1].
+ *  0 when `cand` is empty (nothing to contain). Deterministic, pure. */
+export function shingleContainment(cand: Set<string>, kept: Set<string>): number {
+  if (cand.size === 0) return 0;
+  let inter = 0;
+  for (const s of cand) if (kept.has(s)) inter++;
+  return inter / cand.size;
+}
+
 /**
- * Plan a BYTE-SAFE trim of the ORDERED pack chunks for ONE measure.
+ * Plan a BYTE-SAFE trim of the ORDERED pack chunks for ONE measure (Issue 4).
  *
- * A pack passage is a TRIM CANDIDATE only if BOTH hold:
+ * A pack passage is a TRIM CANDIDATE only if ALL of:
  *   (1) it is NOT decisive (not in computeDecisivePassages over the corpus), AND
- *   (2) it is provably REDUNDANT — every distinct decisive token it carries AND
- *       every source link it carries is ALREADY represented by a KEPT passage.
- * This mirrors planBoundedExpansion's subsumption/dedup rule in the TRIM
- * direction: keep the first occurrence, drop later exact/subsumed repeats.
+ *   (2) it can form a word-shingle (>= NEAR_DUP_SHINGLE_K tokens), AND
+ *   (3) it is a GENUINE NEAR-DUPLICATE — >= NEAR_DUP_CONTAINMENT of its own word
+ *       shingles are contained within ONE already-KEPT passage.
+ * This is the corrected definition of "redundant": keep the first occurrence,
+ * drop only a later near-identical restatement of it.
  *
  * HARD INVARIANTS (the "relevant text is never dropped" guarantee):
+ *   - A passage that is NOT a >=90% near-duplicate of a kept passage is NEVER
+ *     trimmed — REGARDLESS of keyword hits or whether its source document is
+ *     already cited. This is the Issue-4 fix: a unique qualifier/date/scope/
+ *     negation with no keyword, from an already-cited doc, is always kept.
  *   - The set of decisive pack passages is a SUBSET of the kept set — NO decisive
- *     passage that reached the pack is ever trimmed.
- *   - A passage carrying ANY unique decisive token OR ANY unique source link is
- *     NEVER a trim candidate (so pack recall of decisive passages is unchanged,
- *     with the identical `misses` set).
- *   - NEVER trims on "looks irrelevant" — only on provable redundancy/repetition.
+ *     passage that reached the pack is ever trimmed (recall preserved exactly,
+ *     identical `misses` set).
+ *   - A passage too short to form a k-shingle is NEVER trimmed.
+ *   - NEVER trims on "looks irrelevant" — only on provable near-duplication.
  *
- * Deterministic: kept passages preserve their original pack order.
+ * Deterministic: kept passages preserve their original pack order; containment is
+ * measured only against passages ALREADY kept (so it is order-stable and a
+ * candidate can never be trimmed against another candidate that was itself cut).
  *
  * `measure`, `packChunks` (the ORDERED pack) and `corpusChunks` (the full corpus,
  * so the SAME oracle marks decisive passages as the A5 seam) are required. A
@@ -169,10 +220,10 @@ export function planContextTrim(opts: {
   /** FULL corpus chunk set — the universe the decisive oracle marks over. */
   corpusChunks: Chunk[];
   /**
-   * When false/omitted (default/off semantics), returns a byte-identical
-   * passthrough: every pack passage is KEPT, nothing trimmed. Only when `true`
-   * (shadow computes the plan for telemetry; on applies it) is the real
-   * redundancy analysis run.
+   * When false/omitted (off semantics), returns a byte-identical passthrough:
+   * every pack passage is KEPT, nothing trimmed. Only when `true` (shadow
+   * computes the plan for telemetry; on applies it) is the real near-duplicate
+   * analysis run.
    */
   apply?: boolean;
 }): ContextTrimPlan {
@@ -198,62 +249,63 @@ export function planContextTrim(opts: {
   try {
     decisive = computeDecisivePassages({ measure: opts.measure, chunks: corpus });
   } catch {
-    // Fail-safe: if the oracle errors we cannot prove anything is redundant, so
+    // Fail-safe: if the oracle errors we cannot prove anything is decisive, so
     // keep everything (no trim). This can only reduce to current behaviour.
     return { ...EMPTY_TRIM_PLAN, reason: "passthrough: decisive-oracle error — kept all" };
   }
   const decisiveIds = new Set(decisive.map((d) => d.id));
-
-  // Per-passage decisive signal, so we can prove token subsumption on the pack.
-  const signal = decisiveSignal(opts.measure);
 
   const keptIds: string[] = [];
   const trimmedIds: string[] = [];
   let bytesSaved = 0;
   let decisivePackCount = 0;
 
-  // Coverage accumulated over KEPT passages (first-occurrence-wins). A candidate
-  // is redundant only if ALL its decisive tokens AND its source link are already
-  // covered by something we have decided to KEEP.
-  const coveredTokens = new Set<string>();
-  const coveredLinks = new Set<string>();
+  // Shingle sets of passages we have decided to KEEP (first-occurrence-wins).
+  // A candidate is redundant only if it is a >=90% near-duplicate of ONE of these.
+  const keptShingleSets: Set<string>[] = [];
 
   for (const chunk of pack) {
     const id = stablePassageId(chunk);
-    const link = (chunk.docUrl || "").trim().toLowerCase();
-    const hits = passageDecisiveHits(chunk.text || "", signal);
+    const text = chunk.text || "";
     const isDecisive = decisiveIds.has(id);
     if (isDecisive) decisivePackCount++;
 
-    // A passage's "unique contribution": decisive tokens not yet covered by a
-    // kept passage, a source link not yet covered, or a decisive phrase hit.
-    const newTokens = hits.matchedTokens.filter((t) => !coveredTokens.has(t));
-    const linkNew = link !== "" && !coveredLinks.has(link);
+    const candShingles = wordShingles(text);
 
-    // TRIM CANDIDATE only if: NOT decisive AND adds no new decisive token AND
-    // adds no new source link AND carries no decisive phrase. Everything else is
-    // KEPT (this is the load-bearing guarantee).
-    const isRedundantRepeat =
-      !isDecisive && newTokens.length === 0 && !linkNew && !hits.phraseHit;
-
-    if (isRedundantRepeat) {
-      trimmedIds.push(id);
-      bytesSaved += (chunk.text || "").length;
+    // NEVER trim: a decisive passage, or a passage too short to form a shingle.
+    // Both are kept and added to the kept pool so later near-dups of them can be cut.
+    if (isDecisive || candShingles.size === 0) {
+      keptIds.push(id);
+      keptShingleSets.push(candShingles);
       continue;
     }
 
-    // KEEP — and extend coverage so later exact/subsumed repeats become redundant.
+    // Near-duplicate test: containment within a SINGLE already-kept passage.
+    let maxContainment = 0;
+    for (const kept of keptShingleSets) {
+      if (kept.size === 0) continue;
+      const c = shingleContainment(candShingles, kept);
+      if (c > maxContainment) maxContainment = c;
+      if (maxContainment >= NEAR_DUP_CONTAINMENT) break;
+    }
+
+    if (maxContainment >= NEAR_DUP_CONTAINMENT) {
+      trimmedIds.push(id);
+      bytesSaved += text.length;
+      continue;
+    }
+
+    // KEEP — not a near-duplicate of anything already kept.
     keptIds.push(id);
-    for (const t of hits.matchedTokens) coveredTokens.add(t);
-    if (link !== "") coveredLinks.add(link);
+    keptShingleSets.push(candShingles);
   }
 
   const fired = trimmedIds.length > 0;
   const reason = fired
-    ? `context-trim: ${trimmedIds.length} provably-redundant repeat(s) trimmed ` +
-      `(-${bytesSaved} chars); ${keptIds.length} kept; ` +
+    ? `context-trim: ${trimmedIds.length} true >=${Math.round(NEAR_DUP_CONTAINMENT * 100)}% ` +
+      `near-duplicate(s) trimmed (-${bytesSaved} chars); ${keptIds.length} kept; ` +
       `${decisivePackCount} decisive pack passage(s) all kept (recall preserved)`
-    : "no-trim: no provably-redundant repeats in the pack";
+    : "no-trim: no >=90% near-duplicates of a kept passage in the pack";
 
   return Object.freeze({
     fired,
@@ -287,6 +339,82 @@ export function verifyTrimPreservesRecall(opts: {
     before.misses.every((m, i) => m.id === after.misses[i]?.id);
   const ok = after.recall === before.recall && missesEqual;
   return { ok, originalRecall: before.recall, trimmedRecall: after.recall, missesEqual };
+}
+
+// ─── Mode-aware entry point (off / shadow / on) — the single shipped seam ───────
+
+export interface ContextTrimOutcome {
+  /** the resolved policy actually used. */
+  policy: ContextCostPolicy;
+  /** true ONLY when the pack was actually trimmed (policy "on" AND something fired). */
+  applied: boolean;
+  /** the chunks to KEEP, in pack order. Full pack unless `applied`. */
+  keptChunks: Chunk[];
+  /** the computed plan (passthrough under "off"). */
+  plan: ContextTrimPlan;
+  /** a concise marker to log (shadow/on), or null under "off". */
+  logLine: string | null;
+}
+
+/**
+ * Apply the CONTEXT_COST_POLICY to ONE measure's ORDERED pack. This is the SINGLE
+ * seam the analyzer uses AND the one the unit tests exercise, so the code tested is
+ * exactly the code shipped. Pure except for the returned `logLine` (the caller logs
+ * it). Modes:
+ *   - off    → identity: full pack, nothing computed beyond passthrough, no log.
+ *   - shadow → run the near-duplicate detection but DROP NOTHING: return the FULL
+ *              pack unchanged, and surface a would-trim marker in `logLine`.
+ *   - on     → actually trim, but ONLY true >=90% near-duplicates per planContextTrim.
+ * Never throws: any internal error falls back to the full pack (drop nothing).
+ */
+export function applyContextTrimPolicy(opts: {
+  policy?: ContextCostPolicy | null;
+  measure: Pick<FrameworkMeasure, "title" | "evidenceKeywords">;
+  packChunks: Chunk[];
+  corpusChunks: Chunk[];
+}): ContextTrimOutcome {
+  const policy = resolveContextCostPolicy(opts.policy);
+  const pack = Array.isArray(opts.packChunks) ? opts.packChunks : [];
+  const total = pack.length;
+
+  if (policy === "off") {
+    const plan = planContextTrim({
+      measure: opts.measure,
+      packChunks: pack,
+      corpusChunks: opts.corpusChunks,
+      // apply omitted ⇒ byte-identical passthrough
+    });
+    return { policy, applied: false, keptChunks: pack, plan, logLine: null };
+  }
+
+  // shadow + on both compute the REAL near-duplicate plan.
+  const plan = planContextTrim({
+    measure: opts.measure,
+    packChunks: pack,
+    corpusChunks: opts.corpusChunks,
+    apply: true,
+  });
+
+  if (policy === "shadow") {
+    // DROP NOTHING — return the full pack; only report what it WOULD trim.
+    const logLine =
+      `[CONTEXT-TRIM][shadow] would-trim ${plan.trimmedIds.length}/${total} ` +
+      `passages (>=${Math.round(NEAR_DUP_CONTAINMENT * 100)}% near-dup); bytesSaved=${plan.bytesSaved}`;
+    return { policy, applied: false, keptChunks: pack, plan, logLine };
+  }
+
+  // policy === "on": apply the trim, keeping pack order.
+  if (!plan.fired) {
+    const logLine =
+      `[CONTEXT-TRIM][on] 0/${total} near-duplicates — pack unchanged`;
+    return { policy, applied: false, keptChunks: pack, plan, logLine };
+  }
+  const keptSet = new Set(plan.keptIds);
+  const keptChunks = pack.filter((c) => keptSet.has(stablePassageId(c)));
+  const logLine =
+    `[CONTEXT-TRIM][on] trimmed ${plan.trimmedIds.length}/${total} ` +
+    `passages (>=${Math.round(NEAR_DUP_CONTAINMENT * 100)}% near-dup); -${plan.bytesSaved} chars`;
+  return { policy, applied: true, keptChunks, plan, logLine };
 }
 
 // ─── LEVER D — provider prompt-cache-friendly stable prefix ────────────────────
