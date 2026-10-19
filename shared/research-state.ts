@@ -52,6 +52,8 @@ export interface ClassifiableDocument {
   extractionState?: string | null; // complete | partial | empty | null (legacy = unknown)
   contentId?: number | null;
   superseded?: boolean | null;
+  url?: string | null;           // document URL (used only for generic doc-type matching)
+  title?: string | null;         // document title (used only for generic doc-type matching)
 }
 
 // failure_reason values that mean "we never got a conclusive look at the
@@ -182,6 +184,15 @@ export interface ResearchScopeManifest {
   /** Families whose absence is a MATERIAL gap. Conservative: first-party only. */
   essentialFamilies: EssentialSourceFamily[];
   evidenceRequirements?: string[];
+  /**
+   * Framework-declared required document types (verbatim from
+   * `framework.required_doc_types`, e.g. "Annual Report", "Sustainability
+   * Report", "Responsible AI Policy"). Used ONLY to build the per-document-type
+   * essential checklist (Issue 5, part 2) — a generic, framework-derived list,
+   * never a hardcoded company/topic string. Does NOT affect comprehensive/gap
+   * semantics.
+   */
+  requiredDocTypes?: string[];
 }
 
 /**
@@ -197,6 +208,7 @@ export function buildManifest(input: {
   essentialFamilies?: EssentialSourceFamily[];
   eligibleSourceFamilies?: string[];
   evidenceRequirements?: string[];
+  requiredDocTypes?: string[];
 }): ResearchScopeManifest {
   return {
     entityBoundary: input.entityBoundary,
@@ -209,6 +221,7 @@ export function buildManifest(input: {
         { id: "first_party_primary_disclosure", label: "First-party primary disclosure" },
       ],
     evidenceRequirements: input.evidenceRequirements,
+    requiredDocTypes: input.requiredDocTypes,
   };
 }
 
@@ -336,6 +349,132 @@ export function computeEssentialGaps(
   return gaps;
 }
 
+// ─── Essential-document checklist (Issue 5, part 2) ──────────────────────────
+//
+// For low-scoring companies the reviewer must be able to tell "looked and found
+// nothing" apart from "never obtained the key documents". This produces a
+// per-document-type checklist — found / partial / not found — for the document
+// types the FRAMEWORK itself declares as required (`framework.required_doc_types`,
+// e.g. "Annual Report", "Sustainability Report", "Responsible AI Policy").
+//
+// Framework-level by construction: the list is read from framework metadata, so
+// there are no hardcoded company names, tickers, or framework-18 strings. The
+// matching mirrors the analyzer's topic-primary classifier (generic token match
+// against title + URL) so the checklist agrees with how the corpus is classified.
+// Pure + additive: never reads or changes any score/verdict, and does NOT affect
+// the comprehensive/gap semantics above.
+
+/** Score at or below which a company's essential-document checklist is surfaced. */
+export const LOW_SCORE_ESSENTIAL_THRESHOLD = 2;
+
+/** Whether a company's met/Yes count is low enough to surface the checklist. */
+export function isLowScoreCompany(
+  metCount: number | null | undefined,
+  threshold: number = LOW_SCORE_ESSENTIAL_THRESHOLD,
+): boolean {
+  return typeof metCount === "number" && metCount <= threshold;
+}
+
+export interface EssentialDocChecklistItem {
+  /** The framework-declared required document type, verbatim. */
+  docType: string;
+  /** Human label (same as docType). */
+  label: string;
+  /** found: retrieved usable content. partial: only a truncated extraction.
+   *  not_found: no usable copy obtained (absent, or only retryable attempts). */
+  status: "found" | "partial" | "not_found";
+  detail: string;
+}
+
+/**
+ * Generic token match (mirrors analyzer.ts classifyDoc): a document matches a
+ * required doc type when its title+URL contains at least min(2, words) of the
+ * doc-type's words (words of length >= 3). Framework-agnostic.
+ */
+function matchesDocType(haystack: string, docType: string): boolean {
+  const words = docType.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+  if (words.length === 0) return false;
+  const matched = words.filter((w) => haystack.includes(w)).length;
+  return matched >= Math.min(2, words.length);
+}
+
+/**
+ * Build the essential-document checklist from the framework's declared required
+ * document types. Each entry is marked found / partial / not_found by matching
+ * eligible (first-party, non-excluded) documents and classifying their research
+ * state. Pure derivation; empty list when the framework declares no doc types.
+ */
+export function deriveEssentialDocChecklist(
+  documents: ClassifiableDocument[],
+  requiredDocTypes: string[] | null | undefined,
+): EssentialDocChecklistItem[] {
+  const docTypes = (requiredDocTypes || [])
+    .map((d) => (typeof d === "string" ? d.trim() : ""))
+    .filter((d) => d.length > 0);
+  if (docTypes.length === 0) return [];
+
+  // Only first-party, non-excluded documents can satisfy an essential doc type.
+  const eligible = (documents || []).filter(
+    (d) => d.gateVerdict !== "reject" && d.sourceType === "first_party",
+  );
+
+  const items: EssentialDocChecklistItem[] = [];
+  const seen = new Set<string>();
+  for (const docType of docTypes) {
+    const key = docType.toLowerCase();
+    if (seen.has(key)) continue; // dedupe case-insensitively, preserve first spelling
+    seen.add(key);
+
+    let found = false;
+    let partial = false;
+    let retryableAttempt = false;
+    let conclusivelyAbsent = false;
+    let matchedAny = false;
+
+    for (const d of eligible) {
+      const haystack = `${(d.url || "").toLowerCase()} ${(d.title || "").toLowerCase()}`;
+      if (!matchesDocType(haystack, docType)) continue;
+      matchedAny = true;
+      const state = classifyDocument(d);
+      if (state === "extracted_complete" || state === "retrieved") {
+        found = true;
+        break;
+      }
+      if (state === "extracted_partial") partial = true;
+      else if (isRetryable(state)) retryableAttempt = true;
+      else if (isConclusiveAbsence(state)) conclusivelyAbsent = true;
+    }
+
+    let status: EssentialDocChecklistItem["status"];
+    let detail: string;
+    if (found) {
+      status = "found";
+      detail = "Essential document retrieved.";
+    } else if (partial) {
+      status = "partial";
+      detail = "Only a partial/truncated extraction is available.";
+    } else {
+      status = "not_found";
+      if (!matchedAny) detail = "No document of this type was found.";
+      else if (retryableAttempt) detail = "Attempted but not yet obtained (retryable).";
+      else if (conclusivelyAbsent) detail = "Looked and found nothing (conclusively absent).";
+      else detail = "No usable copy obtained.";
+    }
+
+    items.push({ docType, label: docType, status, detail });
+  }
+
+  return items;
+}
+
+/** Single-line summary of a checklist (CSV / compact display). */
+export function summarizeEssentialChecklist(items?: EssentialDocChecklistItem[] | null): string {
+  if (!items || items.length === 0) return "";
+  return items
+    .map((i) => `${i.label}: ${i.status === "not_found" ? "not found" : i.status}`)
+    .join("; ");
+}
+
 // ─── Research status contract ───────────────────────────────────────────────
 
 export interface ResearchCoverage {
@@ -378,6 +517,14 @@ export interface ResearchStatus {
   retryableGaps: EssentialGap[];
   /** Counts of documents by conceptual state (diagnostic; additive). */
   stateCounts: Record<string, number>;
+  /**
+   * Per-document-type checklist (Issue 5, part 2) derived from the framework's
+   * declared required doc types. Empty when the framework declares none. Additive
+   * metadata — does NOT affect comprehensive/gap semantics above. Optional so
+   * legacy/fixture ResearchStatus literals need not supply it; deriveResearchStatus
+   * always populates it, and every reader guards against an absent value.
+   */
+  essentialChecklist?: EssentialDocChecklistItem[];
 }
 
 /**
@@ -446,6 +593,7 @@ export function deriveResearchStatus(input: {
     unresolvedEssentialGaps,
     retryableGaps,
     stateCounts,
+    essentialChecklist: deriveEssentialDocChecklist(documents, manifest.requiredDocTypes),
   };
 }
 
@@ -472,6 +620,8 @@ export function researchStatusCsvColumns(rs?: ResearchStatus | null): Array<{ he
     { header: "Eligible Conclusively Absent", value: rs ? String(rs.coverage.conclusivelyAbsent) : "" },
     { header: "Excluded (policy/gate)", value: rs ? String(rs.coverage.excluded) : "" },
     { header: "Unresolved Essential Gaps", value: rs ? rs.unresolvedEssentialGaps.map((g) => g.label).join("; ") : "" },
+    { header: "Essential Document Checklist", value: rs ? summarizeEssentialChecklist(rs.essentialChecklist) : "" },
+    { header: "Missing Essential Documents", value: rs ? (rs.essentialChecklist || []).filter((i) => i.status !== "found").map((i) => `${i.label} (${i.status === "not_found" ? "not found" : i.status})`).join("; ") : "" },
     { header: "Discovery Recall", value: rs ? rs.discoveryRecall.label : "" },
   ];
 }

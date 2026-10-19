@@ -6,7 +6,7 @@ import { isMet } from "@shared/verdict";
 // WP02/A1 (additive): render explicit research status so the UI shows the SAME
 // status as CSV/export/API (CV07) and never claims "comprehensive" when there is
 // an unresolved essential gap. Display-only — no score/verdict effect.
-import { summarizeResearchStatus } from "@shared/research-state";
+import { summarizeResearchStatus, isLowScoreCompany, LOW_SCORE_ESSENTIAL_THRESHOLD } from "@shared/research-state";
 
 interface CompanyDetailPageProps {
   companyId: number;
@@ -26,6 +26,17 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
   if (!data) return <div className="text-center py-8 text-gray-400">Loading...</div>;
 
   const { company, scores, documents, researchStatus } = data as any;
+
+  // Issue 5 (part 2): for low-scoring companies (<= 2/36 met), surface the
+  // essential-document checklist next to the score so a reviewer can tell
+  // "looked and found nothing" apart from "never obtained the key documents".
+  const metCount: number = Array.isArray(scores)
+    ? scores.filter((s: any) => isMet(s.verdict, s.score)).length
+    : 0;
+  const essentialChecklist: Array<{ label: string; status: string; detail: string }> =
+    (researchStatus?.essentialChecklist as any[]) || [];
+  const showEssentialChecklist =
+    isLowScoreCompany(metCount) && essentialChecklist.length > 0;
 
   const handleAnalyze = async () => {
     try {
@@ -142,6 +153,48 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                 ))}
               </ul>
             )}
+        </div>
+      )}
+
+      {/* Issue 5 (part 2): essential-document checklist for low-score companies
+          (<= 2/36 met). Names each framework-required document as found / partial
+          / not found so a zero/near-zero score is never mistaken for a confident
+          "nothing to disclose". Display-only; derived automatically from research
+          state (no manual labelling). */}
+      {showEssentialChecklist && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="text-sm font-semibold uppercase text-gray-500">
+            Essential-document checklist
+          </div>
+          <div className="text-xs text-amber-800 mb-2">
+            This company met only {metCount}/{scores?.length ?? 0} measures
+            (≤ {LOW_SCORE_ESSENTIAL_THRESHOLD}). Essential documents for this framework:
+          </div>
+          <ul className="space-y-1">
+            {essentialChecklist.map((item, i) => {
+              const color =
+                item.status === "found"
+                  ? "text-green-700"
+                  : item.status === "partial"
+                  ? "text-amber-700"
+                  : "text-red-700";
+              const label =
+                item.status === "found"
+                  ? "Found"
+                  : item.status === "partial"
+                  ? "Partial"
+                  : "Not found";
+              return (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className={`font-semibold ${color} w-20 shrink-0`}>{label}</span>
+                  <span className="text-gray-800">
+                    {item.label}
+                    <span className="text-gray-500"> — {item.detail}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 

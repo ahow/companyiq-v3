@@ -23,6 +23,15 @@ export default function ResultsPage() {
   // ── Multi-select state ──────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
+  // Issue 5 (part 3): optional opt-in to EXCLUDE non-comprehensive companies
+  // from the ranking/portfolio CSV export, rather than presenting their scores
+  // alongside fully-researched ones. Default OFF — by default every row is kept
+  // AND flagged via the research-status columns (constraint: relevant rows/text
+  // are never silently dropped). When ON, rows whose research is explicitly
+  // not comprehensive (researchStatus.comprehensive === false) are omitted;
+  // legacy snapshots without a research status are always kept.
+  const [excludeNonComprehensive, setExcludeNonComprehensive] = useState(false);
+
   const allIds: number[] = useMemo(
     () => (resultsList as any[]).map((r: any) => r.id),
     [resultsList]
@@ -93,6 +102,19 @@ export default function ResultsPage() {
       }
     }
     if (rows.length === 0) return;
+
+    // Issue 5 (part 3): when the opt-in toggle is ON, exclude companies whose
+    // research is explicitly NOT comprehensive so their scores are not ranked
+    // alongside fully-researched ones. Default OFF keeps every row (flagged via
+    // the research-status columns). Rows without a research status (legacy
+    // snapshots) are always kept — we never drop a row we cannot classify.
+    if (excludeNonComprehensive) {
+      rows = rows.filter((r: any) => r.researchStatus?.comprehensive !== false);
+      if (rows.length === 0) {
+        alert("Every company in this result is flagged as non-comprehensive, so there is nothing to export with the current filter. Untick \u201CExclude non-comprehensive\u201D to export all rows.");
+        return;
+      }
+    }
 
     // Get all unique measure titles from the first row that has measureScores
     const measureTitles: string[] = [];
@@ -350,6 +372,18 @@ export default function ResultsPage() {
         </div>
         {resultsList.length > 0 && (
           <div className="flex items-center gap-2 shrink-0">
+            <label
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200 rounded cursor-pointer select-none"
+              title="When ticked, CSV exports omit companies flagged as non-comprehensive (research not complete) so their scores aren't ranked alongside fully-researched ones. Off by default — all rows are exported and flagged."
+            >
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                checked={excludeNonComprehensive}
+                onChange={(e) => setExcludeNonComprehensive(e.target.checked)}
+              />
+              Exclude non-comprehensive
+            </label>
             {singleCompanyCount > 0 && (
               <button
                 onClick={selectSingleCompany}

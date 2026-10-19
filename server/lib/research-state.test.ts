@@ -26,6 +26,10 @@ import {
   deriveResearchStatus,
   summarizeResearchStatus,
   researchStatusCsvColumns,
+  deriveEssentialDocChecklist,
+  summarizeEssentialChecklist,
+  isLowScoreCompany,
+  LOW_SCORE_ESSENTIAL_THRESHOLD,
   type GapDocument,
   type ResearchScopeManifest,
 } from "../../shared/research-state.js";
@@ -228,6 +232,138 @@ test("CV07 every reader renders the same research status", () => {
   // Column headers are stable even without data (header row built from null).
   const headerOnly = researchStatusCsvColumns(null).map((c) => c.header);
   assert.deepEqual(headerOnly, csvCols.map((c) => c.header));
+});
+
+// ═══ Issue 5 — essential-document checklist (part 2) ══════════════════════════
+
+const checklistDocTypes = ["Annual Report", "Sustainability Report", "Responsible AI Policy"];
+
+// Build a manifest carrying the framework's declared required doc types.
+const checklistManifest: ResearchScopeManifest = buildManifest({
+  entityBoundary: "ACME plc",
+  requiredDocTypes: checklistDocTypes,
+});
+
+test("I5.1 extraction_state complete/partial/empty/null map to the right research state", () => {
+  const base: GapDocument = { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok" };
+  assert.equal(classifyDocument({ ...base, extractionState: "complete" }), "extracted_complete");
+  assert.equal(classifyDocument({ ...base, extractionState: "partial" }), "extracted_partial");
+  // "empty" and null are completeness-unknown content → conservative "retrieved".
+  assert.equal(classifyDocument({ ...base, extractionState: "empty" }), "retrieved");
+  assert.equal(classifyDocument({ ...base, extractionState: null }), "retrieved");
+});
+
+test("I5.2 checklist marks a framework doc type found / partial / not found", () => {
+  const docs: GapDocument[] = [
+    // Annual report: fully extracted → found
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Annual Report 2024", url: "https://acme.example/annual-report-2024.pdf" },
+    // Sustainability report: only partial extraction → partial
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "partial",
+      title: "ACME Sustainability Report", url: "https://acme.example/sustainability.pdf" },
+    // No AI policy doc at all → not_found
+  ];
+  const checklist = deriveEssentialDocChecklist(docs, checklistDocTypes);
+  assert.equal(checklist.length, 3);
+  const byType = Object.fromEntries(checklist.map((i) => [i.docType, i.status]));
+  assert.equal(byType["Annual Report"], "found");
+  assert.equal(byType["Sustainability Report"], "partial");
+  assert.equal(byType["Responsible AI Policy"], "not_found");
+});
+
+test("I5.3 a timed-out/failed essential doc that matched is not_found (never counted as obtained)", () => {
+  const docs: GapDocument[] = [
+    // Annual report fetch timed out — matched by title but never retrieved.
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "dead", failureReason: "timeout",
+      title: "ACME Annual Report 2024", url: "https://acme.example/annual.pdf" },
+    // A conclusively-absent sustainability report (404).
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "dead", failureReason: "not_found_404",
+      title: "Sustainability Report 2024", url: "https://acme.example/sustainability-report.pdf" },
+  ];
+  const checklist = deriveEssentialDocChecklist(docs, checklistDocTypes);
+  const byType = Object.fromEntries(checklist.map((i) => [i.docType, i]));
+  assert.equal(byType["Annual Report"].status, "not_found");
+  assert.match(byType["Annual Report"].detail, /retryable/);
+  assert.equal(byType["Sustainability Report"].status, "not_found");
+  assert.match(byType["Sustainability Report"].detail, /conclusively absent/);
+});
+
+test("I5.4 only first-party, non-excluded docs can satisfy a checklist item", () => {
+  const docs: GapDocument[] = [
+    // A third-party article titled like an annual report must NOT satisfy it.
+    { sourceType: "third_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "Analysis of ACME Annual Report", url: "https://news.example/acme-annual-report" },
+    // An excluded first-party doc must NOT satisfy it either.
+    { sourceType: "first_party", gateVerdict: "reject", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Sustainability Report", url: "https://acme.example/sustainability-report.pdf" },
+  ];
+  const checklist = deriveEssentialDocChecklist(docs, ["Annual Report", "Sustainability Report"]);
+  const byType = Object.fromEntries(checklist.map((i) => [i.docType, i.status]));
+  assert.equal(byType["Annual Report"], "not_found", "third-party cannot satisfy");
+  assert.equal(byType["Sustainability Report"], "not_found", "gate-rejected cannot satisfy");
+});
+
+test("I5.5 checklist is empty and framework-level when no required doc types are declared", () => {
+  // No hardcoded fallback list: an empty/absent requiredDocTypes yields no checklist.
+  assert.deepEqual(deriveEssentialDocChecklist([], []), []);
+  assert.deepEqual(deriveEssentialDocChecklist([], null), []);
+  assert.deepEqual(deriveEssentialDocChecklist([], undefined), []);
+  // deriveResearchStatus with the base manifest (no requiredDocTypes) → empty checklist.
+  const rs = deriveResearchStatus({ documents: [], manifest: baseManifest });
+  assert.deepEqual(rs.essentialChecklist, []);
+});
+
+test("I5.6 deriveResearchStatus attaches the checklist from the manifest's requiredDocTypes", () => {
+  const docs: GapDocument[] = [
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "Annual Report 2024", url: "https://acme.example/annual-report.pdf" },
+  ];
+  const rs = deriveResearchStatus({ documents: docs, manifest: checklistManifest });
+  const checklist = rs.essentialChecklist ?? [];
+  assert.equal(checklist.length, 3);
+  assert.equal(checklist.find((i) => i.docType === "Annual Report")?.status, "found");
+  // Checklist is additive — it does not alter the comprehensive/gap semantics.
+  const rsNoDocTypes = deriveResearchStatus({ documents: docs, manifest: baseManifest });
+  assert.equal(rs.comprehensive, rsNoDocTypes.comprehensive);
+  assert.deepEqual(rs.unresolvedEssentialGaps, rsNoDocTypes.unresolvedEssentialGaps);
+});
+
+test("I5.7 low-score gating: metCount <= threshold surfaces the checklist", () => {
+  assert.equal(LOW_SCORE_ESSENTIAL_THRESHOLD, 2);
+  assert.equal(isLowScoreCompany(0), true);
+  assert.equal(isLowScoreCompany(2), true);
+  assert.equal(isLowScoreCompany(3), false);
+  assert.equal(isLowScoreCompany(null), false);
+  assert.equal(isLowScoreCompany(undefined), false);
+});
+
+test("I5.8 checklist + missing-docs appear in the CSV columns (naming the missing documents)", () => {
+  const docs: GapDocument[] = [
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "Annual Report 2024", url: "https://acme.example/annual-report.pdf" },
+    // Sustainability + AI policy missing.
+  ];
+  const rs = deriveResearchStatus({ documents: docs, manifest: checklistManifest });
+  const cols = researchStatusCsvColumns(rs);
+  const checklistCol = cols.find((c) => c.header === "Essential Document Checklist")?.value || "";
+  const missingCol = cols.find((c) => c.header === "Missing Essential Documents")?.value || "";
+  assert.match(checklistCol, /Annual Report: found/);
+  assert.match(missingCol, /Sustainability Report \(not found\)/);
+  assert.match(missingCol, /Responsible AI Policy \(not found\)/);
+  // Header stability (null → same headers as populated).
+  assert.deepEqual(researchStatusCsvColumns(null).map((c) => c.header), cols.map((c) => c.header));
+});
+
+test("I5.9 summarizeEssentialChecklist renders 'not found' label", () => {
+  const items = deriveEssentialDocChecklist(
+    [{ sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+       title: "Annual Report", url: "https://acme.example/annual-report.pdf" }],
+    ["Annual Report", "Sustainability Report"],
+  );
+  const summary = summarizeEssentialChecklist(items);
+  assert.match(summary, /Annual Report: found/);
+  assert.match(summary, /Sustainability Report: not found/);
+  assert.equal(summarizeEssentialChecklist([]), "");
 });
 
 // ─── Additive guarantee: derivation never mutates its inputs ──────────────────

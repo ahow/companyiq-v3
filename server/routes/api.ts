@@ -115,11 +115,20 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
       new Set(rawScores.map((s: any) => s.frameworkId).filter((id: any) => id != null))
     );
     const measureDefByFramework = new Map<number, Map<string, any>>();
+    // Issue 5 (part 2): collect the framework-declared required doc types across
+    // all frameworks this company was assessed under, to drive the generic
+    // essential-document checklist (no hardcoded company/topic strings).
+    const requiredDocTypesSet = new Set<string>();
     for (const fid of frameworkIds) {
       const measures = await storage.getFrameworkMeasures(fid as number);
       const byMeasureId = new Map<string, any>();
       for (const m of measures) byMeasureId.set(m.measureId, m);
       measureDefByFramework.set(fid as number, byMeasureId);
+      try {
+        const fw = await storage.getFrameworkById(fid as number, workspaceId);
+        const rdt = ((fw as any)?.requiredDocTypes as string[] | null) || [];
+        for (const d of rdt) if (typeof d === "string" && d.trim()) requiredDocTypesSet.add(d.trim());
+      } catch { /* framework lookup is best-effort; checklist is additive */ }
     }
     const requirementsToScoreYes = (def: any): string | null => {
       if (!def) return null;
@@ -160,7 +169,10 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
     // status as CSV/export/share (CV07).
     const researchStatus = deriveResearchStatus({
       documents: documents as any,
-      manifest: buildManifest({ entityBoundary: company.name }),
+      manifest: buildManifest({
+        entityBoundary: company.name,
+        requiredDocTypes: requiredDocTypesSet.size > 0 ? Array.from(requiredDocTypesSet) : undefined,
+      }),
     });
 
     res.json({ company: enrichedCompany, scores, documents, researchStatus });

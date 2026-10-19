@@ -1150,7 +1150,12 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       // sourceType/extractionState). This is pure derivation over existing fields
       // — it never reads or changes any score/verdict. Attached to the snapshot
       // so API, UI, CSV and export all render the SAME status (CV07).
-      const researchManifest = buildManifest({ entityBoundary: company.name });
+      const researchManifest = buildManifest({
+        entityBoundary: company.name,
+        // Issue 5 (part 2): framework-declared required doc types drive the
+        // essential-document checklist generically (no hardcoded strings).
+        requiredDocTypes: ((framework as any)?.requiredDocTypes as string[] | null) || undefined,
+      });
       const researchStatus = deriveResearchStatus({
         documents: allAccepted as any,
         manifest: researchManifest,
