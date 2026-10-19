@@ -1472,3 +1472,25 @@ desired (cosmetic; would force a redeploy).
 **Constraint 5.** Builder hardening is automatic at author time; no human review of thousands of companies added.
 
 **Deliverable.** `deliverables/42-issue1-builder-stability-and-agnosticism.md` (+ .pdf / .docx).
+
+
+
+### Topic-derived scoring persona (builder-generated, agnostic) replaces hardcoded "ESG/governance" — deployed + verified 8d2ced3; verdict impact UNMEASURED (2026-10-19)
+
+**Owner request.** Make the live scoring analyst persona topic-appropriate per framework (e.g. an AI Management framework → an AI-Management expert persona) instead of the hardcoded "ESG/governance", implemented at the framework-builder stage. This resolves the residual risk flagged in GENERICNESS_AUDIT §5.4 / deliverable 42 §4.1.
+
+**What shipped (commit `8d2ced3`, 5 files, +157/−2).** (1) **Schema** — new nullable `scoringPersona` text column on the frameworks table (`shared/schema.ts`), idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS scoring_persona TEXT` in `server/db.ts` matching the existing `topic_term`/`topic_synonyms` pattern. (2) **Builder** — `server/routes/framework-builder-v2.ts` `/v2/save` generates + persists `scoringPersona` from the framework's own topic at finalization, via the shared helper (stored persona == runtime fallback in form). (3) **Analyzer** — new pure exported `buildScoringPersona(framework)` replaces the hardcoded literal at BOTH scoring prompts (binary scorer ~L569, partial scorer ~L725). Precedence: stored `scoringPersona` → derive from `topicTerm`‖`topicDescription`‖`name` (`"You are an expert <topic> analyst scoring corporate disclosures against a structured assessment framework."`, whitespace-collapsed, 120-char cap) → neutral generic. The "ESG/governance" literal is fully removed from `analyzer.ts`. Everything else in both system prompts is byte-identical (Topic line, base-rate, SCORING RULES, CONFIDENCE, anti-inference). (4) **Tests** — new `server/lib/scoring-persona.test.ts`, 11 deterministic tests + source guard against re-introducing the ESG literal.
+
+**Default set (owner can override).** Legacy frameworks with no stored persona **derive** the persona from their own topic fields (not the old ESG string) → the whole app is agnostic immediately, and an existing framework's persona changes on next scoring without a rebuild. Safer alternative (legacy fallback = old ESG persona, only new frameworks change) is a one-line change if the owner prefers it.
+
+**Gates (green at `8d2ced3`).** `tsc --noEmit` server **62 → 62** (0 new). Builder suite + persona test **381/381** (370 prior + 11 new). `grep -c "ESG/governance" server/lib/analyzer.ts` → **0**. No client code touched.
+
+**Cell-flip (constraint) — NOT MEASURED.** This is a deliberately **verdict-affecting** change: the persona sentence now differs for existing frameworks previously scored under "ESG/governance", which can flip borderline yes↔no cells. Measuring Yes→No / No→Yes requires a paid scoring batch, which was NOT authorized and NOT run. **No "0 flips" is claimed** — reported honestly as unmeasured. A validation batch (pre- vs post-persona on a frozen corpus) can be scoped on explicit owner go-ahead with cost confirmed first.
+
+**Deploy (SHA parity + verification).** Pushed to origin/main. Railway GraphQL verified **production app + worker both deployed SHA `8d2ced3`, SUCCESS @ 2026-10-19T11:46:53Z** (prior `67c5518` REMOVED on both). Local HEAD == origin/main == both production targets == `8d2ced3`.
+
+**Constraint 5.** Persona generated automatically by the builder; no human review of thousands added.
+
+**Owner validation step.** Owner creates a test framework (e.g. AI Management) in Builder V2 → on save a topic-matched persona is stored → scoring runs under the expert-in-that-field persona.
+
+**Deliverable.** `deliverables/43-topic-derived-scoring-persona.md` (+ .pdf / .docx).
