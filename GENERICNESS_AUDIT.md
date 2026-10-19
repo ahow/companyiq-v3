@@ -218,3 +218,117 @@ term list in tests while keeping climate vocabulary.
 
 All changes are additive and non-destructive; no LLM/model configuration was
 changed; no code was run against the production database and nothing was deployed.
+
+
+
+---
+
+## 5. Pass 2026-10-19 — full-app agnosticism re-sweep (accompanies Issue 1 builder-stability work)
+
+This pass was run alongside the Issue 1 build-time verdict-stability work
+(commit `a8302a1`). It re-sweeps `server/`, `shared/`, and `client/src/` for
+topic-specific literals (AI / ML / LLM / AGI / GPAI / "AI training" / governance,
+plus ESG / climate / nature families), company names / tickers / ISINs from the
+original AI-governance roster, and any hardcoded framework-id / measure-id /
+measure-name strings that **gate** behaviour. The goal is to separate genuine
+hidden single-topic/company gates (→ FIX) from legitimate multi-topic illustrative
+examples and regression-annotation comments (→ REVIEWED-KEPT), per the
+classification already established in §1.
+
+### 5.1 Greps run (verbatim)
+
+```bash
+# Topic acronyms / phrases
+grep -rniE '\b(AI training|AGI|GPAI|frontier model|frontier AI)\b' \
+  server shared client/src --include='*.ts' --include='*.tsx' -l
+
+# "governance" used as a string-comparison / membership GATE
+grep -rniE '(===|==|includes|startsWith|match|indexOf)[^;]*["'"'"']governance' \
+  server shared client/src --include='*.ts' --include='*.tsx'
+
+# AI-governance-roster company names in non-comment code
+grep -rniE '\b(Microsoft|OpenAI|Anthropic|Alphabet|Nvidia|Meta Platforms|DeepMind|Palantir|Cohere|Mistral|Hugging ?Face|Stability AI)\b' \
+  server shared client/src --include='*.ts' --include='*.tsx' | grep -vE '//|\*'
+
+# ISIN pattern (2 letters + 9 alnum + check digit)
+grep -rnoE '\b[A-Z]{2}[A-Z0-9]{9}[0-9]\b' \
+  server shared client/src --include='*.ts' --include='*.tsx'
+
+# framework-id / measure-id / name string-equality gates
+grep -rniE '(frameworkId|framework_id|measureId|measure_id|frameworkName|measureName)\s*(===|==|!==|!=)\s*["'"'"']' \
+  server shared client/src --include='*.ts' --include='*.tsx' | grep -vE '\.test\.'
+grep -rniE '\.(title|name|slug|topic)\s*(===|==)\s*["'"'"'][A-Za-z]' \
+  server shared client/src --include='*.ts' --include='*.tsx' | grep -vE '\.test\.|__fixtures__'
+
+# Topic/ESG literals inside string contents in non-prompt, non-test logic
+grep -rniE '["'"'"'][^"'"'"']*\b(AI governance|ESG|climate change|greenhouse gas|carbon emission|biodiversity|deforestation)\b' \
+  server shared client/src --include='*.ts' --include='*.tsx' \
+  | grep -vE '\.test\.|__fixtures__|intake-prompt|topic-lexicon|-prompt\.ts|/prompts/'
+
+# Topic literals specifically inside the SCORING path
+grep -rniE '["'"'"'][^"'"'"']*\b(AI|ML|LLM|AGI|GPAI|ESG|climate|biodivers|governance)\b' \
+  server/lib/analyzer.ts
+```
+
+### 5.2 Findings
+
+| Location | Hardcoded element | Verdict | Handling |
+|----------|-------------------|---------|----------|
+| `server/lib/framework-v2/intake-prompt.ts:55`, `server/lib/topic-lexicon.ts:133` | Multi-topic acronym examples side-by-side (nature: TNFD/SBTN/GBF…; climate: TCFD/SBTi/CDP; AI: LLM/AGI/GPAI) in LLM prompt guidance | REVIEWED-KEPT | Legitimate multi-topic *illustrative examples* that teach the model to emit all domain acronyms for **whatever** topic it is given; removing them would weaken every topic equally. Same class as §1 A4/A5. |
+| `server/lib/framework-v2/test-drive.ts:592` | Comment `// short known terms ("ai","ml","llm","agi") match INSIDE` | REVIEWED-KEPT | Regression comment explaining a substring-matching guard; the code around it is topic-agnostic token logic, not a gate. |
+| `server/lib/passage-retrieval.ts:1384-1391` | `categoryLower.includes("governance" / "oversight" / "board" / "strategy" / "policy" / "framework")` → inject terminology buckets | REVIEWED-KEPT | These are **universal framework-pillar category names** (TCFD/TNFD/ISSB all use Governance/Strategy/Risk/Metrics), not the AI-governance topic. The injected `terminology.*` buckets are derived at runtime from the framework's own terminology object. Topic-agnostic routing. |
+| LLM-provider identifiers (`deepseek`, `openai`, `anthropic/claude`, `mistral`, `gemini`, `openrouter`, `moonshot/kimi`, `zhipu/glm`) across `ai-providers`, `provider-resilience.ts`, `llm-usage.*`, fixtures | Model/vendor names | REVIEWED-KEPT | Scoring **infrastructure** (which model to call / price), not entities being scored. Unrelated to framework topic. |
+| ISINs (`GB0007099541` Prudential, `JP3890350006`, `FR0000121485`, …) in `issuer-profile.ts:255` and `*.test.ts` | ISIN literals | REVIEWED-KEPT | All are either **test fixtures** or a **regression-motivation comment** (R5e Prudential-plc domain bug). None are AI-governance-roster companies; the production code derives ISIN country generically. |
+| `measureId`/`frameworkId` string comparisons across `edit-applier.ts`, `measure-design-diagnostic.ts`, `regression/harness.ts`, `framework-builder-v2.ts`, `FrameworkBuilderV2Page.tsx` | `typeof x.measureId === "string"`; `measureId !== "framework-level"`; `measureId === "(framework)"` | REVIEWED-KEPT | Type-guards and **structural sentinel** values (framework-level vs measure-level item). No topic/company meaning. |
+| `server/lib/framework-v2/generalisation-audit.ts:40-57` | `TOPIC_TERMS` seed lexicon (biodivers/nature/climate/emission/carbon/…) + `INFRA_ACRONYMS` allow-list | REVIEWED-KEPT | This is the **anti-hardcoding detector itself** (Detector D3): it scans the *builder prompt* for topic tokens that would leak into generated frameworks and flags them for generalisation. The seed is explicitly extensible and backed by a semantic LLM pass (builder-improve STEP 2). It is the opposite of a gate. *(Residual observation below.)* |
+| ESG/sustainability disclosure-document seeds across `r6-discovery.ts`, `pipeline.ts:1166`, `primary-disclosure-check.ts`, `framework-v2/retrieval-targeting.ts:28`, `ranking.ts` | `"sustainability report"`, `"esg report"`, `"integrated report"`, `/\b(sustainab|esg|csr|...)/i` | REVIEWED-KEPT | These identify the **universal class of corporate non-financial disclosure documents** — the container where *any* ESG-adjacent framework's evidence (climate, nature, labour, data-privacy, AI-governance) is published. Discovery queries themselves are topic-driven: `discovery.ts:1430` builds queries from `framework.name` and explicitly instructs *"Do NOT generate generic sustainability/ESG queries unless that IS the topic."* Document-class seeds, not a topic gate. |
+| `server/lib/analyzer.ts:102` `CSRD_TABLE_NOTATION_NOTE` | CSRD/ESRS time-horizon bullet-marker parsing hint | REVIEWED-KEPT | A **document-format** parsing aid for European CSRD/ESRS non-financial statements (how filled-circle horizon columns render in flattened PDFs). Applies to the *format* of a disclosure regardless of the framework's topic; harmless when such tables are absent. Analogous to the SEC-section logic. Not a topic gate. (Removing it would also be verdict-affecting — see §5.4.) |
+| `server/lib/analyzer.ts:569` and `:725` | Scoring **system-prompt persona**: `"You are an expert ESG/governance analyst scoring corporate disclosures…"` | REVIEWED — **flagged as residual risk, not changed** | See §5.4. A mild ESG/governance *prior* in the scoring persona. The actual subject is injected at runtime (`Topic: ${topicDescription}`, and anti-inference rules derive from `framework.topicTerm`), so the persona is a weak prior, **not** a gate. It was **deliberately left unchanged** this pass because editing the live scoring prompt is a verdict-affecting runtime change and cannot be validated without a (prohibited) scoring batch. |
+
+### 5.3 Fixes applied this pass
+
+**None.** This sweep found **no genuine hidden single-topic or single-company
+gate** in shared logic, prompts, or scoring that was not already handled by the
+earlier passes in §1–§3. Every topic/company literal encountered is one of:
+(a) a multi-topic illustrative prompt example, (b) a regression/motivation
+comment or test fixture, (c) a universal framework-pillar / disclosure-document /
+document-format construct that is topic-neutral by design, or (d) scoring
+infrastructure (model-provider names). The main app and Framework Builder V2 are
+**confirmed topic-agnostic at the gating level**: topic-specific behaviour is
+derived at runtime from the framework's own `topicTerm` / `topicDescription` /
+`topicSynonyms` / terminology and from the company record, not baked into shared
+code.
+
+### 5.4 Residual risk (explicit)
+
+- **Scoring-prompt persona lean (`analyzer.ts:569`, `:725`).** The scoring system
+  prompt opens with *"You are an expert ESG/governance analyst…"*. For ESG-family
+  topics (including AI **governance**, the first topic the product targeted) this
+  is on-topic; for a hypothetical non-ESG framework it is a mild framing prior.
+  It is **not** a gate — the real subject is supplied at runtime via
+  `topicDescription` and `framework.topicTerm` — but it is the one topic-leaning
+  string left in the live scoring path. It was **not** changed in this pass
+  because altering the scoring system prompt is a **verdict-affecting runtime
+  change**: on genuinely borderline measures it could flip cells (yes→no / no→yes),
+  which (i) is outside this task's build-time/advisory + agnosticism-refactor
+  scope, and (ii) cannot be validated without running a scoring batch, which is
+  prohibited here. Recommended future handling: generalise the persona to a
+  neutral *"expert analyst scoring corporate disclosures against a structured
+  assessment framework"* and validate verdict-stability on a frozen corpus before
+  shipping. Logged here so the decision is explicit and owner-visible.
+- **`generalisation-audit.ts` seed lexicon leans ESG/nature/climate** and does not
+  list AI/digital-specific tokens. This only affects the *recall of the
+  deterministic floor* of the builder-prompt leak detector, not scoring; the
+  semantic LLM pass (builder-improve STEP 2) covers tokens the seed misses, and
+  the seed comment already documents it as extensible. No functional gap for
+  topic-agnosticism; noted for completeness.
+
+### 5.5 Verification for this pass
+
+- **No code changed in Part B** → `tsc --noEmit` server error count unchanged at
+  **62** (pre-existing baseline on `main`; §4 recorded 61 at the time of the prior
+  pass — the delta is pre-existing drift unrelated to this work, not introduced
+  here). Client `tsc --noEmit` unchanged. No client code touched, so no
+  `vite build` was required.
+- The Issue 1 builder-stability code (Part A, commit `a8302a1`) is covered by its
+  own tests (builder suite **370/370** passing) and added **0** new tsc errors.
