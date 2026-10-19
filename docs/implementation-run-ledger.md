@@ -1494,3 +1494,28 @@ desired (cosmetic; would force a redeploy).
 **Owner validation step.** Owner creates a test framework (e.g. AI Management) in Builder V2 → on save a topic-matched persona is stored → scoring runs under the expert-in-that-field persona.
 
 **Deliverable.** `deliverables/43-topic-derived-scoring-persona.md` (+ .pdf / .docx).
+
+
+
+### Builder V2: five operator questions answered + one-question intake guard & review-stage free-text refine — deployed + verified `3a85c5e` (2026-10-19)
+
+**Owner request (5 questions while preparing to build a new framework).** (1) Enforce one proposal per message in the builder. (2) "Send to Claude" after drafting gives only advisory recommendations with no way to incorporate them — how to tackle. (3) Can the framework be re-edited after drafting (e.g. after the test drive)? (4) Where is the step to validate specific examples during the builder phase? (5) How many companies process in parallel, and how to make it much faster for thousands of companies.
+
+**Answers (code-grounded).** (1) The "one question per message" rule already existed exhaustively in `intake-prompt.ts` but was **not** deterministically enforced in the `/v2/chat` handler — a compliance gap, now fixed. (2) Confirmed by design: "Send to Claude" (`/v2/builder-review`) is advisory and targets the **shared builder prompt**, not the current framework; the real free-text edit path (`ImprovementChat` → `/v2/improvement/apply`) previously only existed post-test-drive — genuine gap, now addressed. (3) Yes — review-stage re-draft + (now) free-text refine, and full editing after a test drive (improvement chat, measure-edits, rescore). (4) Examples ARE validated at intake robustness-gate item 9 (positive/adversarial snippets, accept-all/change-some chips) and again vs real disclosures at/after the test drive; no dedicated pre-draft "run passages through scorer" step. No code change for Q3/Q4 (clarifications; Q3 gap closed by the Q2 fix). (5) See below — confirmed numbers + options, no change applied.
+
+**What shipped (commit `3a85c5e`, 4 files, +622/−47).**
+- **Q1 — one-question intake guard (deterministic, server-side).** New pure module `server/lib/framework-v2/one-question-guard.ts` (`detectMultiProposalTurn()` + `ONE_QUESTION_CORRECTIVE_SUFFIX`): after stripping fenced blocks + chips, flags ≥2 chip groups / ≥2 enumerated headers / ≥2 decision `?`-sentences / fused multi-wh sentence. One-question + many `[[option:…]]` chips PASSES. `/v2/chat` refactored (`extractTurn()`); on violation runs **exactly one** corrective re-generation, adopts it only if it yields a single valid turn, else keeps original (best-effort try/catch, logs `[fb2-one-question-guard]`). No content dropped — held-back questions re-surface via gap-driven intake. Scoring/evidence path untouched.
+- **Q2a — builder-review copy.** `BuilderReviewPanel` banner rewritten: recommendations unmistakably framed as about the **shared builder** (advisory, NOT applied to current framework), pointing to the new free-text refine.
+- **Q2b — free-text refine at review stage.** `/v2/draft/refine` accepts optional `instructions`; when present it re-drafts through the **normal `executeDraft` path** (full validation + auto-repair, no bypass) via new `DraftOptions.userInstructions` threaded through the drafting LLM calls (generic `buildUserInstructionsClause`, verbatim passthrough reaffirming C1–C11). No-instructions targeted-repair path unchanged. Client `redraftWithCorrections(instructions?)` + `DraftReview` textarea/"Re-draft with these instructions" button.
+
+**Q5 — confirmed production concurrency (read live from Railway worker env + `capacity-config.ts`/`worker.ts`).** Worker: `WORKER_CONCURRENCY=4`, `CAPACITY_POLICY=dynamic`, `ADAPTIVE_CONCURRENCY_ENABLED=true`, `ADAPTIVE_CONCURRENCY_MIN=2`, `PG_POOL_MAX=20`, replica count unset (=1). Effective parallelism = **up to 4 companies at a time on 1 replica**, adaptive in the 2–4 band; `dynamic` policy pins the ceiling to `WORKER_CONCURRENCY` (can only lower, never raise, as replicas grow). **Test drive uses the same worker + concurrency as production.** Binding constraint = Postgres connection ceiling (~97 usable). Options PRESENTED, **none applied** (each is a prod runtime/cost change needing explicit go-ahead): A) add worker replicas (owner-preferred horizontal; ~4-replica practical limit at `PG_POOL_MAX=20` before pool must also drop), B) raise `WORKER_CONCURRENCY`, C) tune adaptive band, D) lower `PG_POOL_MAX` + add replicas. Recommended first step: measure steady-state DB connections per worker at concurrency 4 before scaling to thousands. Throughput at scale not demonstrated beyond ~25 companies — stated honestly.
+
+**Gates (green at `3a85c5e`).** `tsc --noEmit` server **62 → 62** (0 new in changed files). New `one-question-guard.test.ts` **12/12**. Full framework-v2 suite **368/368** (with `DATABASE_URL` set). No `.abacus.donotdelete` staged.
+
+**Cell-flip (constraint).** Builder-UX only; no scoring run, no evidence path touched ⇒ **Yes→No = 0, No→Yes = 0, total flips = 0** by construction.
+
+**Deploy (SHA parity + verification).** Pushed to origin/main. Railway GraphQL verified **production app + worker both deployed SHA `3a85c5e`, SUCCESS @ 2026-10-19T21:52Z**. Local HEAD == origin/main == both production targets == `3a85c5e`. Tested code == production code.
+
+**Constraints 4/5/6.** No human-in-the-loop gate added to analyze/worker (4). Scoring persona untouched (5). All changes topic/company-agnostic — detector + refine are generic, instructions a verbatim passthrough (6).
+
+**Deliverable.** `deliverables/44-builder-ux-five-questions-and-fixes.md` (+ .pdf / .docx).
