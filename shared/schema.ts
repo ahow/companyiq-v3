@@ -145,6 +145,13 @@ export const frameworks = pgTable("frameworks", {
   builderVersion: text("builder_version").notNull().default("v1"),
   topicTerm: text("topic_term"),
   topicSynonyms: jsonb("topic_synonyms").$type<string[]>(),
+  // Topic-derived scoring-analyst persona (first sentence of the scoring system
+  // prompt). Generated+stored by the V2 builder from the framework's own topic so
+  // the live scorer frames itself as an expert in THIS framework's domain instead
+  // of a hardcoded one. Nullable: when absent the analyzer derives an equivalent
+  // persona at runtime from topicTerm/topicDescription/name (buildScoringPersona),
+  // so existing frameworks keep working. Topic/company-agnostic by construction.
+  scoringPersona: text("scoring_persona"),
   // Approach 2 (corpus-recall): curated, DF-validated corpus-SELECTION query vocabulary.
   // Distinct from topicSynonyms (which is prompt-only): these 15-30 topic discriminators
   // (product/technique/artefact terms) are generated at framework creation, validated

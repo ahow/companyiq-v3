@@ -171,6 +171,7 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS builder_version TEXT NOT NULL DEFAULT 'v1'`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS topic_term TEXT`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS topic_synonyms JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS scoring_persona TEXT`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS adjacent_topics JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS anchor_frameworks JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS sensitivity_preference TEXT`);

@@ -541,6 +541,37 @@ After deciding your score, verdict, and evidenceSummary, verify that your ration
 If they disagree, correct whichever is wrong so that the final score, verdict, and evidenceSummary you emit are mutually consistent.
 Then set "rationaleConsistencyCheck" to "Yes" if (after any correction) they agree, or "No" if a residual disagreement remains, and give a one-line "consistencyNote".`;
 
+// Topic-derived scoring-analyst persona. Pure, deterministic, topic/company-
+// agnostic: the opening sentence of the scoring system prompt used to be a
+// single hardcoded domain persona. It is now derived from the framework's OWN
+// topic so the scorer frames itself as an expert in whatever the framework is
+// actually about.
+// Precedence:
+//   1. framework.scoringPersona (builder-generated, polished) — returned verbatim.
+//   2. else derive from framework.topicTerm || topicDescription || name:
+//      "You are an expert <topic> analyst scoring corporate disclosures against
+//       a structured assessment framework."
+//   3. else (no topic info at all) a neutral generic persona (no topic literal).
+// The derived topic is trimmed, internal whitespace collapsed, and capped so a
+// pathological topic string can't blow up or distort the prompt.
+const PERSONA_SUFFIX = "analyst scoring corporate disclosures against a structured assessment framework.";
+const GENERIC_SCORING_PERSONA = `You are an expert ${PERSONA_SUFFIX}`;
+const MAX_PERSONA_TOPIC_CHARS = 120;
+
+export function buildScoringPersona(framework: Framework | undefined): string {
+  const stored = typeof framework?.scoringPersona === "string" ? framework.scoringPersona.trim() : "";
+  if (stored) return stored;
+
+  const rawTopic =
+    (typeof framework?.topicTerm === "string" && framework.topicTerm) ||
+    (typeof framework?.topicDescription === "string" && framework.topicDescription) ||
+    (typeof framework?.name === "string" && framework.name) ||
+    "";
+  const topic = rawTopic.replace(/\s+/g, " ").trim().slice(0, MAX_PERSONA_TOPIC_CHARS).trim();
+  if (!topic) return GENERIC_SCORING_PERSONA;
+  return `You are an expert ${topic} ${PERSONA_SUFFIX}`;
+}
+
 export function buildBinaryScoringPrompt(opts: {
   companyName: string;
   measure: FrameworkMeasure;
@@ -566,7 +597,7 @@ Do not penalise evidence for using these terms instead of the framework's langua
 
   const baseRateBlock = buildBaseRatePriorBlock(measure);
 
-  const system = `You are an expert ESG/governance analyst scoring corporate disclosures against a structured assessment framework.
+  const system = `${buildScoringPersona(framework)}
 
 Topic: ${topicDescription}${baseRateBlock}
 
@@ -722,7 +753,7 @@ Do not penalise evidence for using these terms instead of the framework's langua
 
   const baseRateBlock = buildBaseRatePriorBlock(measure);
 
-  const system = `You are an expert ESG/governance analyst scoring corporate disclosures against a structured assessment framework.
+  const system = `${buildScoringPersona(framework)}
 
 Topic: ${topicDescription}${baseRateBlock}
 

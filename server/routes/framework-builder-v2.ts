@@ -2512,6 +2512,28 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
     }
 
     // Create framework row
+    // ─── Topic-derived scoring persona (framework-level, topic/company-agnostic) ──
+    // Generate the scoring-analyst persona from the framework's OWN topic at build
+    // time so the live scorer frames itself as an expert in THIS framework's domain
+    // instead of a single hardcoded persona. Derived deterministically with the SAME
+    // shared helper the analyzer uses as its runtime fallback, so builder-stored and
+    // runtime-derived personas are identical in form. No hardcoded topic/company; no
+    // extra LLM call. Non-fatal: on any failure persona stays null and the analyzer
+    // derives an equivalent one at runtime.
+    let scoringPersona: string | null = null;
+    try {
+      const { buildScoringPersona } = await import("../lib/analyzer.js");
+      scoringPersona = buildScoringPersona({
+        topicTerm: fwDraft.topicTerm,
+        topicDescription: draft.framework.topicDescription || intake.topic || "",
+        name: fwDraft.name,
+      } as any);
+      console.log(`[v2/save] scoringPersona generated (${scoringPersona.length} chars)`);
+    } catch (e: any) {
+      console.warn(`[v2/save] scoringPersona generation failed (non-fatal): ${e?.message ?? e}`);
+      scoringPersona = null;
+    }
+
     const created = await storage.createFramework({
       workspaceId: ctx.workspaceId,
       name: fwDraft.name,
@@ -2522,6 +2544,7 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
       builderVersion: "v2",
       topicTerm: fwDraft.topicTerm,
       topicSynonyms: sanitizedTopicSynonyms,
+      scoringPersona,
       retrievalQueryTerms,
       // Hardening fields the scorer reads — promoted at build time so a freshly
       // BUILT framework is hardened, not only ones imported later. buildFrameworkDraft
