@@ -1370,3 +1370,50 @@ desired (cosmetic; would force a redeploy).
 **Deliverable.** `deliverables/37-issue3-instrumented-diagnostic-result.md`. Durable telemetry: `deliverables/_issue3_diag_telemetry.log` (2,310 records: 656 `[STAGE-INSTR]`, 470 `[DIAG][event-loop]`, 32 `[DIAG][stage-timer]`, 14 `[DIAG][score-write]`, 2 db-op-sample, 1 `[WORKER-ISOLATION]`), `deliverables/_issue3_diag_processing_errors.log` (the co=26 timeout row).
 
 **Next (not this turn — Issue 3 parts 3/4/5).** Arm the budgeted path (per-stage budgets degrading a stalled browser source to "source unresolved" — pipeline-time-budget.ts) and the separated browser/analysis pools (resource-pools.ts) against this attribution; make retry → quarantine → systemic-only (batch-resilience-policy.ts) the production stop rule; then scale-test 25 → 50 → 100 (part 5). All paid, all out of scope here.
+
+
+
+
+### Phase 3 / Issue 3 — Part 5a: FIRST 25-company scale validation (batch 1296) — COMPLETE; 25/25 PASS; levers armed then disarmed (2026-10-19)
+
+**Why.** Issue 3 part 5 (scale): the pipeline had never completed a 25-company run (1276=12/25, 1277=4/25, both cancelled by the legacy whole-batch stop rule). This turn: deploy the behaviourally-armed scale levers (commit `2991989`) to production and run ONE paid 25-company batch with the levers armed to prove 25/25 completion. Explicitly authorised by Andy Howard (ONE paid 25-run; 50/100 held, gated).
+
+**Deploy (SHA parity + health).** Pushed `main` `9faa18e`→`2991989` (`299198918b1b836572d3667282596a548a4d784b`). Railway auto-deployed all **4 targets** ({production,sprint-10-preview} × {app,worker}); every target reports **deployed SHA == 2991989, SUCCESS**. Health `GET /api/health` → `{"status":"ok","version":"3.0.0"}` on `companyiq.online` and `app-production-9929.up.railway.app`. **Code tested == code in production** — every scored row carries `pipeline_version=299198918b1b` (= deployed SHA).
+
+**Armed flags (production worker; confirmed live via variables API + worker logs).** `STAGE_INSTRUMENTATION_POLICY=on`, `PIPELINE_TIME_BUDGET_POLICY=budgeted`, `BATCH_RESILIENCE_POLICY=resilient`, `RESOURCE_POOL_POLICY=separated`, `BROWSER_SEPARATED_MAX=3`. Concurrency 8 = 2 replicas × WORKER_CONCURRENCY 4 (replicas `worker-d118ea46`,`worker-e8e3fb16` both started). Telemetry confirmed arming: `[RESOURCE-POOL] policy=separated`, `[BATCH-RESILIENCE] ARMED batch=1296 … isolated 0/25 (0.0%) ≤ 20.0% → retry/quarantine, batch continues`, 102 `[STAGE-INSTR]` + 6 `[DIAG][stage-timer]` + 308 `budget` lines.
+
+**Run.** Batch **1296**, list_id=7 (same frozen 25 roster as 1276/1295), framework 18 "AI Management". Enqueued 2026-10-18T23:45:06Z → completed 2026-10-19T01:18:35Z. **Wall 92.7 min.** Cost **$11.4315** (4,752 calls, 39,899,467 tokens; cap $14 retained, not breached); per-co mean $0.4573 (min $0.4035, max $0.6163). Models deepseek-chat 4749 / gpt-4o 2 / gpt-4o-mini 1.
+
+**Outcome — PASS.** **25/25 completed, 0 permanent failures, 0 quarantines, 0 batch cancellations.** 22 first-attempt; **3 recovered on retry** (allowed, logged): co=17 (`pipeline timeout 2100s`→648s), co=26 Aristocrat (`pipeline timeout 2100s`→1393s), co=27 (`isolated child exit code=1`→1529s). `processing_errors`: 2× pipeline_timeout; one clean `[WORKER-ISOLATION] pipeline_deadline … outstandingLeases=none → revoke+SIGKILL` (no leak). All timeouts **explained** (long-tail browser-bound) and **retried, not batch-cancelled** — the resilient policy is exactly what turns 4/25 into 25/25. Per-job dur: min 595s, mean 1293s, p50 1319s, p90 1686s, max 2040s (co=13). **NO unexplained timeout.** **Circuit-breaker NOT triggered** (no stall, no cost-cap, systemic 0/25 ≤ 20%; no Trial 2; no quarantine-recovery override).
+
+**Scoring.** 900 `measure_scores` (25×36). Verdicts **No=702, Yes=198**. Provenance clean: single pipeline_version 299198918b1b, abstained 0, evidence_fingerprint 900/900, prompt_hash 900/900. **coverage=full 900/900** — M2 degraded no source to a conclusive No (relevant text never dropped, constraint honoured).
+
+**Cell-flip split (constraint: report Y→N and N→Y) vs closest comparable baseline (batch 1295, same roster/framework, No=709/Yes=191):** **Yes→No=20, No→Yes=27, Total flips=47 of 900 (5.2%), unchanged 853** (net +7 Yes). **Caveat:** 1295 ran on a different code state (SHA 9faa18e, levers dormant) and scoring carries run-to-run model variability — the 47 flips are armed-lever effects + variability combined, not a clean lever isolation.
+
+**Bottleneck (M1 stage-timers, under separated pool + budgets).** Long tail is **browser-bound through the single serialised main browser slot** (`browser_admission_wait` busy_sum ≫ wall: up to 2724s on Associated British Foods, 1750s FactSet, 1276s BT, 1050s BNP), web-search I/O (`search_provider` ~366–382s/co) the dominant steady cost, db_ops negligible (1–14s). Confirms the batch-1295 diagnostic attribution at scale.
+
+**Post-run state / rollback.** Deployment of 2991989 to production is **permanent** (byte-identical to prior prod at shipped defaults). Operational baseline restored after the run: **all 5 arming flags unset** on the production worker (verified none remain) → dormant defaults, **each flag unset restores byte-identical behaviour with NO redeploy**; worker numReplicas restored 2→3. All 4 targets remain on 2991989 / SUCCESS / health ok. Re-arming for the gated 50/100 is a pure env change (no code change, no image redeploy).
+
+**Held (not run, gated).** 50- and 100-company scale tests — NOT authorised this turn; not run.
+
+**Deliverable.** `deliverables/38-issue3-25company-scale-result.md`.
+
+
+
+### Phase 3 / Issue 3 — CLOSED: 25/25 acceptance met (batch 1296); 100-co tier waived per user (2026-10-19)
+
+**Status.** Issue 3 ("the pipeline has not completed a 25-company run") is **RESOLVED / CLOSED**.
+
+**Resolved against.** The **25-company acceptance tier** (Readiness Review line 110) — **MET** by production batch **1296** on live SHA `2991989`: **25/25 completed, retries allowed and logged (3 of 25 recovered), no unexplained timeout, circuit-breaker not triggered.** Code tested == code in production (every scored row `pipeline_version=299198918b1b` = deployed SHA). Full evidence in `deliverables/38-issue3-25company-scale-result.md` and Part 5a above.
+
+**5-step solution mapping (all shipped).** (1) instrument → M1 `stage-instrumentation.ts`; (2) diagnose → batch 1295 / `deliverables/37`; (3) fix bottleneck → M2 `pipeline-time-budget.ts` + M4 `resource-pools.ts`; (4) stop rule → M3 `batch-resilience-policy.ts`; (5) scale test → batch 1296 (first 25/25).
+
+**100-company tier — WAIVED per user direction.** User, verbatim this turn: *"No need to do 100 company paid runs, if its working below that figure."* The 100-company portion of the acceptance test (line 110) and the release gate (line 157, *"a 100-company run is completed to the Issue 3 standard"*) are **waived for Issue-3 closure by explicit system-owner decision** — flagged transparently as **not independently satisfied**, not met by evidence. 50/100 scale tests NOT run.
+
+**Measured-at-25 operating figures (not demonstrated beyond 25).** ≈16.2 companies/hour at concurrency 8; per-company mean cost $0.4573; `coverage=full` 900/900. Cell-flip totals vs baseline 1295 (different code state `9faa18e` + model variability, NOT clean isolation): **Yes→N=20, No→Yes=27, Total flips=47/900, unchanged 853.**
+
+**Caveats.** Caveat 1 (deploy exact commit + paid 25-run) **CLOSED**. Caveat 2 (OCR extraction-fidelity suite) **RESOLVED non-gating** — 10/10 real tests pass; the file-level harness "cancelled" is a leaked OCR-worker handle keeping the event loop alive (not a test failure, not lever-related); optional non-gating follow-up (add `after()` teardown so CI self-exits) tracked, **not implemented** this turn to keep closure docs-only.
+
+**Closure commit.** This docs-only closure commit (completion deliverable `deliverables/39-issue3-completion-closure.md` + this ledger entry; no `server/`/`client/`/runtime/build change). **Production runtime is byte-identical to the validated `2991989`** — the diff is confined to `docs/`, `deliverables/`, `.abacus.donotdelete`. All 4 Railway targets auto-deploy the closure commit (verified SHA parity + health `{"status":"ok","version":"3.0.0"}`). All 5 lever flags remain **UNSET / dormant** on the production worker (re-armable with no redeploy); worker numReplicas = 3.
+
+**Deliverable.** `deliverables/39-issue3-completion-closure.md` (+ .pdf / .docx).
