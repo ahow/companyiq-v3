@@ -99,3 +99,38 @@ test("MULTI-RUN returns nothing with fewer than two runs", () => {
   const run1 = new Map([["m1", [{ measureId: "m1", verdict: "Yes", companyId: 1 }]]]);
   assert.deepEqual(computeMultiRunSignals([run1], new Map()), []);
 });
+
+// ─── verdict_instability_risk (Issue 1 build-time, shared classifier) ────────
+
+test("PRE-TEST surfaces verdict_instability_risk for a degree-word deciding test (topic-agnostic)", () => {
+  // Same grammatical defect, two unrelated topics — both must flag identically.
+  for (const subject of ["emissions reduction plan", "worker safety management system"]) {
+    const m: DiagnosticMeasure = {
+      measureId: `vir-${subject.slice(0, 4)}`,
+      title: `Does the entity have a ${subject}`,
+      fallbackYesCriterion: `Yes if the entity has a substantively integrated and robust ${subject} that is systematically applied.`,
+    };
+    const patterns = analyzeMeasureDefinition(m).map((f) => f.pattern);
+    assert.ok(patterns.includes("verdict_instability_risk"), `${subject} should flag verdict_instability_risk`);
+  }
+});
+
+test("PRE-TEST surfaces verdict_instability_risk for an M-of-N soft gate", () => {
+  const m: DiagnosticMeasure = {
+    measureId: "vir-soft",
+    title: "Soft gate",
+    fallbackYesCriterion: "Yes if any of the following are present: (1) a retention period, (2) a deletion process, (3) a DPO contact.",
+  };
+  const patterns = analyzeMeasureDefinition(m).map((f) => f.pattern);
+  assert.ok(patterns.includes("verdict_instability_risk"));
+});
+
+test("PRE-TEST does NOT flag verdict_instability_risk for a countable, conjunctive measure", () => {
+  const m: DiagnosticMeasure = {
+    measureId: "vir-clean",
+    title: "Hardened",
+    fallbackYesCriterion: "Return Yes ONLY if a single verbatim quote names all of the following: (a) a dated board approval, (b) a numeric target.",
+  };
+  const patterns = analyzeMeasureDefinition(m).map((f) => f.pattern);
+  assert.ok(!patterns.includes("verdict_instability_risk"));
+});

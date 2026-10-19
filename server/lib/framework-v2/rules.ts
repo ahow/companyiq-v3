@@ -376,7 +376,9 @@ export function findDegreeWords(text: string): string[] {
 // "any N of", "N of the following", "any of the following") OR an enumerated
 // list of >=3 named items ("(1)..(2)..(3)", "1...2...3.", "1)..2)..3)", or
 // "(a)..(b)..(c)"). Pattern-based, not hardcoded to any measure.
-function hasCountableRule(text: string): boolean {
+// Exported so the verdict-stability classifier (verdict-stability.ts) can reuse
+// the SAME predicate the C11 build-time gate uses — one definition, no duplication.
+export function hasCountableRule(text: string): boolean {
   if (!text) return false;
   const numWord = "(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten)";
   const selectionPatterns = [
@@ -412,7 +414,8 @@ function hasCountableRule(text: string): boolean {
 // it is not a deciding test. When no numbered structure is present the whole
 // text is returned as a single condition. Marker numbers are bounded to 1–20 so
 // years/amounts ("by 2030.", "$10") are not mistaken for list markers.
-function splitIntoConditions(text: string): string[] {
+// Exported for reuse by the verdict-stability classifier (verdict-stability.ts).
+export function splitIntoConditions(text: string): string[] {
   if (!text) return [];
   const markerRe = /(?:\((\d+)\)|(?:^|\n|\s)(\d+)[.)](?=\s))/g;
   const starts: number[] = [];
@@ -443,7 +446,8 @@ function splitIntoConditions(text: string): string[] {
 // True when a single condition enumerates >=2 distinct named sub-items
 // "(a)(b)(c)" — an in-condition artefact enumeration that makes the deciding
 // test quote-verifiable even if the condition also uses a degree word.
-function hasNamedArtefactEnumeration(text: string): boolean {
+// Exported for reuse by the verdict-stability classifier (verdict-stability.ts).
+export function hasNamedArtefactEnumeration(text: string): boolean {
   if (!text) return false;
   const re = /\(([a-z])\)/gi;
   const seen = new Set<string>();
@@ -1297,19 +1301,23 @@ const CONJUNCTIVE_BUNDLE_PATTERNS: RegExp[] = [
   /\((?:i|1|a)\)[^.]{0,160}?\bAND\b[^.]{0,160}?\((?:ii|2|b)\)/,
 ];
 
-function hasSoftSelectionGate(text: string): boolean {
+// Exported for reuse by the verdict-stability classifier (verdict-stability.ts) —
+// the SAME predicate the C12 advisory uses.
+export function hasSoftSelectionGate(text: string): boolean {
   if (!text) return false;
   return SOFT_SELECTION_GATE_PATTERNS.some((p) => p.test(text));
 }
 
-function hasConjunctiveBundle(text: string): boolean {
+// Exported for reuse by the verdict-stability classifier (verdict-stability.ts).
+export function hasConjunctiveBundle(text: string): boolean {
   if (!text) return false;
   return CONJUNCTIVE_BUNDLE_PATTERNS.some((p) => p.test(text));
 }
 
 // Best-effort N (the selection threshold) and M (number of enumerated options),
 // used only to enrich the advisory message. Returns nulls when not parseable.
-function describeSoftGate(text: string): { n: number | null; m: number | null } {
+// Exported for reuse by the verdict-stability classifier (verdict-stability.ts).
+export function describeSoftGate(text: string): { n: number | null; m: number | null } {
   const numMap: Record<string, number> = {
     one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
   };

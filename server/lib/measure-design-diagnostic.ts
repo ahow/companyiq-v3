@@ -29,13 +29,20 @@ import { db } from "../db.js";
 import { frameworkMeasures, frameworks, analysisResults } from "../../shared/schema.js";
 import { eq, inArray } from "drizzle-orm";
 import { auditFrameworkGuidance, classifyGuidance, type GuidanceAuditIssue } from "./framework-guidance-audit.js";
+import { classifyMeasureStability } from "./framework-v2/verdict-stability.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type DefectPattern =
   | "whitelist_vs_exclusion_conflict"
   | "existence_strength_conflation"
-  | "non_json_scoring_guidance";
+  | "non_json_scoring_guidance"
+  // Issue 1 (verdict reproducibility): the measure's DECIDING TEST is a known
+  // run-to-run flip source — a degree-word judgment with no countable rule, or an
+  // M-of-N / OR-list soft gate. Advisory, like the other pre-test patterns; it
+  // enriches the per-measure instability ranking the author sees. The hard build
+  // gate on the same taxonomy stays with C11 (rules.ts).
+  | "verdict_instability_risk";
 
 export interface PreTestFinding {
   measureId: string;
@@ -239,6 +246,29 @@ export function analyzeMeasureDefinition(measure: DiagnosticMeasure): PreTestFin
       suggestedClarification:
         "Convert scoring_guidance to a JSON object with yes/no/partial buckets (and optional explicit_exclusions / required_evidence_type). Until then the scorer renders it as neutral prose rather than as Yes/No/Partial guidance.",
     });
+  }
+
+  // (d) verdict-instability risk (Issue 1). Reuses the SHARED stability classifier
+  // (framework-v2/verdict-stability.ts), which composes the same degree-word /
+  // countable-rule / soft-gate predicates the C11/C12 build gates use. Advisory:
+  // it only surfaces the risk on this per-measure review surface; it never blocks.
+  const stability = classifyMeasureStability({
+    measureId: measure.measureId,
+    title,
+    fallbackYesCriterion: measure.fallbackYesCriterion,
+    scoringGuidance: measure.scoringGuidance,
+    substantiveDefinition: measure.substantiveDefinition,
+  });
+  if (stability.risk === "borderline") {
+    for (const r of stability.reasons) {
+      findings.push({
+        measureId: measure.measureId,
+        title,
+        pattern: "verdict_instability_risk",
+        evidence: r.evidence,
+        suggestedClarification: r.fix,
+      });
+    }
   }
 
   return findings;

@@ -19,6 +19,7 @@
  */
 
 import type { Flag } from "./test-drive.js";
+import { COUNTABLE_REWRITE_GUIDANCE } from "./verdict-stability.js";
 
 export type EditCause =
   | "over-strict-fallback"      // fallback_yes_criterion too tight
@@ -252,7 +253,9 @@ export function proposeEditForFlag(
         proposedValueSummary:
           "rewrite deciding criteria to a countable, quote-verifiable N-of-M test over NAMED artefacts (C11)",
         rationale:
-          "Verdict is unstable across identical re-runs — the measure leaves a judgment call two passes resolve differently. Remove the degree-word ambiguity by making the deciding rule countable and quote-verifiable. Stability must be fixed before calibration.",
+          "Verdict is unstable across identical re-runs — the measure leaves a judgment call two passes resolve differently. " +
+          COUNTABLE_REWRITE_GUIDANCE +
+          " Stability must be fixed before calibration.",
         patch: { op: "rewrite_countable", path: "substantive_definition", value: null },
         expectedImpact:
           typeof flag.flipRate === "number"
