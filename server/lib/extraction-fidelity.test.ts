@@ -14,7 +14,7 @@
  *
  *   DATABASE_URL=<any pg url; not connected> npx tsx --test server/lib/extraction-fidelity.test.ts
  */
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "fs";
@@ -51,6 +51,13 @@ function cleanup() {
   clearInterval(keepAlive);
   try { rmSync(WORK, { recursive: true, force: true }); } catch {}
 }
+// Run teardown after ALL tests so the ref'd keepAlive timer is cleared while the
+// runner is still draining — this lets the test PROCESS self-exit with no
+// `--test-timeout` flag. (Relying only on process.on("exit") deadlocks: the ref'd
+// interval keeps the event loop alive, so "exit" never fires and the interval is
+// never cleared.) `clearInterval`/`rmSync(force)` are idempotent, so the exit
+// handler below stays as a harmless belt-and-braces fallback.
+after(cleanup);
 process.on("exit", cleanup);
 
 // ── fixture builders (real tools) ────────────────────────────────────────────
