@@ -1417,3 +1417,27 @@ desired (cosmetic; would force a redeploy).
 **Closure commit.** This docs-only closure commit (completion deliverable `deliverables/39-issue3-completion-closure.md` + this ledger entry; no `server/`/`client/`/runtime/build change). **Production runtime is byte-identical to the validated `2991989`** — the diff is confined to `docs/`, `deliverables/`, `.abacus.donotdelete`. All 4 Railway targets auto-deploy the closure commit (verified SHA parity + health `{"status":"ok","version":"3.0.0"}`). All 5 lever flags remain **UNSET / dormant** on the production worker (re-armable with no redeploy); worker numReplicas = 3.
 
 **Deliverable.** `deliverables/39-issue3-completion-closure.md` (+ .pdf / .docx).
+
+
+
+
+
+### Phase 3 / Issue 5 — CLOSED: completeness signals (A4→extraction_state, essential-doc checklist, portfolio flag); deployed + verified a3476f6; 0 verdict flips (2026-10-19)
+
+**Status.** Issue 5 ("PDF extraction completeness not passed into `extraction_state`; low-score companies indistinguishable from genuinely empty; non-comprehensive companies rank as if comprehensive") is **RESOLVED / CLOSED**.
+
+**What shipped (3 parts, all additive/verdict-invariant).** (1) **A4→extraction_state→A1 gap** — worker builds the research manifest with `framework.requiredDocTypes`; each document carries its A4 completeness label as `extractionState`; `classifyDocument` maps `partial`→`extracted_partial`; `computeEssentialGaps` raises a `kind:"partial"` gap so a truncated PDF becomes an unresolved essential gap (not silently "comprehensive"). (2) **Essential-document checklist** for ≤2/36 companies (`LOW_SCORE_ESSENTIAL_THRESHOLD=2`, `isLowScoreCompany`): `deriveEssentialDocChecklist` marks each required family found/partial/not_found via generic token match on `framework.requiredDocTypes` — no hardcoded company/topic/framework strings — so a reviewer can tell "looked and found nothing" from "never obtained the docs". (3) **Portfolio opt-in exclude** — `ResultsPage` gains an off-by-default "Exclude non-comprehensive" toggle; when off (default) every company is exported/ranked and flagged by the research-status columns (relevant rows never dropped); when on, `researchStatus.comprehensive===false` rows are omitted from ranking/export; empty-filter export blocked with an explanatory alert. CSV gains "Essential Document Checklist" + "Missing Essential Documents" columns.
+
+**Shared-code parity (constraint: code tested == code in production).** All logic lives in the shared pure module `shared/research-state.ts` (`classifyDocument`, `computeEssentialGaps`, `deriveEssentialDocChecklist`, `deriveResearchStatus`, `researchStatusCsvColumns`), consumed identically by the worker (`server/worker.ts`), API/CSV (`server/routes/api.ts`) and UI (`CompanyDetailPage.tsx`, `ResultsPage.tsx`).
+
+**Gates (all green at a3476f6).** `research-state.test.ts` **18/18**; `truthful-publication.test.ts` **1/1**; `tsc --noEmit` **62 pre-existing, 0 new** in the 6 changed files; client `vite build` **OK** (1,575 modules, ~4s). 6 files changed, +393/−3.
+
+**Cell-flip (constraint: report Y→N and N→Y).** **Yes→No = 0, No→Yes = 0, Total flips = 0.** Verdict-invariant by construction: Issue 5 adds completeness *signals* + an *opt-in display filter* only — no analyzer, evidence-pack, scoring-prompt, self-consistency or lever change. The default (toggle off) output is byte-identical to pre-Issue-5; the toggle, when switched on by a user, changes which rows are *displayed/exported*, never any verdict value.
+
+**Deploy (SHA parity + verification).** Committed `a3476f6` (`a3476f60b4d4841af1c7eddb800dcb83551319d0`), pushed to origin/main. Railway GraphQL verified **all 4 code targets deployed SHA `a3476f60b4`, SUCCESS**: production app dep `7e67634a` @ 2026-10-19T09:30:53Z + worker dep `3493d1de`; sprint-10-preview app dep `cb5f0ee9` + worker dep `0b38a53f`; prior `1d3aa94775` removed on all four; infra (redis/postgres/pgbouncer) unchanged/SUCCESS. Local HEAD == origin/main == all 4 targets == `a3476f6`.
+
+**Acceptance.** Met: every ≤2/36 company now gets a comprehensive-confirmed status OR a visible incomplete flag naming missing/partial docs (company-detail completeness panel + CSV "Missing Essential Documents"). Completeness label, checklist and comprehensive/incomplete status are fully automatic — **no human review of thousands of companies** required (constraint 5).
+
+**Closure commit.** Docs-only (this ledger entry + `deliverables/41-issue5-completeness-signals-result.{md,docx,pdf}`); production runtime byte-identical to the validated `a3476f6`.
+
+**Deliverable.** `deliverables/41-issue5-completeness-signals-result.md` (+ .docx / .pdf).
