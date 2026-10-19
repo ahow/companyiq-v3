@@ -11,6 +11,7 @@ import { validateAll, summariseViolations, toStructuredIssues, renderStructuredI
 import { analyzeEvidenceKeywordDistinctiveness } from "../lib/framework-v2/evidence-keyword-distinctiveness.js";
 import { evaluateRobustness, type IntakeArtefact } from "../lib/framework-v2/robustness-gate.js";
 import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYSTEM_PROMPT, CHUNKED_MEASURES_SYSTEM_PROMPT } from "../lib/framework-v2/intake-prompt.js";
+import { detectMultiProposalTurn, ONE_QUESTION_CORRECTIVE_SUFFIX } from "../lib/framework-v2/one-question-guard.js";
 import { resolveTargetCount } from "../lib/framework-v2/target-count.js";
 import { sanitizeSearchTemplates } from "../lib/framework-v2/query-template-hygiene.js";
 import { deriveRequiredDocTypes, deriveWithdrawalPatterns, deriveNegativeDomains, validateTargetingCoverage } from "../lib/framework-v2/retrieval-targeting.js";
@@ -125,32 +126,92 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
       }));
     } catch { /* telemetry must never break intake */ }
 
-    // Try to extract a full intake JSON block if the assistant emitted one this turn
-    const jsonMatch = response.match(/```json\s*([\s\S]*?)```/);
-    let emittedIntake: IntakeArtefact | null = null;
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1]);
-        if (parsed && typeof parsed === "object" && parsed.topicTerm) {
-          emittedIntake = parsed as IntakeArtefact;
+    // Extract the machine-readable blocks and the user-visible prose from one
+    // assistant turn. Pulled into a local helper so the one-question-per-turn
+    // guard below can re-run it verbatim on a corrected response.
+    const extractTurn = (responseText: string) => {
+      // Full intake JSON block (only when the assistant finalises the intake).
+      const jsonMatch = responseText.match(/```json\s*([\s\S]*?)```/);
+      let emitted: IntakeArtefact | null = null;
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1]);
+          if (parsed && typeof parsed === "object" && parsed.topicTerm) {
+            emitted = parsed as IntakeArtefact;
+          }
+        } catch {
+          // ignore; caller can re-parse
         }
-      } catch {
-        // ignore; caller can re-parse
       }
-    }
-
-    // Also try to extract a partial gate_state snapshot the LLM emits every turn.
-    // Merge with the existing intake so the UI gate advances turn-by-turn.
-    let partialIntake: Partial<IntakeArtefact> | null = null;
-    const gateStateMatch = response.match(/```gate_state\s*([\s\S]*?)```/);
-    if (gateStateMatch) {
-      try {
-        const parsed = JSON.parse(gateStateMatch[1]);
-        if (parsed && typeof parsed === "object") {
-          partialIntake = parsed as Partial<IntakeArtefact>;
+      // Partial gate_state snapshot the LLM emits every turn.
+      let partial: Partial<IntakeArtefact> | null = null;
+      const gateStateMatch = responseText.match(/```gate_state\s*([\s\S]*?)```/);
+      if (gateStateMatch) {
+        try {
+          const parsed = JSON.parse(gateStateMatch[1]);
+          if (parsed && typeof parsed === "object") {
+            partial = parsed as Partial<IntakeArtefact>;
+          }
+        } catch {
+          // best-effort only
         }
-      } catch {
-        // best-effort only
+      }
+      // Strip machine-readable blocks from the user-visible message. The
+      // gate_state block is not meant to be read by the user; only the prose
+      // gate summary is.
+      const display = responseText.replace(/```gate_state\s*[\s\S]*?```\s*/g, "").trim();
+      return { emitted, partial, display };
+    };
+
+    let { emitted: emittedIntake, partial: partialIntake, display: displayMessage } =
+      extractTurn(response);
+
+    // ─── One-question-per-turn guard (deterministic backstop) ──────────────
+    // The intake prompt already forbids packing several questions/proposals into
+    // one turn, but that is prompt-only. Here we deterministically detect a
+    // multi-question / multi-proposal turn and perform EXACTLY ONE corrective
+    // re-generation constraining the model to a single question + its chips.
+    // Skip on the finalisation turn (emittedIntake present) so the terminating
+    // intake-JSON message is never disrupted. Held-back questions are not lost:
+    // they re-surface on later turns from the persisted gate state.
+    if (!emittedIntake) {
+      const detection = detectMultiProposalTurn(displayMessage);
+      if (detection.violation) {
+        try {
+          console.log("[fb2-one-question-guard] violation", JSON.stringify({
+            reason: detection.reason,
+            questionCount: detection.questionCount,
+            enumeratedHeaderCount: detection.enumeratedHeaderCount,
+            chipGroupCount: detection.chipGroupCount,
+            multiWhSingleSentence: detection.multiWhSingleSentence,
+          }));
+        } catch { /* logging must never break intake */ }
+        try {
+          const correctiveResp = await completeWithFallback(providerName || "claude", {
+            system: INTAKE_SYSTEM_PROMPT + gateContext + ONE_QUESTION_CORRECTIVE_SUFFIX,
+            prompt:
+              history +
+              "\n\n[System correction] The assistant's last drafted turn asked more than one question. Re-send that turn with EXACTLY ONE question and a single matching group of option chips.",
+            maxTokens: 32000,
+            temperature: 0.2,
+            allowTruncated: true,
+          });
+          const correctedText = correctiveResp?.text ?? "";
+          if (correctedText.trim()) {
+            const corrected = extractTurn(correctedText);
+            // Only adopt the corrected turn if it yields a non-empty display.
+            // Never let the correction introduce a finalisation JSON that the
+            // original turn did not contain.
+            if (corrected.display && !corrected.emitted) {
+              displayMessage = corrected.display;
+              partialIntake = corrected.partial ?? partialIntake;
+            }
+          }
+        } catch (correctiveErr) {
+          // The corrective pass is best-effort. On any failure keep the original
+          // turn rather than failing the whole intake request.
+          console.error("[fb2-one-question-guard] corrective regen failed:", correctiveErr);
+        }
       }
     }
 
@@ -162,10 +223,6 @@ router.post("/v2/chat", async (req: Request, res: Response) => {
         : intake ?? null);
 
     const gateAfter = mergedIntake ? evaluateRobustness(mergedIntake) : currentGate;
-
-    // Strip machine-readable blocks from the user-visible message. The gate_state
-    // block is not meant to be read by the user; only the prose gate summary is.
-    const displayMessage = response.replace(/```gate_state\s*[\s\S]*?```\s*/g, "").trim();
 
     return res.json({
       assistantMessage: displayMessage,
@@ -368,8 +425,26 @@ function buildTelemetrySummary(categoryResults: any[], outcome: string): any {
   };
 }
 
-async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string, resolvedTarget?: number): Promise<{ draft: any; truncationRecovered: boolean; provider?: string; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
+// Optional free-text operator instructions threaded through the draft path
+// (review-stage free-text refine). Topic/company-agnostic: this is a generic
+// verbatim passthrough of whatever the operator typed; no parsing or branching.
+interface DraftOptions {
+  userInstructions?: string;
+}
+
+// Build a generic instructions block appended to a drafting user prompt. Empty
+// string when no instructions were supplied (so existing behaviour is byte-for-
+// byte unchanged). The clause always reaffirms that construction rules still
+// bind, so free-text refine can never be used to bypass validation.
+function buildUserInstructionsClause(userInstructions?: string): string {
+  const trimmed = (userInstructions ?? "").trim();
+  if (!trimmed) return "";
+  return `\n\nAdditional operator instructions for this re-draft (apply these, but they do NOT relax any requirement — every construction rule C1–C11 must still pass):\n${trimmed}`;
+}
+
+async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: string, resolvedTarget?: number, opts?: DraftOptions): Promise<{ draft: any; truncationRecovered: boolean; provider?: string; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
+  const instructionsClause = buildUserInstructionsClause(opts?.userInstructions);
 
   // [fb2-telemetry] Diagnostic-first sidecar accumulator. Instrumentation ONLY:
   // it records what each LLM call did; it never changes control flow, retry
@@ -395,7 +470,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
       : intake;
 
   // Phase 1: skeleton (framework metadata + category outlines).
-  const skeletonPrompt = `Intake artefact (JSON):\n${JSON.stringify(skeletonIntake, null, 2)}\n\nProduce the framework skeleton now.`;
+  const skeletonPrompt = `Intake artefact (JSON):\n${JSON.stringify(skeletonIntake, null, 2)}\n\nProduce the framework skeleton now.${instructionsClause}`;
   const skeletonStart = Date.now();
   const skeletonResp = await completeWithFallback(providerName || "claude", {
     system: CHUNKED_SKELETON_SYSTEM_PROMPT,
@@ -472,7 +547,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
       currentCategory: { name: cat.name, purpose: cat.purpose, index: idx + 1, measureOutlines: batchOutlines },
       otherCategories: skeleton.categories.filter((_: any, i: number) => i !== idx).map((c: any) => ({ name: c.name, purpose: c.purpose })),
     };
-    const categoryPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nSkeleton reference (JSON):\n${JSON.stringify(skeletonRef, null, 2)}\n\nDraft the full measures for the ${batchOutlines.length} outline(s) listed under the category "${cat.name}" only. Return the JSON object described in the system prompt.`;
+    const categoryPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nSkeleton reference (JSON):\n${JSON.stringify(skeletonRef, null, 2)}\n\nDraft the full measures for the ${batchOutlines.length} outline(s) listed under the category "${cat.name}" only. Return the JSON object described in the system prompt.${instructionsClause}`;
     // FIX D: count-based fail-loud + bounded retry. A batch is asked to produce
     // batchOutlines.length measures. A response that parses but returns FEWER
     // measures than requested is a masked mid-stream truncation (the salvage /
@@ -683,7 +758,7 @@ async function callChunkedDraftingLLM(intake: IntakeArtefact, providerName?: str
   return { draft: assembled, truncationRecovered: anyTruncationRecovered, provider: draftProvider, telemetry };
 }
 
-async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; truncationRecovered?: boolean; provider?: string; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
+async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }, opts?: DraftOptions): Promise<{ draft: any; truncationRecovered?: boolean; provider?: string; telemetry?: any } | { error: string; raw?: string; telemetry?: any }> {
   // Route to chunked drafting for fresh attempts unless the target is KNOWN to
   // be small. Repair passes always use single-shot with the prior draft as
   // context. Crucially, an UNKNOWN target (undefined — e.g. the intake LLM wrote
@@ -693,13 +768,14 @@ async function callDraftingLLM(intake: IntakeArtefact, providerName?: string, pr
   const target = resolveTargetCount(intake);
   if (!priorAttempt && (target === undefined || target > CHUNKED_DRAFT_THRESHOLD)) {
     console.log(`[framework-builder v2] Chunked drafting activated (target=${target ?? "unknown"}, threshold=${CHUNKED_DRAFT_THRESHOLD}).`);
-    return callChunkedDraftingLLM(intake, providerName, target);
+    return callChunkedDraftingLLM(intake, providerName, target, opts);
   }
-  return callSingleShotDraftingLLM(intake, providerName, priorAttempt);
+  return callSingleShotDraftingLLM(intake, providerName, priorAttempt, opts);
 }
 
-async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }): Promise<{ draft: any; provider?: string } | { error: string; raw?: string }> {
+async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: string, priorAttempt?: { draft: any; violations: any[] }, opts?: DraftOptions): Promise<{ draft: any; provider?: string } | { error: string; raw?: string }> {
   const { completeWithFallback } = await import("../lib/ai-providers.js");
+  const instructionsClause = buildUserInstructionsClause(opts?.userInstructions);
 
   let userPrompt: string;
   if (priorAttempt) {
@@ -707,13 +783,13 @@ async function callSingleShotDraftingLLM(intake: IntakeArtefact, providerName?: 
     const violationSummary = priorAttempt.violations
       .map((v: any) => `- [${v.rule}][${v.severity}] ${v.measureId ? `${v.measureId}: ` : ""}${v.message}${v.suggestion ? ` — SUGGESTION: ${v.suggestion}` : ""}`)
       .join("\n");
-    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nPrior attempt draft (JSON, has validation errors):\n${JSON.stringify(priorAttempt.draft, null, 2)}\n\nViolations to fix (do NOT change measures that are already valid — only edit the fields that trigger these violations):\n${violationSummary}\n\n${C11_REPAIR_CLAUSE}\n\nReturn a corrected framework JSON. Preserve measureId values from the prior attempt. Every construction rule C1–C11 must pass this time.`;
+    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nPrior attempt draft (JSON, has validation errors):\n${JSON.stringify(priorAttempt.draft, null, 2)}\n\nViolations to fix (do NOT change measures that are already valid — only edit the fields that trigger these violations):\n${violationSummary}\n\n${C11_REPAIR_CLAUSE}\n\nReturn a corrected framework JSON. Preserve measureId values from the prior attempt. Every construction rule C1–C11 must pass this time.${instructionsClause}`;
   } else {
     const tgt = resolveTargetCount(intake);
     const countClause = typeof tgt === "number" && tgt > 0
       ? `The user requested approximately ${tgt} measures in total across all categories. Distribute measures roughly evenly across the sub-areas from the intake, weighting more heavily toward higher-priority sub-areas if the user's purpose emphasises them. Do not fall short by more than 15% or exceed by more than 15%.`
       : `Produce approximately 20–30 measures in total across all categories — enough to give balanced coverage but not so many as to become fatiguing to review.`;
-    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C11 exactly. ${countClause} Every measure must comply with C1–C11 — in particular: every measure's substantive_definition MUST include an explicit adjacent-topic exclusion clause naming at least one adjacent topic from the intake list; every measure's fallback_yes_criterion MUST have at least 3 numbered conditions each referencing the topic term or a synonym; every measure MUST have whatConstitutesEvidence AND whatDoesNotConstituteEvidence AND positive_examples (>=2) AND negative_examples (>=2).`;
+    userPrompt = `Intake artefact (JSON):\n${JSON.stringify(intake, null, 2)}\n\nDraft the framework now, following construction rules C1–C11 exactly. ${countClause} Every measure must comply with C1–C11 — in particular: every measure's substantive_definition MUST include an explicit adjacent-topic exclusion clause naming at least one adjacent topic from the intake list; every measure's fallback_yes_criterion MUST have at least 3 numbered conditions each referencing the topic term or a synonym; every measure MUST have whatConstitutesEvidence AND whatDoesNotConstituteEvidence AND positive_examples (>=2) AND negative_examples (>=2).${instructionsClause}`;
   }
 
   const { text: response, provider: singleShotProvider } = await completeWithFallback(providerName || "claude", {
@@ -1370,9 +1446,10 @@ async function repairMeasuresTargeted(
   return { patched, telem };
 }
 
-async function executeDraft(intake: IntakeArtefact, providerName?: string, onDraftReady?: (bestEffort: any) => Promise<void>): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; provider?: string; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport; telemetry?: any; repairWarning?: string | null } | { error: string; raw?: string; telemetry?: any }> {
-  // Attempt 1: initial draft.
-  const first = await callDraftingLLM(intake, providerName);
+async function executeDraft(intake: IntakeArtefact, providerName?: string, onDraftReady?: (bestEffort: any) => Promise<void>, opts?: DraftOptions): Promise<{ draft: any; measures: any[]; validation: any; summary: string; repairAttempts: number; truncationRecovered?: boolean; targetMeasureCount?: number; measureCount: number; failedCategories: number; failedCategoryNames?: string[]; provider?: string; issues: StructuredIssue[]; issuesReadable: string; errorCount: number; warningCount: number; designDiagnostic: DiagnosticReport; telemetry?: any; repairWarning?: string | null } | { error: string; raw?: string; telemetry?: any }> {
+  // Attempt 1: initial draft. Any free-text operator instructions are applied on
+  // this first pass; the auto-repair loop below then enforces full validation.
+  const first = await callDraftingLLM(intake, providerName, undefined, opts);
   if ("error" in first) return first;
   let draft = first.draft;
   // FIX F: actual provider that produced this draft, for persistence on success.
@@ -1735,10 +1812,17 @@ router.post("/v2/draft", requireWorkspace, async (req: Request, res: Response) =
 
 router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Response) => {
   try {
-    const { draft, intake, providerName } = req.body as { draft: any; intake: IntakeArtefact; providerName?: string };
+    const { draft, intake, providerName, instructions } = req.body as { draft: any; intake: IntakeArtefact; providerName?: string; instructions?: string };
     if (!draft || !intake) return res.status(400).json({ error: "draft + intake required" });
     const ctx = getSessionContext(req);
     if (!ctx?.workspaceId || !ctx.userId) return res.status(401).json({ error: "session context missing" });
+
+    // Optional free-text operator instructions for a review-stage re-draft. When
+    // present, we regenerate the draft through the NORMAL draft path (executeDraft)
+    // so every construction-rule validation + auto-repair still runs — free-text
+    // refine never bypasses validation. When absent, behaviour is the existing
+    // validation-violation targeted repair below, byte-for-byte unchanged.
+    const userInstructions = typeof instructions === "string" ? instructions.trim() : "";
 
     const jobId = randomUUID();
     await db.execute(sql`
@@ -1748,6 +1832,45 @@ router.post("/v2/draft/refine", requireWorkspace, async (req: Request, res: Resp
 
     (async () => {
       try {
+        // ─── Free-text re-draft branch ──────────────────────────────────────
+        // When the operator supplied their own instructions, regenerate the draft
+        // via the full normal draft path so ALL validation + auto-repair runs.
+        // Topic/company-agnostic: the instructions are a verbatim passthrough.
+        if (userInstructions) {
+          const redraft = await executeDraft(intake, providerName, undefined, { userInstructions });
+          if ("error" in redraft) {
+            await db.execute(sql`
+              UPDATE framework_v2_jobs
+              SET status = 'failed', error_message = ${redraft.error || "Re-draft with instructions failed."}, updated_at = NOW()
+              WHERE id = ${jobId}
+            `);
+            return;
+          }
+          const plural = (n: number) => (n === 1 ? "" : "s");
+          const ec = redraft.errorCount ?? 0;
+          const wc = redraft.warningCount ?? 0;
+          let refineMessage: string;
+          if (ec === 0 && wc === 0) {
+            refineMessage = "Re-draft incorporated your instructions and the draft is now clean (0 errors, 0 warnings). It can be saved as production-ready.";
+          } else {
+            const parts: string[] = [];
+            if (ec > 0) parts.push(`${ec} error${plural(ec)} still block${ec === 1 ? "s" : ""} saving as production-ready`);
+            if (wc > 0) parts.push(`${wc} advisory warning${plural(wc)} remain`);
+            refineMessage = `Re-draft incorporated your instructions. ${parts.join("; ")}. Errors are blocking — re-draft again or edit the flagged measures; advisory warnings can be left as-is.`;
+          }
+          // Shape mirrors the targeted-repair result the client already consumes
+          // in applyDraftResult (draft / measures / validation / summary /
+          // refineMessage / designDiagnostic / repairAttempts), plus the full
+          // executeDraft fields so the review panel re-renders completely.
+          const result = { ...redraft, refineMessage, refinedWithInstructions: true };
+          await db.execute(sql`
+            UPDATE framework_v2_jobs
+            SET status = 'succeeded', result = ${JSON.stringify(result)}::jsonb, telemetry = ${JSON.stringify((redraft as any).telemetry ?? { kind: "refine-instructions" })}::jsonb, updated_at = NOW()
+            WHERE id = ${jobId}
+          `);
+          return;
+        }
+
         // Iterative targeted repair on the incoming draft. We re-validate, then
         // repair only the offending measures (compact payload — safe for large
         // chunked drafts, unlike the old full-draft single-shot re-send), up to

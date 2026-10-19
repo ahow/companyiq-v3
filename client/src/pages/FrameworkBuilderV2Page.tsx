@@ -970,7 +970,7 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     }
   }
 
-  async function redraftWithCorrections() {
+  async function redraftWithCorrections(instructions?: string) {
     if (!draft || !intake) return;
     setError(null);
     setLoading(true);
@@ -978,12 +978,20 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
     setRepairAttempts(0);
     setRefineMessage(null);
     setTruncationRecovered(false);
+    // Optional free-text operator instructions. When present the server
+    // regenerates the draft via the normal draft path (full validation still
+    // runs); when absent it does the existing validation-violation repair.
+    const trimmedInstructions = typeof instructions === "string" ? instructions.trim() : "";
     let jobId: string;
     try {
       // Start a refine job and poll to completion (same pattern as draftFramework).
       const startRes = await api.request("/framework-builder/v2/draft/refine", {
         method: "POST",
-        body: JSON.stringify({ draft, intake }),
+        body: JSON.stringify({
+          draft,
+          intake,
+          ...(trimmedInstructions ? { instructions: trimmedInstructions } : {}),
+        }),
       });
       jobId = startRes.jobId;
     } catch (err: any) {
@@ -1516,7 +1524,8 @@ export default function FrameworkBuilderV2Page({ onGoToFrameworks }: { onGoToFra
                 targetMeasureCount={targetMeasureCount}
                 failedCategories={failedCategories}
                 failedCategoryNames={failedCategoryNames}
-                onRedraft={redraftWithCorrections}
+                onRedraft={() => void redraftWithCorrections()}
+                onRefineWithInstructions={(instructions) => void redraftWithCorrections(instructions)}
                 onRetryDraft={draftFramework}
                 hasTestDriveResults={!!(savedFrameworkId && testDriveListId)}
                 onViewResults={() => setStage("saved")}
@@ -1941,6 +1950,7 @@ function DraftReview({
   onSelectTestDrive,
   onSave,
   onRedraft,
+  onRefineWithInstructions,
   onRetryDraft,
   onViewResults,
   onBuilderReview,
@@ -1963,6 +1973,7 @@ function DraftReview({
   onSelectTestDrive: () => void;
   onSave: (productionReady: boolean) => void;
   onRedraft?: () => void;
+  onRefineWithInstructions?: (instructions: string) => void;
   onRetryDraft?: () => void;
   onViewResults?: () => void;
   onBuilderReview?: () => void;
@@ -1980,6 +1991,7 @@ function DraftReview({
   warningCount: number;
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [refineInstructions, setRefineInstructions] = useState("");
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-6">
       <div className="flex items-start justify-between mb-4">
@@ -2215,6 +2227,39 @@ function DraftReview({
       {refineMessage && errorCount === 0 && warningCount === 0 && (
         <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-300 dark:border-green-800 rounded text-sm text-green-800 dark:text-green-200">
           <strong>Last re-draft:</strong> {refineMessage}
+        </div>
+      )}
+      {onRefineWithInstructions && (
+        <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+          <label htmlFor="refine-instructions" className="block text-sm font-semibold text-blue-900 dark:text-blue-200">
+            Refine THIS framework in your own words
+          </label>
+          <p className="text-xs text-blue-800 dark:text-blue-300 mt-1 mb-2">
+            Describe the changes you want (e.g. "make the governance measures stricter", "add a measure on third-party audits", "merge the two overlapping disclosure measures"). The framework is re-drafted through the normal engine, so all construction-rule validation still runs — nothing here skips validation. This edits the current framework; it is NOT the same as "Send to Claude — builder review" (which only reviews the shared builder).
+          </p>
+          <textarea
+            id="refine-instructions"
+            value={refineInstructions}
+            onChange={(e) => setRefineInstructions(e.target.value)}
+            disabled={loading}
+            rows={3}
+            placeholder="Type the changes you want made to this framework…"
+            className="w-full px-3 py-2 text-sm rounded-md border border-blue-300 dark:border-blue-700 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          />
+          <div className="mt-2 flex justify-end">
+            <button
+              onClick={() => {
+                const text = refineInstructions.trim();
+                if (!text) return;
+                onRefineWithInstructions(text);
+              }}
+              disabled={loading || refineInstructions.trim().length === 0}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-1 disabled:opacity-50"
+              title="Re-draft this framework incorporating your instructions. Regenerates via the normal draft path so all validation runs."
+            >
+              <RotateCcw className="w-4 h-4" /> Re-draft with these instructions
+            </button>
+          </div>
         </div>
       )}
       <div className="mt-6 flex gap-2 flex-wrap justify-end">
@@ -2550,11 +2595,18 @@ function BuilderReviewPanel({
       </div>
 
       <div className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-800 rounded p-3 mb-4">
-        <strong>Nothing is applied automatically.</strong> These proposals review the framework
-        <em className="mx-1">builder</em> itself (shared by every framework it generates), not just this
-        framework. Selecting proposals and confirming collates a <strong>proposed edit set</strong> only.
-        A builder change is <strong>implemented ≠ verified-fixed</strong>: it is verified only after an
-        operator re-runs generation and the defect is gone on a live validator run.
+        <strong>These recommendations are about the SHARED BUILDER, not this framework.</strong> They
+        review the framework <em className="mx-1">builder</em> itself — the prompt that generates every
+        future framework — so that it improves for all topics. They are <strong>advisory only and are NOT
+        applied to the framework you are currently reviewing.</strong> Selecting proposals and confirming
+        collates a <strong>proposed edit set</strong> for an operator to take forward manually; nothing is
+        applied automatically. A builder change is <strong>implemented ≠ verified-fixed</strong>: it is
+        verified only after an operator re-runs generation and the defect is gone on a live validator run.
+        <div className="mt-2 pt-2 border-t border-amber-300 dark:border-amber-800">
+          Want to change <strong>THIS framework</strong> instead? Close this panel and use
+          <strong className="mx-1">“Refine THIS framework in your own words”</strong> on the review screen —
+          it re-drafts the current framework through the normal engine (all validation still runs).
+        </div>
         <div className="mt-1 text-xs text-amber-700 dark:text-amber-300">
           Source: {review.source.origin} ({review.source.detail})
         </div>
