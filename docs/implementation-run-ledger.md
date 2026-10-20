@@ -1519,3 +1519,28 @@ desired (cosmetic; would force a redeploy).
 **Constraints 4/5/6.** No human-in-the-loop gate added to analyze/worker (4). Scoring persona untouched (5). All changes topic/company-agnostic — detector + refine are generic, instructions a verbatim passthrough (6).
 
 **Deliverable.** `deliverables/44-builder-ux-five-questions-and-fixes.md` (+ .pdf / .docx).
+
+
+
+
+### Q5 free read-only measurement: the true binding ceiling — measured live, no change applied (2026-10-20)
+
+**What this closes.** The deliverable-44 Q5 answer recommended "measure steady-state DB connections per worker at concurrency 4 before scaling to thousands." This is that measurement — plus the LLM/search/browser dimensions — done **read-only** against production so no scaling decision rests on the B6 *derived* `connectionsPerJob` or the *unmeasured* LLM account cap.
+
+**Method (read-only, production SHA parity).** App + worker both on **`7ccf8f6`** (= local HEAD = origin/main; worker deployment `82f9d80e`, SUCCESS). Evidence = live `pg_stat_activity`/`SHOW` over the public DB proxy + the worker's own `[DIAG]` telemetry (llm-permits, db-op-sample, pg-activity, browser-lifecycle) from Railway deployment logs, window **23:34–00:11 UTC** (~37 min of batch 1297 at concurrency 4, including concurrent-company bursts). **No writes, no env change, no scoring batch, batch 1297 untouched.** Deployment target verified = production (not preview).
+
+**Findings (actual numbers).**
+- **DB — not binding.** `max_connections=100`, reserved 3 → **97 usable**. Worker main pool runs at **1–2 of pool_max 4** per job child (mean 1.75), **0** queued checkouts, **0** `checkout_wait_ms`, even under concurrency. `pool_max=4` is the child-isolation partition of `PG_POOL_MAX=20` (`floor(16/4)`), which **empirically validates** B6's `connectionsPerJob ≈ 2`.
+- **Per-replica LLM gate (`max=8`) — only resource showing back-pressure.** 295 samples: held mean **0.60**, FULL in **2%**, jobs waiting in **1%** (max 5 waiting). Transient burst saturation only.
+- **DeepSeek account rate limit (shared) — not hit.** Exactly **1** rate-429 in 37 min, on a *mistral fallback*, not DeepSeek. Other provider failures = output **truncation** (`finish_reason=length`), not rate. Absolute account cap **INCONCLUSIVE** (only a lower bound known) — cannot be read from a load that never touched it.
+- **Browser/memory — not binding.** Browser holders max 1; policy slots 7/10; **no OOM/restart/crash**.
+
+**Binding-ceiling conclusion.** At current scale (1 worker, concurrency 4) **nothing binds hard**. Ranked: (1) per-replica LLM gate=8 (transient), (2) **DeepSeek account cap — shared, true first-binder at high fan-out, absolute value unmeasured**, (3) DB (~3 worker replicas at today's pool sizes, *tunable* via `PG_POOL_MAX`), (4) browser/memory (idle). For scaling to thousands, the **shared** ceilings (#2, #3) bound horizontal scaling; DB is comfortable/tunable, the DeepSeek account cap is the next number to get and only measurable under real multi-replica load.
+
+**Cell-flip (constraint).** Read-only measurement; no scoring run, no evidence path touched ⇒ **Yes→No = 0, No→Yes = 0, total flips = 0** by construction.
+
+**Deploy.** Docs-only (deliverable 45 + this entry); no runtime change, no scaling change applied. Production remains `7ccf8f6`.
+
+**One proposal.** Scale to **3 worker replicas** (DB-safe by the measured arithmetic) and read the DeepSeek account ceiling off the already-emitting `[DIAG][llm-permits]` + `429` telemetry — a bounded in-production measurement of the one unknown, with a pre-set rollback if the 429 rate climbs or `waiting>0` becomes sustained. No code change; applied only on explicit go-ahead.
+
+**Deliverable.** `deliverables/45-binding-ceiling-measurement.md` (+ .pdf / .docx).
