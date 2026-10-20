@@ -111,6 +111,29 @@ export function parseBuilderRules(text: string): Record<string, string> {
   return rules;
 }
 
+// Bespoke proposed edits for missing rules whose generic `enforces` summary
+// would make a misleading verbatim builder instruction (operators can only
+// select/deselect proposals, not edit them). Rules absent here use the generic
+// template. Topic-agnostic by construction.
+const MISSING_RULE_EDIT_OVERRIDES: Record<string, string> = {
+  // C12 is advisory and never blocks; it must not become a blanket mandate that
+  // homogenises every measure toward one gate shape.
+  C12:
+    "Add an ADVISORY construction note C12 to Part 3: WHERE the measurable signal permits, " +
+    "a conjunctive hard-token bundle (co-occurrence in a single verbatim quote of a named " +
+    "artefact/function AND a hard qualifier) is more flip-resistant than an M-of-N / OR-list " +
+    "soft gate — but KEEP a soft or N-of-M gate where a conjunctive bundle would be too strict " +
+    "for the measure. This is advisory, never a blanket requirement; do not homogenise measures " +
+    "toward one gate shape.",
+  // C13 fires when examples ship without a substantive_definition; fix the root
+  // cause (missing authoritative Yes-bar), not just the symptom.
+  C13:
+    "Add a construction rule C13 to Part 3: when a measure ships positive/negative examples, " +
+    "it MUST also carry a `substantive_definition` that states the single authoritative Yes-bar, " +
+    "and every example must be consistent with THAT rule (do not let a strict fallback silently " +
+    "become the authoritative bar).",
+};
+
 const NOTE =
   "GATED proposals only. A builder change affects ALL future frameworks and must be " +
   "human-approved, then VERIFIED by an operator-triggered regeneration — implemented != verified-fixed.";
@@ -161,7 +184,9 @@ export function detectBuilderDrift(builderText: string): BuilderDriftReport {
         rationale:
           `The live engine runs ${rule} but the builder never instructs the LLM ` +
           `about it, so the generator cannot pre-satisfy it. ${v.blocking ? "Blocking" : "Advisory"}.`,
-        proposedBuilderEdit: `Add a construction rule ${rule} to Part 3 describing: ${v.enforces}`,
+        proposedBuilderEdit:
+          MISSING_RULE_EDIT_OVERRIDES[rule] ??
+          `Add a construction rule ${rule} to Part 3 describing: ${v.enforces}`,
       });
     }
   }
@@ -178,10 +203,12 @@ export function detectBuilderDrift(builderText: string): BuilderDriftReport {
       ref: VALIDATOR_SEMANTICS["DEF"].ref,
       rationale:
         "Validator fails loud if any measure lacks a derivable definition; builder " +
-        "should state the definition field is mandatory and non-empty.",
+        "should state that substantive_definition (from which the short definition " +
+        "is derived at save) is mandatory and non-empty.",
       proposedBuilderEdit:
-        "Add to Part 3: every measure MUST carry a non-empty `definition` " +
-        "that states what constitutes a Yes verdict.",
+        "Add to Part 3: every measure MUST carry a non-empty `substantive_definition` " +
+        "that states what constitutes a Yes verdict (the short `definition` field is " +
+        "derived from it at save).",
     });
   }
 
