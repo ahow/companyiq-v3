@@ -281,18 +281,29 @@ interface AnalysisSettings {
   // re-scores on the augmented corpus. Default OFF — inert unless the caller
   // also passes a reviewQueue AND retrievalV2 is on.
   autoReretrieval: boolean;
-  // PR 2: Cascade v2 — Mistral Large 3 replaces Claude as default arbiter AND
-  // the post-cascade auto-downgrade rule is disabled when cascade is active.
-  // Iteration 8 audit showed (a) Claude deferred 92% to DeepSeek producing no
-  // independent tiebreaking value, and (b) the auto-downgrade rule pushed 37%
-  // of cells to Low confidence post-cascade, double-counting the diversity
-  // signal the cascade already provides. Enabling `cascade_v2=true` addresses
-  // both. Inert when scoringCascade=false.
+  // Cascade v2 — DEFAULT ON (env-reversible via CASCADE_V2=0). When on, the
+  // arbiter defaults to gpt5-arbiter (OpenAI GPT-5 via OpenRouter) instead of
+  // claude-arbiter AND the post-cascade auto-downgrade rule is suppressed while
+  // cascade is active. Iteration 8 audit showed (a) Claude deferred 92% to
+  // DeepSeek producing no independent tiebreaking value, and (b) the
+  // auto-downgrade rule pushed 37% of cells to Low confidence post-cascade,
+  // double-counting the diversity signal the cascade already provides. Setting
+  // CASCADE_V2=0 (or workspace cascade_v2="false") reverts to claude-arbiter and
+  // re-enables the auto-downgrade. Inert when scoringCascade=false.
   cascadeV2: boolean;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
   const settings = await storage.getSettings(workspaceId || 1);
+  // Cascade v2 default-on resolution (single source of truth, env-reversible).
+  // Used for both the cascadeV2 field and the default arbiter selection below.
+  // Precedence: workspace force-off ("false") → off; workspace force-on
+  // ("true") → on; otherwise env CASCADE_V2 (default "1"; set "0" to revert to
+  // claude-arbiter + re-enable the post-cascade auto-downgrade). No topic- or
+  // company-specific logic — a single global default.
+  const cascadeV2On = settings.cascade_v2 === "false"
+    ? false
+    : (settings.cascade_v2 === "true" ? true : ((process.env.CASCADE_V2 ?? "1") !== "0"));
   return {
     ensembleScoring: settings.ensemble_scoring === "true",
     ensembleIterations: parseInt(settings.ensemble_iterations || "3"),
@@ -307,22 +318,35 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     crossVerifyEnabled: settings.cross_verify_enabled === "true",
     scoringMode: settings.scoring_mode || "binary",
     lowConfidenceHandling: settings.low_confidence_handling || "downgrade",
-    scoringCascade: settings.scoring_cascade === "true",
+    // DEFAULT ON (framework-agnostic): the cross-architecture cascade (two
+    // primary LLMs + a third arbiter only on disagreement) is now the default
+    // scoring path for every workspace, topic and company. Precedence:
+    //   - workspace force-off: scoring_cascade="false"  → disabled
+    //   - global kill-switch:  SCORING_CASCADE=0        → disabled
+    //   - workspace force-on:  scoring_cascade="true"   → enabled
+    //   - otherwise                                      → enabled (default)
+    // There is NO topic- or company-specific logic here; this is a single
+    // global default toggled purely by env + per-workspace settings.
+    scoringCascade: settings.scoring_cascade === "false"
+      ? false
+      : ((process.env.SCORING_CASCADE ?? "1") !== "0" || settings.scoring_cascade === "true"),
     cascadePrimary: settings.cascade_primary || "deepseek",
     cascadeSecondary: settings.cascade_secondary || "glm-4.6",
-    // PR 2 / Task E: when cascade_v2 flag is on and no explicit arbiter override
-    // is set, default to gpt5-arbiter (OpenAI GPT-5 via OpenRouter) instead of
-    // mistral-arbiter (which is 403-broken). mistral-arbiter is still selectable
-    // via an explicit cascade_arbiter override. Legacy behaviour preserved when
-    // cascade_v2="false" (claude-arbiter).
+    // Cascade v2 is now ON by default (env-reversible), so the arbiter defaults
+    // to gpt5-arbiter (OpenAI GPT-5 via OpenRouter) and the post-cascade
+    // auto-downgrade is suppressed. Precedence for cascade_v2 (see cascadeV2
+    // below): cascade_v2="false" → off; cascade_v2="true" → on; else env
+    // CASCADE_V2 (default "1", set "0" to revert to claude-arbiter + downgrade).
+    // An explicit cascade_arbiter override always wins. mistral-arbiter remains
+    // selectable via an explicit cascade_arbiter override.
     cascadeArbiter: settings.cascade_arbiter
-      || (settings.cascade_v2 === "true" ? "gpt5-arbiter" : "claude-arbiter"),
+      || (cascadeV2On ? "gpt5-arbiter" : "claude-arbiter"),
     // PR 1 · Change 1a: default OFF. Enabled via workspace_settings.retrieval_v2="true".
     retrievalV2: settings.retrieval_v2 === "true",
     // PR 1 · Change 4: default OFF. Enabled via workspace_settings.auto_reretrieval="true".
     // Requires retrievalV2 AND a reviewQueue plumbed from pipeline.ts to have any effect.
     autoReretrieval: settings.auto_reretrieval === "true",
-    cascadeV2: settings.cascade_v2 === "true",
+    cascadeV2: cascadeV2On,
     // v3g (Bug 1 §3 action 5): verdict cache is now OPT-IN (default OFF) until the
     // fingerprint contract is independently re-verified. The cost of recomputing a
     // few measures per re-run is trivial vs the risk of cross-company verdict reuse
@@ -2742,8 +2766,14 @@ export async function analyzeCompanyMeasures(opts: {
       // Get temporal warning if available
       const tw = temporalContext?.temporalWarning || null;
 
-      if (settings.ensembleScoring) {
-        // Ensemble: run multiple passes
+      // Route into scoreWithEnsemble when EITHER classic ensemble OR the
+      // cross-architecture cascade is enabled. scoringCascade is now ON by
+      // default (see loadAnalysisSettings), so this is the default scoring path;
+      // scoreWithEnsemble dispatches to scoreWithCascade when scoringCascade is
+      // true. Falls back to single-pass only when both are off
+      // (SCORING_CASCADE=0 and ensemble_scoring!="true").
+      if (settings.ensembleScoring || settings.scoringCascade) {
+        // Ensemble/cascade: run multiple passes (or the cascade)
         measureResult = await scoreWithEnsemble({
           companyName,
           companyId,
@@ -2997,7 +3027,9 @@ export async function analyzeCompanyMeasures(opts: {
             if (deepPack.topicHits > packTopicHits && deepPack.text.length > 0) {
               console.log(`[${companyName}] Deep-read re-score for ${measure.measureId}: topicHits ${packTopicHits}→${deepPack.topicHits}, evidence ${finalEvidence.length}→${deepPack.text.length} chars`);
               let deepResult: MeasureResult;
-              if (settings.ensembleScoring) {
+              // Same gate as the main scoring path: cascade (default ON) or
+              // classic ensemble both route through scoreWithEnsemble.
+              if (settings.ensembleScoring || settings.scoringCascade) {
                 deepResult = await scoreWithEnsemble({
                   companyName,
                   companyId,
@@ -3957,9 +3989,11 @@ async function scoreWithEnsemble(opts: {
   //      If verdicts disagree → fire Claude Sonnet 4.5 as arbiter
   //        a. If Claude matches one of them → Medium confidence, 2-of-3 majority
   //        b. If Claude produces a third distinct verdict → flag for review
-  // Enabled via SCORING_CASCADE=1 or workspace_settings.scoring_cascade=true.
-  const cascadeEnabled = (process.env.SCORING_CASCADE || "0") === "1"
-    || settings.scoringCascade === true;
+  // Single source of truth: settings.scoringCascade is now resolved in
+  // loadAnalysisSettings (DEFAULT ON; global kill-switch SCORING_CASCADE=0;
+  // per-workspace scoring_cascade force on/off). Do not re-read the env here —
+  // that would double-resolve the toggle and could diverge from the setting.
+  const cascadeEnabled = settings.scoringCascade === true;
 
   if (cascadeEnabled) {
     return scoreWithCascade({
