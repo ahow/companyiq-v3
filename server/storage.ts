@@ -1668,6 +1668,26 @@ export async function getBatchRunById(batchId: number, workspaceId: number) {
   return batch || null;
 }
 
+/**
+ * True iff this batch is a framework-builder TEST DRIVE. A test drive is created
+ * by POST /v2/test-drive/run, which is the only path that writes
+ * `company_lists.test_drive_labels`. Normal analysis lists leave that column
+ * NULL, so this returns false for them. Used by the batch-completion gate to
+ * auto-complete (drop failed) test drives while leaving normal batches to route
+ * to pending_review. Generic: keyed only on the structured flag, never on any
+ * company/topic/framework identity.
+ */
+export async function isTestDriveBatch(batchId: number): Promise<boolean> {
+  const res = await db.execute(sql`
+    SELECT (cl.test_drive_labels IS NOT NULL) AS is_test_drive
+    FROM batch_runs b
+    LEFT JOIN company_lists cl ON cl.id = b.list_id
+    WHERE b.id = ${batchId}
+    LIMIT 1
+  `);
+  return (res.rows?.[0] as any)?.is_test_drive === true;
+}
+
 export async function incrementBatchCompleted(batchId: number) {
   const now = new Date();
   const [batch] = await db.execute(sql`

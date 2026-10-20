@@ -16,6 +16,7 @@ import * as storage from "./storage.js";
 import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
 import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
+import { routeFailedBatch } from "./lib/batch-completion-route.js";
 import { isCreditAlertActive, isProxyCreditAlertActive, ProviderScoringError } from "./lib/credit-breaker.js";
 import { hasAnyLiveScoringProvider } from "./lib/ai-providers.js";
 import {
@@ -845,8 +846,14 @@ async function maybeHandleBatchCompletion(
       return;
     }
 
-    if (failed > 0) {
-      // ── Option (a): pause for review, do NOT save ──
+    // TEST-DRIVE-ONLY divergence: a framework-builder test drive that finishes
+    // with failures DROPs the failed companies and finalises as completed (so the
+    // builder page stops hanging on "still running"), instead of the normal
+    // pending_review gate. Every non-test-drive batch still routes to
+    // pending_review below, byte-for-byte unchanged. See lib/batch-completion-route.
+    const isTestDrive = failed > 0 ? await storage.isTestDriveBatch(batchId) : false;
+    if (failed > 0 && routeFailedBatch({ isTestDrive }) === "pending-review") {
+      // ── Option (a): pause for review, do NOT save (NORMAL analysis only) ──
       console.log(
         "[Worker] Batch " + batchId + " finished with " + failed +
         " terminal failure(s) — entering pending_review (results NOT saved)",
@@ -881,10 +888,23 @@ async function maybeHandleBatchCompletion(
       return;
     }
 
-    // ── Zero failures: finalise + save exactly as before ──
-    console.log(
-      "[Worker] Batch " + batchId + " complete with no failures: " + completed + " succeeded — finalising",
-    );
+    // ── Finalise + save ──
+    //  • failed === 0 (normal): save exactly as before.
+    //  • failed  >  0 (TEST DRIVE only — routed here by routeFailedBatch): the
+    //    failed companies are DROPPED (saveAnalysisResultsForBatch keeps only
+    //    status='completed' jobs, generically by status) and the batch is
+    //    finalised as completed so the builder stops showing "still running".
+    if (failed > 0) {
+      console.log(
+        "[Worker] Batch " + batchId + " is a TEST DRIVE with " + failed +
+        " failed compan" + (failed === 1 ? "y" : "ies") + " (" + completed +
+        " succeeded) — dropping failed and finalising as complete",
+      );
+    } else {
+      console.log(
+        "[Worker] Batch " + batchId + " complete with no failures: " + completed + " succeeded — finalising",
+      );
+    }
     if (!(await storage.completeBatchRun(batchId))) {
       // Lifecycle fence: a cancelled/superseded/terminal batch never becomes
       // completed and never gets a Results snapshot from this path.

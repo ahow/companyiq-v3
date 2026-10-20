@@ -38,6 +38,7 @@ import { sql } from "drizzle-orm";
 import * as storage from "./storage.js";
 import { getQueue } from "./queue.js";
 import { isResurrectEligible, ORPHAN_REJECTION_REASON } from "./lib/reconcile-resurrect.js";
+import { routeFailedBatch } from "./lib/batch-completion-route.js";
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 const RECONCILE_INTERVAL_MS = parseInt(process.env.RECONCILE_INTERVAL_MS || "300000", 10); // 5 min
@@ -521,7 +522,12 @@ async function reconcilePass(): Promise<ReconcileStats> {
       UPDATE batch_runs SET completed_jobs=${comp}, failed_jobs=${fail} WHERE id=${batchId}
     `);
 
-    if (fail > 0) {
+    // TEST-DRIVE-ONLY divergence (mirrors worker maybeHandleBatchCompletion):
+    // a framework-builder test drive with failures is auto-completed with the
+    // failed companies dropped, instead of entering pending_review. Every
+    // non-test-drive batch still routes to pending_review, unchanged.
+    const isTestDrive = fail > 0 ? await storage.isTestDriveBatch(batchId) : false;
+    if (fail > 0 && routeFailedBatch({ isTestDrive }) === "pending-review") {
       // ── Review gate (mirrors worker maybeHandleBatchCompletion option-a) ──
       // A batch with terminal failures MUST NOT be silently completed/saved.
       // Route it to pending_review and raise the same batch_review alert so the
@@ -545,8 +551,11 @@ async function reconcilePass(): Promise<ReconcileStats> {
       continue;
     }
 
-    // ── Zero failures: complete + save results (reuse the worker's finaliser to
-    //    keep one save path). Dynamic import avoids a load-time circular dep. ──
+    // ── Finalise + save (reuse the worker's finaliser to keep one save path).
+    //    Reached when fail === 0 (normal) OR the batch is a TEST DRIVE routed
+    //    here above — finalizeBatchAndSave only snapshots status='completed'
+    //    jobs, so any failed test-drive companies are dropped generically by
+    //    status. Dynamic import avoids a load-time circular dep. ──
     try {
       const { finalizeBatchAndSave } = await import("./worker.js");
       await finalizeBatchAndSave(batchId, Number(row.framework_id), Number(row.workspace_id), row.list_id != null ? Number(row.list_id) : undefined);
@@ -558,7 +567,7 @@ async function reconcilePass(): Promise<ReconcileStats> {
       console.warn(`[Reconciler] finalizeBatchAndSave failed for batch ${batchId} (${e?.message}); marked completed without save`);
     }
     stats.batchesClosed++;
-    console.log(`[Reconciler] Closed batch ${batchId}: ${comp} completed, 0 failed (results saved)`);
+    console.log(`[Reconciler] Closed batch ${batchId}: ${comp} completed, ${fail} failed${fail > 0 ? " dropped (test drive)" : ""} (results saved)`);
   }
 
   return stats;
