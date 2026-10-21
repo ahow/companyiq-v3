@@ -272,6 +272,16 @@ interface AnalysisSettings {
   cascadePrimary: string;
   cascadeSecondary: string;
   cascadeArbiter: string;
+  // Cascade resilience (I81): per-stage model fallback + a per-stage timeout.
+  // If a stage's provider throws OR exceeds cascadeStageTimeoutMs, the cascade
+  // retries that ONE stage on a same-model/independent-network-path provider so a
+  // single provider outage or hang can never freeze a measure to the 2100s
+  // pipeline timeout again. Same-model fallbacks ⇒ no accuracy/architecture change.
+  // All three are env-reversible + workspace-overridable; empty string disables a
+  // given fallback (stage then fails-loud as before, still bounded by the timeout).
+  cascadePrimaryFallback: string;
+  cascadeSecondaryFallback: string;
+  cascadeStageTimeoutMs: number;
   // PR 1 · Change 1a: gates the retrieval-hardening pass (latest-primary-disclosure
   // verification + targeted follow-up queries in pipeline.ts). Default OFF so
   // iteration-8 behaviour is preserved until we opt individual workspaces in.
@@ -343,6 +353,26 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     // the OpenRouter route) and workspace-overridable (cascade_secondary setting).
     // No topic- or company-specific logic — a single global default.
     cascadeSecondary: settings.cascade_secondary || process.env.CASCADE_SECONDARY || "glm-4.6-zai",
+    // Cascade resilience (I81) — per-stage model fallback. Defaults are SAME-MODEL,
+    // independent-network-path siblings of the hot-path providers, so a fallback
+    // never changes the scoring architecture or accuracy, only the route:
+    //   - primary   deepseek      (direct api.deepseek.com) → "openrouter"
+    //                                            (DeepSeek V3.1 via OpenRouter)
+    //   - secondary glm-4.6-zai   (z.ai native)             → "glm-4.6"
+    //                                            (GLM-4.6 via OpenRouter)
+    // Env-reversible (CASCADE_PRIMARY_FALLBACK / CASCADE_SECONDARY_FALLBACK) and
+    // workspace-overridable (cascade_primary_fallback / cascade_secondary_fallback).
+    // Set to "" (or "none"/"off") to disable a fallback — the stage then fails-loud
+    // as it did pre-I81, still bounded by the per-stage timeout below.
+    // No topic- or company-specific logic — a single global default.
+    cascadePrimaryFallback: settings.cascade_primary_fallback ?? process.env.CASCADE_PRIMARY_FALLBACK ?? "openrouter",
+    cascadeSecondaryFallback: settings.cascade_secondary_fallback ?? process.env.CASCADE_SECONDARY_FALLBACK ?? "glm-4.6",
+    // Per-stage wall-clock cap (ms). A stage that exceeds it is treated as failed
+    // and falls back (the 2100s freeze was caused by hangs, which a throw-only
+    // fallback would miss). Default 180s ≈ 36× the p50 (~5s) so it never false-
+    // triggers on a healthy call, but bounds a hung provider to 180s not 2100s.
+    // Env-tunable via CASCADE_STAGE_TIMEOUT_MS; 0 disables the timeout.
+    cascadeStageTimeoutMs: Math.max(0, parseInt(process.env.CASCADE_STAGE_TIMEOUT_MS || "180000", 10) || 0),
     // Cascade v2 is now ON by default (env-reversible), so the arbiter defaults
     // to gpt5-arbiter (OpenAI GPT-5 via OpenRouter) and the post-cascade
     // auto-downgrade is suppressed. Precedence for cascade_v2 (see cascadeV2
@@ -4073,6 +4103,85 @@ async function scoreWithEnsemble(opts: {
   return best;
 }
 
+// ─── Cascade resilience (I81) — pure, injected helpers (unit-tested) ─────────
+// A sentinel error for the timeout path so we can tell a hang apart from a
+// provider throw in the logs/branching.
+export class CascadeStageTimeoutError extends Error {
+  constructor(public provider: string, public ms: number) {
+    super(`cascade stage '${provider}' exceeded ${ms}ms (treated as failed)`);
+    this.name = "StageTimeoutError";
+  }
+}
+
+// normaliseFallback: "", "none", "off" (case-insensitive) or a value equal to the
+// stage's own provider all mean "no fallback" (→ null). A self-fallback would just
+// repeat the same failing route, so it is dropped.
+export function normaliseCascadeFallback(
+  fb: string | undefined | null,
+  stageProvider: string,
+): string | null {
+  const v = (fb ?? "").trim();
+  if (v === "" || v.toLowerCase() === "none" || v.toLowerCase() === "off") return null;
+  return v === stageProvider ? null : v;
+}
+
+// withStageTimeout: race a provider call against a timeout. stageTimeoutMs<=0
+// disables the timeout (returns the promise unchanged). The timer is always
+// cleared so a fast win never leaves a dangling setTimeout keeping the loop alive.
+export async function withStageTimeout<T>(
+  p: Promise<T>,
+  provider: string,
+  stageTimeoutMs: number,
+): Promise<T> {
+  if (stageTimeoutMs <= 0) return p;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<T>([
+      p,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new CascadeStageTimeoutError(provider, stageTimeoutMs)),
+          stageTimeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+// runCascadeStage: run one cascade stage with same-model fallback on throw OR
+// timeout. The fallback is an explicit, logged, whole-stage substitution that only
+// fires when the chosen provider is down — NOT the "silent cross-model fallback"
+// the per-provider self-consistency path forbids (that rule is about mixing models
+// WITHIN one provider's majority vote). A lifecycle cancellation is re-thrown
+// before any fallback so a paused/cancelled job stays fail-loud. If fallback is
+// null, the original error propagates (pre-I81 fail-loud preserved).
+export async function runCascadeStage<T>(args: {
+  provider: string;
+  fallback: string | null;
+  role: string;
+  stageTimeoutMs: number;
+  run: (provider: string) => Promise<T>;
+  isLifecycleCancelled: (e: any) => boolean;
+  onFallback?: (info: { role: string; from: string; to: string; reason: string }) => void;
+}): Promise<T> {
+  const { provider, fallback, role, stageTimeoutMs, run, isLifecycleCancelled, onFallback } = args;
+  try {
+    return await withStageTimeout(run(provider), provider, stageTimeoutMs);
+  } catch (err: any) {
+    if (isLifecycleCancelled(err)) throw err; // never convert a cancellation to a fallback
+    if (!fallback) throw err; // fallback disabled → preserve pre-I81 fail-loud
+    const why = err instanceof CascadeStageTimeoutError
+      ? `timeout>${stageTimeoutMs}ms`
+      : (err?.message || "error");
+    onFallback?.({ role, from: provider, to: fallback, reason: String(why).slice(0, 160) });
+    // Fallback attempt is itself timeout-bounded; if it also fails, that error
+    // propagates (no invented results).
+    return await withStageTimeout(run(fallback), fallback, stageTimeoutMs);
+  }
+}
+
 // ─── Cascade scoring (I80) ─────────────────────────────────────────
 async function scoreWithCascade(opts: {
   companyName: string;
@@ -4090,6 +4199,12 @@ async function scoreWithCascade(opts: {
   const primary = settings.cascadePrimary || "deepseek";
   const secondary = settings.cascadeSecondary || "glm-4.6-zai";
   const arbiter = settings.cascadeArbiter || "claude-arbiter";
+
+  // Cascade resilience (I81): per-stage fallback providers + per-stage timeout.
+  // See normaliseCascadeFallback / withStageTimeout / runCascadeStage above.
+  const primaryFallback = normaliseCascadeFallback(settings.cascadePrimaryFallback, primary);
+  const secondaryFallback = normaliseCascadeFallback(settings.cascadeSecondaryFallback, secondary);
+  const stageTimeoutMs = settings.cascadeStageTimeoutMs > 0 ? settings.cascadeStageTimeoutMs : 0;
 
   // Task A: deterministic evidence-integrity gate config. ON by default in
   // production; RETRIEVAL_EVIDENCE_GATE=0|false disables it entirely (kill-switch).
@@ -4167,8 +4282,25 @@ async function scoreWithCascade(opts: {
     }
   };
 
-  // Stage 1 + Stage 2 in parallel (each is one LLM call; run concurrently to halve latency)
-  const [stage1, stage2] = await Promise.all([scoreOne(primary), scoreOne(secondary)]);
+  // Stage 1 + Stage 2 in parallel (each is one LLM call; run concurrently to halve
+  // latency). Each stage now self-heals onto its same-model fallback route on a
+  // provider throw or a >stageTimeoutMs hang (see runCascadeStage above), so one
+  // provider outage can't freeze the measure to the 2100s pipeline timeout.
+  const logFallback = (info: { role: string; from: string; to: string; reason: string }) =>
+    console.warn(
+      `[CASCADE-FALLBACK] role=${info.role} from=${info.from} to=${info.to} ` +
+      `company=${companyId ?? "-"} measure=${measure.measureId ?? "-"} reason=${JSON.stringify(info.reason)}`,
+    );
+  const [stage1, stage2] = await Promise.all([
+    runCascadeStage({
+      provider: primary, fallback: primaryFallback, role: "primary",
+      stageTimeoutMs, run: scoreOne, isLifecycleCancelled: isLifecycleCancelledError, onFallback: logFallback,
+    }),
+    runCascadeStage({
+      provider: secondary, fallback: secondaryFallback, role: "secondary",
+      stageTimeoutMs, run: scoreOne, isLifecycleCancelled: isLifecycleCancelledError, onFallback: logFallback,
+    }),
+  ]);
 
   const s1 = stage1.score;
   const s2 = stage2.score;
