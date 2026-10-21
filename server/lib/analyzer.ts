@@ -331,7 +331,18 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
       ? false
       : ((process.env.SCORING_CASCADE ?? "1") !== "0" || settings.scoring_cascade === "true"),
     cascadePrimary: settings.cascade_primary || "deepseek",
-    cascadeSecondary: settings.cascade_secondary || "glm-4.6",
+    // Cascade secondary defaults to glm-4.6-zai (z.ai NATIVE API) rather than the
+    // OpenRouter-routed "glm-4.6" provider. When 6cbc2cd made the cascade the
+    // global default scoring path, the OpenRouter glm-4.6 route became the hot
+    // path for every workspace — and it truncates (finish_reason=length) and
+    // retries 4×/call (p50 ~60s, up to 207s), so with both cascade stages awaited
+    // together every measure stalled until the 2100s pipeline timeout (0 batch
+    // completions). The z.ai native provider (GLM_THINKING=disabled) returns clean
+    // JSON at p50 ~5s with 0 truncations, restoring the two-LLM + arbiter cascade
+    // instead of disabling it. Env-reversible (CASCADE_SECONDARY=glm-4.6 restores
+    // the OpenRouter route) and workspace-overridable (cascade_secondary setting).
+    // No topic- or company-specific logic — a single global default.
+    cascadeSecondary: settings.cascade_secondary || process.env.CASCADE_SECONDARY || "glm-4.6-zai",
     // Cascade v2 is now ON by default (env-reversible), so the arbiter defaults
     // to gpt5-arbiter (OpenAI GPT-5 via OpenRouter) and the post-cascade
     // auto-downgrade is suppressed. Precedence for cascade_v2 (see cascadeV2
@@ -4077,7 +4088,7 @@ async function scoreWithCascade(opts: {
   const { companyName, companyId, measure, evidenceText, terminology, topicDescription, settings, temporalWarning, framework } = opts;
 
   const primary = settings.cascadePrimary || "deepseek";
-  const secondary = settings.cascadeSecondary || "glm-4.6";
+  const secondary = settings.cascadeSecondary || "glm-4.6-zai";
   const arbiter = settings.cascadeArbiter || "claude-arbiter";
 
   // Task A: deterministic evidence-integrity gate config. ON by default in
