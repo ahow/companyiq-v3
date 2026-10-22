@@ -318,6 +318,13 @@ interface AnalysisSettings {
   // gate skip the secondary unconditionally). Env CASCADE_CONFIDENCE_GATE_PASSES,
   // default 3. Inert unless cascadeConfidenceGate is on.
   cascadeConfidenceGatePasses: number;
+  // Change 3 — arbiter-trigger mode. DEFAULT "exact" (env ARBITER_TRIGGER_MODE,
+  // workspace arbiter_trigger_mode). "exact" = today: the arbiter fires ONLY when
+  // the two stages disagree numerically. "inconsistency" ALSO fires the arbiter
+  // when the stages agree but a stage flagged its own rationale↔score as internally
+  // inconsistent (reuses detectRationaleScoreInconsistency). Any unknown value is
+  // treated as "exact". No topic- or company-specific logic.
+  arbiterTriggerMode: string;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -427,6 +434,11 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
       1,
       parseInt(settings.cascade_confidence_gate_passes || process.env.CASCADE_CONFIDENCE_GATE_PASSES || "3", 10) || 3,
     ),
+    // Change 3 — arbiter-trigger mode. DEFAULT "exact". Workspace
+    // arbiter_trigger_mode overrides env ARBITER_TRIGGER_MODE. arbiterTriggerDecision
+    // normalises any unknown value back to "exact", so the default (arbiter only on
+    // numeric disagreement) holds unless "inconsistency" is explicitly opted in.
+    arbiterTriggerMode: settings.arbiter_trigger_mode || process.env.ARBITER_TRIGGER_MODE || "exact",
   };
 }
 
@@ -4340,6 +4352,65 @@ export function confidenceGateDecision(input: {
   };
 }
 
+// ─── Arbiter-trigger tuning (Change 3) ──────────────────────────────
+/**
+ * Whether a single cascade stage flagged its OWN rationale↔score as internally
+ * inconsistent. Reuses the deterministic, framework-agnostic
+ * detectRationaleScoreInconsistency detector (the same signal applyRationaleConsistencyFlags
+ * surfaces post-merge). Pure/offline: no LLM/network/DB. If a post-merge flag is
+ * already present on the result it is trusted directly.
+ */
+export function isStageInternallyInconsistent(result: {
+  score: number;
+  verdict: string;
+  evidenceSummary?: string | null;
+  rationaleConsistencyCheck?: string | null;
+  consistencyNote?: string | null;
+  rationaleScoreInconsistent?: boolean;
+}): boolean {
+  if (result.rationaleScoreInconsistent === true) return true;
+  const detection = detectRationaleScoreInconsistency({
+    score: result.score,
+    verdict: result.verdict,
+    rationale: result.evidenceSummary ?? null,
+    modelConsistencyCheck: result.rationaleConsistencyCheck ?? null,
+    consistencyNote: result.consistencyNote ?? null,
+  });
+  return detection.inconsistent;
+}
+
+/**
+ * Pure, offline decision for whether the arbiter (third LLM) should run, given the
+ * two stage scores, the per-stage internal-inconsistency flags, and the configured
+ * mode. DEFAULT-"exact" contract: in "exact" mode the arbiter fires ONLY on a
+ * numeric disagreement (s1 !== s2) — byte-identical to today. "inconsistency" mode
+ * ALSO fires the arbiter when the two stages AGREE numerically but a stage flagged
+ * its own rationale↔score as inconsistent. Any unknown mode is normalised to
+ * "exact" so nothing changes unless "inconsistency" is explicitly opted in.
+ * Deterministic given its inputs (mirrors the DI style of cascade-fallback.test.ts).
+ */
+export function arbiterTriggerDecision(input: {
+  mode: string;
+  s1: number;
+  s2: number;
+  stage1Flagged: boolean;
+  stage2Flagged: boolean;
+}): { invoke: boolean; reason: string | null; mode: string } {
+  const mode = (input.mode || "exact").trim().toLowerCase();
+  const scoresDisagree = input.s1 !== input.s2;
+  if (mode !== "inconsistency") {
+    // "exact" (and any unknown value): current behaviour.
+    return { invoke: scoresDisagree, reason: scoresDisagree ? "scores-disagree" : null, mode: "exact" };
+  }
+  if (scoresDisagree) {
+    return { invoke: true, reason: "scores-disagree", mode: "inconsistency" };
+  }
+  if (input.stage1Flagged || input.stage2Flagged) {
+    return { invoke: true, reason: "agreed-but-flagged-inconsistent", mode: "inconsistency" };
+  }
+  return { invoke: false, reason: null, mode: "inconsistency" };
+}
+
 // ─── Cascade scoring (I80) ─────────────────────────────────────────
 async function scoreWithCascade(opts: {
   companyName: string;
@@ -4492,6 +4563,10 @@ async function scoreWithCascade(opts: {
   // for this measure. gateInfo is recorded into every cascadeTrace terminus below.
   const gateInfo = { enabled: settings.cascadeConfidenceGate === true, fired: false, secondarySkipped: false };
 
+  // Change 3 — arbiter-trigger mode (DEFAULT "exact"). Resolved once; the actual
+  // invoke decision is made after both stage scores are known (see below).
+  const arbiterMode = settings.arbiterTriggerMode || "exact";
+
   let stage1: MeasureResult;
   let stage2: MeasureResult;
 
@@ -4517,6 +4592,7 @@ async function scoreWithCascade(opts: {
           stage1: recStage1, stage2: null, arbiter: null,
           finalConfidence: stage1.confidence || "High", outcome: "gated-primary-only",
           confidenceGate: gateInfo,
+          arbiterTrigger: { mode: (arbiterMode || "exact").trim().toLowerCase() === "inconsistency" ? "inconsistency" : "exact", reason: null },
         }),
       } as MeasureResult & { _gradedBy?: string; _cascade?: any };
     }
@@ -4536,8 +4612,19 @@ async function scoreWithCascade(opts: {
   const s1 = stage1.score;
   const s2 = stage2.score;
 
-  // ─── Agreement (~80% of cells) ──────────────────────────────────
-  if (s1 === s2) {
+  // Change 3 — decide whether the arbiter should run. "exact" (default) fires only
+  // on a numeric disagreement (today's behaviour); "inconsistency" also fires when
+  // the stages agree numerically but a stage self-flagged rationale↔score
+  // inconsistency. The flags are computed here (pure/offline) so the decision is
+  // deterministic and recorded in cascadeTrace.arbiterTrigger.
+  const stage1Flagged = isStageInternallyInconsistent(stage1);
+  const stage2Flagged = isStageInternallyInconsistent(stage2);
+  const arbiterTrig = arbiterTriggerDecision({
+    mode: arbiterMode, s1, s2, stage1Flagged, stage2Flagged,
+  });
+
+  // ─── Agreement (~80% of cells) — only when the arbiter is NOT triggered ─────
+  if (s1 === s2 && !arbiterTrig.invoke) {
     // Pick the richer result as the canonical one: prefer positive verdicts with quotes
     const withQuotes = [stage1, stage2].filter(r => r.quotes.length > 0);
     const canonical = withQuotes.length > 0
@@ -4561,6 +4648,7 @@ async function scoreWithCascade(opts: {
         stage1: recStage1, stage2: recStage2, arbiter: null,
         finalConfidence: "High", outcome: "agreed",
         confidenceGate: gateInfo,
+        arbiterTrigger: { mode: arbiterTrig.mode, reason: arbiterTrig.reason },
       }),
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
   }
@@ -4595,6 +4683,7 @@ async function scoreWithCascade(opts: {
         stage1: recStage1, stage2: recStage2, arbiter: recArbiter,
         finalConfidence: "Review-required", outcome: "3-way",
         confidenceGate: gateInfo,
+        arbiterTrigger: { mode: arbiterTrig.mode, reason: arbiterTrig.reason },
       }),
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
   }
@@ -4635,6 +4724,7 @@ async function scoreWithCascade(opts: {
       stage1: recStage1, stage2: recStage2, arbiter: recArbiter,
       finalConfidence: "Medium", outcome: "arbiter",
       confidenceGate: gateInfo,
+      arbiterTrigger: { mode: arbiterTrig.mode, reason: arbiterTrig.reason },
     }),
   } as MeasureResult & { _gradedBy?: string; _cascade?: any };
 }
