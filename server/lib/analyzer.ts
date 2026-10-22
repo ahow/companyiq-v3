@@ -305,6 +305,19 @@ interface AnalysisSettings {
   // CASCADE_V2=0 (or workspace cascade_v2="false") reverts to claude-arbiter and
   // re-enables the auto-downgrade. Inert when scoringCascade=false.
   cascadeV2: boolean;
+  // Change 2 — confidence-gated cascade. DEFAULT OFF (env CASCADE_CONFIDENCE_GATE,
+  // workspace cascade_confidence_gate="true"). When OFF, the two cascade stages run
+  // in parallel exactly as today. When ON, the primary runs first with real
+  // self-consistency (cascadeConfidenceGatePasses); if it returns High confidence
+  // the secondary (and the arbiter) are SKIPPED for that measure. Medium/Low primary
+  // falls through to the normal two-stage + arbiter-on-disagreement path. No topic-
+  // or company-specific logic — a single global toggle.
+  cascadeConfidenceGate: boolean;
+  // Self-consistency passes the gated primary uses so its confidence is a genuine
+  // High/Medium/Low signal (a single pass is always "High", which would make the
+  // gate skip the secondary unconditionally). Env CASCADE_CONFIDENCE_GATE_PASSES,
+  // default 3. Inert unless cascadeConfidenceGate is on.
+  cascadeConfidenceGatePasses: number;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -398,6 +411,22 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     // that the old positional fingerprint allowed. Set verdict_cache_enabled="true"
     // to re-enable once the new content-stable fingerprints are confirmed unique.
     verdictCacheEnabled: settings.verdict_cache_enabled === "true", // default OFF
+    // Change 2 — confidence-gated cascade. DEFAULT OFF. Precedence: workspace
+    // force-off ("false") → off; workspace force-on ("true") → on; otherwise env
+    // CASCADE_CONFIDENCE_GATE (default "0"; any value other than "0"/"" → on).
+    // No topic- or company-specific logic — a single global toggle.
+    cascadeConfidenceGate: settings.cascade_confidence_gate === "false"
+      ? false
+      : (settings.cascade_confidence_gate === "true"
+        ? true
+        : (() => { const v = process.env.CASCADE_CONFIDENCE_GATE ?? "0"; return v !== "0" && v !== ""; })()),
+    // Self-consistency passes for the gated primary (so its confidence is a genuine
+    // signal — 1 pass is always "High"). Workspace cascade_confidence_gate_passes
+    // overrides env CASCADE_CONFIDENCE_GATE_PASSES; default 3, floor 1.
+    cascadeConfidenceGatePasses: Math.max(
+      1,
+      parseInt(settings.cascade_confidence_gate_passes || process.env.CASCADE_CONFIDENCE_GATE_PASSES || "3", 10) || 3,
+    ),
   };
 }
 
@@ -4281,6 +4310,36 @@ export function buildCascadeTrace(input: {
   };
 }
 
+// ─── Confidence-gated cascade (Change 2) ────────────────────────────
+/**
+ * Pure, offline decision for the confidence gate. Given whether the gate is
+ * enabled and the primary stage's confidence, decide whether the secondary stage
+ * (and therefore the arbiter) should run. DEFAULT-OFF contract: when the gate is
+ * disabled the result ALWAYS says runSecondary=true with gateFired=false, so the
+ * two-LLM + arbiter default behaviour is byte-identical. When enabled, a "High"
+ * confidence primary skips the secondary; anything else runs the full cascade.
+ * No topic- or company-specific logic. Deterministic given its inputs (mirrors the
+ * DI style of cascade-fallback.test.ts).
+ */
+export function confidenceGateDecision(input: {
+  gateEnabled: boolean;
+  primaryConfidence: string | null | undefined;
+}): { runSecondary: boolean; gateFired: boolean; secondarySkipped: boolean; reason: string } {
+  if (!input.gateEnabled) {
+    return { runSecondary: true, gateFired: false, secondarySkipped: false, reason: "gate-disabled" };
+  }
+  const conf = (input.primaryConfidence || "").trim().toLowerCase();
+  if (conf === "high") {
+    return { runSecondary: false, gateFired: true, secondarySkipped: true, reason: "primary-high-confidence" };
+  }
+  return {
+    runSecondary: true,
+    gateFired: true,
+    secondarySkipped: false,
+    reason: `primary-${conf || "unknown"}-confidence`,
+  };
+}
+
 // ─── Cascade scoring (I80) ─────────────────────────────────────────
 async function scoreWithCascade(opts: {
   companyName: string;
@@ -4362,12 +4421,15 @@ async function scoreWithCascade(opts: {
     return result;
   };
 
-  // Inside cascade: run ONE pass per stage (cascade IS the diversity mechanism;
-  // triple self-consistency per stage would be 9 calls/measure and wasteful).
-  const scoreOne = async (provider: string): Promise<MeasureResult> => {
+  // Inside cascade: run ONE pass per stage by default (cascade IS the diversity
+  // mechanism; triple self-consistency per stage would be 9 calls/measure and
+  // wasteful). Change 2: the confidence gate passes `passes` (default 3) ONLY for
+  // the gated primary so its High/Medium/Low confidence is a genuine signal; every
+  // other call omits `passes` and runs exactly one pass (byte-identical default).
+  const scoreOne = async (provider: string, passes?: number): Promise<MeasureResult> => {
     assertDispatchAllowed(`scoring:cascade ${provider}`);
     const prev = process.env.SCORING_SELF_CONSISTENCY;
-    process.env.SCORING_SELF_CONSISTENCY = "1";
+    process.env.SCORING_SELF_CONSISTENCY = String(passes && passes > 0 ? passes : 1);
     try {
       const result = await scoreSingleMeasure({
         companyName, companyId, measure, evidenceText, terminology,
@@ -4402,13 +4464,14 @@ async function scoreWithCascade(opts: {
   // runCascadeStage directly; only timing + the fallback callback are recorded.
   const runRecordedStage = async (
     rec: CascadeStageRecord,
-    args: { provider: string; fallback: string | null; role: "primary" | "secondary" },
+    args: { provider: string; fallback: string | null; role: "primary" | "secondary"; passes?: number },
   ): Promise<MeasureResult> => {
     const t0 = Date.now();
     try {
       const out = await runCascadeStage<MeasureResult>({
         provider: args.provider, fallback: args.fallback, role: args.role,
-        stageTimeoutMs, run: scoreOne, isLifecycleCancelled: isLifecycleCancelledError,
+        stageTimeoutMs, run: (prov: string) => scoreOne(prov, args.passes),
+        isLifecycleCancelled: isLifecycleCancelledError,
         onFallback: (info) => {
           logFallback(info);
           rec.fallbackFired = true;
@@ -4424,10 +4487,51 @@ async function scoreWithCascade(opts: {
     }
   };
 
-  const [stage1, stage2] = await Promise.all([
-    runRecordedStage(recStage1, { provider: primary, fallback: primaryFallback, role: "primary" }),
-    runRecordedStage(recStage2, { provider: secondary, fallback: secondaryFallback, role: "secondary" }),
-  ]);
+  // Change 2 — confidence-gated cascade (DEFAULT OFF). When the gate is enabled and
+  // the primary comes back High confidence, skip the secondary (and the arbiter)
+  // for this measure. gateInfo is recorded into every cascadeTrace terminus below.
+  const gateInfo = { enabled: settings.cascadeConfidenceGate === true, fired: false, secondarySkipped: false };
+
+  let stage1: MeasureResult;
+  let stage2: MeasureResult;
+
+  if (gateInfo.enabled) {
+    // Gate ON: run the primary FIRST with real self-consistency (gatePasses) so its
+    // confidence is a genuine High/Medium/Low signal, then decide.
+    stage1 = await runRecordedStage(recStage1, {
+      provider: primary, fallback: primaryFallback, role: "primary",
+      passes: settings.cascadeConfidenceGatePasses,
+    });
+    const decision = confidenceGateDecision({ gateEnabled: true, primaryConfidence: stage1.confidence });
+    gateInfo.fired = decision.gateFired;
+    gateInfo.secondarySkipped = decision.secondarySkipped;
+    if (!decision.runSecondary) {
+      // High-confidence primary — single-model result, no secondary, no arbiter.
+      // Preserve the primary's FULL quote set (constraint: never drop evidence).
+      return {
+        ...stage1,
+        confidence: stage1.confidence || "High",
+        _gradedBy: `${primary}(gated)`,
+        _cascade: { stage: "gated-primary-only", providers: [primary], votes: [stage1.score] },
+        cascadeTrace: buildCascadeTrace({
+          stage1: recStage1, stage2: null, arbiter: null,
+          finalConfidence: stage1.confidence || "High", outcome: "gated-primary-only",
+          confidenceGate: gateInfo,
+        }),
+      } as MeasureResult & { _gradedBy?: string; _cascade?: any };
+    }
+    // Medium/Low primary — run the secondary now (sequential: primary already
+    // awaited) and fall through to the EXACT same comparison + arbiter path.
+    stage2 = await runRecordedStage(recStage2, { provider: secondary, fallback: secondaryFallback, role: "secondary" });
+  } else {
+    // Default (gate OFF): the two stages run in parallel exactly as today.
+    const [p1, p2] = await Promise.all([
+      runRecordedStage(recStage1, { provider: primary, fallback: primaryFallback, role: "primary" }),
+      runRecordedStage(recStage2, { provider: secondary, fallback: secondaryFallback, role: "secondary" }),
+    ]);
+    stage1 = p1;
+    stage2 = p2;
+  }
 
   const s1 = stage1.score;
   const s2 = stage2.score;
@@ -4456,6 +4560,7 @@ async function scoreWithCascade(opts: {
       cascadeTrace: buildCascadeTrace({
         stage1: recStage1, stage2: recStage2, arbiter: null,
         finalConfidence: "High", outcome: "agreed",
+        confidenceGate: gateInfo,
       }),
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
   }
@@ -4489,6 +4594,7 @@ async function scoreWithCascade(opts: {
       cascadeTrace: buildCascadeTrace({
         stage1: recStage1, stage2: recStage2, arbiter: recArbiter,
         finalConfidence: "Review-required", outcome: "3-way",
+        confidenceGate: gateInfo,
       }),
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
   }
@@ -4528,6 +4634,7 @@ async function scoreWithCascade(opts: {
     cascadeTrace: buildCascadeTrace({
       stage1: recStage1, stage2: recStage2, arbiter: recArbiter,
       finalConfidence: "Medium", outcome: "arbiter",
+      confidenceGate: gateInfo,
     }),
   } as MeasureResult & { _gradedBy?: string; _cascade?: any };
 }
