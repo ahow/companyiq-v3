@@ -3156,6 +3156,9 @@ async function runAnalyzePhase(opts: {
           frameworkId: framework.id,
           frameworkVersion: (framework as any).version ?? null,
           frameworkHash: runFrameworkHash,
+          // Change 5: thread per-stage cascade instrumentation (if the measure was
+          // scored via the cascade) into decision_trace. Observability only.
+          cascadeTrace: (m as any).cascadeTrace ?? null,
         }),
 
         // DIAGNOSTIC-ONLY score-write provenance (batch-1255 §6.2): which job

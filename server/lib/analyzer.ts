@@ -195,6 +195,10 @@ export interface MeasureResult {
   // never change the verdict unless ELIGIBILITY_ENFORCE=on. Back-compat optional.
   eligibilityDecisions?: EligibilityDecision[] | null;
   eligibilityCellStatus?: EligibilityStatus | null;
+  // Change 5: per-stage cascade instrumentation (observability only). Populated by
+  // scoreWithCascade; merged into measure_scores.decision_trace by the pipeline.
+  // Never alters score/verdict/quotes. See buildCascadeTrace / CascadeTrace.
+  cascadeTrace?: CascadeTrace | null;
 }
 
 export interface AnalysisResult {
@@ -4182,6 +4186,101 @@ export async function runCascadeStage<T>(args: {
   }
 }
 
+// ─── Cascade per-stage instrumentation (Change 5) ───────────────────
+// Observability-only: records, per measure scored by the cascade, each stage's
+// provider/score/wall-time, whether a stage fallback fired (and which provider
+// substituted + why), whether the arbiter ran, and the final confidence. This
+// NEVER alters a score, verdict, quote set, or control flow — it only reads what
+// the cascade already computed. The object is namespaced under `cascadeTrace` and
+// merged into measure_scores.decision_trace alongside the existing keys.
+//
+// A mutable recorder is threaded into each stage so timing + fallback are captured
+// as the stage runs; buildCascadeTrace() then assembles the final immutable object.
+export interface CascadeStageRecord {
+  role: "primary" | "secondary" | "arbiter";
+  /** Provider originally requested for this stage. */
+  requestedProvider: string;
+  /** Provider that actually produced the result (== requested unless a fallback fired). */
+  provider: string;
+  /** Numeric score this stage returned, or null if the stage did not run. */
+  score: number | null;
+  /** Wall-clock time spent in this stage, ms. 0 if the stage did not run. */
+  ms: number;
+  /** True when this stage's provider threw/hung and the same-model fallback fired. */
+  fallbackFired: boolean;
+  /** The substitute provider the stage fell back to, or null. */
+  fallbackTo: string | null;
+  /** Why the fallback fired (timeout>Nms / error message), or null. */
+  fallbackReason: string | null;
+}
+
+export interface CascadeTrace {
+  schemaVersion: 1;
+  stage1: CascadeStageRecord;
+  /** null when the secondary was gated away (Change 2 confidence gate). */
+  stage2: CascadeStageRecord | null;
+  arbiterInvoked: boolean;
+  /** Present only when the arbiter actually ran. */
+  arbiter: CascadeStageRecord | null;
+  finalConfidence: string;
+  /** Which cascade terminus produced the result. */
+  outcome: "agreed" | "arbiter" | "3-way" | "gated-primary-only";
+  /** Change 2 observability. */
+  confidenceGate: { enabled: boolean; fired: boolean; secondarySkipped: boolean };
+  /** Change 3 observability. */
+  arbiterTrigger: { mode: string; reason: string | null };
+}
+
+/** Fresh, inert stage recorder for a stage that has not run yet. */
+export function newCascadeStageRecord(
+  role: CascadeStageRecord["role"],
+  requestedProvider: string,
+): CascadeStageRecord {
+  return {
+    role,
+    requestedProvider,
+    provider: requestedProvider,
+    score: null,
+    ms: 0,
+    fallbackFired: false,
+    fallbackTo: null,
+    fallbackReason: null,
+  };
+}
+
+/**
+ * Pure, offline assembler for the per-measure cascade trace. Takes the stage
+ * records the cascade already populated plus the resolved flags and returns the
+ * immutable trace object persisted into decision_trace.cascadeTrace. No DB / LLM /
+ * network / clock access — deterministic given its inputs (mirrors the DI style of
+ * cascade-fallback.test.ts).
+ */
+export function buildCascadeTrace(input: {
+  stage1: CascadeStageRecord;
+  stage2: CascadeStageRecord | null;
+  arbiter: CascadeStageRecord | null;
+  finalConfidence: string;
+  outcome: CascadeTrace["outcome"];
+  confidenceGate?: { enabled: boolean; fired: boolean; secondarySkipped: boolean };
+  arbiterTrigger?: { mode: string; reason: string | null };
+}): CascadeTrace {
+  return {
+    schemaVersion: 1,
+    stage1: input.stage1,
+    stage2: input.stage2,
+    arbiterInvoked: !!input.arbiter,
+    arbiter: input.arbiter,
+    finalConfidence: input.finalConfidence,
+    outcome: input.outcome,
+    confidenceGate: input.confidenceGate ?? {
+      enabled: false,
+      fired: false,
+      secondarySkipped: false,
+    },
+    arbiterTrigger: input.arbiterTrigger ?? { mode: "exact", reason: null },
+  };
+}
+
 // ─── Cascade scoring (I80) ─────────────────────────────────────────
 async function scoreWithCascade(opts: {
   companyName: string;
@@ -4291,15 +4390,43 @@ async function scoreWithCascade(opts: {
       `[CASCADE-FALLBACK] role=${info.role} from=${info.from} to=${info.to} ` +
       `company=${companyId ?? "-"} measure=${measure.measureId ?? "-"} reason=${JSON.stringify(info.reason)}`,
     );
+
+  // Change 5: per-stage recorders (observability only — bookkeeping around the
+  // UNCHANGED runCascadeStage call; never touches a score/verdict/quote).
+  const recStage1 = newCascadeStageRecord("primary", primary);
+  const recStage2 = newCascadeStageRecord("secondary", secondary);
+  const recArbiter = newCascadeStageRecord("arbiter", arbiter);
+
+  // Wrap a cascade stage so its wall-time + any fallback substitution are captured
+  // into `rec` as the stage runs. The control flow is identical to calling
+  // runCascadeStage directly; only timing + the fallback callback are recorded.
+  const runRecordedStage = async (
+    rec: CascadeStageRecord,
+    args: { provider: string; fallback: string | null; role: "primary" | "secondary" },
+  ): Promise<MeasureResult> => {
+    const t0 = Date.now();
+    try {
+      const out = await runCascadeStage<MeasureResult>({
+        provider: args.provider, fallback: args.fallback, role: args.role,
+        stageTimeoutMs, run: scoreOne, isLifecycleCancelled: isLifecycleCancelledError,
+        onFallback: (info) => {
+          logFallback(info);
+          rec.fallbackFired = true;
+          rec.fallbackTo = info.to;
+          rec.provider = info.to;
+          rec.fallbackReason = info.reason;
+        },
+      });
+      rec.score = out.score;
+      return out;
+    } finally {
+      rec.ms = Date.now() - t0;
+    }
+  };
+
   const [stage1, stage2] = await Promise.all([
-    runCascadeStage({
-      provider: primary, fallback: primaryFallback, role: "primary",
-      stageTimeoutMs, run: scoreOne, isLifecycleCancelled: isLifecycleCancelledError, onFallback: logFallback,
-    }),
-    runCascadeStage({
-      provider: secondary, fallback: secondaryFallback, role: "secondary",
-      stageTimeoutMs, run: scoreOne, isLifecycleCancelled: isLifecycleCancelledError, onFallback: logFallback,
-    }),
+    runRecordedStage(recStage1, { provider: primary, fallback: primaryFallback, role: "primary" }),
+    runRecordedStage(recStage2, { provider: secondary, fallback: secondaryFallback, role: "secondary" }),
   ]);
 
   const s1 = stage1.score;
@@ -4326,12 +4453,19 @@ async function scoreWithCascade(opts: {
       ...propagateConsistencySignal([stage1, stage2]),
       _gradedBy: `${primary}+${secondary}`,
       _cascade: { stage: "agreed", providers: [primary, secondary], votes: [s1, s2] },
+      cascadeTrace: buildCascadeTrace({
+        stage1: recStage1, stage2: recStage2, arbiter: null,
+        finalConfidence: "High", outcome: "agreed",
+      }),
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
   }
 
   // ─── Disagreement (~15-20% of cells) → Claude arbiter ──────────────────
   assertDispatchAllowed("scoring:arbiter");
+  const tArb = Date.now();
   const stage3 = await scoreOne(arbiter);
+  recArbiter.score = stage3.score;
+  recArbiter.ms = Date.now() - tArb;
   const s3 = stage3.score;
 
   const votes = [s1, s2, s3];
@@ -4352,6 +4486,10 @@ async function scoreWithCascade(opts: {
       ...propagateConsistencySignal([stage1, stage2, stage3]),
       _gradedBy: `${primary}+${secondary}+${arbiter}(3-way)`,
       _cascade: { stage: "3-way", providers: [primary, secondary, arbiter], votes },
+      cascadeTrace: buildCascadeTrace({
+        stage1: recStage1, stage2: recStage2, arbiter: recArbiter,
+        finalConfidence: "Review-required", outcome: "3-way",
+      }),
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
   }
 
@@ -4387,6 +4525,10 @@ async function scoreWithCascade(opts: {
       votes,
       arbiterSidedWith,
     },
+    cascadeTrace: buildCascadeTrace({
+      stage1: recStage1, stage2: recStage2, arbiter: recArbiter,
+      finalConfidence: "Medium", outcome: "arbiter",
+    }),
   } as MeasureResult & { _gradedBy?: string; _cascade?: any };
 }
 

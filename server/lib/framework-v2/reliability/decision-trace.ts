@@ -90,6 +90,13 @@ export interface DecisionTrace {
   /** FAIL-LOUD: concrete reasons the record could not be fully attributed. Empty
    *  array when the decision is fully bound; NEVER left undefined/blank. */
   diagnostics: string[];
+
+  // ── Cascade per-stage instrumentation (Change 5) ─────────────────────────
+  /** Per-stage cascade trace (providers, scores, wall-times, fallbacks, arbiter,
+   *  final confidence). Observability only — never affects the verdict. Present
+   *  only for measures scored via the cascade path; null/absent otherwise. Loosely
+   *  typed here to avoid coupling the reliability layer to analyzer.ts. */
+  cascadeTrace?: unknown;
 }
 
 /** Minimal framework shape needed to compute the immutable framework hash. */
@@ -147,6 +154,8 @@ export function buildDecisionTrace(input: {
   frameworkVersion?: number | null;
   frameworkHash: string;
   override?: string | null;
+  /** Change 5: optional per-stage cascade trace to merge into the record (observability). */
+  cascadeTrace?: unknown;
 }): DecisionTrace {
   const trace = input.canonicalRuleTrace ?? null;
   const diagnostics: string[] = [];
@@ -224,5 +233,8 @@ export function buildDecisionTrace(input: {
     override: input.override ?? trace?.override ?? null,
     validation: { flaggedForReview, status },
     diagnostics,
+    // Change 5: merge the cascade instrumentation when provided (never affects
+    // the fields above; absent for non-cascade paths to keep records minimal).
+    ...(input.cascadeTrace != null ? { cascadeTrace: input.cascadeTrace } : {}),
   };
 }
