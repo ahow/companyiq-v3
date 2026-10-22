@@ -4656,7 +4656,16 @@ async function scoreWithCascade(opts: {
   // ─── Disagreement (~15-20% of cells) → Claude arbiter ──────────────────
   assertDispatchAllowed("scoring:arbiter");
   const tArb = Date.now();
-  const stage3 = await scoreOne(arbiter);
+  // I4: bound the arbiter stage by the SAME per-stage wall-clock cap
+  // (CASCADE_STAGE_TIMEOUT_MS) as stages 1 and 2. Before this, stages 1/2 ran
+  // through runCascadeStage → withStageTimeout but the arbiter was a bare
+  // `await scoreOne(arbiter)`, so a hung arbiter could still freeze the measure to
+  // the 2100s pipeline timeout. This is fail-loud by design: on timeout the
+  // CascadeStageTimeoutError propagates (no arbiter model-fallback path is added),
+  // bounding the hang to stageTimeoutMs instead of inventing a third result. When
+  // stageTimeoutMs<=0 the timeout is disabled and the call is byte-identical to
+  // before (withStageTimeout returns the promise unchanged).
+  const stage3 = await withStageTimeout(scoreOne(arbiter), arbiter, stageTimeoutMs);
   recArbiter.score = stage3.score;
   recArbiter.ms = Date.now() - tArb;
   const s3 = stage3.score;
