@@ -97,7 +97,37 @@ export interface EvidenceGateResult {
    * segment but that were re-attributed to a present segment they genuinely
    * trace to. Records the original (unresolved) source for audit.
    */
-  repairs?: Array<{ quoteText: string; originalSource: string; repairedTo: string }>;
+  repairs?: RepairRecord[];
+  /**
+   * Option C (search-and-repair) audit: when EVERY model quote failed provenance
+   * and the YES was rescued by a deterministic corpus re-search, the passage that
+   * was found (verbatim-present in the pack) and the segment it came from. Present
+   * only in the repair path (`gateEvidenceWithRepair`).
+   */
+  researched?: ResearchRecord[];
+}
+
+/**
+ * Option C audit record: a quote that was relabelled (not rejected) because its
+ * source bound to the wrong segment — or to no segment — while its verbatim text
+ * lives in another present segment. `repairedTo` is the segment it now cites.
+ */
+export interface RepairRecord {
+  quoteText: string;
+  originalSource: string;
+  repairedTo: string;
+}
+
+/**
+ * Option C audit record: a YES that was rescued by corpus re-search after every
+ * model quote failed provenance. `repairedQuote` is the best verbatim-present
+ * passage found in the pack for the measure's positive criteria; `repairedSource`
+ * is the segment it was drawn from; `criteria` is the query used.
+ */
+export interface ResearchRecord {
+  criteria: string;
+  repairedSource: string;
+  repairedQuote: string;
 }
 
 export interface QuoteInput {
@@ -135,6 +165,13 @@ export interface GateParams {
    * pass this explicitly to compare v1 vs v2 on identical input.
    */
   policyVersion?: GatePolicyVersion;
+  /**
+   * Option C (search-and-repair) — the measure's positive criteria as free text
+   * (title / definition / assessment target). Used ONLY by `gateEvidenceWithRepair`
+   * to run a deterministic, corpus-only re-search when every model quote fails
+   * provenance. Ignored by the legacy `gateEvidence` path.
+   */
+  researchCriteria?: string[];
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -530,6 +567,227 @@ export function gateEvidence<Q extends QuoteInput>(
       originalScore,
       policyVersion: policy,
       ...(repairs.length > 0 ? { repairs } : {}),
+    },
+    keptQuotes,
+  };
+}
+
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// Option C — search-and-repair (behind RETRIEVAL_EVIDENCE_REPAIR in analyzer)
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Tokenise free text into content tokens (>= 4 chars) under a policy. */
+function researchTokens(policy: GatePolicyVersion, s: string): string[] {
+  return normaliseFor(policy, s)
+    .split(/\s+/)
+    .filter((t) => t.length >= 4);
+}
+
+/**
+ * Deterministic, corpus-only re-search (Option C step 3). Given the measure's
+ * positive criteria, find the best verbatim-present passage in the pack that
+ * supports them. Candidate passages are sentences sliced from each present
+ * segment (or the whole pack when there are no DOCUMENT headers), so every
+ * returned passage is — by construction — a contiguous substring of the pack and
+ * therefore passes pack-wide provenance. Scored by distinct-criteria-term
+ * overlap; the single best candidate (ties broken deterministically by first
+ * occurrence) is returned, or null when nothing in the corpus matches (→ the
+ * last-resort downgrade). NO network, NO new fetch — existing pack only.
+ */
+export function researchBestPassage(
+  policy: GatePolicyVersion,
+  criteria: string[],
+  segments: DocumentSegment[],
+  packText: string,
+): { text: string; source: string } | null {
+  const terms = new Set<string>();
+  for (const c of criteria || []) for (const t of researchTokens(policy, c)) terms.add(t);
+  if (terms.size === 0) return null;
+
+  const searchSegs: DocumentSegment[] =
+    segments && segments.length > 0 ? segments : [{ id: "pack", text: packText || "" }];
+
+  let best: { text: string; source: string } | null = null;
+  let bestScore = 0;
+  for (const seg of searchSegs) {
+    // Drop the DOCUMENT header line so it never becomes a candidate passage.
+    const body = (seg.text || "").replace(/--- DOCUMENT: .+? \[.+?\] ---/g, " ");
+    const sentences = body
+      .split(/(?<=[.!?])\s+|\n+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 40 && s.length <= 600);
+    for (const sent of sentences) {
+      const toks = new Set(researchTokens(policy, sent));
+      let overlap = 0;
+      for (const t of terms) if (toks.has(t)) overlap++;
+      if (overlap > bestScore) {
+        bestScore = overlap;
+        best = { text: sent, source: seg.id };
+      }
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+/**
+ * Option A + C: search-and-repair evidence verification.
+ *
+ * This is the flag-ON path (`RETRIEVAL_EVIDENCE_REPAIR=1`). It differs from the
+ * legacy `gateEvidence` (flag-OFF, byte-identical current behaviour) in exactly
+ * the ways §5 of docs/gate-ab-and-cascade-redesign.md specifies:
+ *
+ *   1. Provenance (unchanged) — a quote must be verbatim-present pack-wide.
+ *   2. Attribution becomes REPAIR, not reject — a provenanced quote whose source
+ *      binds to the wrong segment (or to none) is RELABELLED to the segment that
+ *      actually contains its verbatim text, recorded in `repairs[]`, and counts
+ *      as valid. Covers BOTH the "resolved-to-wrong-segment" and the
+ *      "resolve-failed" paths that the legacy gate rejected / only audited.
+ *   3. Re-search on failure — if EVERY model quote fails provenance, run a
+ *      deterministic corpus-only re-search (`researchBestPassage`) for the
+ *      measure's positive criteria and, if a supporting passage is found, KEEP
+ *      the YES with that repaired quote (recorded in `researched[]`).
+ *   4. Downgrade only as last resort — flip YES→NO ONLY when steps 1–3 find no
+ *      verbatim-present supporting passage anywhere in the corpus.
+ *   5. Audit everything — same gate blob plus `repairs[]` / `researched[]`.
+ *
+ * Option A is enforced at the call site (analyzer `gateOne`): the gate's ONLY
+ * score effect is `gate.downgraded` (step 4). It never silently flips a YES as a
+ * side effect of a per-quote strip.
+ *
+ * Pure & synchronous. Never mutates its inputs.
+ */
+export function gateEvidenceWithRepair<Q extends QuoteInput>(
+  params: Omit<GateParams, "quotes"> & { quotes: Q[] },
+): {
+  score: number;
+  gate: EvidenceGateResult;
+  keptQuotes: Q[];
+} {
+  const { originalScore, quotes, packText } = params;
+  const policy = resolveGatePolicy(params.policyVersion);
+  const strictStrip = params.strictStrip !== false;
+  const sourceAttribution = params.sourceAttribution !== false;
+  const segments = params.documentSegments || [];
+  const examples = [
+    ...(params.positiveExamples || []),
+    ...(params.negativeExamples || []),
+  ];
+  const researchCriteria = params.researchCriteria || [];
+
+  const failures: GateFailure[] = [];
+  const keptQuotes: Q[] = [];
+  const repairs: RepairRecord[] = [];
+  const researched: ResearchRecord[] = [];
+  let quotesValid = 0;
+
+  for (const q of quotes || []) {
+    const text = q?.text || "";
+    const source = q?.source || "";
+    const reasons: GateFailureReason[] = [];
+    let authoritative = false;
+    let repairedSource: string | null = null;
+
+    const packOk = checkProvenanceWithPolicy(policy, text, packText);
+
+    if (!packOk) {
+      // Step 1: genuine provenance failure (not present pack-wide). Not repairable
+      // per-quote; the YES may still be rescued by the corpus re-search below.
+      reasons.push("provenance");
+    } else if (sourceAttribution && segments.length > 0) {
+      const seg = resolveDocumentSegmentWithPolicy(policy, source, segments);
+      if (seg && checkProvenanceWithPolicy(policy, text, seg.text)) {
+        // The source correctly binds to a segment that contains the verbatim text.
+        authoritative = true;
+      } else {
+        // Step 2: attribution REPAIR (not reject). The label bound to the wrong
+        // segment (seg != null, text not in it) or to no segment (seg == null).
+        // Relabel to the segment that actually contains the verbatim text.
+        const repairedSeg = segments.find((sg) =>
+          checkProvenanceWithPolicy(policy, text, sg.text),
+        );
+        if (repairedSeg) {
+          repairedSource = repairedSeg.id;
+          repairs.push({ quoteText: text, originalSource: source, repairedTo: repairedSeg.id });
+          authoritative = true;
+        } else {
+          // Present pack-wide but in no single segment slice (e.g. the verbatim
+          // run straddles a chunk boundary). Provenance already passed pack-wide,
+          // which is the anti-hallucination guarantee — accept as a pack-wide pass
+          // rather than strip genuine evidence. No relabel is possible.
+          authoritative = true;
+        }
+      }
+    } else {
+      // Source-attribution off or no segments → pack-wide provenance suffices.
+      authoritative = true;
+    }
+
+    // Anti-echo (anti-hallucination) still filters individual quotes, with the v2
+    // override: exact provenance + authoritative attribution + valid source beats
+    // lexical similarity to a rubric example.
+    if (!checkAntiEchoWithPolicy(policy, text, examples)) {
+      const override = policy === "v2" && packOk && authoritative && checkSource(source);
+      if (!override) reasons.push("anti-echo");
+    }
+
+    if (!checkSource(source)) reasons.push("source");
+
+    if (reasons.length === 0) {
+      quotesValid++;
+      keptQuotes.push(repairedSource ? ({ ...q, source: repairedSource } as Q) : q);
+    } else {
+      failures.push({ quoteText: text, source, reasons });
+      if (!strictStrip) keptQuotes.push(q);
+    }
+  }
+
+  const quotesTotal = (quotes || []).length;
+
+  // Score resolution (Option A: the gate's ONLY score effect is the last-resort
+  // downgrade). A NO stays NO. A YES is sustained when >=1 quote is valid.
+  let score: number;
+  let downgraded = false;
+  if (originalScore !== 1) {
+    score = 0;
+  } else if (quotesValid >= 1) {
+    score = 1;
+  } else {
+    // Step 3: every model quote failed provenance. Re-search the corpus for a
+    // verbatim-present supporting passage before considering any downgrade.
+    const found = researchBestPassage(policy, researchCriteria, segments, packText);
+    if (found) {
+      researched.push({
+        criteria: researchCriteria.join(" | "),
+        repairedSource: found.source,
+        repairedQuote: found.text,
+      });
+      if (strictStrip) {
+        // Replace the stripped (unprovenanced) quotes with the repaired one.
+        keptQuotes.length = 0;
+      }
+      keptQuotes.push({ text: found.text, source: found.source } as unknown as Q);
+      quotesValid++;
+      score = 1;
+    } else {
+      // Step 4: no supporting passage anywhere in the corpus → last-resort flip.
+      score = 0;
+      downgraded = true;
+    }
+  }
+
+  return {
+    score,
+    gate: {
+      quotesTotal,
+      quotesValid,
+      failures,
+      downgraded,
+      originalScore,
+      policyVersion: policy,
+      ...(repairs.length > 0 ? { repairs } : {}),
+      ...(researched.length > 0 ? { researched } : {}),
     },
     keptQuotes,
   };
