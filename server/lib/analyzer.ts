@@ -58,7 +58,7 @@ import {
   applyContextTrimPolicy,
 } from "./model-cost.js";
 import type { IrTenantBinding } from "./provenance.js";
-import { gateEvidence, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
+import { gateEvidence, gateEvidenceWithRepair, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
 import { detectRationaleScoreInconsistency } from "./rationale-consistency.js";
 import { extractGuidanceObject, stripStructuredGuidanceBlock } from "./framework-guidance-audit.js";
 import { createHash } from "crypto";
@@ -155,6 +155,10 @@ export interface MeasureResult {
     quotesValid: number;
     downgraded: boolean;
     failures: EvidenceGateResult["failures"];
+    // Option C (search-and-repair) audit — present only when the repair path ran
+    // (RETRIEVAL_EVIDENCE_REPAIR) and performed a relabel / corpus re-search.
+    repairs?: EvidenceGateResult["repairs"];
+    researched?: EvidenceGateResult["researched"];
   };
   // Change C: in-completion bidirectional self-check emitted by the model within
   // the SAME scoring completion (no extra live LLM call). "Yes" = the model
@@ -4227,12 +4231,73 @@ async function scoreWithCascade(opts: {
     ? parsePackSegments(evidenceText)
     : [];
 
+  // Option A + C (search-and-repair): RETRIEVAL_EVIDENCE_REPAIR=1 switches the
+  // gate from "strip-and-flip" to "search-and-repair". DEFAULT OFF → the legacy
+  // path below runs byte-identically (no production impact until explicitly
+  // enabled). When ON: attribution failures become relabels, an all-quotes-fail
+  // YES is re-searched over the existing corpus, and the gate's ONLY score effect
+  // is the explicit last-resort downgrade (Option A). Segments are reused as-is;
+  // when source-attribution is off (gateSegments empty) we still parse the pack so
+  // the repair/re-search can bind quotes to documents.
+  const evidenceRepairEnabled = ["1", "true"].includes(
+    (process.env.RETRIEVAL_EVIDENCE_REPAIR || "").toLowerCase(),
+  );
+  const repairSegments: DocumentSegment[] = evidenceRepairEnabled
+    ? (gateSegments.length > 0 ? gateSegments : parsePackSegments(evidenceText))
+    : gateSegments;
+  // Positive criteria for the deterministic corpus re-search (Option C step 3).
+  const researchCriteria: string[] = [
+    measure.title,
+    (measure as any).definition,
+    (measure as any).primaryAssessmentTarget,
+    (measure as any).substantiveDefinition,
+  ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+
   // Apply the gate to a single model's parsed output. Runs for EVERY stage
   // (both primaries and the arbiter) BEFORE its score enters the cascade
   // comparison, so any downgrade feeds the disagreement logic. Binary preserved:
   // a YES survives only with >=1 valid quote, otherwise downgraded to 0; NO stays 0.
   const gateOne = (result: MeasureResult): MeasureResult => {
     if (!gateEnabled) return result;
+
+    if (evidenceRepairEnabled) {
+      // ── Option A + C: search-and-repair path (flag ON) ──────────────────────
+      // The gate verifies/repairs evidence but NEVER silently overrides the
+      // cascade verdict: its ONLY score effect is the explicit last-resort
+      // downgrade (gate.downgraded, Option C step 4), fired only when provenance,
+      // relabel AND corpus re-search all fail to find supporting evidence.
+      const { gate, keptQuotes } = gateEvidenceWithRepair({
+        originalScore: result.score === 1 ? 1 : 0,
+        quotes: (result.quotes || []).map((q) => ({ ...q, source: q.source || "" })),
+        packText: evidenceText,
+        positiveExamples: (measure as any).positiveExamples || [],
+        negativeExamples: (measure as any).negativeExamples || [],
+        strictStrip: gateStrictStrip,
+        sourceAttribution: sourceAttributionEnabled,
+        documentSegments: repairSegments,
+        researchCriteria,
+      });
+      result.quotes = keptQuotes;
+      if (gate.downgraded) {
+        // Last-resort downgrade only (no verbatim-present support anywhere).
+        result.score = 0;
+        result.verdict = "No";
+      }
+      // else: leave the cascade's score/verdict untouched (Option A). A sustained
+      // YES keeps its cascade verdict; relabels / re-search only improved the
+      // supporting evidence, they never flip the verdict.
+      result.gateResult = {
+        quotesTotal: gate.quotesTotal,
+        quotesValid: gate.quotesValid,
+        downgraded: gate.downgraded,
+        failures: gate.failures,
+        ...(gate.repairs && gate.repairs.length > 0 ? { repairs: gate.repairs } : {}),
+        ...(gate.researched && gate.researched.length > 0 ? { researched: gate.researched } : {}),
+      };
+      return result;
+    }
+
+    // ── Legacy strip-and-flip path (flag OFF — byte-identical) ────────────────
     const { score, gate, keptQuotes } = gateEvidence({
       originalScore: result.score === 1 ? 1 : 0,
       quotes: (result.quotes || []).map((q) => ({ ...q, source: q.source || "" })),
