@@ -47,6 +47,11 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
+// A9 / WP15 (truthful publication). Build the canonical per-cell publication
+// record for each company and store it in the snapshot metadata so every reader
+// surface (API/UI/CSV/Word/PDF) derives verdict/evidence/research-status from
+// one shape and cannot diverge (PU01 / CV07). Additive — never changes a score.
+import { buildPublicationRecord } from "./lib/truthful-publication.js";
 import { computeFrameworkContentHash } from "./lib/framework-v2/reliability/decision-trace.js";
 import { measureContentHash } from "./lib/framework-v2/reliability/canonical-rule.js";
 import { computeBatchFingerprint } from "./lib/corpus-replay.js";
@@ -55,6 +60,11 @@ import { getProviderStatus } from "./lib/ai-providers.js";
 import { getConfiguredFallbackOrder } from "./lib/provider-resilience.js";
 // WP14 / B6 — connection-budget-aware worker concurrency (kill-switch CAPACITY_POLICY).
 import { resolveEffectiveConcurrency, loadCapacityConfig } from "./lib/capacity-config.js";
+// Phase 3 / M4 — separate bounded resource pools (browser-recovery vs analysis),
+// composed under the B6 97-usable connection ceiling (kill-switch
+// RESOURCE_POOL_POLICY). At the shipped default (`shared`) this is byte-identical
+// to the B6 shared slot count.
+import { resolveResourcePools } from "./lib/resource-pools.js";
 
 const QUEUE_NAME = "analysis";
 const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
@@ -65,7 +75,16 @@ const MAX_CONCURRENT = parseInt(process.env.WORKER_CONCURRENCY || "10", 10);
 // value (which can only ever LOWER concurrency as replicas scale, never raise it).
 // Pure/DB-free; does NOT touch the analyzer/evidence/scoring path or any pool max.
 const CAPACITY = resolveEffectiveConcurrency(loadCapacityConfig());
-const EFFECTIVE_CONCURRENCY = CAPACITY.effectiveConcurrency;
+// Phase 3 / M4: resolve the resource-pool layout. At the shipped default
+// (RESOURCE_POOL_POLICY=shared) `separated` is false and the effective analysis
+// concurrency is exactly `sharedSlots` (== CAPACITY.effectiveConcurrency), so the
+// worker is byte-identical to prior production. When `separated` is armed, the
+// analysis pool is the dedicated `pools.analysis` slot count (composed under the
+// B6 ceiling), leaving browser-recovery its own bounded pool.
+const RESOURCE_POOLS = resolveResourcePools({ cfg: loadCapacityConfig() });
+const EFFECTIVE_CONCURRENCY = RESOURCE_POOLS.separated
+  ? RESOURCE_POOLS.pools.analysis
+  : RESOURCE_POOLS.sharedSlots;
 const JOB_TIMEOUT = parseInt(process.env.JOB_TIMEOUT_MS || "600000", 10); // 10 min default
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 30000; // 30 seconds between retries
@@ -1181,6 +1200,35 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         manifest: researchManifest,
       });
 
+      // A9 / WP15: build the canonical publication record for every measure cell
+      // of this company. One shape every reader surface derives from, so verdict /
+      // evidence / research-status can never diverge (PU01 / CV07). Additive
+      // metadata only — never reads or changes a score. The verdict field is the
+      // existing canonical normalizeVerdict, so it is byte-identical to what
+      // surfaces show today.
+      const publicationScope = {
+        frameworkVersion: (framework as any)?.version ?? frameworkId,
+        frameworkHash: (manifest as any)?.finalCorpusFingerprint ?? null,
+        asOf: null,
+        entityScope: { companyId: company.id, listId: listId ?? null },
+      };
+      const publicationRecords = fullMeasureScores.map((m: any) =>
+        buildPublicationRecord({
+          companyId: company.id,
+          measureId: String(m.measureId),
+          verdict: m.verdict ?? null,
+          score: typeof m.score === "number" ? m.score : null,
+          evidenceSummary: m.evidenceSummary ?? null,
+          supportingQuote: Array.isArray(m.quotes) && m.quotes.length > 0
+            ? (typeof m.quotes[0] === "string" ? m.quotes[0] : (m.quotes[0]?.text ?? null))
+            : null,
+          sourceDocument: null,
+          sourceLink: null,
+          scope: publicationScope,
+          researchStatus: researchStatus as any,
+        }),
+      );
+
       resultsData.push({
         companyId: company.id,
         companyName: company.name,
@@ -1213,6 +1261,10 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         measureScores: fullMeasureScores,
         // WP02/A1 (additive): explicit research status. Metadata only.
         researchStatus,
+        // A9 / WP15 (additive): canonical per-cell publication records. Metadata
+        // only; the single shape every reader surface derives verdict/evidence/
+        // status from (PU01 / CV07). Never changes a score.
+        publicationRecords,
       });
     }
 

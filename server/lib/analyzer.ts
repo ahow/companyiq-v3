@@ -5,6 +5,12 @@ import { classifyProviderError, type ProviderFailureClass } from "./provider-res
 import { assertDispatchAllowed, isLifecycleCancelledError } from "./lifecycle-fence.js";
 import { buildEvidencePacksForCategory, buildEvidencePackForMeasure, computePreferredAnnualUrl, chunkDocuments, tokenize, buildBM25Index, bm25Score, deriveTopicTerms, computeCorpusTopicStats, applyChunkSanityGate, setShortTokenAllowlist, type EvidencePack, type Chunk, type ChunkSanityResult } from "./passage-retrieval.js";
 import type { IssuerProfile } from "./issuer-profile.js";
+// A6 / WP07 (framework-contract governance). Wired at the end of
+// analyzeCompanyMeasures: attaches a verdict-invariant governance pass to the
+// result. At the shipped default (FRAMEWORK_CONTRACT_POLICY=shadow) this is a
+// pure passthrough — publishedScoresMutated is always false by construction, so
+// no published score is ever changed.
+import { runContractGovernance, resolveFrameworkContractPolicy, type GovernanceResult } from "./framework-contract.js";
 // Approach 3: assembly-time boilerplate removal (generic, deterministic, no budget change).
 import { stripRepeatedStructuralBlocks, computeAssemblyPenaltyFactors, containsQuantifiedFigure } from "./corpus-boilerplate.js";
 // Approach 4: semantic candidate generation (embed + cosine rerank) at corpus assembly.
@@ -250,6 +256,11 @@ export interface AnalysisResult {
     reason: string;
     measuresChecked: number;
   };
+  // A6 / WP07: framework-contract governance pass. Verdict-invariant metadata
+  // only — at the default `shadow` policy this is a pure passthrough and
+  // `publishedScoresMutated` is always false (no published score is changed).
+  // Absent only if the governance pass could not be computed.
+  governance?: GovernanceResult;
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -3537,6 +3548,21 @@ export async function analyzeCompanyMeasures(opts: {
     }
   }
 
+  // A6 / WP07: run the framework-contract governance pass over the framework and
+  // its measures. Verdict-invariant by construction — at the default `shadow`
+  // policy this attaches contract metadata only and mutates NO published score
+  // (publishedScoresMutated is always false). Best-effort: a governance failure
+  // must never fail an otherwise-complete analysis, so it is caught and omitted.
+  let governance: GovernanceResult | undefined = undefined;
+  try {
+    governance = runContractGovernance(
+      { framework: framework as any, measures: measures as any[] },
+      resolveFrameworkContractPolicy(),
+    );
+  } catch (govErr: any) {
+    console.warn(`[${companyName}] A6 contract governance pass skipped: ${govErr?.message || govErr}`);
+  }
+
   return {
     totalScore,
     scorePercentage,
@@ -3548,6 +3574,7 @@ export async function analyzeCompanyMeasures(opts: {
     forceIncludeInvariant,
     scoringDiagnostics,
     emptyCorpus,
+    governance,
   };
 }
 

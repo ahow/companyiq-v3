@@ -4,6 +4,11 @@ import * as storage from "../storage.js";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { addBatchJobs, removeBatchJobs, getQueueStats } from "../queue.js";
 import { cancelBatch, enqueueReliabilityFinalizer, finalizeBatchAndSave, saveBatchSnapshot } from "../worker.js";
+// A9 / WP15 (truthful publication). The canonical reader view: when the policy is
+// not `passthrough` the stored per-cell publication records are rendered through
+// the single toPublicationView accessor so API/UI can never diverge from the
+// other surfaces (PU01 / CV07). At the default `passthrough` this is a no-op.
+import { toPublicationView, resolvePublicationPolicy } from "../lib/truthful-publication.js";
 import { cancelTrace } from "../lib/runtime-diag.js";
 import {
   getAllPausedProviders,
@@ -1579,6 +1584,25 @@ apiRouter.get("/results/:id", async (req: Request, res: Response) => {
     if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id." });
     const row = await storage.getAnalysisResultById(id, workspaceId);
     if (!row) return res.status(404).json({ error: "Result not found." });
+    // A9 / WP15: apply the canonical publication view unless the policy is
+    // `passthrough` (the default, byte-identical no-op). When armed (`annotate`/
+    // `shadow`), each company's stored per-cell publication records are rendered
+    // through the single toPublicationView accessor and surfaced as
+    // `publicationViews` — additive; the existing fields are left untouched.
+    const pubPolicy = resolvePublicationPolicy();
+    if (pubPolicy !== "passthrough") {
+      try {
+        const resultsData = (row as any)?.resultsData;
+        if (Array.isArray(resultsData)) {
+          for (const company of resultsData) {
+            const records = Array.isArray(company?.publicationRecords) ? company.publicationRecords : [];
+            company.publicationViews = records.map((r: any) => toPublicationView(r, pubPolicy));
+          }
+        }
+      } catch (viewErr: any) {
+        console.warn(`[api] A9 publication view skipped for result ${id}: ${viewErr?.message || viewErr}`);
+      }
+    }
     res.json(row);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
