@@ -305,6 +305,16 @@ interface AnalysisSettings {
   // given fallback (stage then fails-loud as before, still bounded by the timeout).
   cascadePrimaryFallback: string;
   cascadeSecondaryFallback: string;
+  // Arbiter resilience: the disagreement arbiter (default gpt5-arbiter = GPT-5-mini
+  // via OpenRouter) previously ran with NO fallback — an arbiter outage/hang froze
+  // the measure to the pipeline timeout. It now self-heals onto this provider on a
+  // throw OR a >cascadeStageTimeoutMs hang, exactly like primary/secondary. Default
+  // "openrouter" (DeepSeek-V3.1 via OpenRouter) so every cascade stage has an
+  // OpenRouter failure route. Env-reversible (CASCADE_ARBITER_FALLBACK) and
+  // workspace-overridable (cascade_arbiter_fallback); ""/"none"/"off" disables it.
+  // Point it at a non-OpenRouter provider (e.g. mistral-arbiter) for coverage of a
+  // total OpenRouter outage, since the arbiter's own primary route is via OpenRouter.
+  cascadeArbiterFallback: string;
   cascadeStageTimeoutMs: number;
   // PR 1 · Change 1a: gates the retrieval-hardening pass (latest-primary-disclosure
   // verification + targeted follow-up queries in pipeline.ts). Default OFF so
@@ -391,6 +401,10 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     // No topic- or company-specific logic — a single global default.
     cascadePrimaryFallback: settings.cascade_primary_fallback ?? process.env.CASCADE_PRIMARY_FALLBACK ?? "openrouter",
     cascadeSecondaryFallback: settings.cascade_secondary_fallback ?? process.env.CASCADE_SECONDARY_FALLBACK ?? "glm-4.6",
+    // Arbiter fallback (see interface note). Default "openrouter" so the arbiter
+    // stage — previously fallback-less — gets the same OpenRouter failure route as
+    // primary/secondary. ""/"none"/"off" restores the pre-change fail-loud arbiter.
+    cascadeArbiterFallback: settings.cascade_arbiter_fallback ?? process.env.CASCADE_ARBITER_FALLBACK ?? "openrouter",
     // Per-stage wall-clock cap (ms). A stage that exceeds it is treated as failed
     // and falls back (the 2100s freeze was caused by hangs, which a throw-only
     // fallback would miss). Default 180s ≈ 36× the p50 (~5s) so it never false-
@@ -4334,6 +4348,7 @@ async function scoreWithCascade(opts: {
   // See normaliseCascadeFallback / withStageTimeout / runCascadeStage above.
   const primaryFallback = normaliseCascadeFallback(settings.cascadePrimaryFallback, primary);
   const secondaryFallback = normaliseCascadeFallback(settings.cascadeSecondaryFallback, secondary);
+  const arbiterFallback = normaliseCascadeFallback(settings.cascadeArbiterFallback, arbiter);
   const stageTimeoutMs = settings.cascadeStageTimeoutMs > 0 ? settings.cascadeStageTimeoutMs : 0;
 
   // Task A: deterministic evidence-integrity gate config. ON by default in
@@ -4520,9 +4535,19 @@ async function scoreWithCascade(opts: {
     } as MeasureResult & { _gradedBy?: string; _cascade?: any };
   }
 
-  // ─── Disagreement (~15-20% of cells) → Claude arbiter ──────────────────
+  // ─── Disagreement (~15-20% of cells) → arbiter ─────────────────────────
   assertDispatchAllowed("scoring:arbiter");
-  const stage3 = await scoreOne(arbiter);
+  // Arbiter now self-heals onto its OpenRouter fallback on a throw OR a
+  // >stageTimeoutMs hang, exactly like primary/secondary — previously it ran
+  // with no fallback and no stage timeout, so an arbiter outage/hang froze the
+  // measure to the 2100s pipeline timeout. A lifecycle cancellation is still
+  // re-thrown before any fallback; if arbiterFallback is null the original error
+  // propagates (fail-loud preserved). Reuses the same logFallback sink as the
+  // primary/secondary stages above.
+  const stage3 = await runCascadeStage({
+    provider: arbiter, fallback: arbiterFallback, role: "arbiter",
+    stageTimeoutMs, run: scoreOne, isLifecycleCancelled: isLifecycleCancelledError, onFallback: logFallback,
+  });
   const s3 = stage3.score;
 
   const votes = [s1, s2, s3];
