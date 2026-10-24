@@ -236,30 +236,30 @@ test("CC02c: wordShingles (empty below k) + shingleContainment math", () => {
 
 // ─── CC03 — kill-switch default (shadow, Issue-4) + env/explicit override ──────
 
-test("CC03: shadow default (Issue-4); env off/on + explicit arg override", () => {
-  // As of the Issue-4 fix the shipped default is "shadow" (drops nothing).
-  assert.equal(DEFAULT_CONTEXT_COST_POLICY, "shadow");
+test("CC03: armed default (on, Group C step 3); env off/shadow + explicit arg override", () => {
+  // Group C step 3 ARMS the lever: the shipped default is now "on" (active trim).
+  assert.equal(DEFAULT_CONTEXT_COST_POLICY, "on");
   assert.equal(CONTEXT_COST_POLICY_VERSION, 1);
   assert.equal(CONTEXT_COST_POLICY_ENV, "CONTEXT_COST_POLICY");
 
   const prev = process.env[CONTEXT_COST_POLICY_ENV];
   try {
-    // env UNSET → resolves to the shipped default "shadow" (NOT enforced).
+    // env UNSET → resolves to the shipped default "on" (enforced).
     delete process.env[CONTEXT_COST_POLICY_ENV];
-    assert.equal(resolveContextCostPolicy(), "shadow", "unset env should resolve to default shadow");
-    assert.equal(isContextCostEnforced(), false, "shadow default must not enforce trimming");
+    assert.equal(resolveContextCostPolicy(), "on", "unset env should resolve to armed default on");
+    assert.equal(isContextCostEnforced(), true, "armed default must enforce trimming");
 
-    // env can override to off (rollback) or on (active trim), no redeploy.
+    // env can override to off (rollback) or shadow (telemetry only), no redeploy.
     process.env[CONTEXT_COST_POLICY_ENV] = "off";
-    assert.equal(resolveContextCostPolicy(), "off", "env=off must override default shadow");
+    assert.equal(resolveContextCostPolicy(), "off", "env=off must override default on");
     assert.equal(isContextCostEnforced(), false);
-    process.env[CONTEXT_COST_POLICY_ENV] = "on";
-    assert.equal(resolveContextCostPolicy(), "on", "env=on must override default shadow");
-    assert.equal(isContextCostEnforced(), true);
+    process.env[CONTEXT_COST_POLICY_ENV] = "shadow";
+    assert.equal(resolveContextCostPolicy(), "shadow", "env=shadow must override default on");
+    assert.equal(isContextCostEnforced(), false);
 
-    // explicit arg wins over env (env=on here).
+    // explicit arg wins over env (env=shadow here).
     assert.equal(resolveContextCostPolicy("off"), "off", "explicit off must win over env");
-    assert.equal(resolveContextCostPolicy("shadow"), "shadow", "explicit shadow must win over env");
+    assert.equal(resolveContextCostPolicy("on"), "on", "explicit on must win over env");
   } finally {
     if (prev === undefined) delete process.env[CONTEXT_COST_POLICY_ENV];
     else process.env[CONTEXT_COST_POLICY_ENV] = prev;
@@ -381,14 +381,14 @@ test("CC06: verification never cheap; escalation on uncertainty; off → strong"
 
 // ─── CC07 — policy resolution fail-safe + frozen returns ──────────────────────
 
-test("CC07: resolveContextCostPolicy fail-safe (→ shadow) + total + frozen returns", () => {
+test("CC07: resolveContextCostPolicy fail-safe (→ armed default on) + total + frozen returns", () => {
   const prev = process.env[CONTEXT_COST_POLICY_ENV];
   try {
     for (const bad of ["", "   ", "garbage", "ON2", "shadowy", "0", "true"]) {
       process.env[CONTEXT_COST_POLICY_ENV] = bad;
-      // Issue-4 fail-safe is the shipped default "shadow" (a typo can NEVER
-      // silently drop evidence — it drops nothing).
-      assert.equal(resolveContextCostPolicy(), "shadow", `env="${bad}" should resolve to default shadow`);
+      // Group C step 3 fail-safe is the armed shipped default "on" (an unrecognised
+      // value can never silently flip to a different mode — it resolves to default).
+      assert.equal(resolveContextCostPolicy(), "on", `env="${bad}" should resolve to armed default on`);
     }
     for (const good of ["off", "shadow", "on", "  ON  ", "Shadow"]) {
       process.env[CONTEXT_COST_POLICY_ENV] = good;

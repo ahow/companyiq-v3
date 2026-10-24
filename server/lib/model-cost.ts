@@ -88,7 +88,7 @@ export type ContextCostPolicy = "off" | "shadow" | "on";
  * holdout validates that trimming true >=90% near-duplicates does not move scores.
  * Set CONTEXT_COST_POLICY=off for a byte-identical passthrough (no telemetry).
  */
-export const DEFAULT_CONTEXT_COST_POLICY: ContextCostPolicy = "shadow";
+export const DEFAULT_CONTEXT_COST_POLICY: ContextCostPolicy = "on";
 
 /** Env var name for the kill-switch (documented in the ledger). */
 export const CONTEXT_COST_POLICY_ENV = "CONTEXT_COST_POLICY";

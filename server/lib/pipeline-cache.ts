@@ -85,6 +85,12 @@ export function sha256Hex(s: string): string {
 
 let bytesStore: InMemoryCacheStore<string> | null = null;
 let indexStore: InMemoryCacheStore<unknown> | null = null;
+// Group C (B4): the remaining layers, each a lazy, process-shared singleton.
+let extractionStore: InMemoryCacheStore<unknown> | null = null;
+let ocrStore: InMemoryCacheStore<unknown> | null = null;
+let eligibilityStore: InMemoryCacheStore<unknown> | null = null;
+let packsStore: InMemoryCacheStore<unknown> | null = null;
+let scoresStore: InMemoryCacheStore<unknown> | null = null;
 
 function getBytesStore(): InMemoryCacheStore<string> {
   if (!bytesStore) bytesStore = new InMemoryCacheStore<string>();
@@ -96,6 +102,31 @@ function getIndexStore(): InMemoryCacheStore<unknown> {
   return indexStore;
 }
 
+function getExtractionStore(): InMemoryCacheStore<unknown> {
+  if (!extractionStore) extractionStore = new InMemoryCacheStore<unknown>();
+  return extractionStore;
+}
+
+function getOcrStore(): InMemoryCacheStore<unknown> {
+  if (!ocrStore) ocrStore = new InMemoryCacheStore<unknown>();
+  return ocrStore;
+}
+
+function getEligibilityStore(): InMemoryCacheStore<unknown> {
+  if (!eligibilityStore) eligibilityStore = new InMemoryCacheStore<unknown>();
+  return eligibilityStore;
+}
+
+function getPacksStore(): InMemoryCacheStore<unknown> {
+  if (!packsStore) packsStore = new InMemoryCacheStore<unknown>();
+  return packsStore;
+}
+
+function getScoresStore(): InMemoryCacheStore<unknown> {
+  if (!scoresStore) scoresStore = new InMemoryCacheStore<unknown>();
+  return scoresStore;
+}
+
 /**
  * Drop all wired-layer stores. Test-only: lets each test start from a cold cache
  * so cold-vs-warm behaviour is deterministic regardless of execution order.
@@ -103,6 +134,11 @@ function getIndexStore(): InMemoryCacheStore<unknown> {
 export function __resetPipelineCachesForTest(): void {
   bytesStore = null;
   indexStore = null;
+  extractionStore = null;
+  ocrStore = null;
+  eligibilityStore = null;
+  packsStore = null;
+  scoresStore = null;
 }
 
 // ─── bytes seam ───────────────────────────────────────────────────────────────
@@ -197,4 +233,116 @@ export async function cacheRetrievalIndex<V>(args: CacheRetrievalIndexArgs<V>): 
     },
   });
   return res.value;
+}
+
+
+
+// ─── Group C (B4): the remaining pipeline layers ───────────────────────────────
+//
+// extraction / ocr / eligibility / packs / scores. Each is a thin get-or-compute
+// wrapper over the SAME cache-layers primitive, STRICTLY GATED by CACHE_LAYER_POLICY
+// (shipped default "off"). At the default every helper SKIPS the cache and just
+// awaits the injected compute fn, so wrapping a seam is a provable pass-through:
+// the wrapped expression runs exactly as before, same inputs, same return value,
+// zero cache interaction. Under "on" an identical key (same tenant + dependency
+// hashes) serves the stored value and skips the recompute.
+//
+// All five share one generic shape (workspaceId + dependencyHashes + extra +
+// compute) so a call site keys on the content hashes of its TRUE dependencies.
+// extraction/ocr are keyed by the document BYTE hash (pure content-derived
+// extraction); eligibility/packs/scores additionally fold the A3 eligibility
+// scope hash into `extra` so a differing recomputed eligibility is a natural miss.
+
+export interface CacheLayerArgs<V> {
+  /** Tenant/workspace scope — strict isolation (first field of every key). */
+  workspaceId: string | number;
+  /**
+   * Content hashes of this layer's TRUE dependencies (freshness by hash). Any
+   * change ⇒ different key ⇒ miss ⇒ recompute.
+   */
+  dependencyHashes: readonly string[];
+  /**
+   * Optional structured discriminator folded into the key (e.g. the A3
+   * eligibility scope hash for eligibility/packs/scores, or a measure id).
+   */
+  extra?: unknown;
+  /** The expensive recompute. Returns the value (+ optional provenance). */
+  compute: () => Promise<V> | V;
+  /** Explicit policy override (else resolved from env / default "off"). */
+  policy?: CacheLayerPolicy | null;
+  /** Optional telemetry sink (shadow + on emit). */
+  telemetry?: CacheTelemetrySink;
+  /** Optional injected store (tests); defaults to the process singleton. */
+  store?: CacheStore<V>;
+}
+
+/** Shared implementation for the generic Group-C layers. */
+async function cacheLayer<V>(
+  layerId: "extraction" | "ocr" | "eligibility" | "packs" | "scores",
+  defaultStore: () => CacheStore<V>,
+  args: CacheLayerArgs<V>,
+): Promise<V> {
+  const res = await getOrCompute<V>({
+    store: args.store ?? defaultStore(),
+    workspaceId: args.workspaceId,
+    layerId,
+    dependencyHashes: args.dependencyHashes,
+    extra: args.extra,
+    policy: args.policy,
+    telemetry: args.telemetry,
+    compute: async () => ({ value: await args.compute() } as CacheEntry<V>),
+  });
+  return res.value;
+}
+
+/**
+ * extraction layer: get-or-compute the text/structure extracted from a document's
+ * bytes, keyed by the byte/content hash. DEFAULT ("off"): runs `compute()`
+ * directly — extraction happens exactly as today. Under "on", identical bytes for
+ * the same workspace serve the stored extraction and skip the extract entirely.
+ */
+export function cacheExtraction<V>(args: CacheLayerArgs<V>): Promise<V> {
+  return cacheLayer<V>("extraction", () => getExtractionStore() as unknown as CacheStore<V>, args);
+}
+
+/**
+ * ocr layer: get-or-compute the OCR output for image/scanned pages, keyed by the
+ * byte/content hash. DEFAULT ("off"): runs `compute()` directly — OCR happens
+ * exactly as today. Under "on", identical bytes serve the stored OCR output.
+ */
+export function cacheOcr<V>(args: CacheLayerArgs<V>): Promise<V> {
+  return cacheLayer<V>("ocr", () => getOcrStore() as unknown as CacheStore<V>, args);
+}
+
+/**
+ * eligibility layer (A3): get-or-compute the per-target eligibility decision. The
+ * caller MUST fold the full per-target decision scope into `dependencyHashes`
+ * (and/or `extra`) so the key captures everything A3 decides on; any change is a
+ * natural miss. DEFAULT ("off"): runs `compute()` directly — A3 recomputes per
+ * target exactly as today.
+ */
+export function cacheEligibilityDecision<V>(args: CacheLayerArgs<V>): Promise<V> {
+  return cacheLayer<V>("eligibility", () => getEligibilityStore() as unknown as CacheStore<V>, args);
+}
+
+/**
+ * packs layer: get-or-compute an assembled evidence pack. The key composes the A3
+ * eligibility scope hash (via `extra`, built with buildEligibilityScopeHash) so a
+ * pack cached under an OLD eligibility is never served after eligibility changes.
+ * DEFAULT ("off"): runs `compute()` directly — the pack is assembled as today.
+ */
+export function cacheEvidencePack<V>(args: CacheLayerArgs<V>): Promise<V> {
+  return cacheLayer<V>("packs", () => getPacksStore() as unknown as CacheStore<V>, args);
+}
+
+/**
+ * scores layer: get-or-compute a derived score/verdict. The key composes the
+ * upstream pack + eligibility hashes so any upstream change invalidates the score.
+ * DEFAULT ("off"): runs `compute()` directly — scoring runs exactly as today.
+ * NOTE: the LLM scoring path is not deterministic across cold runs (self-
+ * consistency sampling + provider cascade), so cold===warm byte-identity is a
+ * property only of the cache serving a STORED verdict — enable "on" deliberately.
+ */
+export function cacheMeasureScore<V>(args: CacheLayerArgs<V>): Promise<V> {
+  return cacheLayer<V>("scores", () => getScoresStore() as unknown as CacheStore<V>, args);
 }

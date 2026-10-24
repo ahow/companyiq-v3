@@ -22,7 +22,13 @@ import { normalizeVerdict, normalizedScore } from "../../shared/verdict.js";
 import { discoverCompanyTerminology, flattenTerms, type TerminologyMap } from "./terminology-discovery.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { generateDocumentHash, generateContentStableHash, type ExtractionCompleteness } from "./processor.js";
-import { cacheRetrievalIndex } from "./pipeline-cache.js";
+import {
+  cacheRetrievalIndex,
+  cacheEligibilityDecision,
+  cacheEvidencePack,
+  cacheMeasureScore,
+  sha256Hex,
+} from "./pipeline-cache.js";
 import { translateDocumentsToEnglish } from "./translation.js";
 import { corpusSourceTypes } from "./discovery.js";
 import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./corpus-hygiene.js";
@@ -62,6 +68,9 @@ import {
 import {
   resolveContextCostPolicy,
   applyContextTrimPolicy,
+  stablePrefixOrder,
+  routeModel,
+  type PromptSegment,
 } from "./model-cost.js";
 import type { IrTenantBinding } from "./provenance.js";
 import { gateEvidence, gateEvidenceWithRepair, parsePackSegments, type EvidenceGateResult, type DocumentSegment } from "./evidence-gate.js";
@@ -2681,7 +2690,22 @@ export async function analyzeCompanyMeasures(opts: {
       // as-is — the scorer will see insufficient evidence and score accordingly.
       // The deep-read second pass (below) handles the genuine under-evidenced case
       // where topic content exists in the corpus but wasn't surfaced by normal BM25.
-      let finalEvidence = evidenceText;
+      // ── Group C (B4): cache the assembled evidence pack (A5 expansion + B5 trim) ──
+      // DEFAULT CACHE_LAYER_POLICY "off" ⇒ provable pass-through: cacheEvidencePack
+      // just awaits the compute closure, so the A5/B5 result is byte-identical to
+      // before. Under "on" an identical {company, measure, base-pack, policies} key
+      // serves the stored pack. The compute closure holds the ENTIRE A5+B5 logic
+      // unchanged (only the local pack variable is renamed from finalEvidence).
+      let finalEvidence = await cacheEvidencePack<string>({
+        workspaceId: company?.id ?? companyId ?? "shared",
+        dependencyHashes: [sha256Hex(evidenceText)],
+        extra: {
+          measureId: measure.measureId,
+          recallPolicy: resolveRecallExpansionPolicy(),
+          contextCostPolicy: resolveContextCostPolicy(),
+        },
+        compute: async (): Promise<string> => {
+          let pack = evidenceText;
 
       // ── A5 / WP06: bounded evidence-pack recall expansion (kill-switch gated) ──
       // DEFAULT = "on" (post-GATE5): this block runs and APPENDS a BOUNDED set of
@@ -2707,29 +2731,51 @@ export async function analyzeCompanyMeasures(opts: {
           // A3 marks its (url,title,content) source EXCLUDED for this company — so
           // expansion can NEVER reintroduce what A3 excluded (RT04). Fail-open on
           // predicate error so a defect can only reduce to current behaviour.
-          const isEligible = (chunk: Chunk): boolean => {
+          //
+          // Group C (B4): the A3 decision for each candidate is routed through the
+          // eligibility layer cache (cacheEligibilityDecision). DEFAULT "off" ⇒
+          // pass-through (composeEligibilityDecision runs exactly as before); under
+          // "on" an identical {company, source} decision is served. Decisions are
+          // precomputed for the exact miss-chunks planBoundedExpansion evaluates,
+          // then read by the SYNCHRONOUS predicate the planner requires.
+          const corpusById = new Map<string, Chunk>();
+          for (const c of corpusChunks) corpusById.set(stablePassageId(c), c);
+          const eligibilityByChunkId = new Map<string, boolean>();
+          for (const miss of recall.misses) {
+            const chunk = corpusById.get(miss.id);
+            if (!chunk) continue;
+            const eligInput = {
+              target: {
+                id: company?.id ?? companyId ?? null,
+                name: company?.name || companyName,
+                ticker: company?.ticker ?? null,
+                domain: company?.domain ?? null,
+                relatedDomains: company?.relatedDomains ?? null,
+                isin: company?.isin ?? null,
+              },
+              source: {
+                url: chunk.docUrl ?? null,
+                title: chunk.docTitle ?? null,
+                content: chunk.text ?? null,
+              },
+              knownIrTenants: companyIrTenantCache,
+            };
+            let eligible = true;
             try {
-              const d = composeEligibilityDecision({
-                target: {
-                  id: company?.id ?? companyId ?? null,
-                  name: company?.name || companyName,
-                  ticker: company?.ticker ?? null,
-                  domain: company?.domain ?? null,
-                  relatedDomains: company?.relatedDomains ?? null,
-                  isin: company?.isin ?? null,
-                },
-                source: {
-                  url: chunk.docUrl ?? null,
-                  title: chunk.docTitle ?? null,
-                  content: chunk.text ?? null,
-                },
-                knownIrTenants: companyIrTenantCache,
+              const d = await cacheEligibilityDecision<EligibilityDecision>({
+                workspaceId: company?.id ?? companyId ?? "shared",
+                dependencyHashes: [sha256Hex(miss.id)],
+                extra: eligInput,
+                compute: () => composeEligibilityDecision(eligInput),
               });
-              return d.status !== "excluded";
+              eligible = d.status !== "excluded";
             } catch {
-              return true;
+              eligible = true;
             }
-          };
+            eligibilityByChunkId.set(miss.id, eligible);
+          }
+          const isEligible = (chunk: Chunk): boolean =>
+            eligibilityByChunkId.get(stablePassageId(chunk)) ?? true;
           const plan = planBoundedExpansion({
             misses: recall.misses,
             chunks: corpusChunks,
@@ -2739,8 +2785,8 @@ export async function analyzeCompanyMeasures(opts: {
             isEligible,
           });
           if (recallPolicy === "on" && plan.fired) {
-            // ENFORCE: append-only. finalEvidence grows; the original pack is intact.
-            finalEvidence = evidenceText + formatExpansionAppend(plan);
+            // ENFORCE: append-only. pack grows; the original pack is intact.
+            pack = evidenceText + formatExpansionAppend(plan);
             console.log(
               `[${companyName}] A5-EXPAND ${measure.measureId}: recall ${(recall.recall * 100).toFixed(0)}% ` +
                 `(+${plan.added.length} passage(s), +${plan.addedChars} chars) ${plan.reason}`,
@@ -2768,19 +2814,19 @@ export async function analyzeCompanyMeasures(opts: {
       // NOT a near-duplicate is NEVER trimmed — regardless of keyword hits or
       // whether its source document is already cited — and no decisive passage is
       // ever trimmed, so recall is preserved exactly). "off": this entire block is
-      // SKIPPED, so finalEvidence is BYTE-IDENTICAL to the A5-settled pack (rollback
+      // SKIPPED, so pack is BYTE-IDENTICAL to the A5-settled pack (rollback
       // path, no redeploy). Framework-level: the decisive set is the reused A5
       // oracle — zero per-company/per-topic logic. Fail-open: any error leaves
-      // finalEvidence unchanged.
+      // pack unchanged.
       const contextCostPolicy = resolveContextCostPolicy();
-      if (contextCostPolicy !== "off" && settings.useBm25Retrieval && finalEvidence) {
+      if (contextCostPolicy !== "off" && settings.useBm25Retrieval && pack) {
         try {
           buildDeepIndex();
           const corpusChunks: Chunk[] = deepChunks || [];
-          // Pack membership against the A5-settled finalEvidence (same seam rule as
+          // Pack membership against the A5-settled pack (same seam rule as
           // A5): a corpus chunk is in the pack iff its exact text is present. Order
           // is the pack order so the trim preserves a stable kept-order.
-          const trimPackChunks = corpusChunks.filter((c) => c.text && finalEvidence.includes(c.text));
+          const trimPackChunks = corpusChunks.filter((c) => c.text && pack.includes(c.text));
           const outcome = applyContextTrimPolicy({
             policy: contextCostPolicy,
             measure,
@@ -2792,13 +2838,13 @@ export async function analyzeCompanyMeasures(opts: {
             // text. The decisive set is a subset of keptIds by construction, so
             // recall is preserved exactly. Remove each trimmed chunk's verbatim text.
             const keptSet = new Set(outcome.plan.keptIds);
-            let trimmed = finalEvidence;
+            let trimmed = pack;
             for (const c of trimPackChunks) {
               if (!c.text) continue;
               if (keptSet.has(stablePassageId(c))) continue;
               trimmed = trimmed.split(c.text).join("");
             }
-            finalEvidence = trimmed;
+            pack = trimmed;
             console.log(
               `[${companyName}] B5-TRIM ${measure.measureId}: ${outcome.plan.reason}`,
             );
@@ -2817,45 +2863,98 @@ export async function analyzeCompanyMeasures(opts: {
         }
       }
 
+          return pack;
+        },
+      });
+
       let measureResult: MeasureResult;
 
       // Get temporal warning if available
       const tw = temporalContext?.temporalWarning || null;
 
-      // Route into scoreWithEnsemble when EITHER classic ensemble OR the
-      // cross-architecture cascade is enabled. scoringCascade is now ON by
-      // default (see loadAnalysisSettings), so this is the default scoring path;
-      // scoreWithEnsemble dispatches to scoreWithCascade when scoringCascade is
-      // true. Falls back to single-pass only when both are off
-      // (SCORING_CASCADE=0 and ensemble_scoring!="true").
-      if (settings.ensembleScoring || settings.scoringCascade) {
-        // Ensemble/cascade: run multiple passes (or the cascade)
-        measureResult = await scoreWithEnsemble({
-          companyName,
-          companyId,
-          measure,
-          evidenceText: finalEvidence,
-          terminology,
-          topicDescription: framework.topicDescription || framework.name,
-          settings,
-          temporalWarning: tw,
-          framework,
-        });
-      } else {
-        // Single pass
-        measureResult = await scoreSingleMeasure({
-          companyName,
-          companyId,
-          measure,
-          evidenceText: finalEvidence,
-          terminology,
-          topicDescription: framework.topicDescription || framework.name,
-          provider: scoringProvider,
-          temporalWarning: tw,
-          scoringMode: settings.scoringMode,
-          framework,
-        });
+      // ── Group C (B5 lever D): stablePrefixOrder — reorder prompt segments so the
+      // invariant/boilerplate prefix (identical across companies) precedes the
+      // volatile per-company evidence, maximising a provider prompt-cache hit.
+      // apply=only under CONTEXT_COST_POLICY "on"; at the default this returns the
+      // ORIGINAL order byte-identical, so the prompt sent to the LLM is unchanged.
+      const _promptSegments: PromptSegment[] = [
+        { kind: "stable", text: framework.topicDescription || framework.name || "" },
+        { kind: "volatile", text: finalEvidence },
+      ];
+      const _orderedSegments = stablePrefixOrder(
+        _promptSegments,
+        resolveContextCostPolicy() === "on",
+      );
+      // The reordered evidence segment (volatile) is what the scorer consumes; at
+      // the default this is byte-identical to finalEvidence.
+      const scoringEvidence =
+        _orderedSegments.find((s) => s.kind === "volatile")?.text ?? finalEvidence;
+
+      // ── Group C (B5 lever E): routeModel — choose the model tier for the scoring
+      // pass. apply=only under CONTEXT_COST_POLICY "on"; at the default it ALWAYS
+      // returns the strong tier, so model selection is unchanged. Verification
+      // stages (self-consistency / arbiter inside the cascade) remain on the strong
+      // model by the routeModel contract.
+      const _scoringRoute = routeModel({
+        stage: "scoring",
+        uncertaintySignals: null,
+        apply: resolveContextCostPolicy() === "on",
+      });
+      if (_scoringRoute.model === "cheap") {
+        console.log(
+          `[${companyName}] B5-ROUTE ${measure.measureId}: ${_scoringRoute.reason}`,
+        );
       }
+
+      // ── Group C (B4): cache the derived score. DEFAULT CACHE_LAYER_POLICY "off"
+      // ⇒ provable pass-through: the compute closure runs the exact scoring path
+      // below. Under "on" an identical {company, measure, pack, route} key serves a
+      // STORED verdict (see cacheMeasureScore note: the LLM path is non-deterministic
+      // across cold runs, so enable deliberately).
+      measureResult = await cacheMeasureScore<MeasureResult>({
+        workspaceId: companyId ?? "shared",
+        dependencyHashes: [sha256Hex(scoringEvidence)],
+        extra: {
+          measureId: measure.measureId,
+          modelTier: _scoringRoute.model,
+          cascade: settings.ensembleScoring || settings.scoringCascade,
+        },
+        compute: async (): Promise<MeasureResult> => {
+          // Route into scoreWithEnsemble when EITHER classic ensemble OR the
+          // cross-architecture cascade is enabled. scoringCascade is now ON by
+          // default (see loadAnalysisSettings), so this is the default scoring path;
+          // scoreWithEnsemble dispatches to scoreWithCascade when scoringCascade is
+          // true. Falls back to single-pass only when both are off
+          // (SCORING_CASCADE=0 and ensemble_scoring!="true").
+          if (settings.ensembleScoring || settings.scoringCascade) {
+            // Ensemble/cascade: run multiple passes (or the cascade)
+            return await scoreWithEnsemble({
+              companyName,
+              companyId,
+              measure,
+              evidenceText: scoringEvidence,
+              terminology,
+              topicDescription: framework.topicDescription || framework.name,
+              settings,
+              temporalWarning: tw,
+              framework,
+            });
+          }
+          // Single pass
+          return await scoreSingleMeasure({
+            companyName,
+            companyId,
+            measure,
+            evidenceText: scoringEvidence,
+            terminology,
+            topicDescription: framework.topicDescription || framework.name,
+            provider: scoringProvider,
+            temporalWarning: tw,
+            scoringMode: settings.scoringMode,
+            framework,
+          });
+        },
+      });
 
       // Provenance check
       if (measureResult.score > 0 && measureResult.quotes.length > 0) {

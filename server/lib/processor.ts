@@ -33,6 +33,12 @@ import { beginStage } from "./diag-context.js";
 // the env/default MAX_CONCURRENT_BROWSER value, so this seam is byte-identical.
 import { resolveBrowserPoolSlots } from "./resource-pools.js";
 import { recordPaidCall } from "./paid-call-attribution.js";
+// Group C (B4): cache the extraction / ocr layers. Both are STRICTLY GATED by
+// CACHE_LAYER_POLICY (shipped default "off" ⇒ provable pass-through: the wrapped
+// extract/OCR runs exactly as today). Keyed by the document BYTE hash — extraction
+// and OCR are pure, content-derived functions of the bytes, so identical bytes
+// yield identical output (shared scope is safe; no cross-tenant leak possible).
+import { cacheExtraction, cacheOcr } from "./pipeline-cache.js";
 import { isIsolatedChild, remoteAcquire, remoteRelease, registerDescendantGroup, emitLeaseEvent, nextOpId } from "./isolation-ipc.js";
 
 // User-facing message shown on the dashboard banner when the residential proxy
@@ -940,7 +946,22 @@ const OCR_PAGE_TEXT_LAYER_MIN_CHARS = 20;
  * still unprocessed, the result is flagged incomplete (pagesProcessed < pagesAvailable)
  * rather than silently truncated. Always cleans up temp files.
  */
+/**
+ * Group C (B4): OCR layer cache wrapper. At the shipped default CACHE_LAYER_POLICY
+ * "off" this is a provable pass-through — it just awaits extractViaOcrDetailedCompute
+ * with the same args. Under "on", identical document bytes serve the stored OCR
+ * outcome and skip rasterise+tesseract entirely. Keyed by the byte content hash
+ * (OCR output is a pure function of the bytes); budget/scope only bound a cold run.
+ */
 async function extractViaOcrDetailed(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<OcrOutcome> {
+  return cacheOcr<OcrOutcome>({
+    workspaceId: "shared",
+    dependencyHashes: [crypto.createHash("sha256").update(buffer).digest("hex")],
+    compute: () => extractViaOcrDetailedCompute(buffer, budgetMs, scope),
+  });
+}
+
+async function extractViaOcrDetailedCompute(buffer: Buffer, budgetMs?: number, scope?: OperationScope): Promise<OcrOutcome> {
   const tmpDir = os.tmpdir();
   const token = crypto.randomBytes(8).toString("hex");
   const tmpPdf = path.join(tmpDir, `ciq_ocr_${token}.pdf`);
@@ -1119,7 +1140,23 @@ export interface ExtractionFidelity {
  * a fidelity record classified by the pure rule above. `extractTextFromPdf` is a
  * thin `.text` wrapper so every existing caller is byte-for-byte unchanged.
  */
+/**
+ * Group C (B4): extraction layer cache wrapper. At the shipped default
+ * CACHE_LAYER_POLICY "off" this is a provable pass-through — it just awaits
+ * extractPdfWithFidelityCompute with the same args, so every existing caller is
+ * byte-for-byte unchanged. Under "on", identical document bytes serve the stored
+ * fidelity record and skip pdf-parse/pdftotext/OCR entirely. Keyed by the byte
+ * content hash (extraction is a pure function of the bytes).
+ */
 export async function extractPdfWithFidelity(buffer: Buffer, scope?: OperationScope): Promise<ExtractionFidelity> {
+  return cacheExtraction<ExtractionFidelity>({
+    workspaceId: "shared",
+    dependencyHashes: [crypto.createHash("sha256").update(buffer).digest("hex")],
+    compute: () => extractPdfWithFidelityCompute(buffer, scope),
+  });
+}
+
+async function extractPdfWithFidelityCompute(buffer: Buffer, scope?: OperationScope): Promise<ExtractionFidelity> {
   const bytesAvailable = buffer.length;
   const base = {
     bytesAvailable,
