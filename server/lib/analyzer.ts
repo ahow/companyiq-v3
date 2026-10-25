@@ -420,18 +420,21 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     // selectable via an explicit cascade_arbiter override.
     cascadeArbiter: settings.cascade_arbiter
       || (cascadeV2On ? "gpt5-arbiter" : "claude-arbiter"),
-    // PR 1 · Change 1a: default OFF. Enabled via workspace_settings.retrieval_v2="true".
-    retrievalV2: settings.retrieval_v2 === "true",
-    // PR 1 · Change 4: default OFF. Enabled via workspace_settings.auto_reretrieval="true".
+    // PR 1 · Change 1a: default OFF. Enabled via workspace_settings.retrieval_v2="true"
+    // or, as a fallback, the RETRIEVAL_V2="true" environment variable.
+    retrievalV2: settings.retrieval_v2 === "true" || process.env.RETRIEVAL_V2 === "true",
+    // PR 1 · Change 4: default OFF. Enabled via workspace_settings.auto_reretrieval="true"
+    // or, as a fallback, the AUTO_RERETRIEVAL="true" environment variable.
     // Requires retrievalV2 AND a reviewQueue plumbed from pipeline.ts to have any effect.
-    autoReretrieval: settings.auto_reretrieval === "true",
+    autoReretrieval: settings.auto_reretrieval === "true" || process.env.AUTO_RERETRIEVAL === "true",
     cascadeV2: cascadeV2On,
     // v3g (Bug 1 §3 action 5): verdict cache is now OPT-IN (default OFF) until the
     // fingerprint contract is independently re-verified. The cost of recomputing a
     // few measures per re-run is trivial vs the risk of cross-company verdict reuse
     // that the old positional fingerprint allowed. Set verdict_cache_enabled="true"
     // to re-enable once the new content-stable fingerprints are confirmed unique.
-    verdictCacheEnabled: settings.verdict_cache_enabled === "true", // default OFF
+    // Fallback: also enable via the VERDICT_CACHE_ENABLED="true" environment variable.
+    verdictCacheEnabled: settings.verdict_cache_enabled === "true" || process.env.VERDICT_CACHE_ENABLED === "true", // default OFF
   };
 }
 
