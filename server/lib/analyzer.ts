@@ -348,6 +348,19 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
   const cascadeV2On = settings.cascade_v2 === "false"
     ? false
     : (settings.cascade_v2 === "true" ? true : ((process.env.CASCADE_V2 ?? "1") !== "0"));
+  // Group F: retrieval-hardening, auto re-retrieval and verdict cache are now
+  // DEFAULT ON (env-reversible), mirroring the cascadeV2On resolution above.
+  // Precedence: workspace force-off ("false") → off; workspace force-on ("true")
+  // → on; otherwise the env var (default "1"; set "0" to revert).
+  const retrievalV2On = settings.retrieval_v2 === "false"
+    ? false
+    : (settings.retrieval_v2 === "true" ? true : ((process.env.RETRIEVAL_V2 ?? "1") !== "0"));
+  const autoReretrievalOn = settings.auto_reretrieval === "false"
+    ? false
+    : (settings.auto_reretrieval === "true" ? true : ((process.env.AUTO_RERETRIEVAL ?? "1") !== "0"));
+  const verdictCacheEnabledOn = settings.verdict_cache_enabled === "false"
+    ? false
+    : (settings.verdict_cache_enabled === "true" ? true : ((process.env.VERDICT_CACHE_ENABLED ?? "1") !== "0"));
   return {
     ensembleScoring: settings.ensemble_scoring === "true",
     ensembleIterations: parseInt(settings.ensemble_iterations || "3"),
@@ -420,21 +433,20 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     // selectable via an explicit cascade_arbiter override.
     cascadeArbiter: settings.cascade_arbiter
       || (cascadeV2On ? "gpt5-arbiter" : "claude-arbiter"),
-    // PR 1 · Change 1a: default OFF. Enabled via workspace_settings.retrieval_v2="true"
-    // or, as a fallback, the RETRIEVAL_V2="true" environment variable.
-    retrievalV2: settings.retrieval_v2 === "true" || process.env.RETRIEVAL_V2 === "true",
-    // PR 1 · Change 4: default OFF. Enabled via workspace_settings.auto_reretrieval="true"
-    // or, as a fallback, the AUTO_RERETRIEVAL="true" environment variable.
+    // PR 1 · Change 1a / Group F: default ON (env-reversible via RETRIEVAL_V2=0).
+    // Force-off with workspace_settings.retrieval_v2="false"; force-on with "true".
+    retrievalV2: retrievalV2On,
+    // PR 1 · Change 4 / Group F: default ON (env-reversible via AUTO_RERETRIEVAL=0).
+    // Force-off with workspace_settings.auto_reretrieval="false"; force-on with "true".
     // Requires retrievalV2 AND a reviewQueue plumbed from pipeline.ts to have any effect.
-    autoReretrieval: settings.auto_reretrieval === "true" || process.env.AUTO_RERETRIEVAL === "true",
+    autoReretrieval: autoReretrievalOn,
     cascadeV2: cascadeV2On,
-    // v3g (Bug 1 §3 action 5): verdict cache is now OPT-IN (default OFF) until the
-    // fingerprint contract is independently re-verified. The cost of recomputing a
-    // few measures per re-run is trivial vs the risk of cross-company verdict reuse
-    // that the old positional fingerprint allowed. Set verdict_cache_enabled="true"
-    // to re-enable once the new content-stable fingerprints are confirmed unique.
-    // Fallback: also enable via the VERDICT_CACHE_ENABLED="true" environment variable.
-    verdictCacheEnabled: settings.verdict_cache_enabled === "true" || process.env.VERDICT_CACHE_ENABLED === "true", // default OFF
+    // v3g (Bug 1 §3 action 5) / Group F: verdict cache is now DEFAULT ON
+    // (env-reversible via VERDICT_CACHE_ENABLED=0). Force-off with
+    // workspace_settings.verdict_cache_enabled="false"; force-on with "true".
+    // Content-stable fingerprints gate reuse, so cross-company verdict reuse is
+    // prevented while re-runs reuse identical-evidence verdicts for reproducibility.
+    verdictCacheEnabled: verdictCacheEnabledOn,
   };
 }
 
