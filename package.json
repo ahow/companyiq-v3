@@ -7,7 +7,11 @@
     "dev": "concurrently \"tsx watch server/index.ts\" \"cd client && vite\"",
     "build": "cd client && vite build",
     "start": "tsx server/index.ts",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "phase2:select": "tsx server/scripts/phase2_gate_cli.ts select --out server/data/phase2-holdout/holdout-manifest.json --template server/data/phase2-holdout/labels.template.json",
+    "phase2:gate": "tsx server/scripts/phase2_gate_cli.ts gate --manifest server/data/phase2-holdout/holdout-manifest.json --labels server/data/phase2-holdout/labels.template.json",
+    "phase2:suggest": "tsx server/scripts/phase2_gate_cli.ts suggest --labels server/data/phase2-holdout/labels.template.json",
+    "test:phase2": "node --import tsx --test server/lib/phase2-groundtruth.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

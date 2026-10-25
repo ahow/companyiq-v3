@@ -1544,3 +1544,18 @@ desired (cosmetic; would force a redeploy).
 **One proposal.** Scale to **3 worker replicas** (DB-safe by the measured arithmetic) and read the DeepSeek account ceiling off the already-emitting `[DIAG][llm-permits]` + `429` telemetry — a bounded in-production measurement of the one unknown, with a pre-set rollback if the 429 rate climbs or `waiting>0` becomes sustained. No code change; applied only on explicit go-ahead.
 
 **Deliverable.** `deliverables/45-binding-ceiling-measurement.md` (+ .pdf / .docx).
+
+### WP05 / Phase 2 — Ground truth (Issue 2): Group E / Step 5 — FORMAL IMPLEMENTATION (autonomous parts) (2026-10-25)
+
+**Context.** Phase 2 was previously ESTABLISHED & DEPLOYED (2026-10-18) as inert framework code (`phase2-groundtruth.ts`, `phase2-holdout-roster.ts`, `phase2_gate_cli.ts`, test). Programme Step 5 (Group E) formally implements **everything autonomously possible**, leaving only the one irreducibly-human step (adjudication) outstanding.
+
+**What was implemented autonomously (this commit).**
+1. **Holdout selection made ACTIVE — the fixed yardstick is now a committed static asset.** `server/data/phase2-holdout/holdout-manifest.json` (280 cells: current-yes=19, unstable=7, low-yield-company=192, random-no=62; 3 non-English filers) + `server/data/phase2-holdout/labels.template.json` (all `human_label=PENDING`), generated from the 10-company post-fix replay corpus (1450 obs) at the default seed. Same seed+inputs ⇒ byte-identical (reproducible via `npm run phase2:select`).
+2. **Gate infrastructure ready to run against the committed yardstick.** `phase2_gate_cli gate` gained `--manifest` so the standing gate runs from the committed manifest with **no local replay corpus**. npm scripts added: `phase2:select`, `phase2:gate`, `phase2:suggest`, `test:phase2`. Verified: gate reports **NOT-ARMED** ("ground truth pending", no fabricated precision/recall) against the all-PENDING template.
+3. **Provisional-suggestion plumbing (independent model family, non-authoritative).** New pure `attachProvisionalSuggestions()` + `isIndependentProvisionalSource()` + `SCORER_MODEL_FAMILIES` guard in `phase2-groundtruth.ts`, and a `suggest` CLI subcommand. It merges OUT-OF-BAND independent-model suggestions into the `provisional_suggestion` field ONLY, **copying `human_label`/`labeller_id`/`timestamp`/`overlap` verbatim** (merging can never arm the gate), **rejecting any scorer-family source** (anti-circularity), and **never calling a model itself** ($0, no fabrication). Generating the suggestions is a separate, explicitly-gated independent-model pass.
+
+**Honesty / limits (unchanged, upheld).** No human labels fabricated; the gate stays **not-armed** until the one-time analyst adjudication of the fixed ~280-cell holdout (NOT per-company production review — constraint 7). Framework/CI asset, imported only by test + CLI ⇒ **Total cells Y→N = 0, N→Y = 0 at runtime by construction**; no paid batch; verdict-invariant.
+
+**Tests.** `phase2-groundtruth.test.ts` **27/27** (23 prior + 4 new: independent-source guard; attach-without-touching-human_label + gate stays not-armed; scorer-family rejection; unknown-cell/malformed skip). Regression `phase1-reproducibility.test.ts` **16/16**. tsc: **0 new diagnostics** in changed files.
+
+**Rollback.** Revert this commit — `phase2-groundtruth.ts` (+provisional plumbing), `phase2_gate_cli.ts` (+suggest/--manifest), `phase2-groundtruth.test.ts` (+4 tests), `package.json` (4 scripts), 2 committed data files, this ledger. No schema/pool/env/scoring change.

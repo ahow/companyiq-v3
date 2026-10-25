@@ -523,6 +523,127 @@ export function buildLabelTemplate(manifest: HoldoutManifest): HoldoutLabel[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Provisional suggestions (NON-AUTHORITATIVE analyst triage — independent family)
+//
+// The ledger explicitly allows an OPTIONAL `provisional_suggestion` per cell, from
+// an INDEPENDENT model family, purely to pre-sort the analyst's queue. It is NEVER
+// read by `computeGate()` as truth and NEVER touches `human_label` — populating it
+// is NOT "labelling". This section is the autonomous plumbing: a pure merge that
+// attaches suggestions to a (blank) template while enforcing two hard rules —
+//   (1) the suggestion source must NOT be a scorer-family model (anti-circularity),
+//   (2) the merge must leave every `human_label` exactly as it was (default PENDING).
+// Generating the suggestions themselves (a paid, evidence-backed independent-model
+// pass) is a separate, explicitly-gated step — see phase2_gate_cli `suggest`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The scorer's own model families (the cascade). A provisional source matching any
+ *  of these would re-introduce the circularity Phase 2 exists to break, so it is
+ *  rejected. Framework-level: these are provider/family tokens, not company logic. */
+export const SCORER_MODEL_FAMILIES: readonly string[] = [
+  "deepseek",
+  "glm",
+  "zhipu",
+  "z.ai",
+  "claude",
+  "anthropic",
+];
+
+/** Non-authoritative, independent-family pre-annotation for one holdout cell. */
+export interface ProvisionalSuggestion {
+  label: "Yes" | "No" | "Unsure";
+  /** Names the INDEPENDENT model that produced it (e.g. "openrouter:qwen-2.5-72b").
+   *  MUST NOT name a scorer family (see SCORER_MODEL_FAMILIES). */
+  source: string;
+  note?: string;
+}
+
+/**
+ * Is `source` an INDEPENDENT family (i.e. not the scorer's)? Case-insensitive
+ * substring match against SCORER_MODEL_FAMILIES. Empty/invalid ⇒ not independent.
+ * Pure.
+ */
+export function isIndependentProvisionalSource(source: string | null | undefined): boolean {
+  if (!source || typeof source !== "string") return false;
+  const s = source.toLowerCase();
+  return !SCORER_MODEL_FAMILIES.some((f) => s.includes(f));
+}
+
+export interface AttachProvisionalResult {
+  labels: HoldoutLabel[];
+  attached: number;
+  skippedUnknownCell: number;
+  rejectedScorerFamily: number;
+  errors: string[];
+}
+
+/**
+ * Attach non-authoritative provisional suggestions to a label set (pure, immutable
+ * — returns a new array; inputs untouched). HARD GUARANTEES:
+ *   - `human_label`, `labeller_id`, `timestamp`, `overlap` are copied verbatim —
+ *     this is NOT labelling and can NEVER arm the gate.
+ *   - A suggestion whose cellKey is absent from `labels` is skipped (counted).
+ *   - A suggestion from a scorer-family source is REJECTED (counted) — the merged
+ *     cell keeps its prior suggestion (usually null). Anti-circularity enforced.
+ *   - A malformed suggestion (bad label enum / empty source) records an error and
+ *     is not attached.
+ */
+export function attachProvisionalSuggestions(
+  labels: readonly HoldoutLabel[],
+  suggestions: ReadonlyArray<{ cellKey: string } & ProvisionalSuggestion>,
+): AttachProvisionalResult {
+  const byCell = new Map<string, { cellKey: string } & ProvisionalSuggestion>();
+  const errors: string[] = [];
+  let rejectedScorerFamily = 0;
+  let skippedUnknownCell = 0;
+
+  const labelKeys = new Set(labels.map((l) => l.cellKey));
+  for (const s of suggestions) {
+    if (!s || typeof s !== "object" || typeof s.cellKey !== "string") {
+      errors.push("suggestion missing a string cellKey");
+      continue;
+    }
+    if (!["Yes", "No", "Unsure"].includes(s.label)) {
+      errors.push(`suggestion for ${s.cellKey}: label must be Yes/No/Unsure`);
+      continue;
+    }
+    if (!s.source || typeof s.source !== "string") {
+      errors.push(`suggestion for ${s.cellKey}: source is required (name the independent model)`);
+      continue;
+    }
+    if (!labelKeys.has(s.cellKey)) {
+      skippedUnknownCell++;
+      continue;
+    }
+    if (!isIndependentProvisionalSource(s.source)) {
+      rejectedScorerFamily++;
+      errors.push(
+        `suggestion for ${s.cellKey}: source "${s.source}" matches a scorer family — ` +
+          `rejected (anti-circularity: provisional suggestions must be an INDEPENDENT model)`,
+      );
+      continue;
+    }
+    byCell.set(s.cellKey, s);
+  }
+
+  let attached = 0;
+  const out = labels.map((l) => {
+    const s = byCell.get(l.cellKey);
+    if (!s) return { ...l };
+    attached++;
+    return {
+      ...l, // human_label / labeller_id / timestamp / overlap copied verbatim
+      provisional_suggestion: {
+        label: s.label,
+        source: s.source,
+        ...(s.note ? { note: s.note } : {}),
+      },
+    };
+  });
+
+  return { labels: out, attached, skippedUnknownCell, rejectedScorerFamily, errors };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Standing regression gate
 // ─────────────────────────────────────────────────────────────────────────────
 

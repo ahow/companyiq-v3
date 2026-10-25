@@ -29,6 +29,8 @@ import {
   validateHoldoutLabel,
   validateLabelFile,
   buildLabelTemplate,
+  attachProvisionalSuggestions,
+  isIndependentProvisionalSource,
   computeGate,
   wilsonInterval,
   DEFAULT_GATE_THRESHOLDS,
@@ -306,6 +308,91 @@ test("(2.2e) label file rejects duplicates and cellKeys absent from the manifest
   assert.ok(!rStray.valid && rStray.errors.some((e) => e.includes("not in manifest")));
 
   assert.ok(!validateLabelFile("nope" as any).valid, "non-array label file must be rejected");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (2.7) Provisional suggestions — NON-AUTHORITATIVE, independent-family triage
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("(2.7a) independent-source guard rejects scorer families, accepts others", () => {
+  // Scorer cascade = DeepSeek → GLM-4.6 → Claude arbiter; all must be rejected.
+  assert.equal(isIndependentProvisionalSource("deepseek-chat"), false);
+  assert.equal(isIndependentProvisionalSource("openrouter:z-ai/glm-4.6"), false);
+  assert.equal(isIndependentProvisionalSource("anthropic:claude-3.5-sonnet"), false);
+  assert.equal(isIndependentProvisionalSource("zhipu/glm-4"), false);
+  // Independent families are accepted.
+  assert.equal(isIndependentProvisionalSource("openrouter:qwen-2.5-72b"), true);
+  assert.equal(isIndependentProvisionalSource("mistral-large"), true);
+  // Empty / invalid ⇒ not independent.
+  assert.equal(isIndependentProvisionalSource(""), false);
+  assert.equal(isIndependentProvisionalSource(null), false);
+});
+
+test("(2.7b) attach merges independent suggestions WITHOUT touching human_label", () => {
+  const obs = buildObservations({ companies: [1], measures: MEASURES, runs: 1, verdict: () => "No" });
+  const m = selectHoldout(obs, { seed: "prov", targetSize: 5, lowYieldYesThreshold: 0, minNonEnglishFilers: 0 });
+  const tpl = buildLabelTemplate(m); // all PENDING, no suggestions
+  const target = tpl[0].cellKey;
+
+  const res = attachProvisionalSuggestions(tpl, [
+    { cellKey: target, label: "Yes", source: "openrouter:qwen-2.5-72b", note: "mentions AI board oversight" },
+  ]);
+  assert.equal(res.attached, 1);
+  assert.equal(res.rejectedScorerFamily, 0);
+  assert.equal(res.skippedUnknownCell, 0);
+
+  const merged = res.labels.find((l) => l.cellKey === target)!;
+  assert.equal(merged.provisional_suggestion?.label, "Yes");
+  assert.equal(merged.provisional_suggestion?.source, "openrouter:qwen-2.5-72b");
+  assert.equal(merged.provisional_suggestion?.note, "mentions AI board oversight");
+  // The authoritative fields are untouched ⇒ merging can NEVER arm the gate.
+  assert.equal(merged.human_label, "PENDING");
+  assert.equal(merged.labeller_id, null);
+  assert.equal(merged.timestamp, null);
+
+  // Input array is not mutated (pure).
+  assert.equal(tpl[0].provisional_suggestion, null);
+
+  // Every merged label still validates, and the gate stays NOT ARMED.
+  assert.ok(validateLabelFile(res.labels, m).valid);
+  const g = computeGate({
+    labels: res.labels,
+    modelVerdicts: m.cells.map((c) => ({ cellKey: c.cellKey, verdict: (c.modelVerdict ?? "No") as Verdict })),
+  });
+  assert.equal(g.status, "not-armed");
+  assert.equal(g.armedLabelCount, 0);
+});
+
+test("(2.7c) scorer-family suggestions are rejected (anti-circularity)", () => {
+  const obs = buildObservations({ companies: [1], measures: MEASURES, runs: 1, verdict: () => "No" });
+  const m = selectHoldout(obs, { seed: "prov2", targetSize: 5, lowYieldYesThreshold: 0, minNonEnglishFilers: 0 });
+  const tpl = buildLabelTemplate(m);
+  const target = tpl[0].cellKey;
+
+  const res = attachProvisionalSuggestions(tpl, [
+    { cellKey: target, label: "Yes", source: "deepseek-chat" }, // the scorer itself
+  ]);
+  assert.equal(res.attached, 0);
+  assert.equal(res.rejectedScorerFamily, 1);
+  assert.ok(res.errors.some((e) => e.includes("scorer family")));
+  // The cell keeps its prior (null) suggestion — no scorer opinion is stored.
+  assert.equal(res.labels.find((l) => l.cellKey === target)!.provisional_suggestion, null);
+});
+
+test("(2.7d) unknown cellKeys are skipped and malformed suggestions error (not attached)", () => {
+  const obs = buildObservations({ companies: [1], measures: MEASURES, runs: 1, verdict: () => "No" });
+  const m = selectHoldout(obs, { seed: "prov3", targetSize: 5, lowYieldYesThreshold: 0, minNonEnglishFilers: 0 });
+  const tpl = buildLabelTemplate(m);
+
+  const res = attachProvisionalSuggestions(tpl, [
+    { cellKey: "999::not-in-file", label: "No", source: "mistral-large" }, // unknown cell
+    { cellKey: tpl[0].cellKey, label: "Maybe" as any, source: "mistral-large" }, // bad enum
+    { cellKey: tpl[1].cellKey, label: "No", source: "" as any }, // empty source
+  ]);
+  assert.equal(res.attached, 0);
+  assert.equal(res.skippedUnknownCell, 1);
+  assert.ok(res.errors.some((e) => e.includes("label must be Yes/No/Unsure")));
+  assert.ok(res.errors.some((e) => e.includes("source is required")));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

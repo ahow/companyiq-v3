@@ -1,0 +1,2802 @@
+[
+  {
+    "cellKey": "11::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "early, translate them into product designs, and test them swiftly. Consumer-cent",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "early, translate them into product designs, and test them swiftly. Consumer-cent",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "early, translate them into product designs, and test them swiftly. Consumer-cent",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "with new approaches, techniques and frameworks in development. The lessons learn",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "and transformation strategy, with a key focus on delivering structural efficienc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "and transformation strategy, with a key focus on delivering structural efficienc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472722000007/nem-20211231.htm",
+    "passage": "property, financial information, and operational data; vulnerabilities introduce",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "other sustainability matters such as corporate governance at Corporate Governanc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472722000007/nem-20211231.htm",
+    "passage": "property, financial information, and operational data; vulnerabilities introduce",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "2023 and 2024. Prior to joining Newmont, he served as Group Executive, Strategy ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "three years from 2025, based on the peatland management technology that it devel",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "three years from 2025, based on the peatland management technology that it devel",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to realize their innovations and contributes to a sustainable and better future ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to realize their innovations and contributes to a sustainable and better future ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "and transformation strategy, with a key focus on delivering structural efficienc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "may compromise the achievement of the Group's objectives. •We have a risk manage",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "and transformation strategy, with a key focus on delivering structural efficienc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "other sustainability matters such as corporate governance at Corporate Governanc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "three years from 2025, based on the peatland management technology that it devel",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "rules in countries where we operate. We do this because we believe tax systems s",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "within and we use key risk indicators to indicate any changes to our risk exposu",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "and report risk. The Group Risk Architecture is currently made up of 10 Group Ri",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "and report risk. The Group Risk Architecture is currently made up of 10 Group Ri",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "and report risk. The Group Risk Architecture is currently made up of 10 Group Ri",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "within and we use key risk indicators to indicate any changes to our risk exposu",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "within and we use key risk indicators to indicate any changes to our risk exposu",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "rules in countries where we operate. We do this because we believe tax systems s",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "rules in countries where we operate. We do this because we believe tax systems s",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "rules in countries where we operate. We do this because we believe tax systems s",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "and report risk. The Group Risk Architecture is currently made up of 10 Group Ri",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "within and we use key risk indicators to indicate any changes to our risk exposu",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "• restricted physical access to critical centres and servers; • incident respons",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "and report risk. The Group Risk Architecture is currently made up of 10 Group Ri",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "rules in countries where we operate. We do this because we believe tax systems s",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-strategic-partnerships-or-collaborations-to-advance-ai-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "rules in countries where we operate. We do this because we believe tax systems s",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "and report risk. The Group Risk Architecture is currently made up of 10 Group Ri",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "12::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/811809/000119312526354647/bhp-20260630.htm",
+    "passage": "rules in countries where we operate. We do this because we believe tax systems s",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Kering engages regularly with its suppliers through, for example, questionnaires",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "and well being. The agreement includes L’Oréal’s acquisition of Creed, the signi",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Foundation to foster a safe, supportive, and caring workplace environment for in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "across the Group for its day-to-day management ●2023S Kering’s Human Rights Poli",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "with new approaches, techniques and frameworks in development. The lessons learn",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "with new approaches, techniques and frameworks in development. The lessons learn",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Foundation to foster a safe, supportive, and caring workplace environment for in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Kering engages regularly with its suppliers through, for example, questionnaires",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "across the Group for its day-to-day management ●2023S Kering’s Human Rights Poli",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Kering engages regularly with its suppliers through, for example, questionnaires",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Foundation to foster a safe, supportive, and caring workplace environment for in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Kering engages regularly with its suppliers through, for example, questionnaires",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "and well being. The agreement includes L’Oréal’s acquisition of Creed, the signi",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Kering engages regularly with its suppliers through, for example, questionnaires",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "and well being. The agreement includes L’Oréal’s acquisition of Creed, the signi",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "and well being. The agreement includes L’Oréal’s acquisition of Creed, the signi",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Kering engages regularly with its suppliers through, for example, questionnaires",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "with new approaches, techniques and frameworks in development. The lessons learn",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "Foundation to foster a safe, supportive, and caring workplace environment for in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "across the Group for its day-to-day management ●2023S Kering’s Human Rights Poli",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "across the Group for its day-to-day management ●2023S Kering’s Human Rights Poli",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "across the Group for its day-to-day management ●2023S Kering’s Human Rights Poli",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "across the Group for its day-to-day management ●2023S Kering’s Human Rights Poli",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "with new approaches, techniques and frameworks in development. The lessons learn",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "and well being. The agreement includes L’Oréal’s acquisition of Creed, the signi",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-strategic-partnerships-or-collaborations-to-advance-ai-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "and well being. The agreement includes L’Oréal’s acquisition of Creed, the signi",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "with new approaches, techniques and frameworks in development. The lessons learn",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "13::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.kering.com/api/download-file/?path=02_Universal_Registration_Document_2025_EN_216d1c494b.pdf",
+    "passage": "and well being. The agreement includes L’Oréal’s acquisition of Creed, the signi",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "discussed. –Considered employees' ways of working and opportunities to enhance c",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "a regular basis. Strategic ReportSustainabilityGovernanceRisk reviewFinancial st",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "may compromise the achievement of the Group's objectives. •We have a risk manage",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "Environmental, Social and Climate Change Risk Management  1      Restricted-conf",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "and transformation strategy, with a key focus on delivering structural efficienc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "discussed. –Considered employees' ways of working and opportunities to enhance c",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "Environmental, Social and Climate Change Risk Management  1      Restricted-conf",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "discussed. –Considered employees' ways of working and opportunities to enhance c",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "may compromise the achievement of the Group's objectives. •We have a risk manage",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "discussed. –Considered employees' ways of working and opportunities to enhance c",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "a regular basis. Strategic ReportSustainabilityGovernanceRisk reviewFinancial st",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "discussed. –Considered employees' ways of working and opportunities to enhance c",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "a regular basis. Strategic ReportSustainabilityGovernanceRisk reviewFinancial st",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "a regular basis. Strategic ReportSustainabilityGovernanceRisk reviewFinancial st",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "discussed. –Considered employees' ways of working and opportunities to enhance c",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "and transformation strategy, with a key focus on delivering structural efficienc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "may compromise the achievement of the Group's objectives. •We have a risk manage",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "Environmental, Social and Climate Change Risk Management  1      Restricted-conf",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "Environmental, Social and Climate Change Risk Management  1      Restricted-conf",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "Environmental, Social and Climate Change Risk Management  1      Restricted-conf",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "Environmental, Social and Climate Change Risk Management  1      Restricted-conf",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "a regular basis. Strategic ReportSustainabilityGovernanceRisk reviewFinancial st",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-strategic-partnerships-or-collaborations-to-advance-ai-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "a regular basis. Strategic ReportSustainabilityGovernanceRisk reviewFinancial st",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "16::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/891478/000089147820000017/a20-f2019.htm",
+    "passage": "a regular basis. Strategic ReportSustainabilityGovernanceRisk reviewFinancial st",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Sustainable Packaging - Sustainable Manufacturing, Logistics & Water Stewardship",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "rights issues, supported by five enablers that will further enhance our due dili",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Corporate Governance Report 2025. Nestlé – Annual Review 202564 Compliance is ou",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "work on two different levels: 1) Taking action in our supply chain to assess the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "social partners, and from NGOs to international organizations with diverse focus",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "social partners, and from NGOs to international organizations with diverse focus",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "social partners, and from NGOs to international organizations with diverse focus",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Corporate Governance Report 2025. Nestlé – Annual Review 202564 Compliance is ou",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Sustainable Packaging - Sustainable Manufacturing, Logistics & Water Stewardship",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "work on two different levels: 1) Taking action in our supply chain to assess the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Sustainable Packaging - Sustainable Manufacturing, Logistics & Water Stewardship",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Corporate Governance Report 2025. Nestlé – Annual Review 202564 Compliance is ou",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Sustainable Packaging - Sustainable Manufacturing, Logistics & Water Stewardship",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "rights issues, supported by five enablers that will further enhance our due dili",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Sustainable Packaging - Sustainable Manufacturing, Logistics & Water Stewardship",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "rights issues, supported by five enablers that will further enhance our due dili",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "rights issues, supported by five enablers that will further enhance our due dili",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Sustainable Packaging - Sustainable Manufacturing, Logistics & Water Stewardship",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "social partners, and from NGOs to international organizations with diverse focus",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "Corporate Governance Report 2025. Nestlé – Annual Review 202564 Compliance is ou",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "work on two different levels: 1) Taking action in our supply chain to assess the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "work on two different levels: 1) Taking action in our supply chain to assess the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "work on two different levels: 1) Taking action in our supply chain to assess the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "work on two different levels: 1) Taking action in our supply chain to assess the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "social partners, and from NGOs to international organizations with diverse focus",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "rights issues, supported by five enablers that will further enhance our due dili",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-strategic-partnerships-or-collaborations-to-advance-ai-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "rights issues, supported by five enablers that will further enhance our due dili",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "social partners, and from NGOs to international organizations with diverse focus",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "1::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.nestle.com/sites/default/files/2026-02/non-financial-statement-2025.pdf",
+    "passage": "rights issues, supported by five enablers that will further enhance our due dili",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "2017, the Sumitomo Forestry Group has published the Integrated Report with the o",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "1 forestry company,” hich will have influence in the global timber market in the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "strive to improve profitability while making full use of DX and AI technologies.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2018_report_en.pdf",
+    "passage": "Reports. 1. Risks related to trends in housing markets worldwide 2. Legal and re",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "three years from 2025, based on the peatland management technology that it devel",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "three years from 2025, based on the peatland management technology that it devel",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "strive to improve profitability while making full use of DX and AI technologies.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "2017, the Sumitomo Forestry Group has published the Integrated Report with the o",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2018_report_en.pdf",
+    "passage": "Reports. 1. Risks related to trends in housing markets worldwide 2. Legal and re",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "2017, the Sumitomo Forestry Group has published the Integrated Report with the o",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "strive to improve profitability while making full use of DX and AI technologies.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "2017, the Sumitomo Forestry Group has published the Integrated Report with the o",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "1 forestry company,” hich will have influence in the global timber market in the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "2017, the Sumitomo Forestry Group has published the Integrated Report with the o",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "1 forestry company,” hich will have influence in the global timber market in the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "1 forestry company,” hich will have influence in the global timber market in the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "2017, the Sumitomo Forestry Group has published the Integrated Report with the o",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "three years from 2025, based on the peatland management technology that it devel",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/ir/library/pdf/ar2024eng.pdf",
+    "passage": "strive to improve profitability while making full use of DX and AI technologies.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2018_report_en.pdf",
+    "passage": "Reports. 1. Risks related to trends in housing markets worldwide 2. Legal and re",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2018_report_en.pdf",
+    "passage": "Reports. 1. Risks related to trends in housing markets worldwide 2. Legal and re",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2018_report_en.pdf",
+    "passage": "Reports. 1. Risks related to trends in housing markets worldwide 2. Legal and re",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2018_report_en.pdf",
+    "passage": "Reports. 1. Risks related to trends in housing markets worldwide 2. Legal and re",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "1 forestry company,” hich will have influence in the global timber market in the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-strategic-partnerships-or-collaborations-to-advance-ai-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "1 forestry company,” hich will have influence in the global timber market in the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "20::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://sfc.jp/english/sustainability/pdf/pdf/2024_report_en.pdf",
+    "passage": "1 forestry company,” hich will have influence in the global timber market in the",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "material sustainability topics and formulate action plans Supervise interdepartm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to realize their innovations and contributes to a sustainable and better future ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and capability-building to drive shared improvements on carbon emissions and res",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and security mechanisms conform to regulations in each region where it operates.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to support SDG 9 By 2030, upgrade infrastructure and retrofit industries to make",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to support SDG 9 By 2030, upgrade infrastructure and retrofit industries to make",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to support SDG 9 By 2030, upgrade infrastructure and retrofit industries to make",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and capability-building to drive shared improvements on carbon emissions and res",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "material sustainability topics and formulate action plans Supervise interdepartm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and security mechanisms conform to regulations in each region where it operates.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "material sustainability topics and formulate action plans Supervise interdepartm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and capability-building to drive shared improvements on carbon emissions and res",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "material sustainability topics and formulate action plans Supervise interdepartm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to realize their innovations and contributes to a sustainable and better future ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "material sustainability topics and formulate action plans Supervise interdepartm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to realize their innovations and contributes to a sustainable and better future ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "material sustainability topics and formulate action plans Supervise interdepartm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to support SDG 9 By 2030, upgrade infrastructure and retrofit industries to make",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and capability-building to drive shared improvements on carbon emissions and res",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and security mechanisms conform to regulations in each region where it operates.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and security mechanisms conform to regulations in each region where it operates.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and security mechanisms conform to regulations in each region where it operates.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "and security mechanisms conform to regulations in each region where it operates.",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to support SDG 9 By 2030, upgrade infrastructure and retrofit industries to make",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-strategic-partnerships-or-collaborations-to-advance-ai-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to realize their innovations and contributes to a sustainable and better future ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to support SDG 9 By 2030, upgrade infrastructure and retrofit industries to make",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "21::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1046179/000162828026025362/tsm-20251231.htm",
+    "passage": "to realize their innovations and contributes to a sustainable and better future ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "outside legally protected areas.The company understands that, for its efforts in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "EnvironmentSustainabilityPartnershipsSuzano, the world's largest pulp producer a",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "the Statutory Audit Committee is updated quarterly on the matters addressed by t",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000162828024018426/suz-20231231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-ai-systems-in-production-serving-customers-or-core-business-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000162828024018426/suz-20231231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000162828024018426/suz-20231231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "EnvironmentSustainabilityPartnershipsSuzano, the world's largest pulp producer a",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "outside legally protected areas.The company understands that, for its efforts in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "the Statutory Audit Committee is updated quarterly on the matters addressed by t",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "outside legally protected areas.The company understands that, for its efforts in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "EnvironmentSustainabilityPartnershipsSuzano, the world's largest pulp producer a",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "outside legally protected areas.The company understands that, for its efforts in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "outside legally protected areas.The company understands that, for its efforts in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "outside legally protected areas.The company understands that, for its efforts in",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000162828024018426/suz-20231231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "EnvironmentSustainabilityPartnershipsSuzano, the world's largest pulp producer a",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "the Statutory Audit Committee is updated quarterly on the matters addressed by t",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "the Statutory Audit Committee is updated quarterly on the matters addressed by t",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "the Statutory Audit Committee is updated quarterly on the matters addressed by t",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000110465922053794/suz-20211231x20f.htm",
+    "passage": "the Statutory Audit Committee is updated quarterly on the matters addressed by t",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-specific-ai-use-cases-or-applications-deployed-in-operations",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000162828024018426/suz-20231231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-strategic-partnerships-or-collaborations-to-advance-ai-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000162828024018426/suz-20231231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "22::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/909327/000090932726000045/suz-20251231.htm",
+    "passage": "strategic decisions. One example is Suzano’s climate strategy, which aims to red",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "process, strengthen their trust in our long-term strategy of our business. There",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "insight from our footprint data to set targets for specific value chain interven",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "transition to the IFRS Sustainability Disclosure Standards (IFRS S1 and IFRS S2)",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "early, translate them into product designs, and test them swiftly. Consumer-cent",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "generative AI tools across the organisation and noted the importance of striking",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "transition to the IFRS Sustainability Disclosure Standards (IFRS S1 and IFRS S2)",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "generative AI tools across the organisation and noted the importance of striking",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "insight from our footprint data to set targets for specific value chain interven",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "generative AI tools across the organisation and noted the importance of striking",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "process, strengthen their trust in our long-term strategy of our business. There",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "generative AI tools across the organisation and noted the importance of striking",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "process, strengthen their trust in our long-term strategy of our business. There",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "early, translate them into product designs, and test them swiftly. Consumer-cent",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "insight from our footprint data to set targets for specific value chain interven",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "transition to the IFRS Sustainability Disclosure Standards (IFRS S1 and IFRS S2)",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "transition to the IFRS Sustainability Disclosure Standards (IFRS S1 and IFRS S2)",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "transition to the IFRS Sustainability Disclosure Standards (IFRS S1 and IFRS S2)",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "transition to the IFRS Sustainability Disclosure Standards (IFRS S1 and IFRS S2)",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-specific-strategic-objectives-or-business-outcomes-targeted-through-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "process, strengthen their trust in our long-term strategy of our business. There",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-the-scale-or-scope-of-ai-deployment-across-business-units-or-geographi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "early, translate them into product designs, and test them swiftly. Consumer-cent",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "11::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/217410/000021741024000017/ul-20231231.htm",
+    "passage": "process, strengthen their trust in our long-term strategy of our business. There",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "operations depend upon the secure transmission of confidential information over ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "reports for the corresponding committees. Specialized Committees The Energy Comm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "reports for the corresponding committees. Specialized Committees The Energy Comm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-board-level-oversight-of-ai-strategy-risks-or-governance",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "operations depend upon the secure transmission of confidential information over ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "the following: Protecting our technology and information systems: When we implem",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-cross-functional-committees-councils-or-working-groups-for-ai-governan",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "operations depend upon the secure transmission of confidential information over ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "reports for the corresponding committees. Specialized Committees The Energy Comm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "operations depend upon the secure transmission of confidential information over ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "operations depend upon the secure transmission of confidential information over ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-integration-of-ai-risks-into-enterprise-risk-management-processes",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "operations depend upon the secure transmission of confidential information over ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "reports for the corresponding committees. Specialized Committees The Energy Comm",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "the following: Protecting our technology and information systems: When we implem",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "the following: Protecting our technology and information systems: When we implem",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "the following: Protecting our technology and information systems: When we implem",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "the following: Protecting our technology and information systems: When we implem",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-strategic-partnerships-or-collaborations-to-advance-ai-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "14::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/104169/000119312526152873/wmt-20260413.htm",
+    "passage": "increase could continue to accelerate.Our strategy, which includes investments i",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-a-formal-ai-governance-framework-policy-or-management-system",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "other sustainability matters such as corporate governance at Corporate Governanc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-a-formal-ai-strategy-or-strategic-roadmap",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "2023 and 2024. Prior to joining Newmont, he served as Group Executive, Strategy ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-adoption-of-ai-standards-or-pursuit-of-certifications-e-g-iso-iec-4200",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "planning process. ►Chair, Leadership Development and Compensation Committee ►Exe",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-adoption-of-responsible-ai-principles-or-ethical-guidelines",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "of certain types of payments made to governments in Canada and abroad based on N",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-ai-infrastructure-platforms-or-technical-architecture-supporting-deplo",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472722000007/nem-20211231.htm",
+    "passage": "property, financial information, and operational data; vulnerabilities introduce",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-ai-talent-acquisition-development-or-workforce-capabilities",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472722000007/nem-20211231.htm",
+    "passage": "property, financial information, and operational data; vulnerabilities introduce",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-alignment-with-or-preparation-for-ai-regulations-e-g-eu-ai-act-sector-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "planning process. ►Chair, Leadership Development and Compensation Committee ►Exe",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-commitments-or-practices-for-ai-transparency-or-explainability",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "of certain types of payments made to governments in Canada and abroad based on N",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-environmental-impact-of-ai-systems-e-g-energy-consumption-carbon-footp",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "planning process. ►Chair, Leadership Development and Compensation Committee ►Exe",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-executive-level-accountability-for-ai-e-g-chief-ai-officer-or-equivale",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "other sustainability matters such as corporate governance at Corporate Governanc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-financial-or-resource-commitments-to-ai-development-or-deployment",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "2023 and 2024. Prior to joining Newmont, he served as Group Executive, Strategy ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-governance-of-third-party-ai-systems-vendors-or-partnerships",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "other sustainability matters such as corporate governance at Corporate Governanc",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-how-ai-capabilities-contribute-to-competitive-advantage-or-market-posi",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "2023 and 2024. Prior to joining Newmont, he served as Group Executive, Strategy ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-how-ai-is-expected-to-create-value-for-stakeholders",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "2023 and 2024. Prior to joining Newmont, he served as Group Executive, Strategy ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-performance-metrics-or-outcomes-from-deployed-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472722000007/nem-20211231.htm",
+    "passage": "property, financial information, and operational data; vulnerabilities introduce",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-processes-for-ai-model-lifecycle-management-monitoring-or-retirement",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "planning process. ►Chair, Leadership Development and Compensation Committee ►Exe",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-processes-to-assess-and-mitigate-bias-or-ensure-fairness-in-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "of certain types of payments made to governments in Canada and abroad based on N",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-prohibited-or-restricted-use-cases-for-ai",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "of certain types of payments made to governments in Canada and abroad based on N",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-requirements-for-human-oversight-or-human-in-the-loop-controls-for-ai-",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "of certain types of payments made to governments in Canada and abroad based on N",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-safety-testing-validation-or-assurance-processes-for-ai-systems",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000120677421000692/nem3808021-def14a.htm",
+    "passage": "of certain types of payments made to governments in Canada and abroad based on N",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  },
+  {
+    "cellKey": "18::discloses-timelines-or-milestones-for-ai-strategy-implementation",
+    "human_label": "PENDING",
+    "labeller_id": null,
+    "document": "https://www.sec.gov/Archives/edgar/data/1164727/000116472724000016/nem-20231231.htm",
+    "passage": "2023 and 2024. Prior to joining Newmont, he served as Group Executive, Strategy ",
+    "timestamp": null,
+    "overlap": false,
+    "provisional_suggestion": null
+  }
+]
