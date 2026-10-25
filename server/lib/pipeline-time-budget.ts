@@ -44,7 +44,7 @@ import { isRetryable, isConclusiveAbsence } from "../../shared/research-state.js
 
 export type PipelineTimeBudgetPolicy = "wallclock" | "shadow" | "budgeted";
 
-export const DEFAULT_PIPELINE_TIME_BUDGET_POLICY: PipelineTimeBudgetPolicy = "wallclock";
+export const DEFAULT_PIPELINE_TIME_BUDGET_POLICY: PipelineTimeBudgetPolicy = "budgeted";
 export const PIPELINE_TIME_BUDGET_POLICY_ENV = "PIPELINE_TIME_BUDGET_POLICY";
 export const PIPELINE_TIME_BUDGET_POLICY_VERSION = 1;
 

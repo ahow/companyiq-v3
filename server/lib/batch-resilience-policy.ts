@@ -46,7 +46,7 @@ import {
 
 export type BatchResiliencePolicy = "legacy" | "shadow" | "resilient";
 
-export const DEFAULT_BATCH_RESILIENCE_POLICY: BatchResiliencePolicy = "legacy";
+export const DEFAULT_BATCH_RESILIENCE_POLICY: BatchResiliencePolicy = "resilient";
 export const BATCH_RESILIENCE_POLICY_ENV = "BATCH_RESILIENCE_POLICY";
 export const BATCH_RESILIENCE_POLICY_VERSION = 1;
 

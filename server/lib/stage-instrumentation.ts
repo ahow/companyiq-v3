@@ -50,7 +50,7 @@ import { hashObject } from "./run-manifest.js";
 export type StageInstrumentationPolicy = "off" | "shadow" | "on";
 
 /** SHIPPED DEFAULT. `off` = no extra emits/snapshots/flushes (byte-identical). */
-export const DEFAULT_STAGE_INSTRUMENTATION_POLICY: StageInstrumentationPolicy = "off";
+export const DEFAULT_STAGE_INSTRUMENTATION_POLICY: StageInstrumentationPolicy = "on";
 
 /** Env var name for the kill-switch (documented in the ledger). */
 export const STAGE_INSTRUMENTATION_POLICY_ENV = "STAGE_INSTRUMENTATION_POLICY";
