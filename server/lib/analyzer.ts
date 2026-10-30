@@ -2675,8 +2675,8 @@ export async function analyzeCompanyMeasures(opts: {
     const DEEP_MAX_CHARS = parseInt(process.env.RETRIEVAL_DEEPREAD_MAX_CHARS || "40000", 10);
     const DEEPREAD_ENABLED = (process.env.RETRIEVAL_DEEPREAD_ENABLED || "true").toLowerCase() !== "false";
 
-    // Score measures in parallel (batch of 5 concurrent)
-    const MEASURE_CONCURRENCY = 5;
+    // Score measures in parallel (env MEASURE_CONCURRENCY, default 5).
+    const MEASURE_CONCURRENCY = Math.max(1, parseInt(process.env.MEASURE_CONCURRENCY || "5", 10));
     const scoreMeasure = async (measure: FrameworkMeasure): Promise<MeasureResult> => {
       const evidencePack = evidencePacks.find((e) => e.measureId === measure.measureId);
       const evidenceText = evidencePack?.text || "";
