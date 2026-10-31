@@ -1011,17 +1011,28 @@ async function webSearchSerper(
 /**
  * Serper goto-link recovery (Google top-3 link change, ~01:30 UTC Oct 30 2026).
  *
+ * ⚠️ DANGER — NEVER await this inline inside a bounded discovery concurrency slot.
+ * This `/resolve` call takes ~24s (up to 45s). Discovery runs ~270 searches per
+ * company through a bounded query-plan concurrency pool; awaiting /resolve inside
+ * webSearchInner holds each discovery slot 12-25x longer than a normal ~1-2s
+ * search, which serializes the whole pipeline past DISCOVERY_TIMEOUT_MS and
+ * produces a full-batch `discovery_timeout` outage (0 documents, every company
+ * failed). This exact mistake caused a production outage and was reverted.
+ * Goto links are ALREADY resolved at FETCH time — axios `maxRedirects` and
+ * Playwright `page.goto` both follow the Google goto HTTP redirect to the real
+ * page — so inline pre-resolution is also redundant. If goto pre-resolution is
+ * ever genuinely needed, it MUST be a bounded-parallel, time-budgeted POST-search
+ * pass (its own concurrency limit + overall deadline), NEVER a serial per-search
+ * await on the critical path.
+ *
  * Google now only lets the top-3 organic results open directly; results beyond
  * the top 3 come back from Serper as opaque redirect links of the form
- * `https://www.google.com/goto?url=CAES...`, which fetch poorly and silently
- * degrade corpus completeness. Serper's free `/resolve` endpoint takes the
- * ENTIRE unmodified `/search` response JSON and returns the same shape with
- * every `organic[].link` resolved to the real URL (verified: HTTP 200, 100% of
- * goto links resolved, ~24s latency, 0 credits).
+ * `https://www.google.com/goto?url=CAES...`. Serper's free `/resolve` endpoint
+ * takes the ENTIRE unmodified `/search` response JSON and returns the same shape
+ * with every `organic[].link` resolved to the real URL.
  *
- *  - SERPER_RESOLVE_ENABLED=0/false disables it (default ON).
- *  - No-op (no network call) when the response contains no goto links — keeps
- *    the added latency off top-3-only / goto-free searches.
+ *  - SERPER_RESOLVE_ENABLED=1/true enables it (default OFF — see danger above).
+ *  - No-op (no network call) when the response contains no goto links.
  *  - Free: never recordPaidCall here.
  *  - Graceful: on ANY failure (timeout, non-200, malformed body, non-lifecycle
  *    abort) logs a warning and returns the ORIGINAL input unchanged, so the
@@ -1032,7 +1043,7 @@ export async function resolveSerperGotoLinks(
   apiKey: string,
   signal?: AbortSignal,
 ): Promise<any> {
-  const enabled = (process.env.SERPER_RESOLVE_ENABLED || "true").toLowerCase();
+  const enabled = (process.env.SERPER_RESOLVE_ENABLED || "false").toLowerCase();
   if (enabled === "0" || enabled === "false") return searchResponseData;
 
   const organic = Array.isArray(searchResponseData?.organic) ? searchResponseData.organic : [];
@@ -1366,11 +1377,11 @@ async function webSearchInner(
   // during 429 backoff sleeps or across the Serper→SerpAPI fallback.
   if (serperKey) {
     try {
-      // The /search call keeps a token bucket slot; the (~24s) /resolve call runs
-      // OUTSIDE the bucket (KEEP #1) so it never holds a search token.
+      // Goto links are resolved at FETCH time (axios maxRedirects / Playwright
+      // page.goto). Do NOT await resolveSerperGotoLinks here — a serial ~24s call
+      // per search exhausts DISCOVERY_TIMEOUT_MS (full-batch discovery_timeout).
       const raw = await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal));
-      const resolved = await resolveSerperGotoLinks(raw, serperKey);
-      return mapOrganicResults(resolved?.organic || []);
+      return mapOrganicResults(raw?.organic || []);
     } catch (error: any) {
       if (isLifecycleCancelledError(error)) throw error; // stop: never fall through / retry
       // On 429 (rate limit), wait and retry once
@@ -1381,8 +1392,7 @@ async function webSearchInner(
         assertDispatchAllowed("discovery.webSearchInner:serper-429-retry");
         try {
           const raw = await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal));
-          const resolved = await resolveSerperGotoLinks(raw, serperKey);
-          return mapOrganicResults(resolved?.organic || []);
+          return mapOrganicResults(raw?.organic || []);
         } catch (retryErr) { if (isLifecycleCancelledError(retryErr)) throw retryErr; /* fall through */ }
       }
       noteRateLimited(); // genuine Serper failure (429-retry-success returns earlier) = back-pressure signal for adaptive concurrency
