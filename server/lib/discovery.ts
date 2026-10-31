@@ -963,12 +963,26 @@ interface SearchResult {
   position?: number;
 }
 
+// Map a raw Serper `organic[]` array to our SearchResult[] shape (shared by the
+// primary Serper path, after goto-link resolution).
+function mapOrganicResults(organic: any[]): SearchResult[] {
+  return (organic || []).map((r: any, idx: number) => ({
+    title: r.title || "",
+    link: r.link || "",
+    snippet: r.snippet || "",
+    position: r.position || idx + 1,
+  }));
+}
+
+// Returns the RAW Serper `/search` response body (searchParameters, organic[], …)
+// so the caller can run goto-link resolution OUTSIDE the search token bucket
+// before mapping. Still records the paid search call (billed on request).
 async function webSearchSerper(
   query: string,
   apiKey: string,
   opts: { num?: number; tbs?: string; gl?: string; hl?: string } = {},
   signal?: AbortSignal,
-): Promise<SearchResult[]> {
+): Promise<any> {
   assertDispatchAllowed("discovery.webSearchSerper:entry");
   const body: any = {
     q: query,
@@ -989,15 +1003,66 @@ async function webSearchSerper(
     signal,
   }).catch((e: any) => { throw abortReasonOr(signal, e); });
 
-  const organic = response.data.organic || [];
   // WP13-A — one paid search call just settled (billed on request, not cache).
   recordPaidCall({ callKind: "search", provider: "serper", model: "serper", endpoint: "https://google.serper.dev/search", role: "search" });
-  return organic.map((r: any, idx: number) => ({
-    title: r.title || "",
-    link: r.link || "",
-    snippet: r.snippet || "",
-    position: r.position || idx + 1,
-  }));
+  return response.data;
+}
+
+/**
+ * Serper goto-link recovery (Google top-3 link change, ~01:30 UTC Oct 30 2026).
+ *
+ * Google now only lets the top-3 organic results open directly; results beyond
+ * the top 3 come back from Serper as opaque redirect links of the form
+ * `https://www.google.com/goto?url=CAES...`, which fetch poorly and silently
+ * degrade corpus completeness. Serper's free `/resolve` endpoint takes the
+ * ENTIRE unmodified `/search` response JSON and returns the same shape with
+ * every `organic[].link` resolved to the real URL (verified: HTTP 200, 100% of
+ * goto links resolved, ~24s latency, 0 credits).
+ *
+ *  - SERPER_RESOLVE_ENABLED=0/false disables it (default ON).
+ *  - No-op (no network call) when the response contains no goto links — keeps
+ *    the added latency off top-3-only / goto-free searches.
+ *  - Free: never recordPaidCall here.
+ *  - Graceful: on ANY failure (timeout, non-200, malformed body, non-lifecycle
+ *    abort) logs a warning and returns the ORIGINAL input unchanged, so the
+ *    top-3 real links are never lost. A lifecycle-cancel still propagates.
+ */
+export async function resolveSerperGotoLinks(
+  searchResponseData: any,
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<any> {
+  const enabled = (process.env.SERPER_RESOLVE_ENABLED || "true").toLowerCase();
+  if (enabled === "0" || enabled === "false") return searchResponseData;
+
+  const organic = Array.isArray(searchResponseData?.organic) ? searchResponseData.organic : [];
+  const hasGoto = organic.some(
+    (r: any) => typeof r?.link === "string" && r.link.includes("google.com/goto"),
+  );
+  // No goto links → skip the network call entirely (no added latency).
+  if (!hasGoto) return searchResponseData;
+
+  try {
+    const response = await axios.post("https://google.serper.dev/resolve", searchResponseData, {
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json",
+      },
+      timeout: envNum("SERPER_RESOLVE_TIMEOUT_MS", 45000),
+      signal,
+    }).catch((e: any) => { throw abortReasonOr(signal, e); });
+
+    if (response?.status === 200 && Array.isArray(response.data?.organic)) {
+      return response.data;
+    }
+    console.warn(`[Discovery] Serper /resolve returned unexpected response (status=${response?.status}); keeping original links`);
+    return searchResponseData;
+  } catch (error: any) {
+    // A lifecycle-cancel must still propagate/throw as elsewhere in this file.
+    if (isLifecycleCancelledError(error)) throw error;
+    console.warn(`[Discovery] Serper /resolve failed (${error?.message || error}); keeping original goto links`);
+    return searchResponseData;
+  }
 }
 
 async function webSearchSerpApi(
@@ -1301,7 +1366,11 @@ async function webSearchInner(
   // during 429 backoff sleeps or across the Serper→SerpAPI fallback.
   if (serperKey) {
     try {
-      return await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal));
+      // The /search call keeps a token bucket slot; the (~24s) /resolve call runs
+      // OUTSIDE the bucket (KEEP #1) so it never holds a search token.
+      const raw = await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal));
+      const resolved = await resolveSerperGotoLinks(raw, serperKey);
+      return mapOrganicResults(resolved?.organic || []);
     } catch (error: any) {
       if (isLifecycleCancelledError(error)) throw error; // stop: never fall through / retry
       // On 429 (rate limit), wait and retry once
@@ -1310,7 +1379,11 @@ async function webSearchInner(
         assertDispatchAllowed("discovery.webSearchInner:serper-429-pre-backoff");
         await timeStage("retry_backoff", "search_429_backoff", () => new Promise(r => setTimeout(r, 5000 + Math.random() * 2000)));
         assertDispatchAllowed("discovery.webSearchInner:serper-429-retry");
-        try { return await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal)); } catch (retryErr) { if (isLifecycleCancelledError(retryErr)) throw retryErr; /* fall through */ }
+        try {
+          const raw = await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal));
+          const resolved = await resolveSerperGotoLinks(raw, serperKey);
+          return mapOrganicResults(resolved?.organic || []);
+        } catch (retryErr) { if (isLifecycleCancelledError(retryErr)) throw retryErr; /* fall through */ }
       }
       noteRateLimited(); // genuine Serper failure (429-retry-success returns earlier) = back-pressure signal for adaptive concurrency
       console.warn(`[Discovery] Serper.dev failed for "${query}": ${error.message}`);

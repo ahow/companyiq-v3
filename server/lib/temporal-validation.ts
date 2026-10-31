@@ -13,6 +13,7 @@
 
 import axios from "axios";
 import { completeWithFallback } from "./ai-providers.js";
+import { resolveSerperGotoLinks } from "./discovery.js";
 import type { Framework } from "../../shared/schema.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -116,7 +117,11 @@ async function webSearchForWithdrawals(query: string): Promise<SearchResult[]> {
           timeout: 10000,
         }
       );
-      return (response.data.organic || []).map((r: any) => ({
+      // Recover Google goto redirect links (positions 4-5) via Serper /resolve
+      // before using them as evidence sources (Oct 30 Google link change). Free
+      // and graceful: returns the original links unchanged on any failure.
+      const resolved = await resolveSerperGotoLinks(response.data, serperKey);
+      return (resolved.organic || []).map((r: any) => ({
         title: r.title || "",
         link: r.link || "",
         snippet: r.snippet || "",
