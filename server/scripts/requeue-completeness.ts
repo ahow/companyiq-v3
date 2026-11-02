@@ -35,8 +35,10 @@
  *   REQUEUE_WORKSPACE_ID   (default 3)
  *   REQUEUE_FRAMEWORK_ID   (default 21)
  *   FETCH_RATIO_THRESHOLD  (default 0.7)
+ *   BUDGET_MATERIAL_FETCH_RATIO (default 0.9; budgetExceeded below this = Tier 1)
  *   REQUEUE_COMPANY_IDS    (comma-separated; restrict the candidate pool)
  *   --limit N              (cap the number of companies re-run; staged rollout)
+ *   --tier 1|2             (1=material core only [default]; 2=also marginal budget overruns)
  *   --confirm              (actually reset + create batch + enqueue)
  *   --full-reset           (clearMeasureScores + fullResetCompanyDocuments)
  */
@@ -58,6 +60,9 @@ function argValue(flag: string): string | undefined {
 }
 const LIMIT_RAW = argValue("--limit");
 const LIMIT = LIMIT_RAW ? parseInt(LIMIT_RAW, 10) : undefined;
+// Materiality tier. Default 1 = Tier 1 material deficits only (the defensible
+// re-run core). Pass `--tier 2` to also include marginal budget overruns.
+const MAX_TIER: 1 | 2 = argValue("--tier") === "2" ? 2 : 1;
 
 const CANDIDATE_IDS = process.env.REQUEUE_COMPANY_IDS
   ? process.env.REQUEUE_COMPANY_IDS.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n))
@@ -79,7 +84,7 @@ async function main() {
   console.log(
     `[Requeue-Completeness] workspace=${WORKSPACE_ID} framework=${FRAMEWORK_ID} ` +
       `fetchRatioThreshold=${process.env.FETCH_RATIO_THRESHOLD || "0.7"} ` +
-      `limit=${LIMIT ?? "none"} confirm=${CONFIRM} fullReset=${FULL_RESET}` +
+      `limit=${LIMIT ?? "none"} maxTier=${MAX_TIER} confirm=${CONFIRM} fullReset=${FULL_RESET}` +
       (CANDIDATE_IDS ? ` candidatePool=${CANDIDATE_IDS.length}` : ""),
   );
 
@@ -93,9 +98,11 @@ async function main() {
     thresholds: { fetchRatioThreshold: parseFloat(process.env.FETCH_RATIO_THRESHOLD || "0.7") },
     companyIds: CANDIDATE_IDS,
     limit: LIMIT,
+    maxTier: MAX_TIER,
   });
 
-  console.log(`[Requeue-Completeness] total qualifying: ${selection.total}` +
+  console.log(`[Requeue-Completeness] total qualifying: ${selection.total} ` +
+    `(tier1=${selection.tierCounts.tier1}, tier2=${selection.tierCounts.tier2})` +
     (LIMIT ? ` (re-running first ${selection.selected.length} after --limit)` : ""));
   console.log(`[Requeue-Completeness] per-signal counts (over all qualifying):`);
   for (const [signal, count] of Object.entries(selection.signalCounts)) {

@@ -20,14 +20,24 @@ import { db } from "../db.js";
 import { sql } from "drizzle-orm";
 
 export interface CompletenessThresholds {
-  /** fetchRatio below this counts as a completeness deficit. */
+  /** fetchRatio below this counts, on its own, as a completeness deficit (Tier 1). */
   fetchRatioThreshold: number;
+  /**
+   * fetchRatio below this makes a `budgetExceeded` company count as MATERIALLY
+   * incomplete (Tier 1) even without unretrieved first-party docs. A company that
+   * blew its fetch budget but still fetched >= this share of discovered docs is
+   * treated as marginal (Tier 2) — re-running it buys little.
+   */
+  budgetMaterialFetchRatio: number;
 }
 
 export function resolveThresholds(over?: Partial<CompletenessThresholds>): CompletenessThresholds {
   return {
     fetchRatioThreshold:
       over?.fetchRatioThreshold ?? parseFloat(process.env.FETCH_RATIO_THRESHOLD || "0.7"),
+    budgetMaterialFetchRatio:
+      over?.budgetMaterialFetchRatio ??
+      parseFloat(process.env.BUDGET_MATERIAL_FETCH_RATIO || "0.9"),
   };
 }
 
@@ -36,6 +46,8 @@ export interface CompanyCompletenessRow {
   companyName: string;
   diagnostics: any;
   firstPartyDocCount: number;
+  /** Count of first-party docs that were discovered but could NOT be retrieved. */
+  unretrievedFirstPartyCount: number;
   jobFailed: boolean;
 }
 
@@ -45,12 +57,21 @@ export interface CompletenessAssessment {
   needsRerun: boolean;
   category: "failed" | "incomplete" | null;
   reasons: string[];
+  /**
+   * 1 = material deficit, re-run strongly indicated (missing first-party corpus,
+   *     dead primary filing, weak coverage, fetch genuinely truncated, job failed).
+   * 2 = marginal deficit only (blew the fetch budget but still fetched almost
+   *     everything, with only third-party docs left behind) — optional re-run.
+   * 0 = no deficit.
+   */
+  tier: 0 | 1 | 2;
 }
 
 /** Canonical reason codes (also the keys of the per-signal count breakdown). */
 export const COMPLETENESS_REASONS = [
   "failed_job",
-  "budget_exceeded",
+  "budget_exceeded_material",
+  "budget_exceeded_marginal",
   "low_fetch_ratio",
   "dead_primary_filing",
   "coverage_low",
@@ -58,6 +79,18 @@ export const COMPLETENESS_REASONS = [
   "coverage_suspect",
   "zero_first_party_docs",
 ] as const;
+
+/** Reason codes that, on their own, place a company in Tier 1 (material). */
+const TIER1_REASONS = new Set<string>([
+  "failed_job",
+  "budget_exceeded_material",
+  "low_fetch_ratio",
+  "dead_primary_filing",
+  "coverage_low",
+  "coverage_minimal",
+  "coverage_suspect",
+  "zero_first_party_docs",
+]);
 
 function asBool(v: any): boolean {
   return v === true || String(v).toLowerCase() === "true";
@@ -79,11 +112,11 @@ export function assessCompleteness(
 
   if (row.jobFailed) reasons.push("failed_job");
 
-  if (asBool(fc.budgetExceeded)) reasons.push("budget_exceeded");
-
   const fetchRatio =
     typeof fc.fetchRatio === "number" ? fc.fetchRatio : parseFloat(fc.fetchRatio);
-  if (Number.isFinite(fetchRatio) && fetchRatio < thresholds.fetchRatioThreshold) {
+  const hasFetchRatio = Number.isFinite(fetchRatio);
+
+  if (hasFetchRatio && fetchRatio < thresholds.fetchRatioThreshold) {
     reasons.push("low_fetch_ratio");
   }
 
@@ -96,6 +129,18 @@ export function assessCompleteness(
 
   if (row.firstPartyDocCount === 0) reasons.push("zero_first_party_docs");
 
+  // Materiality gate on budgetExceeded. Blowing the fetch budget only warrants a
+  // re-run if it actually left corpus on the table: unretrieved FIRST-PARTY docs,
+  // or a fetchRatio that dropped below budgetMaterialFetchRatio. A company that
+  // exceeded budget but still fetched almost everything (and only third-party docs
+  // remain) is MARGINAL — flagged Tier 2, so it never inflates the Tier 1 core.
+  if (asBool(fc.budgetExceeded)) {
+    const material =
+      row.unretrievedFirstPartyCount > 0 ||
+      (hasFetchRatio && fetchRatio < thresholds.budgetMaterialFetchRatio);
+    reasons.push(material ? "budget_exceeded_material" : "budget_exceeded_marginal");
+  }
+
   const incomplete = reasons.some(r => r !== "failed_job");
   const needsRerun = row.jobFailed || incomplete;
   // Failure takes precedence in the category label; all reasons are retained.
@@ -105,7 +150,15 @@ export function assessCompleteness(
       ? "failed"
       : "incomplete";
 
-  return { companyId: row.companyId, companyName: row.companyName, needsRerun, category, reasons };
+  // Tier 1 if ANY reason is material; Tier 2 only when the sole deficit is a
+  // marginal budget overrun. No deficit at all → Tier 0.
+  const tier: 0 | 1 | 2 = !needsRerun
+    ? 0
+    : reasons.some(r => TIER1_REASONS.has(r))
+      ? 1
+      : 2;
+
+  return { companyId: row.companyId, companyName: row.companyName, needsRerun, category, reasons, tier };
 }
 
 /**
@@ -119,6 +172,7 @@ export async function loadBatchCompletenessRows(batchId: number): Promise<Compan
       c.name AS company_name,
       c.discovery_diagnostics AS diagnostics,
       COALESCE(fp.cnt, 0) AS first_party_count,
+      COALESCE(jsonb_array_length(c.discovery_diagnostics->'fetchCoverage'->'unretrievableFirstParty'), 0) AS unretrieved_fp,
       j.status AS job_status
     FROM analysis_jobs j
     JOIN companies c ON c.id = j.company_id
@@ -135,6 +189,7 @@ export async function loadBatchCompletenessRows(batchId: number): Promise<Compan
     companyName: String(r.company_name || ""),
     diagnostics: r.diagnostics || null,
     firstPartyDocCount: Number(r.first_party_count || 0),
+    unretrievedFirstPartyCount: Number(r.unretrieved_fp || 0),
     jobFailed: String(r.job_status || "") === "failed",
   }));
 }
@@ -167,6 +222,7 @@ export async function loadWorkspaceCompletenessRows(opts: {
       c.name AS company_name,
       c.discovery_diagnostics AS diagnostics,
       COALESCE(fp.cnt, 0) AS first_party_count,
+      COALESCE(jsonb_array_length(c.discovery_diagnostics->'fetchCoverage'->'unretrievableFirstParty'), 0) AS unretrieved_fp,
       lj.status AS job_status
     FROM latest_job lj
     JOIN companies c ON c.id = lj.company_id
@@ -184,6 +240,7 @@ export async function loadWorkspaceCompletenessRows(opts: {
     companyName: String(r.company_name || ""),
     diagnostics: r.diagnostics || null,
     firstPartyDocCount: Number(r.first_party_count || 0),
+    unretrievedFirstPartyCount: Number(r.unretrieved_fp || 0),
     jobFailed: String(r.job_status || "") === "failed",
   }));
 }
@@ -204,6 +261,8 @@ export interface MarkBatchResult {
   failed: number;
   incomplete: number;
   cleared: number;
+  tier1: number;
+  tier2: number;
 }
 
 /**
@@ -222,7 +281,7 @@ export async function markBatchCompleteness(opts: {
   const thresholds = resolveThresholds(opts.thresholds);
   const rows = await loadBatchCompletenessRows(opts.batchId);
   const markedAt = new Date().toISOString();
-  const out: MarkBatchResult = { marked: 0, failed: 0, incomplete: 0, cleared: 0 };
+  const out: MarkBatchResult = { marked: 0, failed: 0, incomplete: 0, cleared: 0, tier1: 0, tier2: 0 };
 
   for (const row of rows) {
     const a = assessCompleteness(row, thresholds);
@@ -234,6 +293,7 @@ export async function markBatchCompleteness(opts: {
     const flag = {
       needsRerun: true,
       category: a.category,
+      tier: a.tier,
       reasons: a.reasons,
       batchId: opts.batchId,
       frameworkId: opts.frameworkId,
@@ -252,6 +312,8 @@ export async function markBatchCompleteness(opts: {
     out.marked++;
     if (a.category === "failed") out.failed++;
     else out.incomplete++;
+    if (a.tier === 1) out.tier1++;
+    else if (a.tier === 2) out.tier2++;
   }
   return out;
 }
@@ -259,6 +321,8 @@ export async function markBatchCompleteness(opts: {
 export interface CompletenessSelection {
   selected: Array<CompletenessAssessment & { flagged: boolean }>;
   signalCounts: Record<string, number>;
+  /** Count of selected companies per tier (before any `limit` is applied). */
+  tierCounts: { tier1: number; tier2: number };
   total: number;
 }
 
@@ -276,8 +340,15 @@ export async function selectCompletenessDeficitCompanies(opts: {
   thresholds?: Partial<CompletenessThresholds>;
   companyIds?: number[];
   limit?: number;
+  /**
+   * Restrict the selection to companies at or above this materiality tier.
+   * `1` (default) = Tier 1 material deficits only — the defensible re-run core.
+   * `2` = include Tier 2 marginal budget overruns as well (the broad union).
+   */
+  maxTier?: 1 | 2;
 }): Promise<CompletenessSelection> {
   const thresholds = resolveThresholds(opts.thresholds);
+  const maxTier = opts.maxTier ?? 1;
   const rows = await loadWorkspaceCompletenessRows({
     workspaceId: opts.workspaceId,
     frameworkId: opts.frameworkId,
@@ -289,26 +360,33 @@ export async function selectCompletenessDeficitCompanies(opts: {
   signalCounts["persisted_flag"] = 0;
 
   const selected: Array<CompletenessAssessment & { flagged: boolean }> = [];
+  const tierCounts = { tier1: 0, tier2: 0 };
   for (const row of rows) {
     const a = assessCompleteness(row, thresholds);
     const persisted = !!(row.diagnostics?.completenessFlag?.needsRerun);
     if (!a.needsRerun && !persisted) continue;
+    // A live Tier 2 (marginal) company is excluded unless maxTier allows it. A
+    // persisted flag always qualifies — it was recorded by the marker on purpose.
+    if (!persisted && a.tier === 2 && maxTier < 2) continue;
     for (const r of a.reasons) {
       if (r in signalCounts) signalCounts[r]++;
     }
     if (persisted) signalCounts["persisted_flag"]++;
+    if (a.tier === 1) tierCounts.tier1++;
+    else if (a.tier === 2) tierCounts.tier2++;
     selected.push({ ...a, needsRerun: true, flagged: persisted });
   }
 
-  // Deterministic ordering: failed first, then by company id.
+  // Deterministic ordering: failed first, then Tier 1 before Tier 2, then by id.
   selected.sort((x, y) => {
     if (x.category !== y.category) {
       if (x.category === "failed") return -1;
       if (y.category === "failed") return 1;
     }
+    if (x.tier !== y.tier) return x.tier - y.tier;
     return x.companyId - y.companyId;
   });
 
   const limited = opts.limit && opts.limit > 0 ? selected.slice(0, opts.limit) : selected;
-  return { selected: limited, signalCounts, total: selected.length };
+  return { selected: limited, signalCounts, tierCounts, total: selected.length };
 }
