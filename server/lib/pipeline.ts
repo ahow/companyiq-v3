@@ -2015,6 +2015,98 @@ async function runFetchPhase(opts: {
     console.warn(`[${companyName}] CHANGE 5: deferred retry sweep error: ${sweepErr?.message || sweepErr}`);
   }
 
+  // ─── Change 3 (2026-11): env-gated DEAD FIRST-PARTY fetch recovery ──────────
+  // Complements CHANGE 5 (which retries only BUDGET-reason deaths) and Fix 2b
+  // (which recovers only PDFs): this retries dead FIRST-PARTY documents of ANY
+  // failure reason (timeout / empty / 403 / 404), with an explicit headless-
+  // browser fallback for BOTH PDFs and HTML links that fail a direct re-fetch.
+  //
+  // Entirely OFF by default — behaviour is byte-identical unless
+  // FETCH_DEAD_RETRY_ENABLED is set — so it ships dark and is enabled per deploy.
+  // Fully bounded: at most FETCH_DEAD_RETRY_MAX_DOCS documents, FETCH_RETRY_MAX
+  // attempts each, within the REMAINING fetch budget and the UNCHANGED
+  // PER_DOCUMENT_TIMEOUT_MS per attempt (enforced by the operation scope). The
+  // direct re-fetch goes through processDocument, which already honours
+  // SERPER_RESOLVE_ENABLED for link resolution. Successful recoveries flip to
+  // 'ok'; failures leave the existing dead status/reason untouched — no loop, no
+  // re-queue, no scoring impact.
+  const deadRetryEnabled = ["true", "1"].includes((process.env.FETCH_DEAD_RETRY_ENABLED || "false").toLowerCase());
+  if (deadRetryEnabled) {
+    try {
+      const FETCH_RETRY_MAX = Math.max(1, parseInt(process.env.FETCH_RETRY_MAX || "1", 10));
+      const FETCH_DEAD_RETRY_MAX_DOCS = Math.max(0, parseInt(process.env.FETCH_DEAD_RETRY_MAX_DOCS || "25", 10));
+      const browserPdfFallback = ["true", "1"].includes((process.env.BROWSER_PDF_FALLBACK_ENABLED || "false").toLowerCase());
+      const deadRetryBudgetMs = Math.max(0, FETCH_PHASE_BUDGET_MS - (Date.now() - fetchPhaseStart));
+      if (FETCH_DEAD_RETRY_MAX_DOCS > 0 && deadRetryBudgetMs > 1000) {
+        const isIssuerDomainUrl = (u: string): boolean => {
+          try {
+            const h = new URL(u).hostname.replace(/^www\./, "");
+            return (!!companyDomainLower && (h === companyDomainLower || h.endsWith("." + companyDomainLower))) ||
+              relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith("." + rd)));
+          } catch { return false; }
+        };
+        const allDocs = await storage.getAcceptedDocuments(companyId);
+        const deadFirstParty = allDocs
+          .filter(d => d.fetchStatus === "dead" && isIssuerDomainUrl(d.url))
+          .slice(0, FETCH_DEAD_RETRY_MAX_DOCS);
+        if (deadFirstParty.length > 0) {
+          console.log(`[${companyName}] Change 3: dead-first-party recovery — ${deadFirstParty.length} doc(s), retryMax=${FETCH_RETRY_MAX}, browserPdfFallback=${browserPdfFallback}, budget=${Math.round(deadRetryBudgetMs / 1000)}s`);
+          const deadline = Date.now() + deadRetryBudgetMs;
+          let recovered = 0;
+          // Resolve the browser-fallback primitives lazily, only when enabled.
+          let pfFn: ((u: string, s?: any) => Promise<string>) | null = null;
+          let bfFn: ((u: string, s?: any) => Promise<string>) | null = null;
+          if (browserPdfFallback) {
+            try {
+              const proc = await import("./processor.js") as any;
+              pfFn = typeof proc.fetchPdfViaBrowser === "function" ? proc.fetchPdfViaBrowser : null;
+              bfFn = typeof proc.fetchWithBrowser === "function" ? proc.fetchWithBrowser : null;
+            } catch { /* fallback unavailable — direct retry only */ }
+          }
+          for (const doc of deadFirstParty) {
+            if (Date.now() >= deadline) break;
+            const isPdf = /\.pdf(\?|$)/i.test(doc.url);
+            for (let attempt = 1; attempt <= FETCH_RETRY_MAX; attempt++) {
+              if (Date.now() >= deadline) break;
+              const remaining = deadline - Date.now();
+              const scope = createOperationScope({
+                budgetMs: Math.max(1, Math.min(PER_DOCUMENT_TIMEOUT_MS, remaining)),
+                ctx: getDiagContext(),
+                label: `[${companyName}] dead-retry ${doc.url.slice(0, 80)}`,
+              });
+              let content = "";
+              try {
+                // 1) direct re-fetch (processDocument has its own browser escalation).
+                content = await Promise.race([
+                  processDocument(doc.url, inferDocumentType(doc.url), { scope }),
+                  scope.whenAborted(`[${companyName}] dead-retry ${doc.url.slice(0, 80)}`),
+                ]);
+                // 2) explicit headless-browser fallback for PDFs/links still empty.
+                if ((!content || content.length <= 50) && !scope.aborted()) {
+                  if (isPdf && pfFn) content = await pfFn(doc.url, scope);
+                  else if (!isPdf && bfFn) content = await bfFn(doc.url, scope);
+                }
+              } catch {
+                content = "";
+              } finally {
+                scope.dispose();
+              }
+              if (content && content.length > 50 && !scope.aborted()) {
+                await storage.recordFetchSuccess(companyId, doc.url, content, getExtractionCompleteness(doc.url));
+                recovered++;
+                console.log(`[${companyName}] Change 3: recovered ${content.length} chars from ${doc.url.slice(0, 80)} (attempt ${attempt})`);
+                break; // this doc is recovered — stop retrying it
+              }
+            }
+          }
+          console.log(`[${companyName}] Change 3: dead-first-party recovery complete — recovered ${recovered}/${deadFirstParty.length}`);
+        }
+      }
+    } catch (deadRetryErr: any) {
+      console.warn(`[${companyName}] Change 3: dead-first-party recovery error: ${deadRetryErr?.message || deadRetryErr}`);
+    }
+  }
+
   // ─── One-Hop PDF Harvest (P2a + Fix 3: headless DOM + latest-year bias) ────────
   // When a fetched company-domain page is index-like (many links, little substantive text),
   // extract same-domain/CDN PDF links whose anchor text matches the framework topic.

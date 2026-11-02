@@ -406,6 +406,63 @@ function distinctiveNameTokens(name: string | null | undefined): string[] {
     .filter(w => w.length >= 4 && !GENERIC_TOKENS.has(w));
 }
 
+// ─── Registrable-domain (eTLD+1) helpers — for Rule 1a (2026-11) ─────────────
+//
+// Two-part country-code TLD suffixes where the registrable domain is the last
+// THREE labels (e.g. "sainsburys.co.uk"). Mirrors the list in
+// discovery.normaliseToRegistrableDomain; replicated locally (rather than
+// imported) to avoid a provenance <-> discovery module cycle.
+const TWO_PART_CC_TLDS = new Set([
+  "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "org.au", "gov.au",
+  "co.jp", "or.jp", "ne.jp", "co.nz", "com.sg", "com.hk", "com.mx",
+  "com.br", "bank.in", "co.in", "org.in", "net.in", "bank.cn", "com.cn",
+  "net.cn", "gov.cn", "edu.cn", "co.kr", "or.kr", "go.kr", "com.tr",
+  "gov.tr", "org.tr", "co.za", "org.za", "com.ph", "com.my", "com.tw",
+]);
+
+// Reduce a hostname to its registrable domain (eTLD+1), honouring the two-part
+// cc-TLD list above. "ir.3m.com" -> "3m.com"; "3m.co.uk" -> "3m.co.uk";
+// "www.example.com" -> "example.com".
+function registrableDomainOf(host: string | null | undefined): string {
+  const clean = (host || "").replace(/^www\./i, "").toLowerCase().trim();
+  if (!clean) return "";
+  const parts = clean.split(".").filter(Boolean);
+  if (parts.length <= 2) return parts.join(".");
+  const lastTwo = parts.slice(-2).join(".");
+  if (TWO_PART_CC_TLDS.has(lastTwo)) return parts.slice(-3).join(".");
+  return parts.slice(-2).join(".");
+}
+
+// Short issuer identity tokens for the Rule 1a leading-label rescue: the ticker
+// and short acronym-style name tokens (2–4 chars). These are exactly the tokens
+// that distinctiveNameTokens (>= 4 chars) and the Rule 1b brand rescue (>= 5
+// chars) both DROP, which is why short-ticker issuers ("3M", "AAC", "ACS")
+// never recover their own-domain documents. Used ONLY for EXACT leading-label
+// equality against a registrable domain, never substring — so "3m" matches
+// "3m.com"/"3m.co.uk" but never "3minsights.com".
+function shortIdentityTokensOf(input: ProvenanceInput): string[] {
+  const out = new Set<string>();
+  const ticker = normalise(input.companyTicker).replace(/[^a-z0-9]/g, "");
+  if (ticker.length >= 2 && ticker.length <= 6 && !GENERIC_TOKENS.has(ticker)) {
+    out.add(ticker);
+  }
+  const nameToks = normalise(input.companyName)
+    .replace(/[\/\\,.'()&]+/g, " ")
+    .split(/\s+/)
+    .map(t => t.replace(/[^a-z0-9]/g, ""))
+    .filter(Boolean);
+  const nonCorp = nameToks.filter(t => !CORP_FORM_TOKENS.has(t));
+  // Only mine short tokens from COMPACT names (<= 2 tokens after dropping
+  // corporate-form words). Long multi-word names yield noisy short words
+  // ("at", "de", "co") that must never be treated as standalone identity.
+  if (nonCorp.length <= 2) {
+    for (const t of nonCorp) {
+      if (t.length >= 2 && t.length <= 4 && !GENERIC_TOKENS.has(t)) out.add(t);
+    }
+  }
+  return [...out];
+}
+
 // Corporate-form / legal-suffix tokens that carry no identity on their own.
 // Stripped from the leading/trailing edges of a name before building the
 // full-name identity phrase. Topic/company-agnostic: a closed list of legal
@@ -613,6 +670,54 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
           irPlatformHost: null,
           identitySignal: "url-path",
         };
+      }
+    }
+  }
+
+  // Rule 1a (2026-11): registrable-domain (eTLD+1) match + short-identity
+  // leading-label rescue. Rule 1's exact/sub-domain test misses two legitimate
+  // first-party cases:
+  //   (i)  the stored companyDomain carries an extra sub-domain (e.g.
+  //        "ir.3m.com") while the document lives on the bare registrable
+  //        domain ("3m.com") — host.endsWith("."+d) only matches the OTHER
+  //        direction (doc deeper than the stored domain), so this is missed.
+  //   (ii) a regional/country variant on the SAME registrable label but a
+  //        different TLD (e.g. "3m.co.uk", "3m.de") when only "3m.com" is
+  //        known and the variant isn't in related_domains.
+  // Both are also defeated by the Rule 1b brand rescue's >= 5-char floor, so
+  // short-ticker / acronym issuers ("3M", "AAC", "ACS") never recover their
+  // own-domain documents and get misfiled third_party (the 3M 1/37 case).
+  // Fix: EXACT registrable-domain equality (never substring) for (i), and
+  // EXACT leading-label equality against a short identity token for (ii).
+  if (host) {
+    const hostReg = registrableDomainOf(host);
+    // (i) exact registrable-domain (eTLD+1) match against any issuer domain.
+    for (const d of allIssuerDomains) {
+      const dReg = registrableDomainOf(d);
+      if (hostReg && dReg && hostReg === dReg) {
+        return {
+          provenance: "issuer",
+          reason: `registrable domain matches company domain (${dReg})`,
+          regulatorHost: null,
+          irPlatformHost: null,
+          identitySignal: "url-path",
+        };
+      }
+    }
+    // (ii) short-identity leading-label rescue (ticker / short acronym name
+    // token). EXACT equality on the registrable domain's leading label only.
+    const hostLabel = hostReg.split(".")[0];
+    if (hostLabel) {
+      for (const tok of shortIdentityTokensOf(input)) {
+        if (hostLabel === tok) {
+          return {
+            provenance: "issuer",
+            reason: `short issuer identity token "${tok}" is the registrable-domain label (${hostReg})`,
+            regulatorHost: null,
+            irPlatformHost: null,
+            identitySignal: "url-path",
+          };
+        }
       }
     }
   }
