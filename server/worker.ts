@@ -17,6 +17,7 @@ import crypto from "crypto";
 import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
 import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
 import { routeFailedBatch } from "./lib/batch-completion-route.js";
+import { startReconciler } from "./reconciler.js";
 import { isCreditAlertActive, isProxyCreditAlertActive, ProviderScoringError } from "./lib/credit-breaker.js";
 import { hasAnyLiveScoringProvider } from "./lib/ai-providers.js";
 import {
@@ -1814,6 +1815,17 @@ export async function startWorker(workerId?: string): Promise<Worker> {
   // observability). At default static, effective === MAX_CONCURRENT.
   console.log("[Worker] CAPACITY_POLICY=" + CAPACITY.policy + " replicaCount=" + loadCapacityConfig().replicaCount + " static=" + CAPACITY.staticConcurrency + " dynamic=" + CAPACITY.dynamicConcurrency + " effective=" + EFFECTIVE_CONCURRENCY + " withinBudget=" + CAPACITY.withinBudget + " maxSafeReplicas=" + CAPACITY.maxSafeReplicas);
   console.log("[Worker] Started with concurrency=" + EFFECTIVE_CONCURRENCY + ", timeout=" + JOB_TIMEOUT + "ms, maxRetries=" + MAX_RETRY_ATTEMPTS + ", lockDuration=" + WORKER_LOCK_DURATION_MS + "ms, stalledInterval=" + WORKER_STALLED_INTERVAL_MS + "ms, maxStalledCount=" + WORKER_MAX_STALLED_COUNT);
+
+  // Periodic reconciler: reaps orphaned `claimed` jobs back to `pending`,
+  // re-enqueues DB-pending rows that have fallen out of the Redis queue, and
+  // routes all-terminal batches to pending_review (which restores the dashboard
+  // "re-run" control). Self-guarded: no-op if already scheduled (`if (timer)
+  // return`), gated by RECONCILE_ENABLED, multi-replica-safe via an advisory
+  // lock, first pass 30s after boot. Without this call the reconciler module is
+  // defined but never runs, so stranded jobs are never recovered and a batch can
+  // hang in "running" forever (batch-1339 stall, 2026-11-02).
+  startReconciler();
+
   return worker;
   } finally {
     workerStarting = false;
