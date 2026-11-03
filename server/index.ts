@@ -361,7 +361,10 @@ initializeDatabase().then(async () => {
           // Check if the snapshot actually exists in analysis_results before marking saved.
           // Do NOT blindly mark snapshot_saved=TRUE when no row was persisted — that
           // permanently hides the batch from future recovery attempts.
-          const existingResults = await storage.getAnalysisResults(b.workspace_id);
+          // Use metadata-only query (excludes the huge results_data JSONB). We only
+          // need batchId to check for an existing snapshot row; loading the full
+          // results_data for every snapshot in the workspace blows the heap (OOM).
+          const existingResults = await storage.getAnalysisResultsMeta(b.workspace_id);
           const hasRow = existingResults.some((r: any) => r.batchId === b.id);
           if (hasRow) {
             await storage.markBatchSnapshotSaved(b.id);
