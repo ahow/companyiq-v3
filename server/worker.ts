@@ -18,6 +18,7 @@ import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBat
 import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
 import { routeFailedBatch } from "./lib/batch-completion-route.js";
 import { startReconciler } from "./reconciler.js";
+import { markBatchCompleteness } from "./lib/completeness-marker.js";
 import { isCreditAlertActive, isProxyCreditAlertActive, ProviderScoringError } from "./lib/credit-breaker.js";
 import { hasAnyLiveScoringProvider } from "./lib/ai-providers.js";
 import {
@@ -847,6 +848,32 @@ async function maybeHandleBatchCompletion(
 
   try {
     const listId = batchRow.list_id ? Number(batchRow.list_id) : undefined;
+
+    // ─── Permanent completeness marker (2026-11) ─────────────────────────────
+    // When a (non-reliability) batch finishes, persist a NON-DESTRUCTIVE
+    // `completenessFlag` on every company that FAILED (job exhausted attempts)
+    // or is INCOMPLETE (scored, but under-scored because document discovery/
+    // fetch was truncated — the 3M case). This lets the operator re-run exactly
+    // those companies later (via requeue-completeness.ts) without losing any
+    // existing scores/quotes/documents. Best-effort: never blocks finalisation,
+    // and never touches scoring. Toggle with COMPLETENESS_MARKER_ENABLED (ON by
+    // default; set to "false"/"0" to disable).
+    const markerEnabled = !["false", "0"].includes(
+      (process.env.COMPLETENESS_MARKER_ENABLED || "true").toLowerCase(),
+    );
+    if (markerEnabled && !batchRow.reliability_run_id) {
+      try {
+        const res = await markBatchCompleteness({ batchId, frameworkId, workspaceId });
+        console.log(
+          `[Worker] Completeness marker (batch ${batchId}): marked ${res.marked} ` +
+          `(${res.failed} failed, ${res.incomplete} incomplete), cleared ${res.cleared}`,
+        );
+      } catch (markErr: any) {
+        console.warn(
+          `[Worker] Completeness marker failed for batch ${batchId} (non-fatal): ${markErr?.message || markErr}`,
+        );
+      }
+    }
 
     // Reliability/recovery batches (system-generated diagnostic runs) must never
     // enter the user-facing interactive review queue. They have their own

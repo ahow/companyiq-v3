@@ -785,3 +785,90 @@ test("genuine third_party (reuters) stays third_party even with tenant declarati
   });
   assert.equal(r.provenance, "third_party");
 });
+
+
+
+// ─── Rule 1a (2026-11): short-ticker / registrable-domain own-domain rescue ──
+// Short-ticker issuers ("3M", "AAC", "ACS") whose distinctive name token is
+// < 5 chars were defeated by the Rule 1b brand rescue's >= 5-char floor and
+// fell through to third_party even for their OWN domains (the 3M 1/37 case).
+
+const THREE_M = {
+  companyName: "3M Company",
+  companyDomain: "3m.com",
+  relatedDomains: [],
+  companyTicker: "MMM",
+  companyAliases: ["3m"],
+};
+
+test("Rule 1a — 3M own registrable domain (exact) is first_party via Rule 1", () => {
+  const r = classifyProvenance({
+    url: "https://www.3m.com/3M/en_US/sustainability-us/",
+    title: "Sustainability",
+    ...THREE_M,
+  });
+  assert.equal(r.provenance, "issuer");
+});
+
+test("Rule 1a(i) — stored domain has sub-domain, doc on bare registrable domain", () => {
+  // companyDomain = "ir.3m.com"; document lives on "3m.com". Rule 1's
+  // host.endsWith("."+d) only matches the other direction, so this needs 1a.
+  const r = classifyProvenance({
+    url: "https://3m.com/3M/en_US/responsibility/report.pdf",
+    title: "Global Impact Report",
+    companyName: "3M Company",
+    companyDomain: "ir.3m.com",
+    relatedDomains: [],
+    companyTicker: "MMM",
+    companyAliases: ["3m"],
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /registrable domain matches/);
+});
+
+test("Rule 1a(ii) — regional TLD variant 3m.co.uk rescued by short name token", () => {
+  // Only 3m.com is known; the UK regional site is a different registrable
+  // domain. The short name token "3m" equals its leading label exactly.
+  const r = classifyProvenance({
+    url: "https://www.3m.co.uk/3M/en_GB/company-uk/sustainability/",
+    title: "Sustainability UK",
+    ...THREE_M,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /short issuer identity token/);
+});
+
+test("Rule 1a(ii) — AAC short identity token rescues own domain", () => {
+  const r = classifyProvenance({
+    url: "https://aac.com/investor/esg-report.pdf",
+    title: "ESG Report",
+    companyName: "AAC Technologies",
+    companyDomain: null,
+    relatedDomains: [],
+    companyTicker: "2018",
+    companyAliases: ["aac"],
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /short issuer identity token/);
+});
+
+test("Rule 1a(ii) NEGATIVE — short token must NOT match a longer leading label", () => {
+  // "3m" must not rescue "3minsights.com" (EXACT leading-label equality only).
+  const r = classifyProvenance({
+    url: "https://www.3minsights.com/articles/3m-company-profile",
+    title: "3M Company profile",
+    ...THREE_M,
+  });
+  assert.equal(r.provenance, "third_party");
+});
+
+test("Rule 1a(i) NEGATIVE — substring registrable domain is NOT a match", () => {
+  // "my3m.com" shares the substring "3m" but is a different registrable
+  // domain and a different leading label ("my3m"), so it stays third_party.
+  const r = classifyProvenance({
+    url: "https://my3m.com/some/third-party/page",
+    title: "Third party page",
+    ...THREE_M,
+  });
+  assert.equal(r.provenance, "third_party");
+});

@@ -740,15 +740,41 @@ export interface CoverageMetric {
   requiredDocsFound: Record<string, boolean>;
   coverageLevel: "full" | "adequate" | "low" | "minimal";
   missingTier1Types: string[];
+  /**
+   * Issuer-type-aware checklist (2026-11): which jurisdiction family was used
+   * for the required-docs checklist. "us" demands Proxy/DEF 14A; "non-us"
+   * accepts analogous governance disclosure (governance report, AGM circular,
+   * notice of meeting, governance page). Diagnostics-only — does not affect
+   * scoring.
+   */
+  issuerDocFamily?: "us" | "non-us";
+}
+
+// Issuer-type-aware required-docs checklist (2026-11). US-only filing types
+// (Proxy / DEF 14A) must not be demanded of non-US issuers whose equivalent
+// disclosure lives in an annual report, AGM circular, notice of meeting, or a
+// standalone corporate-governance report. Country takes precedence; ISIN prefix
+// is the fallback; an UNKNOWN jurisdiction preserves the legacy US-centric
+// default so this change never relaxes the checklist for existing US issuers.
+function issuerIsUsForChecklist(country?: string | null, isin?: string | null): boolean {
+  const c = (country || "").trim().toLowerCase();
+  if (c) {
+    return /(^|[^a-z])(us|usa|u\.s\.?|united states|america|american)([^a-z]|$)/.test(c);
+  }
+  const prefix = (isin || "").slice(0, 2).toUpperCase();
+  if (prefix) return prefix === "US";
+  return true; // unknown jurisdiction → legacy behaviour (treat as US)
 }
 
 export function computeCoverageMetric(
   documents: DiscoveryCandidate[],
   frameworkSignals?: { topicSlugs?: string[]; requiredDocSlugs?: string[]; requiredDocTypes?: string[] },
+  issuer?: { country?: string | null; isin?: string | null },
 ): CoverageMetric {
   let tier1Count = 0, tier2Count = 0, tier3Count = 0, tier4Count = 0;
   let has10KOrAnnualReport = false;
   let hasProxyOrDEF14A = false;
+  let hasGovernanceReport = false; // non-US analogue of proxy/DEF 14A
   let hasInvestorPresentation = false;
   let hasGovernancePage = false;
   const requiredDocsFound: Record<string, boolean> = {};
@@ -774,6 +800,12 @@ export function computeCoverageMetric(
     if (/def.?14a|proxy.?statement|agm.?circular/i.test(combined)) {
       hasProxyOrDEF14A = true;
     }
+    // Non-US governance-disclosure analogues (AGM/governance report, notice of
+    // meeting, remuneration/governance statement). These satisfy the governance
+    // family for non-US issuers that do not file a US proxy / DEF 14A.
+    if (/governance.?report|corporate.?governance.?statement|remuneration.?report|notice.?of.?(annual.?)?(general.?)?meeting|agm.?(notice|circular)|annual.?general.?meeting/i.test(combined)) {
+      hasGovernanceReport = true;
+    }
     if (/investor.?presentation|investor.?day|capital.?markets/i.test(combined)) {
       hasInvestorPresentation = true;
     }
@@ -792,15 +824,31 @@ export function computeCoverageMetric(
     }
   }
 
-  // Determine coverage level
+  // Determine coverage level — issuer-type-aware checklist (2026-11).
+  // The annual-report family is already jurisdiction-agnostic (10-K / 20-F /
+  // annual report / integrated report all satisfy has10KOrAnnualReport). The
+  // ONLY US-specific requirement is the proxy / DEF 14A. For non-US issuers we
+  // accept the analogous governance family (governance report / AGM circular /
+  // notice of meeting / governance page) instead of demanding a US proxy, so a
+  // compliant non-US issuer is not spuriously flagged as missing a mandatory
+  // source. Diagnostics/classification only — scoring is untouched.
+  const isUsIssuer = issuerIsUsForChecklist(issuer?.country, issuer?.isin);
+  const governanceFamilyMet = isUsIssuer
+    ? hasProxyOrDEF14A
+    : (hasProxyOrDEF14A || hasGovernanceReport || hasGovernancePage);
+
   const missingTier1Types: string[] = [];
   if (!has10KOrAnnualReport) missingTier1Types.push("10-K / Annual Report");
-  if (!hasProxyOrDEF14A) missingTier1Types.push("Proxy / DEF 14A");
+  if (!governanceFamilyMet) {
+    missingTier1Types.push(
+      isUsIssuer ? "Proxy / DEF 14A" : "Governance Report / AGM Circular",
+    );
+  }
 
   let coverageLevel: "full" | "adequate" | "low" | "minimal";
-  if (has10KOrAnnualReport && hasProxyOrDEF14A && (hasInvestorPresentation || hasGovernancePage)) {
+  if (has10KOrAnnualReport && governanceFamilyMet && (hasInvestorPresentation || hasGovernancePage)) {
     coverageLevel = "full";
-  } else if (has10KOrAnnualReport || hasProxyOrDEF14A) {
+  } else if (has10KOrAnnualReport || governanceFamilyMet) {
     coverageLevel = "adequate";
   } else if (tier1Count > 0 || tier2Count >= 3) {
     coverageLevel = "low";
@@ -813,6 +861,7 @@ export function computeCoverageMetric(
     has10KOrAnnualReport, hasProxyOrDEF14A, hasInvestorPresentation,
     hasGovernancePage, requiredDocsFound,
     coverageLevel, missingTier1Types,
+    issuerDocFamily: isUsIssuer ? "us" : "non-us",
   };
 }
 
@@ -5417,7 +5466,10 @@ async function searchCompanyDocumentsInner(opts: {
     requiredDocSlugs: ((framework.requiredDocTypes as string[] | null) || []).map((s: string) => s.toLowerCase().replace(/\s+/g, "-")),
     requiredDocTypes: (framework.requiredDocTypes as string[] | null) || [],
   };
-  const coverage = computeCoverageMetric(finalDocs, coverageSignals);
+  const coverage = computeCoverageMetric(finalDocs, coverageSignals, {
+    country: opts.country ?? null,
+    isin: opts.isin ?? null,
+  });
   console.log(`[${companyName}] Coverage: ${coverage.coverageLevel} (Tier1: ${coverage.tier1Count}, Tier2: ${coverage.tier2Count}, Tier3: ${coverage.tier3Count})`);
   console.log(`[${companyName}] Ranker: distinctTop20=${rankerDiagnostics.distinctPrioritiesInTop20} largestTie=${rankerDiagnostics.largestTieCountPreUrlHash} urlHashFrac=${rankerDiagnostics.urlhashDecisionFraction.toFixed(3)}`);
   if (coverage.missingTier1Types.length > 0) {
