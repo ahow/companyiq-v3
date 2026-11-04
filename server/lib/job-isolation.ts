@@ -226,7 +226,7 @@ function recordPipelineTimeout(opts: PipelineOptions, elapsedMs: number, limitMs
     const storage: any = await import("../storage.js");
     const elapsed = Math.round(elapsedMs / 1000);
     await storage.updateCompany(company.id, opts.workspaceId, { analysisStatus: "failed" });
-    await storage.logProcessingError({ companyId: company.id, companyName: company.name, stage: "pipeline_timeout",
+    await storage.logProcessingError({ workspaceId: opts.workspaceId, companyId: company.id, companyName: company.name, stage: "pipeline_timeout",
       error: JSON.stringify({ type: "timeout", elapsedSeconds: elapsed, limitSeconds: Math.round(limitMs / 1000), message: `Pipeline timed out after ${elapsed}s (limit: ${limitMs / 1000}s) [isolated child killed by parent]` }) });
   })().catch((e) => console.warn(`[WORKER-ISOLATION] pipeline-timeout bookkeeping failed: ${e?.message || e}`));
 }

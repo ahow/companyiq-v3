@@ -3102,6 +3102,7 @@ async function runAnalyzePhase(opts: {
       console.warn(`[${companyName}] 0%-guard triggered: genuinely empty analysis (all measures Low pre- and post-adjustment, no evidence)`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: "score",
@@ -3330,6 +3331,7 @@ async function runAnalyzePhase(opts: {
   if (scoringDiag && (scoringDiag.scoringFailures > 0 || scoringDiag.fallbackUsed > 0 || scoringDiag.timeouts > 0)) {
     try {
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: "scoring_diagnostics",
@@ -3375,7 +3377,7 @@ async function runAnalyzePhase(opts: {
       });
       try {
         await storage.logProcessingError({
-          companyId, companyName, stage: "mass_scoring_failure",
+          workspaceId, companyId, companyName, stage: "mass_scoring_failure",
           error: `${failuresInAnswered}/${answeredForRatio} measures failed (>${(MASS_FAILURE_THRESHOLD*100).toFixed(0)}% threshold). Score is not substantive.`,
         });
       } catch { /* non-fatal */ }
@@ -3398,6 +3400,7 @@ async function runAnalyzePhase(opts: {
     console.error(`[${companyName}][invariant][FAIL] ${fiInvariant.violations.length} force-include violation(s): ${fiInvariant.violations.map((v) => `${v.measureId} (${v.reason})`).join("; ")}`);
     try {
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: "score",
@@ -3939,6 +3942,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // I45: Persist structured pipeline failure with type classification
       const isTimeout = error instanceof TimeoutError || /timed? ?out|ETIMEDOUT/i.test(error.message);
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: isTimeout ? "pipeline_timeout" : "pipeline_error",
@@ -4004,6 +4008,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // I45: Persist explicit timeout status with structured provenance so Gate
       // Report diagnostics can distinguish timeout zeros from no-evidence zeros.
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: "pipeline_timeout",
