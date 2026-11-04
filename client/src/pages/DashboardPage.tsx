@@ -28,6 +28,58 @@ function readStoredId(key: string): number | null {
   }
 }
 
+/** Render the coverage flags for a low-discovery/low-retrieval row as plain-English
+ * badges with a hover explanation, instead of the raw internal flag names. */
+function DiscoveryFlagCell({
+  budgetExceeded,
+  lowEvidence,
+  critical,
+}: {
+  budgetExceeded?: boolean;
+  lowEvidence?: boolean;
+  critical?: boolean;
+}) {
+  const flags: Array<{ label: string; title: string; cls: string }> = [];
+  if (critical) {
+    flags.push({
+      label: "critical",
+      title:
+        "Fewer than 3 documents were retrieved, or the fetch ratio is below the critical threshold — the score rests on very little evidence and is especially unreliable.",
+      cls: "bg-red-100 text-red-700",
+    });
+  }
+  if (budgetExceeded) {
+    flags.push({
+      label: "fetch-time budget hit",
+      title:
+        "The per-company document-download phase reached its time limit before all the discovered documents could be fetched. The remaining documents were skipped and the company was scored on those already retrieved. Re-running retries the un-fetched documents.",
+      cls: "bg-gray-100 text-gray-700",
+    });
+  }
+  if (lowEvidence) {
+    flags.push({
+      label: "thin evidence",
+      title:
+        "Very little usable text was retrieved, so the score rests on a weak evidence base.",
+      cls: "bg-gray-100 text-gray-700",
+    });
+  }
+  if (flags.length === 0) return <span className="text-gray-400">—</span>;
+  return (
+    <span className="flex flex-wrap gap-1">
+      {flags.map((f) => (
+        <span
+          key={f.label}
+          title={f.title}
+          className={`px-1.5 py-0.5 rounded text-[10px] font-medium cursor-help ${f.cls}`}
+        >
+          {f.label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /** Persist (or clear when null) a numeric id in localStorage. Best-effort. */
 function writeStoredId(key: string, id: number | null): void {
   try {
@@ -357,8 +409,11 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     queryFn: () => api.getLowDiscovery(effectiveFrameworkId),
     refetchInterval: 30000,
   });
-  const lowDiscRows = lowDiscovery?.lowDiscovery ?? [];
-  const criticalDiscRows = lowDiscovery?.criticalDiscovery ?? [];
+  // Signal-split: the red section is "too few documents found" (discovery),
+  // the amber section is "enough found but too few retrieved" (fetch/retrieval
+  // rate). Fall back to the old field names for a stale cached API response.
+  const criticalDiscRows = lowDiscovery?.discoveryTooLow ?? lowDiscovery?.criticalDiscovery ?? [];
+  const lowDiscRows = lowDiscovery?.lowRetrieval ?? lowDiscovery?.lowDiscovery ?? [];
 
   const rerunDiscoveryMutation = useMutation({
     mutationFn: (companyIds: number[]) => api.rerunLowDiscovery(companyIds, effectiveFrameworkId),
@@ -705,7 +760,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                 Document Discovery Too Low — {criticalDiscRows.length} compan{criticalDiscRows.length !== 1 ? "ies" : "y"}
               </span>
               <span className="text-xs text-red-600">
-                Critically low discovery/fetch coverage — likely unreliable scores
+                Fewer than {lowDiscovery?.thresholds?.criticalMinDocs ?? 10} documents were found in search — the evidence base is too thin to score reliably
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -764,7 +819,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                       <th className="p-1.5 text-left text-red-800">Sector</th>
                       <th className="p-1.5 text-left text-red-800">Country</th>
                       <th className="p-1.5 text-right text-red-800">Fetched / Discovered</th>
-                      <th className="p-1.5 text-right text-red-800">Fetch ratio</th>
+                      <th className="p-1.5 text-right text-red-800" title="Fraction of discovered documents that were actually downloaded (fetched ÷ discovered).">Fetch ratio</th>
                       <th className="p-1.5 text-left text-red-800">Flags</th>
                       <th className="p-1.5 text-center text-red-800">Actions</th>
                     </tr>
@@ -792,7 +847,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                         <td className="p-1.5 text-right text-gray-700">{r.documentsFetched} / {r.documentsDiscovered}</td>
                         <td className="p-1.5 text-right font-bold text-red-700">{Math.round((r.fetchRatio ?? 0) * 100)}%</td>
                         <td className="p-1.5 text-gray-500">
-                          {[r.budgetExceeded ? "budgetExceeded" : null, r.lowEvidence ? "lowEvidence" : null].filter(Boolean).join(", ") || "—"}
+                          <DiscoveryFlagCell budgetExceeded={r.budgetExceeded} lowEvidence={r.lowEvidence} />
                         </td>
                         <td className="p-1.5 text-center">
                           <button
@@ -821,10 +876,10 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
             <div className="flex items-center gap-2">
               <AlertCircle className="w-5 h-5 text-amber-600" />
               <span className="text-sm font-semibold text-amber-900">
-                Low Document Discovery — {lowDiscRows.length} compan{lowDiscRows.length !== 1 ? "ies" : "y"}
+                Low Retrieval Rate — {lowDiscRows.length} compan{lowDiscRows.length !== 1 ? "ies" : "y"}
               </span>
               <span className="text-xs text-amber-600">
-                Fetch coverage below {Math.round((lowDiscovery?.thresholds?.lowDiscoveryRatio ?? 0.7) * 100)}% — consider re-running
+                Documents were found but under {Math.round((lowDiscovery?.thresholds?.lowDiscoveryRatio ?? 0.7) * 100)}% could be retrieved — re-running retries the un-fetched documents
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -883,7 +938,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                       <th className="p-1.5 text-left text-amber-800">Sector</th>
                       <th className="p-1.5 text-left text-amber-800">Country</th>
                       <th className="p-1.5 text-right text-amber-800">Fetched / Discovered</th>
-                      <th className="p-1.5 text-right text-amber-800">Fetch ratio</th>
+                      <th className="p-1.5 text-right text-amber-800" title="Fraction of discovered documents that were actually downloaded (fetched ÷ discovered).">Fetch ratio</th>
                       <th className="p-1.5 text-left text-amber-800">Flags</th>
                       <th className="p-1.5 text-center text-amber-800">Actions</th>
                     </tr>
@@ -911,7 +966,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                         <td className="p-1.5 text-right text-gray-700">{r.documentsFetched} / {r.documentsDiscovered}</td>
                         <td className="p-1.5 text-right font-bold text-amber-700">{Math.round((r.fetchRatio ?? 0) * 100)}%</td>
                         <td className="p-1.5 text-gray-500">
-                          {[r.budgetExceeded ? "budgetExceeded" : null, r.lowEvidence ? "lowEvidence" : null].filter(Boolean).join(", ") || "—"}
+                          <DiscoveryFlagCell budgetExceeded={r.budgetExceeded} lowEvidence={r.lowEvidence} critical={r.critical} />
                         </td>
                         <td className="p-1.5 text-center">
                           <button

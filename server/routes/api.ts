@@ -2414,6 +2414,7 @@ type DiscoveryRow = {
   fetchRatio: number;
   budgetExceeded: boolean;
   lowEvidence: boolean;
+  critical: boolean;
 };
 
 apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) => {
@@ -2432,8 +2433,16 @@ apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) 
     }
 
     const companies = await storage.getCompanies(workspaceId);
-    const lowDiscovery: DiscoveryRow[] = [];
-    const criticalDiscovery: DiscoveryRow[] = [];
+    // Two DISTINCT signals, one company in exactly one list:
+    //   • discoveryTooLow — too few documents were FOUND in search. A thin corpus
+    //     cannot be fixed by retrying fetches, so this check wins outright.
+    //   • lowRetrieval    — enough documents were found, but too few were actually
+    //     RETRIEVED/fetched (fetchRatio below the threshold). Usually caused by the
+    //     per-company fetch-time budget being hit; re-running retries the un-fetched
+    //     documents. `critical` marks the worst of these (ratio below the critical
+    //     ratio, or fewer than CRITICAL_DISCOVERY_MIN_FETCHED documents retrieved).
+    const discoveryTooLow: DiscoveryRow[] = [];
+    const lowRetrieval: DiscoveryRow[] = [];
 
     for (const c of companies) {
       const cov = (c as any).discoveryDiagnostics?.fetchCoverage;
@@ -2451,23 +2460,21 @@ apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) 
         fetchRatio,
         budgetExceeded: cov.budgetExceeded === true,
         lowEvidence: cov.lowEvidence === true,
+        critical:
+          fetchRatio < CRITICAL_DISCOVERY_RATIO ||
+          documentsFetched < CRITICAL_DISCOVERY_MIN_FETCHED,
       };
-      // Critical tier takes precedence — a company appears in exactly one list.
-      const isCritical =
-        documentsDiscovered < CRITICAL_DISCOVERY_MIN_DOCS ||
-        documentsFetched < CRITICAL_DISCOVERY_MIN_FETCHED ||
-        fetchRatio < CRITICAL_DISCOVERY_RATIO;
-      if (isCritical) {
-        criticalDiscovery.push(row);
+      if (documentsDiscovered < CRITICAL_DISCOVERY_MIN_DOCS) {
+        discoveryTooLow.push(row);
       } else if (fetchRatio < LOW_DISCOVERY_RATIO) {
-        lowDiscovery.push(row);
+        lowRetrieval.push(row);
       }
     }
 
-    // Worst coverage first within each tier.
+    // Worst coverage first within each list.
     const byRatio = (a: DiscoveryRow, b: DiscoveryRow) => a.fetchRatio - b.fetchRatio;
-    lowDiscovery.sort(byRatio);
-    criticalDiscovery.sort(byRatio);
+    discoveryTooLow.sort(byRatio);
+    lowRetrieval.sort(byRatio);
 
     res.json({
       frameworkId: framework?.id ?? null,
@@ -2478,8 +2485,12 @@ apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) 
         criticalRatio: CRITICAL_DISCOVERY_RATIO,
         criticalMinFetched: CRITICAL_DISCOVERY_MIN_FETCHED,
       },
-      lowDiscovery,
-      criticalDiscovery,
+      // Signal-split keys (current client).
+      discoveryTooLow,
+      lowRetrieval,
+      // Back-compat aliases for any stale cached bundle (old field names).
+      criticalDiscovery: discoveryTooLow,
+      lowDiscovery: lowRetrieval,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
