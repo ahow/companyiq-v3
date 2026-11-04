@@ -178,5 +178,14 @@ export const api = {
   reexamineAnomaly: (id: number) => request(`/score-anomalies/${id}/reexamine`, { method: "POST" }),
   bulkDismissAnomalies: (ids: number[]) => request("/score-anomalies/bulk-dismiss", { method: "POST", body: JSON.stringify({ ids }) }),
   bulkReexamineAnomalies: (ids: number[]) => request("/score-anomalies/bulk-reexamine", { method: "POST", body: JSON.stringify({ ids }) }),
+
+  // Document-Discovery Coverage Diagnostics
+  getLowDiscovery: (frameworkId?: number | null) =>
+    request(`/diagnostics/low-discovery${frameworkId ? `?frameworkId=${frameworkId}` : ""}`),
+  rerunLowDiscovery: (companyIds: number[], frameworkId?: number | null) =>
+    request("/diagnostics/low-discovery/rerun", {
+      method: "POST",
+      body: JSON.stringify({ companyIds, frameworkId: frameworkId ?? undefined }),
+    }),
 };
 // v1786754269

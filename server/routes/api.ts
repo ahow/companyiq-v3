@@ -2388,6 +2388,161 @@ apiRouter.post("/score-anomalies/seed", async (req: Request, res: Response) => {
   }
 });
 
+// ─── Document-Discovery Coverage Diagnostics ────────────────────────────────
+// Surfaces companies whose latest document-discovery coverage
+// (discoveryDiagnostics.fetchCoverage) is weak, split into two tiers, and lets
+// the dashboard re-run analysis for all or a selected subset using the SAME
+// non-destructive per-company enqueue path the "Re-examine" buttons use
+// (storage.enqueueReexamination — NOT the broken ANY(array) selector).
+//
+// Tunable thresholds (env-overridable so they are easy to adjust in prod):
+//   LOW_DISCOVERY_RATIO        (default 0.7) — fetchRatio below this = "low"
+//   CRITICAL_DISCOVERY_MIN_DOCS (default 10) — documentsDiscovered below this = critical
+//   CRITICAL_DISCOVERY_RATIO   (default 0.3) — fetchRatio below this = critical
+const LOW_DISCOVERY_RATIO = Number(process.env.LOW_DISCOVERY_RATIO ?? "0.7");
+const CRITICAL_DISCOVERY_MIN_DOCS = Number(process.env.CRITICAL_DISCOVERY_MIN_DOCS ?? "10");
+const CRITICAL_DISCOVERY_RATIO = Number(process.env.CRITICAL_DISCOVERY_RATIO ?? "0.3");
+const CRITICAL_DISCOVERY_MIN_FETCHED = 3; // documentsFetched below this = critical
+
+type DiscoveryRow = {
+  id: number;
+  name: string;
+  sector: string | null;
+  country: string | null;
+  documentsFetched: number;
+  documentsDiscovered: number;
+  fetchRatio: number;
+  budgetExceeded: boolean;
+  lowEvidence: boolean;
+};
+
+apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    // Resolve the framework the dashboard is scoped to: an explicitly selected
+    // framework (query param) wins, otherwise the workspace's active framework.
+    // Never hardcode a workspace or framework id.
+    const selectedFrameworkId = parseInt(String(req.query.frameworkId ?? ""), 10);
+    let framework: any = null;
+    if (Number.isInteger(selectedFrameworkId) && selectedFrameworkId > 0) {
+      framework = await storage.getFrameworkById(selectedFrameworkId, workspaceId);
+    }
+    if (!framework) {
+      framework = await storage.getActiveFramework(workspaceId);
+    }
+
+    const companies = await storage.getCompanies(workspaceId);
+    const lowDiscovery: DiscoveryRow[] = [];
+    const criticalDiscovery: DiscoveryRow[] = [];
+
+    for (const c of companies) {
+      const cov = (c as any).discoveryDiagnostics?.fetchCoverage;
+      if (!cov || typeof cov.fetchRatio !== "number") continue;
+      const documentsFetched = Number(cov.documentsFetched ?? 0);
+      const documentsDiscovered = Number(cov.documentsDiscovered ?? 0);
+      const fetchRatio = Number(cov.fetchRatio ?? 0);
+      const row: DiscoveryRow = {
+        id: c.id,
+        name: c.name,
+        sector: c.sector ?? null,
+        country: c.country ?? null,
+        documentsFetched,
+        documentsDiscovered,
+        fetchRatio,
+        budgetExceeded: cov.budgetExceeded === true,
+        lowEvidence: cov.lowEvidence === true,
+      };
+      // Critical tier takes precedence — a company appears in exactly one list.
+      const isCritical =
+        documentsDiscovered < CRITICAL_DISCOVERY_MIN_DOCS ||
+        documentsFetched < CRITICAL_DISCOVERY_MIN_FETCHED ||
+        fetchRatio < CRITICAL_DISCOVERY_RATIO;
+      if (isCritical) {
+        criticalDiscovery.push(row);
+      } else if (fetchRatio < LOW_DISCOVERY_RATIO) {
+        lowDiscovery.push(row);
+      }
+    }
+
+    // Worst coverage first within each tier.
+    const byRatio = (a: DiscoveryRow, b: DiscoveryRow) => a.fetchRatio - b.fetchRatio;
+    lowDiscovery.sort(byRatio);
+    criticalDiscovery.sort(byRatio);
+
+    res.json({
+      frameworkId: framework?.id ?? null,
+      frameworkName: framework?.name ?? null,
+      thresholds: {
+        lowDiscoveryRatio: LOW_DISCOVERY_RATIO,
+        criticalMinDocs: CRITICAL_DISCOVERY_MIN_DOCS,
+        criticalRatio: CRITICAL_DISCOVERY_RATIO,
+        criticalMinFetched: CRITICAL_DISCOVERY_MIN_FETCHED,
+      },
+      lowDiscovery,
+      criticalDiscovery,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/diagnostics/low-discovery/rerun", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const { companyIds, frameworkId: bodyFrameworkId } = req.body as {
+      companyIds?: number[];
+      frameworkId?: number;
+    };
+    if (!Array.isArray(companyIds) || companyIds.length === 0) {
+      return res.status(400).json({ error: "companyIds required" });
+    }
+    const ids = companyIds
+      .map((n) => Number(n))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    if (ids.length === 0) {
+      return res.status(400).json({ error: "no valid companyIds" });
+    }
+
+    // Resolve the framework to re-analyze under (selected wins, else active).
+    let framework: any = null;
+    const selFw = Number(bodyFrameworkId);
+    if (Number.isInteger(selFw) && selFw > 0) {
+      framework = await storage.getFrameworkById(selFw, workspaceId);
+    }
+    if (!framework) framework = await storage.getActiveFramework(workspaceId);
+    if (!framework) return res.status(400).json({ error: "No active or selected framework" });
+
+    const results: Array<{ companyId: number; batchId: number; jobId: number }> = [];
+    const skipped: Array<{ companyId: number; reason: string }> = [];
+    // Enqueue one company at a time via the SAME non-destructive reset+enqueue
+    // path the existing "Re-examine" buttons use. Never a single ANY(array)
+    // selector (Postgres 42809). Other companies' completed results are untouched.
+    for (const companyId of ids) {
+      const company = await storage.getCompanyById(companyId, workspaceId);
+      if (!company) {
+        skipped.push({ companyId, reason: "not found in workspace" });
+        continue;
+      }
+      const r = await storage.enqueueReexamination({
+        companyId,
+        companyName: company.name,
+        frameworkId: framework.id,
+        workspaceId,
+        recoveryReason: "manual re-run from low-discovery dashboard section",
+      });
+      if (r) {
+        results.push({ companyId, batchId: r.batchId, jobId: r.jobId });
+      } else {
+        skipped.push({ companyId, reason: "could not enqueue" });
+      }
+    }
+
+    res.json({ success: true, reruns: results.length, results, skipped });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 41-F / 42-E: Manual override for related_domains_manual (standardised auth pattern)
 apiRouter.post("/companies/:id/related-domains-manual", async (req: Request, res: Response) => {
   try {

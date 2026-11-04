@@ -82,6 +82,11 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const [reviewExpanded, setReviewExpanded] = useState(false);
   const [anomalyExpanded, setAnomalyExpanded] = useState(false);
   const [selectedAnomalyIds, setSelectedAnomalyIds] = useState<Set<number>>(new Set());
+  // Document-discovery coverage sections (low tier + critical tier).
+  const [lowDiscExpanded, setLowDiscExpanded] = useState(false);
+  const [criticalDiscExpanded, setCriticalDiscExpanded] = useState(false);
+  const [selectedLowDiscIds, setSelectedLowDiscIds] = useState<Set<number>>(new Set());
+  const [selectedCriticalDiscIds, setSelectedCriticalDiscIds] = useState<Set<number>>(new Set());
   // Presentational: secondary run actions live behind a "More" menu; the company
   // table can be collapsed. Neither affects scoring, mutations or query keys.
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -345,6 +350,27 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const effectiveFrameworkName = selectedFramework
     ? frameworks.find((f: any) => f.id === selectedFramework)?.name
     : activeFramework?.name;
+
+  // ── Document-discovery coverage (low + critical tiers) ────────────────────
+  const { data: lowDiscovery } = useQuery({
+    queryKey: ["lowDiscovery", effectiveFrameworkId ?? null],
+    queryFn: () => api.getLowDiscovery(effectiveFrameworkId),
+    refetchInterval: 30000,
+  });
+  const lowDiscRows = lowDiscovery?.lowDiscovery ?? [];
+  const criticalDiscRows = lowDiscovery?.criticalDiscovery ?? [];
+
+  const rerunDiscoveryMutation = useMutation({
+    mutationFn: (companyIds: number[]) => api.rerunLowDiscovery(companyIds, effectiveFrameworkId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["lowDiscovery"] });
+      setSelectedLowDiscIds(new Set());
+      setSelectedCriticalDiscIds(new Set());
+    },
+    onError: (error: any) => alert(`Re-run failed: ${error.message}`),
+  });
 
   const handleAnalyze = () => {
     if (!effectiveFrameworkId) return alert("No framework selected");
@@ -658,6 +684,244 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                               Dismiss
                             </button>
                           </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Document Discovery Too Low — critical tier (red) */}
+      {criticalDiscRows.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              <span className="text-sm font-semibold text-red-900">
+                Document Discovery Too Low — {criticalDiscRows.length} compan{criticalDiscRows.length !== 1 ? "ies" : "y"}
+              </span>
+              <span className="text-xs text-red-600">
+                Critically low discovery/fetch coverage — likely unreliable scores
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => rerunDiscoveryMutation.mutate(criticalDiscRows.map((r: any) => r.id))}
+                disabled={rerunDiscoveryMutation.isPending}
+                className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+              >
+                Re-run all ({criticalDiscRows.length})
+              </button>
+              <button
+                onClick={() => setCriticalDiscExpanded((v) => !v)}
+                className="text-xs text-red-700 underline hover:text-red-900"
+              >
+                {criticalDiscExpanded ? "Collapse" : "Expand"}
+              </button>
+            </div>
+          </div>
+
+          {criticalDiscExpanded && (
+            <div className="mt-3">
+              {selectedCriticalDiscIds.size > 0 && (
+                <div className="flex items-center gap-3 mb-2 p-2 bg-red-100 rounded">
+                  <span className="text-xs font-medium text-red-800">{selectedCriticalDiscIds.size} selected</span>
+                  <button
+                    onClick={() => rerunDiscoveryMutation.mutate(Array.from(selectedCriticalDiscIds))}
+                    disabled={rerunDiscoveryMutation.isPending}
+                    className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                  >
+                    Re-run selected
+                  </button>
+                  <button
+                    onClick={() => setSelectedCriticalDiscIds(new Set())}
+                    className="px-2 py-1 text-xs text-red-600 hover:text-red-800"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-red-100 sticky top-0">
+                    <tr>
+                      <th className="p-1.5 text-left">
+                        <input
+                          type="checkbox"
+                          checked={selectedCriticalDiscIds.size === criticalDiscRows.length && criticalDiscRows.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) setSelectedCriticalDiscIds(new Set(criticalDiscRows.map((r: any) => r.id)));
+                            else setSelectedCriticalDiscIds(new Set());
+                          }}
+                        />
+                      </th>
+                      <th className="p-1.5 text-left text-red-800">Company</th>
+                      <th className="p-1.5 text-left text-red-800">Sector</th>
+                      <th className="p-1.5 text-left text-red-800">Country</th>
+                      <th className="p-1.5 text-right text-red-800">Fetched / Discovered</th>
+                      <th className="p-1.5 text-right text-red-800">Fetch ratio</th>
+                      <th className="p-1.5 text-left text-red-800">Flags</th>
+                      <th className="p-1.5 text-center text-red-800">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {criticalDiscRows.map((r: any) => (
+                      <tr key={r.id} className={`border-t border-red-100 ${selectedCriticalDiscIds.has(r.id) ? "bg-red-100" : "hover:bg-red-50"}`}>
+                        <td className="p-1.5">
+                          <input
+                            type="checkbox"
+                            checked={selectedCriticalDiscIds.has(r.id)}
+                            onChange={(e) => {
+                              const next = new Set(selectedCriticalDiscIds);
+                              if (e.target.checked) next.add(r.id);
+                              else next.delete(r.id);
+                              setSelectedCriticalDiscIds(next);
+                            }}
+                          />
+                        </td>
+                        <td className="p-1.5 font-medium text-gray-900">
+                          <button onClick={() => onViewCompany(r.id)} className="hover:underline text-left">{r.name}</button>
+                        </td>
+                        <td className="p-1.5 text-gray-600">{r.sector || "—"}</td>
+                        <td className="p-1.5 text-gray-600">{r.country || "—"}</td>
+                        <td className="p-1.5 text-right text-gray-700">{r.documentsFetched} / {r.documentsDiscovered}</td>
+                        <td className="p-1.5 text-right font-bold text-red-700">{Math.round((r.fetchRatio ?? 0) * 100)}%</td>
+                        <td className="p-1.5 text-gray-500">
+                          {[r.budgetExceeded ? "budgetExceeded" : null, r.lowEvidence ? "lowEvidence" : null].filter(Boolean).join(", ") || "—"}
+                        </td>
+                        <td className="p-1.5 text-center">
+                          <button
+                            onClick={() => rerunDiscoveryMutation.mutate([r.id])}
+                            disabled={rerunDiscoveryMutation.isPending}
+                            className="px-1.5 py-0.5 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                            title="Re-run discovery + analysis for this company"
+                          >
+                            Re-run
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Low Document Discovery — low tier (amber) */}
+      {lowDiscRows.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-amber-600" />
+              <span className="text-sm font-semibold text-amber-900">
+                Low Document Discovery — {lowDiscRows.length} compan{lowDiscRows.length !== 1 ? "ies" : "y"}
+              </span>
+              <span className="text-xs text-amber-600">
+                Fetch coverage below {Math.round((lowDiscovery?.thresholds?.lowDiscoveryRatio ?? 0.7) * 100)}% — consider re-running
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => rerunDiscoveryMutation.mutate(lowDiscRows.map((r: any) => r.id))}
+                disabled={rerunDiscoveryMutation.isPending}
+                className="px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
+              >
+                Re-run all ({lowDiscRows.length})
+              </button>
+              <button
+                onClick={() => setLowDiscExpanded((v) => !v)}
+                className="text-xs text-amber-700 underline hover:text-amber-900"
+              >
+                {lowDiscExpanded ? "Collapse" : "Expand"}
+              </button>
+            </div>
+          </div>
+
+          {lowDiscExpanded && (
+            <div className="mt-3">
+              {selectedLowDiscIds.size > 0 && (
+                <div className="flex items-center gap-3 mb-2 p-2 bg-amber-100 rounded">
+                  <span className="text-xs font-medium text-amber-800">{selectedLowDiscIds.size} selected</span>
+                  <button
+                    onClick={() => rerunDiscoveryMutation.mutate(Array.from(selectedLowDiscIds))}
+                    disabled={rerunDiscoveryMutation.isPending}
+                    className="px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    Re-run selected
+                  </button>
+                  <button
+                    onClick={() => setSelectedLowDiscIds(new Set())}
+                    className="px-2 py-1 text-xs text-amber-600 hover:text-amber-800"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-amber-100 sticky top-0">
+                    <tr>
+                      <th className="p-1.5 text-left">
+                        <input
+                          type="checkbox"
+                          checked={selectedLowDiscIds.size === lowDiscRows.length && lowDiscRows.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) setSelectedLowDiscIds(new Set(lowDiscRows.map((r: any) => r.id)));
+                            else setSelectedLowDiscIds(new Set());
+                          }}
+                        />
+                      </th>
+                      <th className="p-1.5 text-left text-amber-800">Company</th>
+                      <th className="p-1.5 text-left text-amber-800">Sector</th>
+                      <th className="p-1.5 text-left text-amber-800">Country</th>
+                      <th className="p-1.5 text-right text-amber-800">Fetched / Discovered</th>
+                      <th className="p-1.5 text-right text-amber-800">Fetch ratio</th>
+                      <th className="p-1.5 text-left text-amber-800">Flags</th>
+                      <th className="p-1.5 text-center text-amber-800">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lowDiscRows.map((r: any) => (
+                      <tr key={r.id} className={`border-t border-amber-100 ${selectedLowDiscIds.has(r.id) ? "bg-amber-100" : "hover:bg-amber-50"}`}>
+                        <td className="p-1.5">
+                          <input
+                            type="checkbox"
+                            checked={selectedLowDiscIds.has(r.id)}
+                            onChange={(e) => {
+                              const next = new Set(selectedLowDiscIds);
+                              if (e.target.checked) next.add(r.id);
+                              else next.delete(r.id);
+                              setSelectedLowDiscIds(next);
+                            }}
+                          />
+                        </td>
+                        <td className="p-1.5 font-medium text-gray-900">
+                          <button onClick={() => onViewCompany(r.id)} className="hover:underline text-left">{r.name}</button>
+                        </td>
+                        <td className="p-1.5 text-gray-600">{r.sector || "—"}</td>
+                        <td className="p-1.5 text-gray-600">{r.country || "—"}</td>
+                        <td className="p-1.5 text-right text-gray-700">{r.documentsFetched} / {r.documentsDiscovered}</td>
+                        <td className="p-1.5 text-right font-bold text-amber-700">{Math.round((r.fetchRatio ?? 0) * 100)}%</td>
+                        <td className="p-1.5 text-gray-500">
+                          {[r.budgetExceeded ? "budgetExceeded" : null, r.lowEvidence ? "lowEvidence" : null].filter(Boolean).join(", ") || "—"}
+                        </td>
+                        <td className="p-1.5 text-center">
+                          <button
+                            onClick={() => rerunDiscoveryMutation.mutate([r.id])}
+                            disabled={rerunDiscoveryMutation.isPending}
+                            className="px-1.5 py-0.5 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
+                            title="Re-run discovery + analysis for this company"
+                          >
+                            Re-run
+                          </button>
                         </td>
                       </tr>
                     ))}
