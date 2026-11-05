@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { realQuotes } from "../lib/quotes";
 import { useState } from "react";
 import { ArrowLeft, Play, Camera, Upload, ExternalLink, FileText, CheckCircle2, XCircle } from "lucide-react";
 import { isMet } from "@shared/verdict";
@@ -356,10 +357,12 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                                 </p>
                               </div>
                             )}
-                            {/* (v) Evidence quote + (vi) Source (hyperlinked where a URL exists) */}
-                            {m.quotes && m.quotes.length > 0 && (
+                            {/* (v) Evidence quote + (vi) Source (hyperlinked where a URL exists).
+                                Diagnostic trace blobs (diag:// / retrieval-diagnostic / evidence-gate)
+                                are filtered out here so only human-readable verbatim quotes show. */}
+                            {realQuotes(m.quotes).length > 0 && (
                               <div className="ml-6 mt-2 space-y-1">
-                                {m.quotes.map((q: any, idx: number) => (
+                                {realQuotes(m.quotes).map((q: any, idx: number) => (
                                   <blockquote key={idx} className="text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic">
                                     "{q.text}"
                                     {q.source && (
