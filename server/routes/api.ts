@@ -750,6 +750,68 @@ apiRouter.delete("/frameworks/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ─── Domain Policies (Source Domains review) ──────────────────────────────────
+// Workspace-scoped, framework-agnostic human-in-the-loop provenance overrides.
+
+// Raw policy rows for the workspace.
+apiRouter.get("/domain-policies", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const rows = await storage.getDomainPolicies(workspaceId);
+    res.json(rows);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Candidate domains aggregated from the third_party corpus.
+apiRouter.get("/domain-policies/candidates", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const limitRaw = parseInt(String(req.query.limit ?? ""), 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 2000) : 200;
+    const result = await storage.getDomainPolicyCandidates(workspaceId, limit);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Companies affected by an approved (primary) domain policy.
+apiRouter.get("/domain-policies/affected-companies", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const companies = await storage.getAffectedCompanies(workspaceId);
+    res.json(companies);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Upsert a decision for a registrable domain.
+apiRouter.post("/domain-policies", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId, email } = getSessionContext(req);
+    const { registrableDomain, decision, note } = req.body || {};
+    if (!registrableDomain || typeof registrableDomain !== "string") {
+      return res.status(400).json({ error: "registrableDomain is required" });
+    }
+    if (decision !== "primary" && decision !== "third_party") {
+      return res.status(400).json({ error: "decision must be 'primary' or 'third_party'" });
+    }
+    const row = await storage.upsertDomainPolicy(
+      workspaceId,
+      registrableDomain,
+      decision,
+      typeof note === "string" ? note : null,
+      email || null,
+    );
+    res.json(row);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Batch Analysis ─────────────────────────────────────────────────────────
 
 apiRouter.post("/analyze", async (req: Request, res: Response) => {

@@ -11,6 +11,7 @@ import SettingsPage from "./pages/SettingsPage";
 import FrameworkBuilderV2Page from "./pages/FrameworkBuilderV2Page";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import DomainsPage from "./pages/DomainsPage";
+import SourceDomainsPage from "./pages/SourceDomainsPage";
 import GuidePage from "./pages/GuidePage";
 import HowItWorksPage from "./pages/HowItWorksPage";
 import Navbar from "./components/Navbar";
@@ -47,6 +48,7 @@ type Page =
   | "framework-builder-v2"
   | "diagnostics"
   | "domains"
+  | "source-domains"
   | "guide";
 
 export default function App() {
@@ -135,6 +137,7 @@ export default function App() {
           {page === "framework-builder-v2" && <FrameworkBuilderV2Page onGoToFrameworks={() => navigate("framework")} />}
           {page === "diagnostics" && <DiagnosticsPage />}
           {page === "domains" && <DomainsPage />}
+          {page === "source-domains" && <SourceDomainsPage />}
           {page === "guide" && <GuidePage />}
         </main>
       </div>

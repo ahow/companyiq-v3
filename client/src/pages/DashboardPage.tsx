@@ -139,6 +139,9 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const [criticalDiscExpanded, setCriticalDiscExpanded] = useState(false);
   const [selectedLowDiscIds, setSelectedLowDiscIds] = useState<Set<number>>(new Set());
   const [selectedCriticalDiscIds, setSelectedCriticalDiscIds] = useState<Set<number>>(new Set());
+  // Understated — pending domain review (companies affected by approved Source Domains).
+  const [affectedExpanded, setAffectedExpanded] = useState(false);
+  const [selectedAffectedIds, setSelectedAffectedIds] = useState<Set<number>>(new Set());
   // Presentational: secondary run actions live behind a "More" menu; the company
   // table can be collapsed. Neither affects scoring, mutations or query keys.
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -423,6 +426,33 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
       queryClient.invalidateQueries({ queryKey: ["lowDiscovery"] });
       setSelectedLowDiscIds(new Set());
       setSelectedCriticalDiscIds(new Set());
+    },
+    onError: (error: any) => alert(`Re-run failed: ${error.message}`),
+  });
+
+  // ── Understated — pending domain review ───────────────────────────────────
+  // Companies touched by a domain Andy has approved as primary-eligible on the
+  // Source Domains page. A scoreOnly re-run re-classifies their existing corpus
+  // under the new policy without re-fetching documents.
+  const { data: affectedCompanies } = useQuery({
+    queryKey: ["affectedCompanies"],
+    queryFn: () => api.getAffectedCompanies(),
+    refetchInterval: 60000,
+  });
+  const affectedRows: any[] = Array.isArray(affectedCompanies) ? affectedCompanies : [];
+
+  const rerunAffectedMutation = useMutation({
+    mutationFn: (companyIds: number[]) => {
+      if (!effectiveFrameworkId) throw new Error("No framework selected");
+      // Re-score ONLY: re-classify the existing document corpus under the updated
+      // domain policy without re-running discovery/fetch.
+      return api.analyze({ frameworkId: effectiveFrameworkId, companyIds, scoreOnly: true });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["affectedCompanies"] });
+      setSelectedAffectedIds(new Set());
     },
     onError: (error: any) => alert(`Re-run failed: ${error.message}`),
   });
@@ -739,6 +769,129 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                               Dismiss
                             </button>
                           </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Understated — pending domain review (approved Source Domains) */}
+      {affectedRows.length > 0 && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-emerald-600" />
+              <span className="text-sm font-semibold text-emerald-900">
+                Understated — pending domain review — {affectedRows.length} compan{affectedRows.length !== 1 ? "ies" : "y"}
+              </span>
+              <span className="text-xs text-emerald-600">
+                These companies have documents on a domain you approved on Source Domains. Re-run (score only) to re-classify their existing corpus under the new policy.
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => rerunAffectedMutation.mutate(affectedRows.map((r: any) => r.companyId))}
+                disabled={rerunAffectedMutation.isPending}
+                className="px-2 py-1 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50"
+              >
+                Re-run all ({affectedRows.length})
+              </button>
+              <button
+                onClick={() => setAffectedExpanded((v) => !v)}
+                className="text-xs text-emerald-700 underline hover:text-emerald-900"
+              >
+                {affectedExpanded ? "Collapse" : "Expand"}
+              </button>
+            </div>
+          </div>
+
+          {affectedExpanded && (
+            <div className="mt-3">
+              {selectedAffectedIds.size > 0 && (
+                <div className="flex items-center gap-3 mb-2 p-2 bg-emerald-100 rounded">
+                  <span className="text-xs font-medium text-emerald-800">{selectedAffectedIds.size} selected</span>
+                  <button
+                    onClick={() => rerunAffectedMutation.mutate(Array.from(selectedAffectedIds))}
+                    disabled={rerunAffectedMutation.isPending}
+                    className="px-2 py-1 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    Re-run selected (score only)
+                  </button>
+                  <button
+                    onClick={() => setSelectedAffectedIds(new Set())}
+                    className="px-2 py-1 text-xs text-emerald-600 hover:text-emerald-800"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-emerald-100 sticky top-0">
+                    <tr>
+                      <th className="p-1.5 text-left">
+                        <input
+                          type="checkbox"
+                          checked={selectedAffectedIds.size === affectedRows.length && affectedRows.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) setSelectedAffectedIds(new Set(affectedRows.map((r: any) => r.companyId)));
+                            else setSelectedAffectedIds(new Set());
+                          }}
+                        />
+                      </th>
+                      <th className="p-1.5 text-left text-emerald-800">Company</th>
+                      <th className="p-1.5 text-left text-emerald-800">Sector</th>
+                      <th className="p-1.5 text-left text-emerald-800">Country</th>
+                      <th className="p-1.5 text-right text-emerald-800" title="Third-party documents on an approved domain that could be re-classified as issuer.">Affected docs</th>
+                      <th className="p-1.5 text-right text-emerald-800">Current score</th>
+                      <th className="p-1.5 text-left text-emerald-800">Status</th>
+                      <th className="p-1.5 text-center text-emerald-800">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {affectedRows.map((r: any) => (
+                      <tr key={r.companyId} className={`border-t border-emerald-100 ${selectedAffectedIds.has(r.companyId) ? "bg-emerald-100" : "hover:bg-emerald-50"}`}>
+                        <td className="p-1.5">
+                          <input
+                            type="checkbox"
+                            checked={selectedAffectedIds.has(r.companyId)}
+                            onChange={(e) => {
+                              const next = new Set(selectedAffectedIds);
+                              if (e.target.checked) next.add(r.companyId);
+                              else next.delete(r.companyId);
+                              setSelectedAffectedIds(next);
+                            }}
+                          />
+                        </td>
+                        <td className="p-1.5 font-medium text-gray-900">
+                          <button onClick={() => onViewCompany(r.companyId)} className="hover:underline text-left">{r.name}</button>
+                        </td>
+                        <td className="p-1.5 text-gray-600">{r.sector || "—"}</td>
+                        <td className="p-1.5 text-gray-600">{r.country || "—"}</td>
+                        <td className="p-1.5 text-right text-gray-700">{r.affectedDocCount}</td>
+                        <td className="p-1.5 text-right text-gray-700">{r.totalScore ?? "—"}</td>
+                        <td className="p-1.5">
+                          {r.pendingReRun ? (
+                            <span className="inline-block px-1.5 py-0.5 rounded-full bg-emerald-200 text-emerald-900 font-medium">Pending re-run</span>
+                          ) : (
+                            <span className="text-gray-500">Up to date</span>
+                          )}
+                        </td>
+                        <td className="p-1.5 text-center">
+                          <button
+                            onClick={() => rerunAffectedMutation.mutate([r.companyId])}
+                            disabled={rerunAffectedMutation.isPending}
+                            className="px-1.5 py-0.5 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50"
+                            title="Re-score this company under the updated domain policy (no re-fetch)"
+                          >
+                            Re-run
+                          </button>
                         </td>
                       </tr>
                     ))}

@@ -613,6 +613,35 @@ export const workspaceSettings = pgTable("workspace_settings", {
   workspaceKeyIdx: uniqueIndex("settings_workspace_key_idx").on(table.workspaceId, table.key),
 }));
 
+// ─── Domain Policies (Workspace-Scoped, framework-agnostic) ─────────────────
+// Human-in-the-loop overrides for the provenance classifier. Andy reviews
+// registrable domains (eTLD+1) that surfaced in the third_party corpus and
+// marks each one:
+//   - 'primary'      → ELIGIBLE like a recognised IR/regulator host, BUT the
+//                      existing three-tier identity check in provenance.ts MUST
+//                      still run and pass before a doc on that domain is treated
+//                      as issuer. NEVER an unconditional promotion.
+//   - 'third_party'  → permanently silence an aggregator (default behaviour,
+//                      made explicit).
+// The DEFAULT for an absent domain is third_party, so an empty table produces
+// ZERO behaviour change versus pre-feature. Decisions apply across ALL
+// frameworks (no framework_id anywhere). `scope` is kept for forward-compat but
+// the only value ever written is 'issuer_if_identity' — there is deliberately
+// no 'always_primary' scope.
+export const domainPolicies = pgTable("domain_policies", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  registrableDomain: text("registrable_domain").notNull(), // normalised eTLD+1, lowercase
+  decision: text("decision").notNull(), // 'primary' | 'third_party'
+  scope: text("scope").notNull().default("issuer_if_identity"),
+  note: text("note"),
+  decidedBy: text("decided_by"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  workspaceDomainIdx: uniqueIndex("domain_policies_workspace_domain_idx").on(table.workspaceId, table.registrableDomain),
+}));
+
 // ─── Processing Errors (for diagnostics) ───────────────────────────────────
 
 export const processingErrors = pgTable("processing_errors", {

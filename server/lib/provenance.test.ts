@@ -872,3 +872,95 @@ test("Rule 1a(i) NEGATIVE — substring registrable domain is NOT a match", () =
   });
   assert.equal(r.provenance, "third_party");
 });
+
+
+
+// ─── Domain-policy overrides (2026-11, human-in-the-loop) ────────────────────
+
+const NEWMONT_POLICY = {
+  companyName: "Newmont Corporation",
+  companyDomain: "newmont.com",
+  relatedDomains: [],
+  companyTicker: "NEM",
+  companyAliases: ["newmont"],
+};
+
+test("domain-policy (a) primary + identity match on title -> issuer", () => {
+  // annualreports.com is NOT a recognised IR/regulator host, so without a policy
+  // it would default to third_party. With a 'primary' policy AND a title identity
+  // match, it is promoted to issuer.
+  const policies = new Map<string, { decision: "primary" | "third_party"; scope: string }>([
+    ["annualreports.com", { decision: "primary", scope: "issuer_if_identity" }],
+  ]);
+  const r = classifyProvenance({
+    url: "https://www.annualreports.com/HostedData/AnnualReports/PDF/newmont-2024.pdf",
+    title: "Newmont Corporation 2024 Annual Report",
+    domainPolicies: policies,
+    ...NEWMONT_POLICY,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /domain-policy \(primary/);
+});
+
+test("domain-policy (b) primary + NO identity match -> third_party (MUST NOT promote)", () => {
+  // Same approved domain, but the doc is a DIFFERENT company's report with no
+  // Newmont identity signal anywhere (title/url/content). It must stay third_party.
+  const policies = new Map<string, { decision: "primary" | "third_party"; scope: string }>([
+    ["annualreports.com", { decision: "primary", scope: "issuer_if_identity" }],
+  ]);
+  const r = classifyProvenance({
+    url: "https://www.annualreports.com/HostedData/AnnualReports/PDF/acme-widgets-2024.pdf",
+    title: "Acme Widgets Inc 2024 Annual Report",
+    content: "Acme Widgets Inc reported strong growth across all divisions.",
+    domainPolicies: policies,
+    ...NEWMONT_POLICY,
+  });
+  assert.equal(r.provenance, "third_party");
+});
+
+test("domain-policy (c) third_party decision -> third_party (silences domain)", () => {
+  // A domain explicitly marked third_party stays third_party even when an
+  // identity signal is present.
+  const policies = new Map<string, { decision: "primary" | "third_party"; scope: string }>([
+    ["seekingalpha.com", { decision: "third_party", scope: "issuer_if_identity" }],
+  ]);
+  const r = classifyProvenance({
+    url: "https://seekingalpha.com/article/newmont-corporation-deep-dive",
+    title: "Newmont Corporation deep dive",
+    content: "Newmont Corporation Newmont Corporation analysis.",
+    domainPolicies: policies,
+    ...NEWMONT_POLICY,
+  });
+  assert.equal(r.provenance, "third_party");
+  assert.match(r.reason, /domain-policy \(marked third_party\)/);
+});
+
+test("domain-policy (d) empty map -> identical to no-policy behaviour", () => {
+  const sample = {
+    url: "https://www.annualreports.com/HostedData/AnnualReports/PDF/newmont-2024.pdf",
+    title: "Newmont Corporation 2024 Annual Report",
+    ...NEWMONT_POLICY,
+  };
+  const baseline = classifyProvenance(sample);
+  const withEmpty = classifyProvenance({ ...sample, domainPolicies: new Map() });
+  assert.equal(withEmpty.provenance, baseline.provenance);
+  assert.equal(withEmpty.reason, baseline.reason);
+  // And the baseline (no recognised host, no policy) is third_party.
+  assert.equal(baseline.provenance, "third_party");
+});
+
+test("domain-policy does NOT override an earlier issuer rule (own domain)", () => {
+  // A 'third_party' policy on the company's OWN registrable domain must not win,
+  // because Rule 1 classifies issuer before the policy block is consulted.
+  const policies = new Map<string, { decision: "primary" | "third_party"; scope: string }>([
+    ["newmont.com", { decision: "third_party", scope: "issuer_if_identity" }],
+  ]);
+  const r = classifyProvenance({
+    url: "https://www.newmont.com/investors/annual-report.pdf",
+    title: "Newmont Annual Report",
+    domainPolicies: policies,
+    ...NEWMONT_POLICY,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /hostname matches company domain/);
+});

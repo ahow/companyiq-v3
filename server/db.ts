@@ -845,6 +845,25 @@ export async function initializeDatabase(): Promise<void> {
       `);
     }
 
+    // ─── Domain Policies (Workspace-Scoped, framework-agnostic) ──────────────
+    // Human-in-the-loop provenance overrides. Additive, backward-compatible:
+    // an empty table reproduces pre-feature behaviour exactly. See
+    // shared/schema.ts `domainPolicies` for the column semantics.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS domain_policies (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+        registrable_domain TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'issuer_if_identity',
+        note TEXT,
+        decided_by TEXT,
+        decided_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS domain_policies_workspace_domain_idx ON domain_policies(workspace_id, registrable_domain)`);
+
     // ─── Review Fix Columns (Aug 2026) ─────────────────────────────────
     // Fix 5: Methodology versioning on measure_scores
     await db.execute(sql`ALTER TABLE measure_scores ADD COLUMN IF NOT EXISTS model_id TEXT`);

@@ -86,6 +86,14 @@ export interface ProvenanceInput {
   // hoc lookups) still get the pre-R5c behaviour. Stateless callers pass
   // undefined; batch-context callers pass a shared Map.
   knownIrTenants?: Map<string, IrTenantBinding>;
+  // Domain-policy overrides (2026-11, human-in-the-loop). Keyed by registrable
+  // domain (eTLD+1, lowercase). Consulted AFTER Rules 1/1a/1b/2/3 have had their
+  // chance but BEFORE the Rule 4 third_party default. A 'primary' decision makes
+  // the domain ELIGIBLE like a recognised IR/regulator host, but the existing
+  // three-tier identity check MUST still match before the doc becomes issuer —
+  // there is NO unconditional promotion. A 'third_party' decision silences the
+  // domain permanently. An absent key / empty / undefined map changes nothing.
+  domainPolicies?: Map<string, { decision: "primary" | "third_party"; scope: string }>;
 }
 
 export interface IrTenantBinding {
@@ -423,7 +431,7 @@ const TWO_PART_CC_TLDS = new Set([
 // Reduce a hostname to its registrable domain (eTLD+1), honouring the two-part
 // cc-TLD list above. "ir.3m.com" -> "3m.com"; "3m.co.uk" -> "3m.co.uk";
 // "www.example.com" -> "example.com".
-function registrableDomainOf(host: string | null | undefined): string {
+export function registrableDomainOf(host: string | null | undefined): string {
   const clean = (host || "").replace(/^www\./i, "").toLowerCase().trim();
   if (!clean) return "";
   const parts = clean.split(".").filter(Boolean);
@@ -905,6 +913,47 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
     };
   }
 
+  // Rule 3.5 (2026-11): domain-policy override (human-in-the-loop). Consulted
+  // AFTER Rules 1/1a/1b/2/3 have all failed to classify as issuer, but BEFORE
+  // the Rule 4 third_party default. A 'primary' decision makes the domain
+  // eligible like a recognised IR/regulator host, but — per Andy's hard
+  // requirement — the three-tier identity check MUST still match before the doc
+  // is treated as issuer (no unconditional promotion; never promotes a different
+  // company's doc on a shared host). A 'third_party' decision silences the
+  // domain permanently. An absent/empty/undefined map changes nothing, so the
+  // pre-feature behaviour is reproduced exactly when no policy applies.
+  const policyMap = input.domainPolicies;
+  if (host && policyMap && policyMap.size > 0) {
+    const regDomain = registrableDomainOf(host);
+    const policy = regDomain ? policyMap.get(regDomain) : undefined;
+    if (policy) {
+      if (policy.decision === "primary") {
+        const identity = threeTierIdentityCheck(input);
+        if (identity.matched) {
+          return {
+            provenance: "issuer",
+            reason: `domain-policy (primary, ${identity.tier} identity match on ${identity.matchedOn})`,
+            regulatorHost: null,
+            irPlatformHost: null,
+            identitySignal: identity.signal,
+          };
+        }
+        // Primary-eligible but no identity signal — do NOT promote. Falls through
+        // to the Rule 4 default (third_party). This is the critical safety
+        // behaviour: a shared host hosting a DIFFERENT company's doc stays
+        // third_party even though Andy approved the domain.
+      } else if (policy.decision === "third_party") {
+        return {
+          provenance: "third_party",
+          reason: `domain-policy (marked third_party)`,
+          regulatorHost: null,
+          irPlatformHost: null,
+          identitySignal: "none",
+        };
+      }
+    }
+  }
+
   // Rule 4: default.
   return {
     provenance: "third_party",
@@ -915,6 +964,55 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
     irPlatformHost: null,
     identitySignal: "none",
   };
+}
+
+// Suggested-bucket classifier for the Source Domains review page (2026-11).
+// Given a registrable domain (or any URL/host), returns which review bucket it
+// belongs to so the UI can group recognised-host identity-misses and genuinely
+// unrecognised hosts apart from obvious aggregators. Reuses the classifier's own
+// regulator/IR-platform host matching so the buckets stay consistent with how
+// documents are actually classified.
+export type SuggestedBucket = "recognised_host_identity_miss" | "known_aggregator" | "unrecognised_host";
+
+// Built-in denylist of obvious aggregators / news / data platforms. These are
+// hosts that cover MANY companies; a doc on one is almost never the issuer's own
+// primary disclosure. Seeded per Andy's list. dataclouds.cninfo.com.cn is the
+// official CN regulator host (NOT an aggregator) and is deliberately excluded.
+export const KNOWN_AGGREGATOR_DOMAINS = new Set<string>([
+  "stocklight.com",
+  "financialfilings.com",
+  "stocktitan.net",
+  "finance.yahoo.com", // yahoo.com registrable; handled specially below
+  "yahoo.com",
+  "companiesmarketcap.com",
+  "alphaspread.com",
+  "fortune.com",
+  "scribd.com",
+  "tradingview.com",
+  "gurufocus.com",
+  "seekingalpha.com",
+  "fool.com",
+  "marketscreener.com",
+  "fintel.io",
+  "last10k.com",
+  "quartr.com",
+  "filingreader.com",
+]);
+
+export function classifySuggestedBucket(domainOrUrl: string): SuggestedBucket {
+  const raw = (domainOrUrl || "").trim();
+  if (!raw) return "unrecognised_host";
+  // Build a usable URL for the host-matching helpers (they expect full URLs).
+  const asUrl = /^https?:\/\//i.test(raw) ? raw : `https://${raw.replace(/^www\./i, "")}`;
+  // Recognised official host whose identity check missed.
+  if (matchRegulatorHost(asUrl) || matchIrPlatform(asUrl)) {
+    return "recognised_host_identity_miss";
+  }
+  const reg = registrableDomainOf(hostOf(asUrl) || raw);
+  if (KNOWN_AGGREGATOR_DOMAINS.has(reg) || KNOWN_AGGREGATOR_DOMAINS.has(raw.toLowerCase().replace(/^www\./i, ""))) {
+    return "known_aggregator";
+  }
+  return "unrecognised_host";
 }
 
 // R2: three-tier identity check for regulator + IR-platform hosts. Runs

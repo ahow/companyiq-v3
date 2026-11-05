@@ -721,6 +721,10 @@ async function runFetchPhase(opts: {
   }
 
   const irTenantCache = new Map<string, IrTenantBinding>();
+  // Domain-policy overrides (2026-11): loaded once per run, threaded into every
+  // classifyProvenance call the SAME way as knownIrTenants. An empty map is
+  // inert (classifier reproduces pre-feature behaviour).
+  const domainPolicyMap = await storage.getDomainPolicyMap(workspaceId);
   type FirstPassEntry = {
     doc: typeof discoveryResult.documents[number];
     firstProv: ReturnType<typeof classifyProvenance>;
@@ -740,6 +744,7 @@ async function runFetchPhase(opts: {
       companyIsin: (company as any).isin || null,
       companySecCik,
       knownIrTenants: irTenantCache,
+      domainPolicies: domainPolicyMap,
     });
     if (firstProv.boundIrTenant) {
       console.log(`[${companyName}] R5c: bound IR tenant ${firstProv.boundIrTenant.platform}:${firstProv.boundIrTenant.tenantId} via ${firstProv.boundIrTenant.confirmedBy}`);
@@ -770,6 +775,7 @@ async function runFetchPhase(opts: {
         companyIsin: (company as any).isin || null,
         companySecCik,
         knownIrTenants: irTenantCache,
+        domainPolicies: domainPolicyMap,
       });
       if (second.provenance === "issuer") {
         r5cPass2Upgrades++;
@@ -2705,6 +2711,11 @@ async function runAnalyzePhase(opts: {
   // is stronger than title-tier and rarely leaves winnable third_party
   // URLs unbound after the whole fetched-corpus is walked.
   const irTenantCacheContent = new Map<string, IrTenantBinding>();
+  // Domain-policy overrides (2026-11): threaded into the content-time
+  // reclassification the SAME way as knownIrTenants. Because this path already
+  // upgrades third_party->first_party and persists it, an approved+identity-
+  // matched doc is auto-corrected on the next analysis of the company.
+  const domainPolicyMapContent = await storage.getDomainPolicyMap(workspaceId);
   // Proposal A: aboutness at corpus assembly (pre-grade) covers documents fetched
   // in earlier runs too. "reject" (lenient floor) excludes; "deprioritize" registers
   // a ranking multiplier consumed by passage retrieval. Disabled in corpus replay
@@ -2760,6 +2771,7 @@ async function runAnalyzePhase(opts: {
       companyIsin: (company as any)?.isin || null,
       companySecCik: companySecCikForCorpus,
       knownIrTenants: irTenantCacheContent,
+      domainPolicies: domainPolicyMapContent,
     });
     const priorSourceType = (doc as any).source_type || (doc as any).sourceType || null;
     if (prov.provenance === "issuer" && priorSourceType === "third_party") {
