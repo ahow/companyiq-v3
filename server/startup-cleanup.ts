@@ -17,17 +17,22 @@ import { db } from "./db.js";
 import { sql } from "drizzle-orm";
 import { getQueue } from "./queue.js";
 
-// A running batch is preserved only when its persisted batch heartbeat and every
-// active job's progress heartbeat are fresh. An unchanged aggregate snapshot is
-// deliberately not part of this decision.
+// A running batch is preserved whenever its persisted batch heartbeat is fresh.
+// The batch heartbeat is touched on every claim/progress/complete/fail, so a
+// fresh value reliably means siblings are still progressing — the correct
+// per-batch liveness signal. Individual `claimed` rows that a restart orphaned
+// are NOT a reason to cancel the whole batch: they are recovered in-place by
+// recoverOrphanedClaims below. (A `stale_active_jobs` count is still computed for
+// logging, but no longer gates preservation — previously it could cancel a live
+// batch merely because some claimed rows had gone idle.)
 const ACTIVITY_WINDOW_SECONDS = parseInt(process.env.RELIABILITY_STALL_THRESHOLD_SECONDS || String(45 * 60), 10);
 
 export async function cleanupOnStartup(): Promise<void> {
   console.log("[Startup] Cleaning up stale jobs from previous server session...");
 
   try {
-    // A live run must have both a fresh batch heartbeat and fresh progress on all
-    // currently active jobs. A single coarse unchanged snapshot cannot stall it.
+    // A live run is identified by a fresh batch heartbeat alone. Orphaned claimed
+    // rows are recovered in-place rather than treated as a cancel trigger.
     const activeBatchResult = await db.execute(sql`
       SELECT b.id,
              COALESCE(b.last_heartbeat_at, MAX(j.last_progress_at), 'epoch') AS last_heartbeat,
@@ -38,7 +43,6 @@ export async function cleanupOnStartup(): Promise<void> {
       WHERE b.status = 'running'
       GROUP BY b.id, b.last_heartbeat_at
       HAVING COALESCE(b.last_heartbeat_at, MAX(j.last_progress_at), 'epoch') > NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds'
-         AND COUNT(*) FILTER (WHERE j.status = 'claimed' AND COALESCE(j.last_progress_at, 'epoch') <= NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds') = 0
       ORDER BY b.id ASC
       LIMIT 1
     `);
@@ -46,8 +50,8 @@ export async function cleanupOnStartup(): Promise<void> {
     if (activeBatchResult.rows.length > 0) {
       const activeBatch = activeBatchResult.rows[0] as any;
       console.log(
-        `[Startup] Preserving live batch ${activeBatch.id} (heartbeat ${activeBatch.last_heartbeat}, ` +
-        `all active job heartbeats within ${ACTIVITY_WINDOW_SECONDS}s) — SKIPPING cleanup`
+        `[Startup] Preserving live batch ${activeBatch.id} (batch heartbeat ${activeBatch.last_heartbeat} within ${ACTIVITY_WINDOW_SECONDS}s, ` +
+        `open_jobs=${activeBatch.open_jobs}, stale_claimed=${activeBatch.stale_active_jobs} to be recovered in-place) — SKIPPING cleanup`
       );
       // Recover any `claimed` rows in THIS preserved batch that a just-restarted
       // process orphaned. A busy batch keeps its heartbeat fresh via its siblings,
@@ -64,7 +68,7 @@ export async function cleanupOnStartup(): Promise<void> {
       return;
     }
 
-    // No batch has a fresh batch-and-job heartbeat — safe to quarantine stale state.
+    // No batch has a fresh batch heartbeat — safe to quarantine stale state.
 
     // 1. Mark stale running batches as cancelled, preserving their provenance.
     const staleBatches = await db.execute(sql`
