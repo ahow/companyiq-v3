@@ -39,6 +39,7 @@ import * as storage from "./storage.js";
 import { getQueue } from "./queue.js";
 import { isResurrectEligible, ORPHAN_REJECTION_REASON } from "./lib/reconcile-resurrect.js";
 import { routeFailedBatch } from "./lib/batch-completion-route.js";
+import { backfillNullDomainsViaFmp } from "./lib/domain-backfill.js";
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 const RECONCILE_INTERVAL_MS = parseInt(process.env.RECONCILE_INTERVAL_MS || "300000", 10); // 5 min
@@ -73,6 +74,13 @@ const RECONCILE_ENABLED = !/^(false|0|no|off)$/i.test(process.env.RECONCILE_ENAB
 // only proceeds on the ONE replica that wins this transaction-scoped advisory
 // lock; the others skip the pass entirely. Arbitrary stable 32-bit key.
 const RECONCILE_LOCK_KEY = parseInt(process.env.RECONCILE_LOCK_KEY || "918273645", 10);
+// ── Domain auto-population sweep (FMP-only, no Serper/LLM) ──
+// Each reconcile pass resolves the blank `companies.domain` of up to this many
+// companies via FMP, so newly-added companies are auto-populated within minutes
+// with no per-import latency and no manual step. Kill switch + bound are env-
+// overridable. Strictly additive: wrapped so a failure never breaks the pass.
+const DOMAIN_SWEEP_ENABLED = !/^(false|0|no|off)$/i.test(process.env.DOMAIN_BACKFILL_SWEEP_ENABLED || "true");
+const DOMAIN_SWEEP_LIMIT = parseInt(process.env.DOMAIN_BACKFILL_SWEEP_LIMIT || "25", 10);
 // ── Resurrect-orphaned-failure sweep (§1.5) tunables ──
 // On a server restart, startup-cleanup.ts fails in-flight jobs with a fixed
 // orphan signature and cancels their batches with ORPHAN_REJECTION_REASON. Those
@@ -162,6 +170,7 @@ type ReconcileStats = {
   exhaustedFailed: number;
   qaFlagged: number;
   batchesClosed: number;
+  domainsBackfilled?: number; // companies whose blank domain was FMP-resolved this pass
   skipped?: boolean; // true when this replica did not win the leader lock
 };
 
@@ -620,6 +629,22 @@ async function reconcilePass(): Promise<ReconcileStats> {
     }
     stats.batchesClosed++;
     console.log(`[Reconciler] Closed batch ${batchId}: ${comp} completed, ${fail} failed${fail > 0 ? " dropped (test drive)" : ""} (results saved)`);
+  }
+
+  // ── Domain auto-population sweep (FMP-only; no Serper/LLM). Resolves the blank
+  //    `companies.domain` of up to DOMAIN_SWEEP_LIMIT companies so newly-added
+  //    companies are populated automatically. Strictly additive and fully
+  //    guarded — any failure here must never affect the reconcile outcome.
+  if (DOMAIN_SWEEP_ENABLED) {
+    try {
+      const r = await backfillNullDomainsViaFmp({ limit: DOMAIN_SWEEP_LIMIT, concurrency: 4 });
+      stats.domainsBackfilled = r.resolved;
+      if (r.resolved > 0 || r.fmpNoMatch > 0 || r.errors > 0) {
+        console.log(`[Reconciler] Domain sweep: resolved ${r.resolved} (cache ${r.fromCache}, fmp ${r.fromFmpLookup}) of ${r.scanned} scanned · noIsin ${r.noIsin} · fmpNoMatch ${r.fmpNoMatch} · errors ${r.errors}`);
+      }
+    } catch (e: any) {
+      console.warn(`[Reconciler] Domain sweep skipped: ${e?.message}`);
+    }
   }
 
   return stats;

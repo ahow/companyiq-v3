@@ -2540,6 +2540,15 @@ export interface DomainPolicyCandidate {
   exampleUrls: string[];
   suggestedBucket: SuggestedBucket;
   currentDecision: DomainPolicyDecision;
+  /**
+   * True when this registrable domain is the registered own-domain (or a
+   * related/manual related domain) of SOME company in the workspace. Such a
+   * domain is already first_party for its owner; it only appears in this
+   * third_party review list because OTHER companies cross-reference it. These
+   * are usually red herrings — approving them as "primary" would wrongly treat
+   * another issuer's own site as a primary source for everyone who cites it.
+   */
+  isCompanyOwnedDomain: boolean;
 }
 
 /**
@@ -2586,6 +2595,12 @@ export async function getDomainPolicyCandidates(
   // Current decisions (absent => 'third_party' default).
   const policyMap = await getDomainPolicyMap(workspaceId);
 
+  // Build the set of registrable domains that are the OWN domain (or a
+  // related / manual-related domain) of some company in this workspace. A
+  // candidate whose registrable domain is in this set is already first_party
+  // for its owner and is flagged as such in the UI.
+  const ownedDomains = await getWorkspaceOwnedRegistrableDomains(workspaceId);
+
   const all: DomainPolicyCandidate[] = [...byDomain.entries()].map(([registrableDomain, agg]) => ({
     registrableDomain,
     docCount: agg.docCount,
@@ -2593,9 +2608,46 @@ export async function getDomainPolicyCandidates(
     exampleUrls: agg.examples,
     suggestedBucket: classifySuggestedBucket(registrableDomain),
     currentDecision: (policyMap.get(registrableDomain)?.decision ?? "third_party") as DomainPolicyDecision,
+    isCompanyOwnedDomain: ownedDomains.has(registrableDomain),
   }));
-  all.sort((a, b) => b.docCount - a.docCount);
+  // Primary sort by doc volume (most-cited first); company-owned domains are
+  // red herrings so they are pushed below non-owned domains of equal priority.
+  all.sort((a, b) => {
+    if (a.isCompanyOwnedDomain !== b.isCompanyOwnedDomain) return a.isCompanyOwnedDomain ? 1 : -1;
+    return b.docCount - a.docCount;
+  });
   return { candidates: all.slice(0, Math.max(0, limit)), total: all.length };
+}
+
+/**
+ * Returns the set of registrable domains (eTLD+1) owned by companies in the
+ * workspace — folded from each company's `domain`, `related_domains`, and
+ * `related_domains_manual`. Used to flag Source-Domain candidates that are a
+ * company's own site (already first_party for that owner).
+ */
+export async function getWorkspaceOwnedRegistrableDomains(workspaceId: number): Promise<Set<string>> {
+  const res: any = await db.execute(sql`
+    SELECT domain, related_domains, related_domains_manual
+    FROM companies
+    WHERE workspace_id = ${workspaceId}
+  `);
+  const owned = new Set<string>();
+  const add = (v: unknown) => {
+    if (!v) return;
+    const reg = registrableDomainOf(String(v));
+    if (reg) owned.add(reg);
+  };
+  for (const r of ((res.rows as any[]) || [])) {
+    add(r.domain);
+    for (const key of ["related_domains", "related_domains_manual"]) {
+      const raw = r[key];
+      if (Array.isArray(raw)) { for (const d of raw) add(d); }
+      else if (typeof raw === "string" && raw.trim().startsWith("[")) {
+        try { const arr = JSON.parse(raw); if (Array.isArray(arr)) for (const d of arr) add(d); } catch { /* ignore */ }
+      }
+    }
+  }
+  return owned;
 }
 
 export interface AffectedCompany {

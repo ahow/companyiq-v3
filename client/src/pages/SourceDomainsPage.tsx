@@ -25,6 +25,7 @@ interface Candidate {
   exampleUrls: string[];
   suggestedBucket: SuggestedBucket;
   currentDecision: Decision;
+  isCompanyOwnedDomain?: boolean;
 }
 
 const BUCKET_META: Record<SuggestedBucket, { label: string; hint: string; cls: string; Icon: typeof Globe }> = {
@@ -55,6 +56,7 @@ export default function SourceDomainsPage() {
   const [bucketFilter, setBucketFilter] = useState<SuggestedBucket | "all">("all");
   const [decisionFilter, setDecisionFilter] = useState<Decision | "all">("all");
   const [search, setSearch] = useState("");
+  const [hideOwned, setHideOwned] = useState(false);
   const [expandedDomain, setExpandedDomain] = useState<string | null>(null);
   // Local optimistic overlay of decisions keyed by registrable domain.
   const [pendingDecision, setPendingDecision] = useState<Record<string, Decision>>({});
@@ -104,11 +106,14 @@ export default function SourceDomainsPage() {
     return candidates.filter((c) => {
       if (bucketFilter !== "all" && c.suggestedBucket !== bucketFilter) return false;
       if (decisionFilter !== "all" && decisionOf(c) !== decisionFilter) return false;
+      if (hideOwned && c.isCompanyOwnedDomain) return false;
       if (q && !c.registrableDomain.toLowerCase().includes(q)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, bucketFilter, decisionFilter, search, pendingDecision]);
+  }, [candidates, bucketFilter, decisionFilter, search, hideOwned, pendingDecision]);
+
+  const ownedCount = useMemo(() => candidates.filter((c) => c.isCompanyOwnedDomain).length, [candidates]);
 
   const setDecision = (c: Candidate, decision: Decision) => {
     if (decisionOf(c) === decision) return;
@@ -195,6 +200,17 @@ export default function SourceDomainsPage() {
           placeholder="Filter by domain…"
           className="px-3 py-1.5 rounded-md text-xs border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 w-48"
         />
+        {ownedCount > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={hideOwned}
+              onChange={(e) => setHideOwned(e.target.checked)}
+              className="rounded border-gray-300 dark:border-gray-600"
+            />
+            Hide company-owned ({ownedCount})
+          </label>
+        )}
         <span className="ml-auto text-xs text-gray-500 dark:text-gray-400">
           {counts.primaries} marked primary-eligible · {total} domains total
         </span>
@@ -238,9 +254,17 @@ export default function SourceDomainsPage() {
                         className="border-t border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50"
                       >
                         <td className="px-3 py-2 font-medium text-gray-900 dark:text-white">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             {decision === "primary" && <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />}
                             {c.registrableDomain}
+                            {c.isCompanyOwnedDomain && (
+                              <span
+                                title="This domain is a company's own registered site, so it is already treated as first_party for that owner. It appears here only because OTHER companies cite it. Approving it as 'primary' is usually wrong."
+                                className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                              >
+                                Company-owned
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">{c.docCount}</td>
