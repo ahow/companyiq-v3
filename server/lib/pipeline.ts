@@ -44,6 +44,7 @@ import { buildDecisionTrace, computeFrameworkContentHash } from "./framework-v2/
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
 import { classifyProvenance, provenanceToSourceType, isProvenanceRobustnessEnabled, type IrTenantBinding } from "./provenance.js";
+import { deriveFmpAnchors } from "./fmp-resolver.js";
 import { traceKeep, traceDrop, traceInfo, traceMatches, TRACE_ENABLED } from "./discovery-tracer.js";
 import { deriveAliases } from "./issuer-resolver.js";
 import { ABOUTNESS_ENABLED, ABOUTNESS_DEPRIORITIZE_WEIGHT, scoreAboutness, setAboutnessDocWeights, type AboutnessResult } from "./aboutness.js";
@@ -589,6 +590,37 @@ async function runFetchPhase(opts: {
     .map((d: string) => (d || "").replace(/^www\./, "").toLowerCase())
     .filter(Boolean);
   const companyAliases = deriveAliases((company as any).name || "", (company as any).ticker || null);
+  // §4.1 DEFENSIVE FALLBACK: even if the durable anchor-wiring in discovery.ts has
+  // not yet persisted (older companies, resume paths, or a discovery error), derive
+  // the provenance anchors from the already-resolved FMP identity so Rule 1's
+  // deterministic host match can still fire. Pure + non-destructive: fills BLANK
+  // native values only, never overrides a resolved native domain/ticker, and only
+  // unions the FMP registrable host into related_domains.
+  const fmpAnchorsForClassify = deriveFmpAnchors({
+    nativeDomain: companyDomainLower || null,
+    nativeTicker: (company as any).ticker || null,
+    relatedDomains: relatedDomainsLower,
+    fmpWebsite: (company as any).fmpWebsite ?? (company as any).fmp_website ?? null,
+    fmpSymbol: (company as any).fmpSymbol ?? (company as any).fmp_symbol ?? null,
+  });
+  const classifyCompanyDomain = companyDomainLower || fmpAnchorsForClassify.domain || "";
+  const classifyCompanyTicker = ((company as any).ticker || fmpAnchorsForClassify.ticker || null) as string | null;
+  // Union the FMP registrable host into relatedDomainsLower so the concentration
+  // heuristic and BOTH classifier passes below see it (array is mutated downstream).
+  if (fmpAnchorsForClassify.relatedDomains) {
+    for (const d of fmpAnchorsForClassify.relatedDomains) {
+      const norm = (d || "").replace(/^www\./, "").toLowerCase().trim();
+      if (norm && !relatedDomainsLower.includes(norm)) relatedDomainsLower.push(norm);
+    }
+  }
+  if (fmpAnchorsForClassify.changed) {
+    console.log(
+      `[${companyName}] §4.1 defensive FMP anchors for classify ->` +
+      `${fmpAnchorsForClassify.domain !== undefined ? ` domain=${fmpAnchorsForClassify.domain}` : ""}` +
+      `${fmpAnchorsForClassify.ticker !== undefined ? ` ticker=${fmpAnchorsForClassify.ticker}` : ""}` +
+      `${fmpAnchorsForClassify.relatedDomains !== undefined ? ` related_domains+=fmp-host` : ""}`
+    );
+  }
   // R2 (2026-09-04): resolve SEC CIK once per company so the provenance
   // classifier can perform CIK-path matches on Q4 Inc CDN URLs. Country/ISIN
   // gate inside resolveCikForCompany prevents non-US issuers from resolving
@@ -700,10 +732,10 @@ async function runFetchPhase(opts: {
       url: doc.url,
       title: doc.title,
       content: null,
-      companyDomain: companyDomainLower,
+      companyDomain: classifyCompanyDomain,
       relatedDomains: relatedDomainsLower,
       companyName: (company as any).name || null,
-      companyTicker: (company as any).ticker || null,
+      companyTicker: classifyCompanyTicker,
       companyAliases,
       companyIsin: (company as any).isin || null,
       companySecCik,
@@ -730,10 +762,10 @@ async function runFetchPhase(opts: {
         url: doc.url,
         title: doc.title,
         content: null,
-        companyDomain: companyDomainLower,
+        companyDomain: classifyCompanyDomain,
         relatedDomains: relatedDomainsLower,
         companyName: (company as any).name || null,
-        companyTicker: (company as any).ticker || null,
+        companyTicker: classifyCompanyTicker,
         companyAliases,
         companyIsin: (company as any).isin || null,
         companySecCik,
@@ -2601,6 +2633,25 @@ async function runAnalyzePhase(opts: {
     .map((d: string) => (d || "").replace(/^www\./, "").toLowerCase())
     .filter(Boolean);
   const companyAliasesForCorpus = deriveAliases((company as any)?.name || companyName, (company as any)?.ticker || null);
+  // §4.1 DEFENSIVE FALLBACK (corpus re-classification): derive provenance anchors
+  // from the resolved FMP identity so the content-time host match can still fire
+  // for issuers whose native domain/ticker are blank but fmp_website/fmp_symbol
+  // are resolved. Non-destructive: only fills blanks, only unions the FMP host.
+  const fmpAnchorsForCorpus = deriveFmpAnchors({
+    nativeDomain: companyDomainForCorpus || null,
+    nativeTicker: (company as any)?.ticker || null,
+    relatedDomains: relatedDomainsForCorpus,
+    fmpWebsite: (company as any)?.fmpWebsite ?? (company as any)?.fmp_website ?? null,
+    fmpSymbol: (company as any)?.fmpSymbol ?? (company as any)?.fmp_symbol ?? null,
+  });
+  const classifyCompanyDomainForCorpus = companyDomainForCorpus || fmpAnchorsForCorpus.domain || "";
+  const classifyCompanyTickerForCorpus = ((company as any)?.ticker || fmpAnchorsForCorpus.ticker || null) as string | null;
+  if (fmpAnchorsForCorpus.relatedDomains) {
+    for (const d of fmpAnchorsForCorpus.relatedDomains) {
+      const norm = (d || "").replace(/^www\./, "").toLowerCase().trim();
+      if (norm && !relatedDomainsForCorpus.includes(norm)) relatedDomainsForCorpus.push(norm);
+    }
+  }
   // R2: reuse the cached CIK resolution from the discovery step above so
   // Q4 Inc CDN URLs can be re-classified via CIK path match if the title
   // tier doesn't fire.
@@ -2620,7 +2671,7 @@ async function runAnalyzePhase(opts: {
   // Fail OPEN for that company's third_party exclusion — keep the docs and
   // log loudly that provenance ran without a confirmed domain. Exclusion
   // stays active whenever a domain IS confirmed.
-  const domainConfirmedForCorpus = companyDomainForCorpus.length > 0;
+  const domainConfirmedForCorpus = classifyCompanyDomainForCorpus.length > 0;
   const failOpenProvenance = provenanceRobustnessEnabled && provenanceFilterEnabled && !domainConfirmedForCorpus;
   if (failOpenProvenance) {
     console.warn(
@@ -2672,6 +2723,20 @@ async function runAnalyzePhase(opts: {
   }
   for (const doc of fetchedDocs) {
     if (!doc.content) continue;
+    // FMP transcript lane (§3.5): earnings_transcript documents carry executive-only
+    // content whose provenance is established by the speaker-level gate at ingest, NOT
+    // by a host match. They must bypass the host-based classifier (whose pseudo-URL host
+    // would otherwise force a third_party downgrade/exclusion here) and be kept as
+    // first-party evidence unconditionally. Aboutness is also skipped — the content is
+    // already reduced to the issuer's executives' own words.
+    if (((doc as any).type) === "earnings_transcript") {
+      if (TRACE_ENABLED && traceMatches(doc.url)) traceKeep(companyName, "S14.u17ProvenanceFilter", doc.url, "FMP earnings_transcript: executive-only first-party content, kept by speaker-level gate");
+      documentTexts.push(doc.content);
+      documentUrls.push(doc.url);
+      documentTitles.push(doc.title || doc.url);
+      documentIds.push(doc.id);
+      continue;
+    }
     if (aboutnessActive && doc.content.length > 50) {
       const ab = scoreAboutness(doc.content, (company as any)?.name || companyName, companyAliasesForCorpus, aboutnessPeerNames);
       if (ab.decision === "reject") {
@@ -2687,10 +2752,10 @@ async function runAnalyzePhase(opts: {
       url: doc.url,
       title: doc.title,
       content: doc.content,
-      companyDomain: companyDomainForCorpus,
+      companyDomain: classifyCompanyDomainForCorpus,
       relatedDomains: relatedDomainsForCorpus,
       companyName: (company as any)?.name || companyName,
-      companyTicker: (company as any)?.ticker || null,
+      companyTicker: classifyCompanyTickerForCorpus,
       companyAliases: companyAliasesForCorpus,
       companyIsin: (company as any)?.isin || null,
       companySecCik: companySecCikForCorpus,

@@ -27,7 +27,8 @@ import {
 } from "./ranking.js";
 import type { Framework, TrustedSource } from "../../shared/schema.js";
 import { deriveAliases, resolveCompanyFIGI } from "./issuer-resolver.js";
-import { resolveViaFmp, fmpWebsiteToDomain } from "./fmp-resolver.js";
+import { resolveViaFmp, fmpWebsiteToDomain, deriveFmpAnchors } from "./fmp-resolver.js";
+import { fetchExecutiveOnlyTranscripts, DEFAULT_TRANSCRIPT_HISTORY_QUARTERS } from "./fmp-transcripts.js";
 import { PIPELINE_VERSION } from "./pipeline-version.js";
 import { resolveIssuerProfile, scoreEntityMatch, type IssuerProfile } from "./issuer-profile.js";
 import {
@@ -96,6 +97,17 @@ const FMP_NEVER_ISSUER_DOMAINS = new Set([
  */
 function isDomainCorroborationPersistEnabled(): boolean {
   const v = (process.env.DOMAIN_CORROBORATION_PERSIST || "").toLowerCase();
+  return v !== "0" && v !== "false";
+}
+
+/**
+ * FMP earnings-call transcript lane master switch (design note §4). Ships LIVE /
+ * default-ON — the account's subscription tier includes the transcript endpoints
+ * (verified against the live API). A kill-switch is provided for ops safety only:
+ * set FMP_TRANSCRIPTS_ENABLED=0 / false to disable the lane without a redeploy.
+ */
+function getFmpTranscriptsEnabled(): boolean {
+  const v = (process.env.FMP_TRANSCRIPTS_ENABLED || "").toLowerCase();
   return v !== "0" && v !== "false";
 }
 
@@ -4083,6 +4095,14 @@ async function searchCompanyDocumentsInner(opts: {
   let effectiveDomain: string | null = null;
   let relatedDomains: string[] = [];
   let domainAutoDetected = false;
+  // §4.1 durable provenance fix + Lane 9b transcripts: capture the resolved FMP
+  // identity at FUNCTION scope so it is available on BOTH the cache-hit short-
+  // circuit path AND the full-resolution-ladder path below. Seeded from the
+  // persisted cache; refreshed inside the ladder when FMP is re-resolved.
+  let resolvedFmpSymbol: string | null = (companyRow as any).fmpSymbol ?? null;
+  let resolvedFmpWebsite: string | null = (companyRow as any).fmpWebsite ?? null;
+  // CEO name (optional) used only to corroborate the transcript executive roster.
+  let resolvedFmpCeo: string | null = null;
 
   // 42-A + 41-B: Use cached family if available, fresh, AND same pipeline version.
   // Distinguish null (never resolved) from [] (resolved, legitimately empty).
@@ -4206,10 +4226,16 @@ async function searchCompanyDocumentsInner(opts: {
     // For FMP-sourced domains we ALSO consider tokens derived from FMP's
     // canonical companyName which more often matches the brand.
     let fmpResolvedDomain: string | null = null;
+    // §4.1 durable provenance fix: refresh the FUNCTION-scoped FMP identity
+    // (symbol + website + ceo) when FMP is re-resolved this run, so the anchor
+    // wiring and transcript lane below use the freshest values.
     if (companyRow.isin && (companyRow.fmpPipelineVersion !== PIPELINE_VERSION || !companyRow.fmpResolvedAt)) {
       try {
         const fmpProfile = await resolveViaFmp(companyRow.isin);
         if (fmpProfile) {
+          resolvedFmpSymbol = fmpProfile.symbol ?? resolvedFmpSymbol;
+          resolvedFmpWebsite = fmpProfile.website ?? resolvedFmpWebsite;
+          resolvedFmpCeo = fmpProfile.ceo ?? resolvedFmpCeo;
           const fmpDomainCandidate = fmpWebsiteToDomain(fmpProfile.website);
           const normalisedFmpDomain = fmpDomainCandidate ? normaliseToRegistrableDomain(fmpDomainCandidate) : null;
           // Sanity check strategy: FMP is authoritative-per-ISIN, but we
@@ -4372,6 +4398,114 @@ async function searchCompanyDocumentsInner(opts: {
         }
       }
       console.log(`[${companyName}] domain-unresolved: no domain found after full 40 ladder`);
+    }
+  }
+
+  // 40-Z2 / §4.1 DURABLE PROVENANCE FIX: wire FMP's resolved identity into the
+  // real companies.domain / ticker / related_domains anchors that
+  // classifyProvenance() Rule 1 reads. Only fills BLANK native fields (never
+  // overwrites a resolved native value) and only unions the fmp host into
+  // related_domains. Manual overrides (related_domains_manual) are untouched.
+  // This removes the root cause of the 3M misclassification for the whole cohort
+  // (fmp_symbol/fmp_website resolved, but domain/ticker/related_domains blank),
+  // independent of the short-identity-token rescue.
+  if (companyRow.id && (resolvedFmpSymbol || resolvedFmpWebsite)) {
+    try {
+      // Native domain after this run = whatever the ladder resolved (effectiveDomain)
+      // or the stored value; anchors only fill when this is still blank.
+      const nativeDomainNow = effectiveDomain || (companyRow.domain as string | null) || null;
+      const nativeTickerNow = (companyRow.ticker as string | null) || null;
+      // related_domains after this run = the just-persisted relatedDomains when a
+      // domain was resolved, else the stored value.
+      const relatedNow: string[] = effectiveDomain
+        ? relatedDomains
+        : (((companyRow.relatedDomains as string[] | null) || []));
+      const anchors = deriveFmpAnchors({
+        nativeDomain: nativeDomainNow,
+        nativeTicker: nativeTickerNow,
+        relatedDomains: relatedNow,
+        fmpWebsite: resolvedFmpWebsite,
+        fmpSymbol: resolvedFmpSymbol,
+      });
+      if (anchors.changed) {
+        const sets: any[] = [];
+        if (anchors.domain !== undefined) sets.push(sql`domain = ${anchors.domain}`);
+        if (anchors.ticker !== undefined) sets.push(sql`ticker = ${anchors.ticker}`);
+        if (anchors.relatedDomains !== undefined) {
+          sets.push(sql`related_domains = ${JSON.stringify(anchors.relatedDomains)}::jsonb`);
+        }
+        if (sets.length > 0) {
+          await db.execute(sql`UPDATE companies SET ${sql.join(sets, sql`, `)} WHERE id = ${companyRow.id}`);
+          // Reflect into the in-memory row so later steps in this run use the anchors.
+          if (anchors.domain !== undefined) {
+            (companyRow as any).domain = anchors.domain;
+            effectiveDomain = effectiveDomain || anchors.domain;
+          }
+          if (anchors.ticker !== undefined) (companyRow as any).ticker = anchors.ticker;
+          if (anchors.relatedDomains !== undefined) {
+            (companyRow as any).relatedDomains = anchors.relatedDomains;
+            relatedDomains = anchors.relatedDomains;
+          }
+          console.log(
+            `[${companyName}] 40-Z2: wired FMP anchors ->` +
+            `${anchors.domain !== undefined ? ` domain=${anchors.domain}` : ""}` +
+            `${anchors.ticker !== undefined ? ` ticker=${anchors.ticker}` : ""}` +
+            `${anchors.relatedDomains !== undefined ? ` related_domains+=fmp-host` : ""}`
+          );
+        }
+      }
+    } catch (anchorErr: any) {
+      console.warn(`[${companyName}] 40-Z2: failed to wire FMP anchors (non-fatal): ${anchorErr?.message}`);
+    }
+  }
+
+  // ─── Lane 9b: FMP earnings-call transcript lane (executive-only) ────────────
+  // Design note §4. For issuers with a resolved FMP symbol, pull the last N
+  // quarters of transcripts DIRECTLY from FMP, apply the executive-only speaker
+  // filter (§3), and persist each surviving transcript as a ready-to-score
+  // first-party document (type='earnings_transcript'). This bypasses the
+  // blocked-aggregator web-search path entirely: transcripts already carry their
+  // (speaker-filtered) content, so they are stored fetched-ok and do NOT enter
+  // the candidate/web-fetch flow. The §3.4 fail-safe (no roster / unparseable /
+  // zero executive turns) is applied inside fetchExecutiveOnlyTranscripts, so
+  // excluded transcripts are never persisted. Entirely non-fatal.
+  const transcriptSymbol = (resolvedFmpSymbol || (companyRow as any).ticker || "").trim();
+  if (companyRow.id && transcriptSymbol && getFmpTranscriptsEnabled()) {
+    try {
+      const historyQuarters = (() => {
+        const raw = parseInt(process.env.FMP_TRANSCRIPT_HISTORY_QUARTERS || "", 10);
+        return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TRANSCRIPT_HISTORY_QUARTERS;
+      })();
+      const transcripts = await fetchExecutiveOnlyTranscripts({
+        symbol: transcriptSymbol,
+        ceo: resolvedFmpCeo,
+        historyQuarters,
+      });
+      let storedCount = 0;
+      for (const t of transcripts) {
+        try {
+          await storage.storeTranscriptDocument({
+            companyId: companyRow.id,
+            url: t.url,
+            title: t.title,
+            content: t.content,
+            attribution: t.attribution,
+          });
+          storedCount++;
+        } catch (storeErr: any) {
+          console.warn(`[${companyName}] Lane 9b: failed to store transcript ${t.url} (non-fatal): ${storeErr?.message}`);
+        }
+      }
+      if (storedCount > 0) {
+        console.log(
+          `[${companyName}] Lane 9b: ingested ${storedCount} FMP earnings-call transcript(s) ` +
+          `(symbol=${transcriptSymbol}, executive-only, first-party) of ${transcripts.length} that passed the speaker gate.`
+        );
+      } else {
+        console.log(`[${companyName}] Lane 9b: no FMP transcripts passed the executive-speaker gate (symbol=${transcriptSymbol}).`);
+      }
+    } catch (transcriptErr: any) {
+      console.warn(`[${companyName}] Lane 9b: FMP transcript lane failed (non-fatal): ${transcriptErr?.message}`);
     }
   }
 

@@ -739,6 +739,78 @@ export async function recordExtractionState(companyId: number, url: string, stat
   `);
 }
 
+/**
+ * FMP transcript lane (§3.5): persist an executive-only earnings-call transcript
+ * as a ready-to-score first-party document in ONE call. Unlike web-discovered
+ * documents, transcripts already carry their (speaker-filtered) content, so this
+ * both upserts the documents row AND stores the content — bypassing the fetch path.
+ *
+ * The row is written with:
+ *   - type = 'earnings_transcript'  (recognised and kept unconditionally by the
+ *     corpus loop; its provenance is the speaker-level gate, not a host match)
+ *   - source_type = 'first_party'   (executive-only content; §3.5)
+ *   - gate_verdict = 'accept', fetch_status = 'ok'  (so research-state treats it
+ *     as eligible, retrieved evidence)
+ *   - transcript_attribution = per-turn attribution JSON (audit trail)
+ *
+ * Idempotent on (company_id, url): re-ingesting the same transcript refreshes
+ * content + attribution without duplicating the row. Returns the document id.
+ */
+export async function storeTranscriptDocument(data: {
+  companyId: number;
+  url: string;
+  title: string;
+  content: string;
+  attribution: unknown;
+  gateReason?: string;
+}): Promise<number | null> {
+  const urlHash = hashUrl(data.url);
+  const contentLength = data.content.length;
+
+  // Step 1: store content in the deduplicated content table.
+  const dcResult = await db.execute(sql`
+    INSERT INTO document_content (url_hash, url, content, content_length, created_at, updated_at)
+    VALUES (${urlHash}, ${data.url}, ${data.content}, ${contentLength}, NOW(), NOW())
+    ON CONFLICT (url_hash) DO UPDATE SET
+      content = EXCLUDED.content,
+      content_length = EXCLUDED.content_length,
+      updated_at = NOW()
+    RETURNING id
+  `);
+  const contentId = (dcResult.rows[0] as any)?.id ?? null;
+
+  const attributionJson = JSON.stringify(data.attribution ?? null);
+  const gateReason = data.gateReason ?? "fmp_transcript; executive-only speaker gate (§3.5)";
+
+  // Step 2: upsert the documents row with content linked and marked fetched-ok.
+  const docResult = await db.execute(sql`
+    INSERT INTO documents (
+      company_id, url, title, type, gate_verdict, gate_reason,
+      fetch_status, fetch_failures, content_id, source_type,
+      extraction_state, transcript_attribution, fetched_at, created_at
+    )
+    VALUES (
+      ${data.companyId}, ${data.url}, ${data.title}, 'earnings_transcript', 'accept', ${gateReason},
+      'ok', 0, ${contentId}, 'first_party',
+      'complete', ${attributionJson}::jsonb, NOW(), NOW()
+    )
+    ON CONFLICT (company_id, url) DO UPDATE SET
+      title = EXCLUDED.title,
+      type = 'earnings_transcript',
+      gate_verdict = 'accept',
+      gate_reason = EXCLUDED.gate_reason,
+      fetch_status = 'ok',
+      content_id = EXCLUDED.content_id,
+      content = NULL,
+      source_type = 'first_party',
+      extraction_state = 'complete',
+      transcript_attribution = EXCLUDED.transcript_attribution,
+      fetched_at = NOW()
+    RETURNING id
+  `);
+  return (docResult.rows[0] as any)?.id ?? null;
+}
+
 export async function recordFetchFailure(companyId: number, url: string, failureReason?: string) {
   await db.execute(sql`
     UPDATE documents SET fetch_failures = fetch_failures + 1,

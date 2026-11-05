@@ -37,15 +37,18 @@ export interface FmpProfile {
   cusip: string | null;
 }
 
-function getFmpKey(): string | null {
+export function getFmpKey(): string | null {
   const k = process.env.FMP_API_KEY || process.env.FMP_TOKEN || "";
   return k ? k : null;
 }
 
+/** Base URL for the FMP /stable endpoint set — exported for sibling modules. */
+export const FMP_STABLE_BASE = FMP_BASE;
+
 const REQUEST_TIMEOUT_MS = 12000;
 const MAX_RETRIES = 2;
 
-async function fmpGet(url: string, params: Record<string, unknown>): Promise<any> {
+export async function fmpGet(url: string, params: Record<string, unknown>): Promise<any> {
   const key = getFmpKey();
   if (!key) throw new Error("FMP_API_KEY not configured");
   const p: Record<string, unknown> = { ...params, apikey: key };
@@ -141,4 +144,101 @@ export function fmpWebsiteToDomain(website: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+// ─── FMP anchor derivation (durable provenance fix, §4.1) ────────────────────
+//
+// 3M (and the whole cohort) can carry a resolved fmp_symbol / fmp_website while
+// the native domain / ticker / related_domains columns that classifyProvenance()
+// Rule 1 reads are blank. This leaves the deterministic host-match unable to fire,
+// so the issuer's own filings fall through to third_party and are dropped from the
+// eligible-evidence pack. deriveFmpAnchors() computes the anchor values to write
+// (or fall back on at classify time) from the already-resolved FMP identity.
+//
+// Guarantees (never overwrite a native non-blank value, never touch *_manual):
+//   • domain:          set from the registrable domain of fmp_website ONLY when
+//                      the native domain is blank.
+//   • ticker:          set from fmp_symbol ONLY when the native ticker is blank.
+//   • relatedDomains:  add the fmp registrable domain if it is not already
+//                      present (additive union; manual overrides are untouched).
+
+// Two-part country-code TLD suffixes where the registrable domain is the last
+// THREE labels (e.g. 3m.co.uk -> 3m.co.uk). Small closed list; mirrors the one
+// used by the provenance classifier.
+const FMP_TWO_PART_CC_TLDS = new Set([
+  "co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "or.jp", "ne.jp", "co.kr",
+  "com.au", "net.au", "org.au", "com.br", "com.cn", "com.hk", "com.sg",
+  "com.mx", "co.in", "co.za", "co.nz", "com.tr", "com.tw", "com.my",
+]);
+
+/** Reduce a hostname to its registrable domain (eTLD+1, cc-TLD aware). */
+export function registrableDomain(host: string | null | undefined): string | null {
+  const clean = (host || "").replace(/^www\./i, "").toLowerCase().trim();
+  if (!clean) return null;
+  const parts = clean.split(".").filter(Boolean);
+  if (parts.length <= 2) return parts.join(".") || null;
+  const lastTwo = parts.slice(-2).join(".");
+  if (FMP_TWO_PART_CC_TLDS.has(lastTwo)) return parts.slice(-3).join(".");
+  return parts.slice(-2).join(".");
+}
+
+export interface FmpAnchorInput {
+  nativeDomain?: string | null;
+  nativeTicker?: string | null;
+  relatedDomains?: string[] | null;
+  fmpWebsite?: string | null;
+  fmpSymbol?: string | null;
+}
+
+export interface FmpAnchorResult {
+  /** Present only when the native domain was blank and FMP yielded one. */
+  domain?: string;
+  /** Present only when the native ticker was blank and FMP yielded one. */
+  ticker?: string;
+  /** Present only when the fmp registrable domain was not already in related_domains. */
+  relatedDomains?: string[];
+  /** True when any of domain/ticker/relatedDomains would change. */
+  changed: boolean;
+}
+
+function isBlank(v: string | null | undefined): boolean {
+  return !v || !String(v).trim();
+}
+
+/**
+ * Compute the provenance anchors to write (or fall back on) from an issuer's
+ * already-resolved FMP identity. Pure: no I/O, no mutation of inputs.
+ */
+export function deriveFmpAnchors(input: FmpAnchorInput): FmpAnchorResult {
+  const result: FmpAnchorResult = { changed: false };
+
+  const fmpHost = fmpWebsiteToDomain(input.fmpWebsite ?? null); // strips scheme/www
+  const fmpRegistrable = registrableDomain(fmpHost);
+
+  // domain: only when native is blank.
+  if (isBlank(input.nativeDomain) && fmpRegistrable) {
+    result.domain = fmpRegistrable;
+    result.changed = true;
+  }
+
+  // ticker: only when native is blank.
+  if (isBlank(input.nativeTicker) && !isBlank(input.fmpSymbol)) {
+    result.ticker = String(input.fmpSymbol).trim();
+    result.changed = true;
+  }
+
+  // related_domains: additive union of the fmp registrable domain.
+  if (fmpRegistrable) {
+    const existing = (input.relatedDomains || [])
+      .map((d) => registrableDomain(d) || (d || "").replace(/^www\./i, "").toLowerCase().trim())
+      .filter(Boolean);
+    const already = existing.includes(fmpRegistrable);
+    if (!already) {
+      const merged = [...(input.relatedDomains || []).filter(Boolean), fmpRegistrable];
+      result.relatedDomains = merged;
+      result.changed = true;
+    }
+  }
+
+  return result;
 }

@@ -282,7 +282,7 @@ export const documents = pgTable("documents", {
   companyId: integer("company_id").references(() => companies.id).notNull(),
   url: text("url").notNull(),
   title: text("title"),
-  type: text("type").notNull().default("html"), // html | pdf
+  type: text("type").notNull().default("html"), // html | pdf | earnings_transcript
   gateVerdict: text("gate_verdict"), // accept | reject
   gateReason: text("gate_reason"),
   fetchStatus: text("fetch_status").notNull().default("pending"), // pending | ok | dead
@@ -299,6 +299,12 @@ export const documents = pgTable("documents", {
   // Never read by scoring/analyzer — research-state accounting only, so verdicts
   // and scores are unaffected. Distinguishes extracted_complete vs extracted_partial.
   extractionState: text("extraction_state"),
+  // FMP transcript lane (§3.5): per-turn speaker attribution for an
+  // earnings_transcript document, so any scored sentence is traceable to a named
+  // executive. JSON shape: { kept, excludeReason?, turns:[{speaker,title,role,kept}],
+  // rosterSize, totalTurnCount, executiveTurnCount }. Null for all non-transcript
+  // documents. Additive/nullable — never read by scoring, audit-only.
+  transcriptAttribution: jsonb("transcript_attribution"),
   fetchedAt: timestamp("fetched_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({

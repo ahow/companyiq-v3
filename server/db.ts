@@ -886,6 +886,12 @@ export async function initializeDatabase(): Promise<void> {
     // stay NULL (completeness-unknown), treated conservatively (never a gap).
     await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_state TEXT`);
 
+    // FMP transcript lane (§3.5, additive): per-turn speaker attribution for
+    // earnings_transcript documents (speaker/title/role/kept per turn). Nullable
+    // JSONB; null for all non-transcript documents; never read by scoring/analyzer
+    // (audit-only), so adding it cannot change any verdict or score.
+    await db.execute(sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS transcript_attribution JSONB`);
+
     // Corpus snapshot: freeze the evidence set per batch for reproducibility
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS batch_corpus (
