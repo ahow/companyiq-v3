@@ -29,6 +29,7 @@ import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.j
 // WP02/A1 (additive): explicit research-state accounting. Pure derivation —
 // never affects scores/verdicts; attached to responses as metadata only.
 import { buildManifest, deriveResearchStatus } from "../../shared/research-state.js";
+import { buildEvidenceFunnel } from "../lib/evidence-funnel.js";
 import { runCompletenessValidator } from "../lib/framework-completeness.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -180,7 +181,22 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
       }),
     });
 
-    res.json({ company: enrichedCompany, scores, documents, researchStatus });
+    // Evidence funnel (§3, additive/display-only): per-stage counts + the
+    // same-domain-third-party provenance-health signal. Computed from ALL
+    // document rows (not just gate-accepted) grouped by source_type/gate_verdict,
+    // plus the authoritative fetchCoverage snapshot for discovered/fetched/dead.
+    // Does not change scoring.
+    let evidenceFunnel: any = null;
+    try {
+      const allDocs = await storage.getAllDocumentsForFunnel(company.id);
+      const fetchCoverage =
+        ((company as any).discoveryDiagnostics as any)?.fetchCoverage ?? null;
+      evidenceFunnel = buildEvidenceFunnel(allDocs as any, company as any, fetchCoverage);
+    } catch {
+      /* funnel is additive/best-effort; never block the company read */
+    }
+
+    res.json({ company: enrichedCompany, scores, documents, researchStatus, evidenceFunnel });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -512,6 +512,31 @@ export async function getAcceptedDocuments(companyId: number) {
 }
 
 /**
+ * Evidence funnel (display-only): return ALL document rows for a company with
+ * the provenance / gate / fetch columns needed to build the per-stage funnel
+ * and the same-domain-third-party provenance-health signal. Additive, read-only
+ * — does not change scoring. Unlike getAcceptedDocuments this is NOT filtered to
+ * gate_verdict='accept', because the funnel must show discovered → fetched → dead
+ * → gate-accepted → first/third-party stages across every source_type.
+ */
+export async function getAllDocumentsForFunnel(companyId: number) {
+  return db
+    .select({
+      id: schema.documents.id,
+      url: schema.documents.url,
+      type: schema.documents.type,
+      gateVerdict: schema.documents.gateVerdict,
+      fetchStatus: schema.documents.fetchStatus,
+      failureReason: schema.documents.failureReason,
+      sourceType: schema.documents.sourceType,
+      extractionState: schema.documents.extractionState,
+    })
+    .from(schema.documents)
+    .where(eq(schema.documents.companyId, companyId))
+    .orderBy(asc(schema.documents.id));
+}
+
+/**
  * U17: Update a document's source_type after re-classification with full
  * content. Used by the pipeline's corpus-build provenance filter to persist
  * upgrades (title-only misclassified third_party → issuer once content shows
