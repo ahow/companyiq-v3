@@ -51,6 +51,13 @@ const STUCK_THRESHOLD_MIN = parseInt(process.env.RECONCILE_STUCK_MIN || "40", 10
 // same 40 min as STUCK_THRESHOLD_MIN so a merely-slow-but-alive job (worst-case
 // pipeline ≈35 min) is never reaped; override with RECONCILE_REAP_CLAIM_MIN.
 const REAP_CLAIM_MIN = parseInt(process.env.RECONCILE_REAP_CLAIM_MIN || String(STUCK_THRESHOLD_MIN), 10);
+// Dedicated budget for the stale-claim reaper (§0), tracked in
+// discoveryDiagnostics.reap.count. This is INTENTIONALLY separate from
+// analysis_jobs.attempts: a worker that died mid-claim should not burn the
+// pipeline retry budget for a job it never actually ran. The budget still
+// guarantees a genuinely unprocessable company is failed+QA-flagged rather than
+// released forever. Override with RECONCILE_REAP_MAX.
+const REAP_MAX = parseInt(process.env.RECONCILE_REAP_MAX || "5", 10);
 const RECONCILE_MAX = parseInt(process.env.RECONCILE_MAX || "3", 10);
 // Quality-zero thresholds (mirror the in-pipeline auto-reexam gate exactly so
 // the reconciler and the pipeline share ONE budget and ONE definition).
@@ -199,34 +206,74 @@ async function reconcilePass(): Promise<ReconcileStats> {
   //  company has no results yet. Single-company (re-exam) batches are left to
   //  §1, which handles them with the bounded recovery/QA path. Re-queueing in
   //  place (not new batches) is what prevents the single-company batch
-  //  proliferation observed in production. Attempts are NOT incremented here so a
-  //  worker that died mid-claim doesn't burn the retry budget for a job it never
-  //  actually got to run; §1 still bounds genuinely unprocessable companies.
+  //  proliferation observed in production.
+  //
+  //  Liveness is judged PER JOB (the job's own idle time + its BullMQ presence),
+  //  NOT per batch. The batch-heartbeat clause was removed: a BUSY batch keeps its
+  //  heartbeat fresh via every sibling job's progress, so a per-batch gate let a
+  //  single dead worker's claimed rows sit orphaned forever inside an otherwise
+  //  healthy running batch. The per-job idle predicate + the runtime live.has()
+  //  BullMQ check are the real safety net against reaping a slow-but-alive job.
+  //
+  //  The reap is bounded by a DEDICATED budget (discoveryDiagnostics.reap.count,
+  //  cap REAP_MAX), decoupled from analysis_jobs.attempts so a worker that died
+  //  mid-claim doesn't burn the pipeline retry budget for a job it never ran.
   try {
     const staleClaims = await db.execute(sql`
-      SELECT j.id AS job_id, j.company_id, j.batch_id, j.attempts,
-             j.framework_id, j.workspace_id, b.last_heartbeat_at, j.last_progress_at,
+      SELECT j.id AS job_id, j.company_id, j.batch_id,
+             j.framework_id, j.workspace_id, j.last_progress_at,
              (SELECT COUNT(*) FROM measure_scores ms
                 WHERE ms.company_id = j.company_id AND ms.framework_id = j.framework_id) AS has_scores
       FROM analysis_jobs j
       JOIN batch_runs b ON b.id = j.batch_id
       WHERE j.status = 'claimed'
-        AND COALESCE(b.last_heartbeat_at, 'epoch') < NOW() - INTERVAL '${sql.raw(String(REAP_CLAIM_MIN))} minutes'
         AND COALESCE(j.last_progress_at, j.claimed_at, 'epoch') < NOW() - INTERVAL '${sql.raw(String(REAP_CLAIM_MIN))} minutes'
         AND b.status = 'running'
         AND b.total_jobs > 1
         AND j.id = (SELECT MAX(id) FROM analysis_jobs j2 WHERE j2.company_id = j.company_id)
     `);
-    let reaped = 0;
+    let reaped = 0, reapSynced = 0, reapFailed = 0;
     for (const row of staleClaims.rows as any[]) {
       const companyId = Number(row.company_id);
-      if (live.has(companyId)) continue;            // still genuinely in-flight
-      if (Number(row.has_scores) > 0) continue;     // results exist => leave for §1 sync-to-completed
-      if (Number(row.attempts) >= 3) continue;      // exhausted => leave for §1 to fail+QA
-      // Release back to pending in the SAME batch and re-enqueue onto the queue.
+      const jobId = Number(row.job_id);
+      if (live.has(companyId)) continue;            // still genuinely in-flight on the queue
+
+      // Lost status-write: results already exist => sync to completed in place.
+      if (Number(row.has_scores) > 0) {
+        await syncCompleted(companyId, jobId);
+        reapSynced++;
+        stats.syncedCompleted++;
+        console.log(`[Reconciler] Reaper synced company ${companyId} to completed (results already present)`);
+        continue;
+      }
+
+      const company = await storage.getCompanyById(companyId, Number(row.workspace_id));
+      if (!company) continue;
+      const diag = getDiag(company);
+      const reap = diag.reap || { count: 0 };
+
+      if ((reap.count || 0) >= REAP_MAX) {
+        // Budget exhausted: fail the job + QA-flag. Never loops.
+        await db.execute(sql`UPDATE analysis_jobs SET status='failed', last_error='stale-claim reap budget exhausted', completed_at=NOW() WHERE id=${jobId} AND status='claimed'`);
+        await flagForQa(company, `stale-claim reaper exhausted after ${reap.count} releases (no results produced)`);
+        reapFailed++;
+        stats.exhaustedFailed++;
+        stats.qaFlagged++;
+        console.log(`[Reconciler] Reaper FAILED + QA-flagged company ${companyId}: reap budget exhausted`);
+        continue;
+      }
+
+      // Within budget: persist the incremented counter, then release back to
+      // pending in the SAME batch and re-enqueue in place.
+      diag.reap = {
+        count: (reap.count || 0) + 1,
+        lastAt: new Date().toISOString(),
+        reason: "stale claim released (orphaned worker / DB<->queue desync)",
+      };
+      await storage.updateCompany(companyId, company.workspaceId, { discoveryDiagnostics: diag } as any);
       await db.execute(sql`
         UPDATE analysis_jobs SET status='pending', claimed_at=NULL
-        WHERE id=${Number(row.job_id)} AND status='claimed'
+        WHERE id=${jobId} AND status='claimed'
       `);
       try {
         const { getQueue } = await import("./queue.js");
@@ -234,7 +281,7 @@ async function reconcilePass(): Promise<ReconcileStats> {
         await q.add(
           `reap-${row.batch_id}-${companyId}`,
           {
-            jobId: Number(row.job_id),
+            jobId,
             companyId,
             frameworkId: Number(row.framework_id),
             batchId: Number(row.batch_id),
@@ -243,14 +290,16 @@ async function reconcilePass(): Promise<ReconcileStats> {
           },
           // Unique jobId per reap pass so a re-claim isn't deduped against a
           // stale BullMQ id from a previous pass.
-          { priority: 2, jobId: `reap-job-${row.job_id}-${Date.now()}` }
+          { priority: 2, jobId: `reap-job-${jobId}-${Date.now()}` }
         );
       } catch (e: any) {
-        console.warn(`[Reconciler] Reaper could not re-enqueue job ${row.job_id} (will rely on worker poll): ${e?.message}`);
+        console.warn(`[Reconciler] Reaper could not re-enqueue job ${jobId} (will rely on worker poll): ${e?.message}`);
       }
       reaped++;
     }
-    if (reaped > 0) console.log(`[Reconciler] Stale-claim reaper released ${reaped} orphaned job(s) back to pending in-place`);
+    if (reaped > 0 || reapSynced > 0 || reapFailed > 0) {
+      console.log(`[Reconciler] Stale-claim reaper: released ${reaped}, synced ${reapSynced}, failed+flagged ${reapFailed}`);
+    }
   } catch (e: any) {
     console.warn(`[Reconciler] Stale-claim reaper error (non-fatal): ${e?.message}`);
   }
@@ -264,11 +313,14 @@ async function reconcilePass(): Promise<ReconcileStats> {
     JOIN analysis_jobs j ON j.company_id = c.id
     JOIN batch_runs b ON b.id = j.batch_id
     WHERE b.status = 'running'
-      AND COALESCE(b.last_heartbeat_at, 'epoch') < NOW() - INTERVAL '${sql.raw(String(STUCK_THRESHOLD_MIN))} minutes'
       AND COALESCE(j.last_progress_at, j.claimed_at, 'epoch') < NOW() - INTERVAL '${sql.raw(String(STUCK_THRESHOLD_MIN))} minutes'
       AND j.status IN ('pending','claimed')
       AND j.id = (SELECT MAX(id) FROM analysis_jobs j2 WHERE j2.company_id = c.id)
   `);
+  // NB: like §0, liveness here is judged per JOB (its own idle time + live.has())
+  // not per batch. The batch-heartbeat clause was removed so a stranded job inside
+  // a BUSY (fresh-heartbeat) running batch is still recoverable. live.has() below
+  // is what prevents touching a slow-but-alive job.
 
   for (const row of orphans.rows as any[]) {
     const companyId = Number(row.company_id);

@@ -49,6 +49,17 @@ export async function cleanupOnStartup(): Promise<void> {
         `[Startup] Preserving live batch ${activeBatch.id} (heartbeat ${activeBatch.last_heartbeat}, ` +
         `all active job heartbeats within ${ACTIVITY_WINDOW_SECONDS}s) — SKIPPING cleanup`
       );
+      // Recover any `claimed` rows in THIS preserved batch that a just-restarted
+      // process orphaned. A busy batch keeps its heartbeat fresh via its siblings,
+      // so the periodic reconciler used to leave such rows claimed-forever; freeing
+      // them here makes recovery immediate on deploy instead of waiting a full
+      // reconcile cycle. See recoverOrphanedClaims for the rolling-replica safety
+      // contract (live-queue guard + fail-safe-on-unknown).
+      try {
+        await recoverOrphanedClaims(Number(activeBatch.id));
+      } catch (e: any) {
+        console.warn(`[Startup] Orphaned-claim recovery error (non-fatal): ${e?.message}`);
+      }
       console.log("[Startup] The worker will resume processing the existing queue on reconnect");
       return;
     }
@@ -116,5 +127,91 @@ export async function cleanupOnStartup(): Promise<void> {
   } catch (error: any) {
     console.error(`[Startup] Cleanup error (non-fatal): ${error.message}`);
     // Don't throw — startup cleanup is best-effort
+  }
+}
+
+/**
+ * Read the set of companyIds that currently have a live BullMQ job
+ * (waiting/active/delayed/prioritized/paused). Returns `null` if the queue cannot
+ * be read — the caller MUST treat null as "unknown" and release nothing, so a
+ * transient Redis hiccup can never cause us to yank a job from a live worker.
+ */
+async function liveQueueCompanyIds(): Promise<Set<number> | null> {
+  try {
+    const q = getQueue();
+    const jobs = await q.getJobs(["waiting", "active", "delayed", "prioritized", "paused"]);
+    const ids = new Set<number>();
+    for (const j of jobs) {
+      const cid = (j as any)?.data?.companyId;
+      if (typeof cid === "number") ids.add(cid);
+    }
+    return ids;
+  } catch (e: any) {
+    console.warn(`[Startup] Could not read queue for orphan recovery (fail-safe: releasing nothing): ${e?.message}`);
+    return null;
+  }
+}
+
+/**
+ * Release `claimed` rows in a preserved (still-running) batch back to `pending`
+ * and re-enqueue them, so a worker reclaims them immediately after a restart.
+ *
+ * SAFETY — this runs on EVERY worker replica at boot (WORKER_RUN_CLEANUP=true),
+ * so during a rolling deploy several replicas execute it while siblings are still
+ * processing jobs. Two guards make it safe:
+ *   1. Live-queue guard: a claimed row whose company has ANY live BullMQ entry is
+ *      left untouched — that job is genuinely in-flight on some replica. Only true
+ *      orphans (claimed in DB, absent from the queue) are released.
+ *   2. Won-the-release guard: the UPDATE is `... WHERE status='claimed' RETURNING`,
+ *      so only the replica that actually flips the row re-enqueues it; concurrent
+ *      replicas match 0 rows and never double-enqueue.
+ * If the queue state is unknown (liveQueueCompanyIds -> null) we release nothing.
+ */
+async function recoverOrphanedClaims(batchId: number): Promise<void> {
+  const live = await liveQueueCompanyIds();
+  if (live === null) return; // fail-safe: never release when queue state is unknown
+
+  const claimed = await db.execute(sql`
+    SELECT j.id AS job_id, j.company_id, j.framework_id, j.workspace_id
+    FROM analysis_jobs j
+    WHERE j.batch_id = ${batchId} AND j.status = 'claimed'
+      AND j.id = (SELECT MAX(id) FROM analysis_jobs j2 WHERE j2.company_id = j.company_id)
+  `);
+
+  let released = 0;
+  for (const row of claimed.rows as any[]) {
+    const companyId = Number(row.company_id);
+    if (live.has(companyId)) continue; // a sibling replica is actively working it
+    const jobId = Number(row.job_id);
+
+    const upd = await db.execute(sql`
+      UPDATE analysis_jobs SET status='pending', claimed_at=NULL
+      WHERE id=${jobId} AND status='claimed'
+      RETURNING id
+    `);
+    if (upd.rows.length === 0) continue; // another replica already released it
+
+    try {
+      const q = getQueue();
+      await q.add(
+        `startup-reclaim-${batchId}-${companyId}`,
+        {
+          jobId,
+          companyId,
+          frameworkId: Number(row.framework_id),
+          batchId,
+          workspaceId: Number(row.workspace_id),
+          skipFetch: false,
+        },
+        // Unique BullMQ id so the re-enqueue is never deduped against a stale id.
+        { priority: 2, jobId: `startup-reclaim-${jobId}-${Date.now()}` }
+      );
+    } catch (e: any) {
+      console.warn(`[Startup] Could not re-enqueue reclaimed job ${jobId} (will rely on reconciler): ${e?.message}`);
+    }
+    released++;
+  }
+  if (released > 0) {
+    console.log(`[Startup] Released ${released} orphaned claimed job(s) in preserved batch ${batchId} back to pending + re-enqueued`);
   }
 }
