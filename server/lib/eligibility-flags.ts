@@ -177,6 +177,44 @@ function identityTokens(company: CompanyIdentity): string[] {
   return Array.from(toks);
 }
 
+export interface QuoteAttribution {
+  /** Index of the quote in the input array. */
+  index: number;
+  /** True when the target company's distinctive identity tokens appear in this
+   *  quote's text. False means the passage names no identity token of the
+   *  target — it describes some other entity. */
+  attributedToTarget: boolean;
+}
+
+/**
+ * PER-QUOTE attribution review. For each supporting quote, decide whether the
+ * target company's distinctive identity tokens (name/alias/ticker, via the same
+ * `identityTokens` logic the entity-attribution flag uses) appear in the quote
+ * TEXT. This is the review step the entity-attribution scoring gate uses to mark
+ * the specific quotes that do NOT name the target as disqualified, so the
+ * displayed evidence stays consistent with a downgraded (No) verdict instead of
+ * showing Yes-implying third-party passages next to a No.
+ *
+ * Total/never throws: on any unexpected input it returns attributedToTarget=true
+ * for every quote (fail-open — never falsely disqualify a quote).
+ */
+export function reviewQuoteAttribution(
+  quotes: QuoteLike[] | null | undefined,
+  company: CompanyIdentity,
+): QuoteAttribution[] {
+  try {
+    const toks = identityTokens(company);
+    return (quotes || []).map((q, index) => {
+      const text = (q?.text || "").toLowerCase();
+      const attributedToTarget =
+        toks.length > 0 && text.length > 0 && toks.some((t) => text.includes(t));
+      return { index, attributedToTarget };
+    });
+  } catch {
+    return (quotes || []).map((_, index) => ({ index, attributedToTarget: true }));
+  }
+}
+
 function anyCueHits(patterns: RegExp[], text: string): boolean {
   return patterns.some((p) => p.test(text));
 }

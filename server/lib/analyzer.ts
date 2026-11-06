@@ -37,7 +37,7 @@ import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate
 import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scoring-contract.js";
 import { buildCanonicalRuleTrace, buildCanonicalRule, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
 import { PASSAGE_LEVEL_EQUIVALENCE_CLAUSE } from "./framework-v2/structured-guidance.js";
-import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from "./eligibility-flags.js";
+import { computeEligibilityFlags, isPositiveVerdict, reviewQuoteAttribution, type EligibilityFlag } from "./eligibility-flags.js";
 // A3 / WP04: end-to-end entity/provenance/temporal eligibility composition guardrail.
 // Attached per measure in SHADOW mode by default (observability only); verdict-
 // mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
@@ -139,7 +139,7 @@ export interface MeasureResult {
   coverage: string | null;
   confidence: string;
   evidenceSummary: string;
-  quotes: Array<{ text: string; source: string; sourceUrl?: string; page?: number }>;
+  quotes: Array<{ text: string; source: string; sourceUrl?: string; page?: number; disqualified?: boolean; disqualReason?: string }>;
   verdict: "Yes" | "No" | "Partial" | "Insufficient evidence" | "Scoring error";
   verdictNuance: string | null;
   displayOrder: number;
@@ -3428,6 +3428,44 @@ export async function analyzeCompanyMeasures(opts: {
             const gateNote = `[Entity-attribution gate: downgraded ${prevVerdict}→No — ${entityFlag.reason}]`;
             result.evidenceSummary = (result.evidenceSummary ? `${result.evidenceSummary} ` : "") + gateNote;
             result.verdictNuance = (result.verdictNuance ? `${result.verdictNuance} ` : "") + gateNote;
+
+            // QUOTE–VERDICT CONSISTENCY REVIEW. The gate fired precisely because
+            // NONE of the supporting quotes name the target, so the quotes the LLM
+            // selected to justify the (now overturned) positive verdict all
+            // describe other entities. Without this step the UI shows those
+            // Yes-implying third-party passages next to a No verdict (the Accenture
+            // report: BBVA / Metro de Madrid quotes under a red "No"). Re-review
+            // each quote for attribution and MARK (not delete — audit trail) the
+            // non-attributing ones as disqualified, with the reason, so the detail
+            // and results pages render them as the evidence FOR the downgrade
+            // rather than as clean positive support. Never throws.
+            try {
+              const targetName = company?.name || companyName;
+              const attributions = reviewQuoteAttribution(result.quotes || [], {
+                name: targetName,
+                ticker: company?.ticker ?? null,
+                aliases: (company as any)?.aliases ?? null,
+                domain: company?.domain ?? null,
+                relatedDomains: company?.relatedDomains ?? null,
+              });
+              const attrByIndex = new Map(attributions.map((a) => [a.index, a.attributedToTarget]));
+              let disqCount = 0;
+              result.quotes = (result.quotes || []).map((q, i) => {
+                // Leave diagnostic sidecar quotes (diag://...) untouched — they are
+                // not user-facing evidence.
+                if (String((q as any)?.sourceUrl ?? "").startsWith("diag://")) return q;
+                if (attrByIndex.get(i) === true) return q; // names the target → keep as-is
+                disqCount++;
+                return {
+                  ...q,
+                  disqualified: true,
+                  disqualReason: `Not attributable to ${targetName} — this passage describes another entity (e.g. a client, case-study subject, group affiliate, vendor or partner), so it does not evidence ${targetName}'s own practice.`,
+                };
+              });
+              console.log(`[${companyName}] QUOTE-REVIEW ${result.measureId}: marked ${disqCount} supporting quote(s) disqualified (not attributable to target) after entity-attribution downgrade`);
+            } catch (qerr) {
+              console.warn(`[${companyName}] QUOTE-REVIEW ${result.measureId}: marking skipped (${(qerr as Error)?.message ?? "error"}) — verdict still downgraded`);
+            }
             console.log(`[${companyName}] ENTITY-ATTRIBUTION DOWNGRADE ${result.measureId}: ${prevVerdict} (score ${prevScore}) → No (0) — supporting quotes do not name the target company (client/case-study self-attribution)`);
           }
         }

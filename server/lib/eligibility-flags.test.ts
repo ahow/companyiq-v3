@@ -11,6 +11,7 @@
 import {
   computeEligibilityFlags,
   isPositiveVerdict,
+  reviewQuoteAttribution,
   type EligibilityFlagId,
   type EligibilityFlagsInput,
 } from "./eligibility-flags.js";
@@ -245,6 +246,44 @@ function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
     }
   }
   check("never throws and always returns five advisory flags on bad input", !threw);
+}
+
+// ─── 9. reviewQuoteAttribution: per-quote consistency review ─────────────────────
+// This is the review step the entity-attribution scoring gate uses to mark the
+// specific quotes that do NOT name the target as disqualified, so a downgraded
+// (No) verdict never displays Yes-implying third-party passages (the Accenture bug).
+{
+  // The Accenture pattern: two third-party quotes (client / case-study subjects),
+  // one quote that actually names the target. Only the third-party ones should be
+  // flagged attributedToTarget=false.
+  const quotes = [
+    { text: "A global semiconductor company leveraged an AI-powered cloud platform to reduce costs.", sourceUrl: "https://acme-bev.com/thought-leadership" },
+    { text: "Metro de Madrid deployed AI algorithms to reduce its annual energy intake by 25%.", sourceUrl: "https://acme-bev.com/thought-leadership" },
+    { text: "Acme Beverages deployed its own AI platform internally across all plants.", sourceUrl: "https://acme-bev.com/report" },
+  ];
+  const attr = reviewQuoteAttribution(quotes, ACME);
+  check("reviewQuoteAttribution returns one result per quote", attr.length === 3);
+  check("third-party quote (semiconductor company) → attributedToTarget=false", attr[0].attributedToTarget === false);
+  check("third-party quote (Metro de Madrid) → attributedToTarget=false", attr[1].attributedToTarget === false);
+  check("quote naming the target (Acme Beverages) → attributedToTarget=true", attr[2].attributedToTarget === true);
+  check("indices are preserved in order", attr[0].index === 0 && attr[1].index === 1 && attr[2].index === 2);
+
+  // Ticker mention also counts as naming the target.
+  const tickerQuote = reviewQuoteAttribution([{ text: "ABV reported its board AI committee met quarterly.", sourceUrl: "x" }], ACME);
+  check("quote naming the target by ticker → attributedToTarget=true", tickerQuote[0].attributedToTarget === true);
+
+  // Fail-open / never-throws on malformed input.
+  let qThrew = false;
+  try {
+    reviewQuoteAttribution(null, ACME);
+    reviewQuoteAttribution(undefined as any, ACME);
+    reviewQuoteAttribution([null as any, { text: 123 as any }], ACME);
+    reviewQuoteAttribution([{ text: "x" }], { name: "" } as any);
+  } catch {
+    qThrew = true;
+  }
+  check("reviewQuoteAttribution never throws on malformed input", !qThrew);
+  check("reviewQuoteAttribution returns [] for empty input", reviewQuoteAttribution([], ACME).length === 0);
 }
 
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"}`);

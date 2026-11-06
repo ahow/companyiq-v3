@@ -363,8 +363,23 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                             {realQuotes(m.quotes).length > 0 && (
                               <div className="ml-6 mt-2 space-y-1">
                                 {realQuotes(m.quotes).map((q: any, idx: number) => (
-                                  <blockquote key={idx} className="text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic">
-                                    "{q.text}"
+                                  <blockquote
+                                    key={idx}
+                                    className={
+                                      q.disqualified
+                                        ? "text-xs text-gray-400 border-l-2 border-red-300 pl-2 italic"
+                                        : "text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic"
+                                    }
+                                    title={q.disqualified ? q.disqualReason : undefined}
+                                  >
+                                    {q.disqualified && (
+                                      <span className="not-italic font-semibold text-red-600 mr-1">
+                                        ✗ Disqualified —
+                                      </span>
+                                    )}
+                                    <span className={q.disqualified ? "line-through decoration-gray-300" : ""}>
+                                      "{q.text}"
+                                    </span>
                                     {q.source && (
                                       q.sourceUrl ? (
                                         <a
@@ -379,6 +394,11 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                                       ) : (
                                         <span className="text-gray-400 ml-1">— {q.source}</span>
                                       )
+                                    )}
+                                    {q.disqualified && q.disqualReason && (
+                                      <div className="not-italic text-[11px] text-red-500 mt-0.5 leading-snug">
+                                        {q.disqualReason}
+                                      </div>
                                     )}
                                   </blockquote>
                                 ))}
