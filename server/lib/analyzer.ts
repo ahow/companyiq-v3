@@ -4022,7 +4022,13 @@ async function scoreSingleMeasurePass(opts: {
       system,
       prompt,
       json: true,
-      maxTokens: 2000,
+      // Raised 2000 -> 6000 (2026-11-06): on evidence-dense companies the scoring
+      // JSON (verdict + rationale + multiple attributed quotes) exceeded 2000 output
+      // tokens, returning finish_reason=length. A truncated/invalid JSON made every
+      // provider in the cascade "fail", burning the full cascade+fallback chain per
+      // measure and eventually hitting the 3000s pipeline timeout with 0 scores.
+      // 6000 gives comfortable headroom for the largest observed rationales.
+      maxTokens: 6000,
       seed,
       logMeta: { measureId: measure.measureId },
     });
