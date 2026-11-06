@@ -286,5 +286,35 @@ function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
   check("reviewQuoteAttribution returns [] for empty input", reviewQuoteAttribution([], ACME).length === 0);
 }
 
+// ─── 9b. Generic corporate-form words must NOT attribute (prod regression) ───────
+// The live Accenture run kept third-party quotes under a No verdict because the
+// company name "ACCENTURE PUBLIC LIMITED COMPANY" admitted the generic words
+// "public"/"limited"/"company" as identity tokens — so a Metro de Madrid client
+// case study ("...in the public sector...") and a "...the company targeted..."
+// passage were wrongly counted as naming the target. Only the DISTINCTIVE token
+// ("accenture") must attribute.
+{
+  const ACN = { name: "ACCENTURE PUBLIC LIMITED COMPANY", ticker: "ACN" };
+  const quotes = [
+    { text: "In the public sector, Metro de Madrid deployed AI algorithms to reduce its annual energy intake by 25%.", sourceUrl: "https://accenture.com/case-studies" },
+    { text: "By industrializing its AI tools and teams, the company targeted efficiency gains of 5% in its first year.", sourceUrl: "https://accenture.com/insights" },
+    { text: "A leading Asia Pacific beauty product company assessed its responsible AI maturity.", sourceUrl: "https://accenture.com/insights" },
+    { text: "Accenture committed to investing $3 billion in AI and generative AI in FY23.", sourceUrl: "https://accenture.com/news" },
+  ];
+  const attr = reviewQuoteAttribution(quotes, ACN);
+  check("generic 'public' does NOT attribute (Metro de Madrid) → false", attr[0].attributedToTarget === false);
+  check("generic 'company' does NOT attribute (efficiency gains) → false", attr[1].attributedToTarget === false);
+  check("generic 'company' does NOT attribute (beauty product) → false", attr[2].attributedToTarget === false);
+  check("distinctive token 'Accenture' attributes → true", attr[3].attributedToTarget === true);
+
+  // Wholly-generic name still gets tokens via fallback (never zero → never
+  // attributes everything-or-nothing by accident); ticker remains distinctive.
+  const generic = reviewQuoteAttribution(
+    [{ text: "The group holdings company reported results.", sourceUrl: "x" }],
+    { name: "GLOBAL HOLDINGS GROUP", ticker: "GHG" },
+  );
+  check("wholly-generic name: review still returns a verdict", generic.length === 1);
+}
+
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"}`);
 process.exit(failures === 0 ? 0 : 1);

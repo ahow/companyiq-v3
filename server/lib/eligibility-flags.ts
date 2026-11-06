@@ -154,6 +154,27 @@ function nonEmpty(s: any): s is string {
   return typeof s === "string" && s.trim().length > 0;
 }
 
+// Generic corporate-form / sector / geo words that are NOT distinctive identity
+// tokens. Third-party quotes routinely contain these ("...the company...", "...in
+// the public sector..."), so admitting them as identity tokens causes FALSE
+// attribution — e.g. a Metro de Madrid client case study wrongly counted as
+// naming "Accenture Public Limited Company" merely because it says "public".
+// (Mirrors discovery.ts' GENERIC_NAME_WORDS, plus "public".)
+const GENERIC_NAME_WORDS = new Set<string>([
+  "the", "and", "for", "group", "holding", "holdings", "company", "companies",
+  "corp", "corporation", "incorporated", "inc", "ltd", "limited", "llc", "plc",
+  "public", "co", "sa", "se", "ag", "nv", "spa", "oyj", "asa", "ab", "as", "bv", "kg",
+  "international", "global", "worldwide", "industries", "industrial", "enterprise",
+  "enterprises", "technologies", "technology", "systems", "solutions", "services",
+  "products", "semiconductor", "semiconductors", "electronics", "electric",
+  "financial", "bank", "banking", "capital", "partners", "resources", "materials",
+  "energy", "power", "motors", "motor", "pharmaceutical", "pharmaceuticals",
+  "chemical", "chemicals", "insurance", "asset", "management", "trust", "properties",
+  "property", "realty", "real", "estate", "manufacturing", "telecom", "communications",
+  "media", "retail", "foods", "food", "beverage", "automotive", "aerospace",
+  "hong", "kong", "china", "japan", "korea", "america", "american", "national",
+]);
+
 /** Distinctive identity tokens for the target company (lowercased). Generic. */
 function identityTokens(company: CompanyIdentity): string[] {
   const toks = new Set<string>();
@@ -174,7 +195,15 @@ function identityTokens(company: CompanyIdentity): string[] {
   for (const a of company.aliases || []) {
     if (nonEmpty(a) && a.trim().length >= 3) toks.add(a.toLowerCase().trim());
   }
-  return Array.from(toks);
+  // Drop any token that is itself a single generic corporate-form / sector / geo
+  // word — these match unrelated third-party passages and break attribution.
+  // Multi-word / concatenated aliases (e.g. "accenturepublic") are unaffected.
+  // Default-to-third-party: a quote stays "valid" only when it names a
+  // *distinctive* identity token, never a generic word that happens to coincide.
+  const filtered = Array.from(toks).filter((t) => !GENERIC_NAME_WORDS.has(t));
+  // Fallback: if the name is ENTIRELY generic (filtering removed everything), keep
+  // the unfiltered set so a wholly-generic name still has some tokens.
+  return filtered.length > 0 ? filtered : Array.from(toks);
 }
 
 export interface QuoteAttribution {
