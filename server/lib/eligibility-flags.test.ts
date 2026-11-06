@@ -62,6 +62,66 @@ const ACME = { name: "Acme Beverages Corporation", ticker: "ABV", domain: "acme-
   check("entity-attribution CLEARS when target named", !fired(cleanInput, "entity-attribution"));
 }
 
+// ─── 1b. entity-attribution: QUOTES-ONLY signal (the Accenture bug) ─────────────
+// Mirrors the scoring gate in analyzer.ts: the entity-attribution flag is the ONLY
+// eligibility flag that downgrades. A positive cell is downgraded to No iff the
+// entity-attribution flag fires. This predicate replicates that gate so the
+// downgrade outcome is asserted here, next to the flag logic that drives it.
+function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
+  if (!isPositiveVerdict(input.verdict)) return false;
+  return fired(input, "entity-attribution");
+}
+{
+  // (b) The Accenture pattern: the rationale/summary NAMES the target, but the
+  // supporting QUOTES describe only OTHER entities (clients / case-study
+  // subjects). Combined check would pass (summary mentions Acme); quotes-only
+  // check must fire → flagged AND downgraded.
+  const accenturePattern: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [
+      { text: "A global semiconductor company leveraged an AI-powered cloud platform to reduce costs.", sourceUrl: "https://acme-bev.com/thought-leadership" },
+      { text: "Metro de Madrid deployed AI algorithms to reduce its annual energy intake by 25%.", sourceUrl: "https://acme-bev.com/thought-leadership" },
+    ],
+    evidenceSummary: "These are client/industry case examples in Acme Beverages' own report rather than Acme Beverages' own internal objectives, but they are concrete qualifying instances.",
+    company: ACME,
+  };
+  check("entity-attribution FIRES on quotes-only signal when summary names target but quotes do not (Accenture pattern)", fired(accenturePattern, "entity-attribution"));
+  check("Accenture pattern → downgraded to No", entityGateDowngrades(accenturePattern) === true);
+
+  // (a)/(c) Normal positive cell: the target IS named in the supporting quotes →
+  // not flagged, not downgraded, unaffected.
+  const targetInQuotes: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [
+      { text: "Acme Beverages deployed its own AI platform internally to reduce its annual energy use by 25%.", sourceUrl: "https://acme-bev.com/report" },
+    ],
+    evidenceSummary: "Acme Beverages describes its own internal AI deployment.",
+    company: ACME,
+  };
+  check("entity-attribution CLEARS when target named in the supporting quotes", !fired(targetInQuotes, "entity-attribution"));
+  check("normal positive cell with target in quotes → NOT downgraded", entityGateDowngrades(targetInQuotes) === false);
+
+  // Guard: a positive cell whose only name mention is in the summary (no quotes)
+  // still relies on the combined signal (not the quotes-only branch).
+  const summaryOnlyNamed: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [],
+    evidenceSummary: "Acme Beverages maintains an internal ethics committee.",
+    company: ACME,
+  };
+  check("entity-attribution does not misfire when no quotes present but summary names target", !fired(summaryOnlyNamed, "entity-attribution"));
+
+  // Softer flags stay advisory: a planned-only cell that DOES name the target in
+  // quotes must NOT be downgraded by the entity gate (only entity-attribution gates).
+  const plannedButNamed: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [{ text: "Acme Beverages plans to establish an AI oversight board by 2027.", sourceUrl: "https://acme-bev.com/x" }],
+    company: ACME,
+  };
+  check("planned-only cell that names target in quotes is NOT downgraded by entity gate", entityGateDowngrades(plannedButNamed) === false);
+  check("planned-vs-live still fires advisory on that cell", fired(plannedButNamed, "planned-vs-live"));
+}
+
 // ─── 2. date-window ─────────────────────────────────────────────────────────────
 {
   const stale: EligibilityFlagsInput = {

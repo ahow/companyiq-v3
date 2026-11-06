@@ -44,6 +44,7 @@ export const UNIVERSAL_ANTI_INFERENCE_RULES: string[] = [
   "You must score this measure based STRICTLY on explicit, verbatim disclosures made by the company in the evidence text provided. Do not infer beyond what is written.",
   "DO NOT infer that a company has a specific target, policy or programme merely because they are a member of an alliance, initiative or signatory group (Partnership on AI, OECD signatory, SBTi commitment, UN Global Compact, NZBA member, etc.). Alliance membership alone is not company-specific evidence.",
   "DO NOT count programmes, policies or commitments belonging to a separately-listed subsidiary or affiliate group entity as evidence for the parent unless the parent explicitly adopts or names the programme as its own.",
+  "DO NOT credit the assessed company with outcomes, deployments, objectives or results that the evidence attributes to the company's CLIENTS, CUSTOMERS, or CASE-STUDY SUBJECTS — including case studies, client success stories, or thought-leadership/marketing material the company authored about what OTHER organisations achieved. Such material describes third-party practice, not the assessed company's own practice, even when it appears in the company's own publication. It only counts if the company explicitly states it adopted the same practice internally.",
   "DO NOT count evidence from lapsed, retired, superseded or pre-merger disclosures as current. Score based on the most recent reporting period.",
 ];
 

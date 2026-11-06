@@ -207,16 +207,54 @@ function flagEntityAttribution(input: EligibilityFlagsInput, text: string): Elig
   if (toks.length === 0) {
     return { ...base, triggered: false, reason: "No distinctive identity tokens available for the target company — attribution not assessed." };
   }
-  const lower = text.toLowerCase();
-  const mentionsTarget = toks.some((t) => lower.includes(t));
-  if (mentionsTarget) {
-    return { ...base, triggered: false, reason: "Supporting passage(s) mention the target company's own name/alias/ticker." };
+
+  // Signal A — COMBINED (quotes + summary): the original check. The summary/
+  // rationale often names the target even to argue the evidence is NOT about its
+  // own practice, so this check alone misses the client/case-study pattern.
+  const lowerCombined = text.toLowerCase();
+  const mentionsCombined = toks.some((t) => lowerCombined.includes(t));
+
+  // Signal B — QUOTES ALONE: the high-precision check. Evaluate the supporting
+  // QUOTES in isolation (not quotes+summary). This is the exact Accenture /
+  // client-case-study pattern: an AI consultancy's own thought-leadership report
+  // crediting its CLIENTS' outcomes to itself — the summary names the company but
+  // the supporting quotes describe other organisations. If there ARE supporting
+  // quotes but NONE of them carry the target's identity tokens, the passages
+  // backing the verdict describe other entities even though the summary mentions
+  // the target.
+  const quoteTexts = (input.quotes || [])
+    .map((q) => (nonEmpty(q?.text) ? q!.text : ""))
+    .filter((s) => s.length > 0);
+  const haveQuotes = quoteTexts.length > 0;
+  const lowerQuotes = quoteTexts.join(" \n ").toLowerCase();
+  const mentionsInQuotes = haveQuotes && toks.some((t) => lowerQuotes.includes(t));
+
+  if (haveQuotes && !mentionsInQuotes) {
+    return {
+      ...base,
+      triggered: true,
+      reason: mentionsCombined
+        ? "Quotes-only signal: none of the target company's distinctive name/alias/ticker tokens appear in any supporting QUOTE, even though the rationale/summary mentions the company — the supporting passages describe other entities (e.g. the company's clients, customers or case-study subjects, a group affiliate, vendor or partner) rather than the assessed company's own practice."
+        : "Quotes-only + combined signal: none of the target company's distinctive name/alias/ticker tokens appear in any supporting QUOTE or in the rationale/summary — the evidence may describe a different entity rather than the assessed company.",
+    };
+  }
+
+  // Quotes name the target, OR there are no quotes to inspect: fall back to the
+  // combined signal.
+  if (mentionsCombined) {
+    return {
+      ...base,
+      triggered: false,
+      reason: haveQuotes
+        ? "Supporting quote(s) mention the target company's own name/alias/ticker."
+        : "Supporting passage(s) (summary) mention the target company's own name/alias/ticker.",
+    };
   }
   return {
     ...base,
     triggered: true,
     reason:
-      "None of the target company's distinctive name/alias/ticker tokens appear in the supporting passage(s) — the evidence may describe a different entity (e.g. a group affiliate, vendor, or partner) rather than the assessed company.",
+      "Combined signal: none of the target company's distinctive name/alias/ticker tokens appear in the supporting passage(s) — the evidence may describe a different entity (e.g. a group affiliate, vendor, or partner) rather than the assessed company.",
   };
 }
 

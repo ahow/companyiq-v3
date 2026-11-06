@@ -3406,6 +3406,30 @@ export async function analyzeCompanyMeasures(opts: {
           if (triggeredCount > 0) {
             console.log(`[${companyName}] eligibility-flags ${result.measureId}: ${triggeredCount} advisory flag(s) — ${flags.filter((f) => f.triggered).map((f) => f.id).join(", ")} (non-blocking)`);
           }
+
+          // ENTITY-ATTRIBUTION SCORING GATE (highest-precision signal ONLY).
+          // The strengthened `entity-attribution` flag (quotes-only check) fires
+          // when NONE of the target company's identity tokens appear in any
+          // supporting QUOTE — the client/case-study self-attribution pattern
+          // (e.g. an AI consultancy's own thought-leadership report crediting its
+          // CLIENTS' outcomes to itself, the Accenture bug). This is the ONE
+          // eligibility flag allowed to change the verdict: a positive cell whose
+          // supporting quotes describe other entities is downgraded Yes/Partial →
+          // No (score 0). The softer advisory flags (date-window, planned-vs-live,
+          // author-vs-adopter, claim-level-source-link) STAY advisory and never
+          // gate. Kill switch: ENTITY_ATTRIBUTION_GATE=off restores advisory-only.
+          const entityGateOff = (process.env.ENTITY_ATTRIBUTION_GATE || "").trim().toLowerCase() === "off";
+          const entityFlag = flags.find((f) => f.id === "entity-attribution");
+          if (!entityGateOff && entityFlag?.triggered && isPositiveVerdict(result.verdict)) {
+            const prevVerdict = result.verdict;
+            const prevScore = result.score;
+            result.verdict = "No";
+            result.score = 0;
+            const gateNote = `[Entity-attribution gate: downgraded ${prevVerdict}→No — ${entityFlag.reason}]`;
+            result.evidenceSummary = (result.evidenceSummary ? `${result.evidenceSummary} ` : "") + gateNote;
+            result.verdictNuance = (result.verdictNuance ? `${result.verdictNuance} ` : "") + gateNote;
+            console.log(`[${companyName}] ENTITY-ATTRIBUTION DOWNGRADE ${result.measureId}: ${prevVerdict} (score ${prevScore}) → No (0) — supporting quotes do not name the target company (client/case-study self-attribution)`);
+          }
         }
       } catch (err) {
         console.warn(`[${companyName}] eligibility-flags ${result.measureId}: computation skipped (${(err as Error)?.message ?? "error"}) — advisory only, not blocking`);
