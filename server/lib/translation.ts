@@ -121,7 +121,17 @@ async function translateBlock(block: string): Promise<string> {
         "Do not summarize, omit, or add commentary. If a segment is already English, return it unchanged. " +
         "Output only the translation, with no preamble.",
       prompt: block,
-      maxTokens: Math.min(8000, Math.ceil(block.length / 2) + 500),
+      // CJK→English expands the token count, so the old `chars/2 + 500` estimate
+      // under-budgeted long foreign blocks → finish_reason=length truncation →
+      // completeWithFallback retried the ENTIRE provider cascade (×4 each) before
+      // giving up. For CN/JP companies with many long blocks that aggregate latency
+      // storm blew the 3000s pipeline budget → timeout with 0 scores. Budget
+      // generously (≈1 output token per input char, capped at 16k) and accept a
+      // graceful partial via allowTruncated so a single truncation NEVER triggers
+      // the cascade. Truncation here was already non-fatal (we keep the text), so
+      // allowTruncated only removes wasted retry latency.
+      maxTokens: Math.min(16000, block.length + 1000),
+      allowTruncated: true,
     });
     const out = (text || "").trim() || block;
     cache.set(key, out);
