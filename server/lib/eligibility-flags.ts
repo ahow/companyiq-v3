@@ -93,7 +93,8 @@ const ADOPTER_CUES: RegExp[] = [
   /\b(?:internally|across\s+(?:our|the)\s+(?:company|group|organ))/i,
 ];
 
-const PRONOUNS_REGEX = /\b(we|our|us|the company|the group|the firm|the bank|this company|this group|both parties|本集团|本公司|我们|我司|双方|本行|本行及子公司)\b/i;
+const PRONOUNS_REGEX = /\b(we|our|us|the company|the group|the firm|the bank|the carrier|the insurer|the airline|the utility|the retailer|the manufacturer|this company|this group|both parties|本集团|本公司|我们|我司|双方|本行|本行及子公司)\b/i;
+const CASE_STUDY_NEGATIVES = /\b(for a client|assisted a partner|major retailer case study|customer case study|client case study|vendor to|partnered with)\b/i;
 const REPORTS_REGEX = /\b(Annual Report|Sustainability Report|ESG Report|ESG Fact|10-K|20-F|Integrated Report|Terms & Conditions|Consent Form|Proxy Statement|Notice of Meeting|Policy|Statement|Code of Conduct|Charter|Guidelines)\b/i;
 const COMMITMENT_VERBS = /\b(Establish|Implement|Ensure|Adopt|Maintain|Retain|Monitor|Protect|Secure|Disclose)\b/i;
 
@@ -167,8 +168,9 @@ function cleanCompanyName(name: string): string {
 
 function getDistinctiveTokens(text: string | null | undefined): Set<string> {
   if (!text) return new Set();
-  const tokens = text.match(/\b[A-Z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*\b|\b[A-Z]{2,}\b|\b[A-Z][a-z]{3,}\b/g) || [];
-  const exclude = new Set(["Entity", "Gate", "Quotes", "Rationale", "Verdict", "Company", "No", "Yes", "High", "Partial", "Confidence", "Missing", "Supporting", "Passage", "Evidence", "Target", "Downgraded", "Score", "Internal", "Practice", "Describes", "Systems", "Models", "Framework", "Governance", "Strategic", "Objectives", "Deployment", "Operational", "Efficiency"]);
+  // Extract Proper Nouns, CamelCase, and specific project-like tokens
+  const tokens = text.match(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b|\b[A-Z]{2,}(?:\d+)?\b|\b[A-Z][a-z]{3,}\b/g) || [];
+  const exclude = new Set(["Entity", "Gate", "Quotes", "Rationale", "Verdict", "Company", "No", "Yes", "High", "Partial", "Confidence", "Missing", "Supporting", "Passage", "Evidence", "Target", "Downgraded", "Score", "Internal", "Practice", "Describes", "Systems", "Models", "Framework", "Governance", "Strategic", "Objectives", "Deployment", "Operational", "Efficiency", "The", "This", "Our", "We", "They", "It"]);
   return new Set(tokens.filter(t => !exclude.has(t) && t.length > 2));
 }
 
@@ -178,7 +180,7 @@ function identityTokens(company: CompanyIdentity): string[] {
   if (name) {
     for (const a of deriveAliases(name, company.ticker ?? null)) {
       const t = a.toLowerCase().trim();
-      if (t.length >= 3) toks.add(t);
+      if (t.length >= 2) toks.add(t);
     }
     const core = cleanCompanyName(name);
     if (core.length >= 3) toks.add(core.toLowerCase());
@@ -192,7 +194,7 @@ function identityTokens(company: CompanyIdentity): string[] {
   }
 
   for (const a of company.aliases || []) {
-    if (nonEmpty(a) && a.trim().length >= 3) toks.add(a.toLowerCase().trim());
+    if (nonEmpty(a) && a.trim().length >= 2) toks.add(a.toLowerCase().trim());
   }
   
   // Non-English name tokens
@@ -204,7 +206,7 @@ function identityTokens(company: CompanyIdentity): string[] {
     }
   }
 
-  const filtered = Array.from(toks).filter((t) => !GENERIC_NAME_WORDS.has(t));
+  const filtered = Array.from(toks).filter((t) => !GENERIC_NAME_WORDS.has(t) || t === tkr);
   return filtered.length > 0 ? filtered : Array.from(toks);
 }
 
@@ -222,6 +224,16 @@ export function reviewQuoteAttribution(
       
       const text = q.text;
       const lowerText = text.toLowerCase();
+
+      // Safeguard: Case Study Penalty (Negative Rule)
+      if (CASE_STUDY_NEGATIVES.test(text)) {
+        // If a very strong identity match is present, we might still trust it, 
+        // but the Master List says "Disqualify if...".
+        // We check if the company name appears in a way that suggests OWN activity 
+        // despite the case study keywords (e.g. "We partnered with X to...").
+        // But Rule 1-8 are primarily about RECOVERING false negatives.
+        return { index, attributedToTarget: false, reason: "Case Study Pattern (Negative Rule)" };
+      }
       
       // Rule: Direct identity token match
       if (toks.some(t => lowerText.includes(t))) {
@@ -246,6 +258,8 @@ export function reviewQuoteAttribution(
       for (const token of rationaleTokens) {
         if (text.includes(token)) return { index, attributedToTarget: true, reason: `Rationale Alignment (${token})` };
       }
+
+      // Rule: Industry-Specific Alias is now part of PRONOUNS_REGEX
 
       return { index, attributedToTarget: false };
     });
