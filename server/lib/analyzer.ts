@@ -3578,7 +3578,7 @@ export async function analyzeCompanyMeasures(opts: {
             aliases: (company as any)?.aliases ?? null,
             domain: company?.domain ?? null,
             relatedDomains: company?.relatedDomains ?? null,
-          });
+          }, result.evidence_summary);
           const attrByIndex = new Map(attributions.map((a) => [a.index, a.attributedToTarget]));
           let disqCount = 0;
           result.quotes = result.quotes.map((q, i) => {
