@@ -1,0 +1,387 @@
+[
+  {
+    "quarter": 3,
+    "fiscalYear": 2026,
+    "date": "2026-10-20"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2026,
+    "date": "2026-07-21"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2026,
+    "date": "2026-04-21"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2025,
+    "date": "2026-01-20"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2025,
+    "date": "2025-10-21"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2025,
+    "date": "2025-07-18"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2025,
+    "date": "2025-04-22"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2024,
+    "date": "2025-01-21"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2024,
+    "date": "2024-10-22"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2024,
+    "date": "2024-07-26"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2024,
+    "date": "2024-02-21"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2023,
+    "date": "2024-01-23"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2023,
+    "date": "2023-10-24"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2023,
+    "date": "2023-07-25"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2022,
+    "date": "2023-01-24"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2022,
+    "date": "2022-10-25"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2022,
+    "date": "2022-07-26"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2022,
+    "date": "2022-03-17"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2021,
+    "date": "2022-01-25"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2021,
+    "date": "2021-10-26"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2021,
+    "date": "2021-07-27"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2021,
+    "date": "2021-03-16"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2020,
+    "date": "2021-01-26"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2020,
+    "date": "2020-10-27"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2020,
+    "date": "2020-07-28"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2020,
+    "date": "2020-04-28"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2019,
+    "date": "2020-01-28"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2019,
+    "date": "2019-10-24"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2019,
+    "date": "2019-07-25"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2019,
+    "date": "2019-02-20"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2018,
+    "date": "2019-01-29"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2018,
+    "date": "2018-10-23"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2018,
+    "date": "2018-07-24"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2017,
+    "date": "2018-01-25"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2018,
+    "date": "2017-12-12"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2017,
+    "date": "2017-10-24"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2017,
+    "date": "2017-07-25"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2016,
+    "date": "2017-01-24"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2017,
+    "date": "2016-12-13"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2016,
+    "date": "2016-10-25"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2016,
+    "date": "2016-07-26"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2015,
+    "date": "2016-01-26"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2016,
+    "date": "2015-12-15"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2015,
+    "date": "2015-10-22"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2015,
+    "date": "2015-07-23"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2015,
+    "date": "2015-04-23"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2014,
+    "date": "2015-01-27"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2014,
+    "date": "2014-10-23"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2014,
+    "date": "2014-07-24"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2013,
+    "date": "2014-01-30"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2014,
+    "date": "2013-12-17"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2013,
+    "date": "2013-10-24"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2013,
+    "date": "2013-07-25"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2023,
+    "date": "2013-03-21"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2012,
+    "date": "2013-01-24"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2013,
+    "date": "2012-12-12"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2012,
+    "date": "2012-10-23"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2012,
+    "date": "2012-07-24"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2012,
+    "date": "2012-04-24"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2011,
+    "date": "2012-01-26"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2011,
+    "date": "2011-10-25"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2011,
+    "date": "2011-07-26"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2011,
+    "date": "2011-04-26"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2010,
+    "date": "2011-01-25"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2010,
+    "date": "2010-10-28"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2010,
+    "date": "2010-07-22"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2010,
+    "date": "2010-04-27"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2009,
+    "date": "2010-01-28"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2009,
+    "date": "2009-10-22"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2009,
+    "date": "2009-07-23"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2009,
+    "date": "2009-04-24"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2008,
+    "date": "2009-01-29"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2008,
+    "date": "2008-10-21"
+  },
+  {
+    "quarter": 2,
+    "fiscalYear": 2008,
+    "date": "2008-07-24"
+  },
+  {
+    "quarter": 1,
+    "fiscalYear": 2008,
+    "date": "2008-04-24"
+  },
+  {
+    "quarter": 4,
+    "fiscalYear": 2007,
+    "date": "2008-01-29"
+  },
+  {
+    "quarter": 3,
+    "fiscalYear": 2007,
+    "date": "2007-10-19"
+  }
+]

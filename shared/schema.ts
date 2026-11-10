@@ -282,7 +282,7 @@ export const documents = pgTable("documents", {
   companyId: integer("company_id").references(() => companies.id).notNull(),
   url: text("url").notNull(),
   title: text("title"),
-  type: text("type").notNull().default("html"), // html | pdf
+  type: text("type").notNull().default("html"), // html | pdf | earnings_transcript
   gateVerdict: text("gate_verdict"), // accept | reject
   gateReason: text("gate_reason"),
   fetchStatus: text("fetch_status").notNull().default("pending"), // pending | ok | dead
@@ -299,6 +299,12 @@ export const documents = pgTable("documents", {
   // Never read by scoring/analyzer — research-state accounting only, so verdicts
   // and scores are unaffected. Distinguishes extracted_complete vs extracted_partial.
   extractionState: text("extraction_state"),
+  // FMP transcript lane (§3.5): per-turn speaker attribution for an
+  // earnings_transcript document, so any scored sentence is traceable to a named
+  // executive. JSON shape: { kept, excludeReason?, turns:[{speaker,title,role,kept}],
+  // rosterSize, totalTurnCount, executiveTurnCount }. Null for all non-transcript
+  // documents. Additive/nullable — never read by scoring, audit-only.
+  transcriptAttribution: jsonb("transcript_attribution"),
   fetchedAt: timestamp("fetched_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
@@ -605,6 +611,35 @@ export const workspaceSettings = pgTable("workspace_settings", {
   value: text("value").notNull(),
 }, (table) => ({
   workspaceKeyIdx: uniqueIndex("settings_workspace_key_idx").on(table.workspaceId, table.key),
+}));
+
+// ─── Domain Policies (Workspace-Scoped, framework-agnostic) ─────────────────
+// Human-in-the-loop overrides for the provenance classifier. Andy reviews
+// registrable domains (eTLD+1) that surfaced in the third_party corpus and
+// marks each one:
+//   - 'primary'      → ELIGIBLE like a recognised IR/regulator host, BUT the
+//                      existing three-tier identity check in provenance.ts MUST
+//                      still run and pass before a doc on that domain is treated
+//                      as issuer. NEVER an unconditional promotion.
+//   - 'third_party'  → permanently silence an aggregator (default behaviour,
+//                      made explicit).
+// The DEFAULT for an absent domain is third_party, so an empty table produces
+// ZERO behaviour change versus pre-feature. Decisions apply across ALL
+// frameworks (no framework_id anywhere). `scope` is kept for forward-compat but
+// the only value ever written is 'issuer_if_identity' — there is deliberately
+// no 'always_primary' scope.
+export const domainPolicies = pgTable("domain_policies", {
+  id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id").references(() => workspaces.id).notNull(),
+  registrableDomain: text("registrable_domain").notNull(), // normalised eTLD+1, lowercase
+  decision: text("decision").notNull(), // 'primary' | 'third_party'
+  scope: text("scope").notNull().default("issuer_if_identity"),
+  note: text("note"),
+  decidedBy: text("decided_by"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  workspaceDomainIdx: uniqueIndex("domain_policies_workspace_domain_idx").on(table.workspaceId, table.registrableDomain),
 }));
 
 // ─── Processing Errors (for diagnostics) ───────────────────────────────────

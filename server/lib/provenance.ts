@@ -86,6 +86,14 @@ export interface ProvenanceInput {
   // hoc lookups) still get the pre-R5c behaviour. Stateless callers pass
   // undefined; batch-context callers pass a shared Map.
   knownIrTenants?: Map<string, IrTenantBinding>;
+  // Domain-policy overrides (2026-11, human-in-the-loop). Keyed by registrable
+  // domain (eTLD+1, lowercase). Consulted AFTER Rules 1/1a/1b/2/3 have had their
+  // chance but BEFORE the Rule 4 third_party default. A 'primary' decision makes
+  // the domain ELIGIBLE like a recognised IR/regulator host, but the existing
+  // three-tier identity check MUST still match before the doc becomes issuer —
+  // there is NO unconditional promotion. A 'third_party' decision silences the
+  // domain permanently. An absent key / empty / undefined map changes nothing.
+  domainPolicies?: Map<string, { decision: "primary" | "third_party"; scope: string }>;
 }
 
 export interface IrTenantBinding {
@@ -406,6 +414,63 @@ function distinctiveNameTokens(name: string | null | undefined): string[] {
     .filter(w => w.length >= 4 && !GENERIC_TOKENS.has(w));
 }
 
+// ─── Registrable-domain (eTLD+1) helpers — for Rule 1a (2026-11) ─────────────
+//
+// Two-part country-code TLD suffixes where the registrable domain is the last
+// THREE labels (e.g. "sainsburys.co.uk"). Mirrors the list in
+// discovery.normaliseToRegistrableDomain; replicated locally (rather than
+// imported) to avoid a provenance <-> discovery module cycle.
+const TWO_PART_CC_TLDS = new Set([
+  "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "org.au", "gov.au",
+  "co.jp", "or.jp", "ne.jp", "co.nz", "com.sg", "com.hk", "com.mx",
+  "com.br", "bank.in", "co.in", "org.in", "net.in", "bank.cn", "com.cn",
+  "net.cn", "gov.cn", "edu.cn", "co.kr", "or.kr", "go.kr", "com.tr",
+  "gov.tr", "org.tr", "co.za", "org.za", "com.ph", "com.my", "com.tw",
+]);
+
+// Reduce a hostname to its registrable domain (eTLD+1), honouring the two-part
+// cc-TLD list above. "ir.3m.com" -> "3m.com"; "3m.co.uk" -> "3m.co.uk";
+// "www.example.com" -> "example.com".
+export function registrableDomainOf(host: string | null | undefined): string {
+  const clean = (host || "").replace(/^www\./i, "").toLowerCase().trim();
+  if (!clean) return "";
+  const parts = clean.split(".").filter(Boolean);
+  if (parts.length <= 2) return parts.join(".");
+  const lastTwo = parts.slice(-2).join(".");
+  if (TWO_PART_CC_TLDS.has(lastTwo)) return parts.slice(-3).join(".");
+  return parts.slice(-2).join(".");
+}
+
+// Short issuer identity tokens for the Rule 1a leading-label rescue: the ticker
+// and short acronym-style name tokens (2–4 chars). These are exactly the tokens
+// that distinctiveNameTokens (>= 4 chars) and the Rule 1b brand rescue (>= 5
+// chars) both DROP, which is why short-ticker issuers ("3M", "AAC", "ACS")
+// never recover their own-domain documents. Used ONLY for EXACT leading-label
+// equality against a registrable domain, never substring — so "3m" matches
+// "3m.com"/"3m.co.uk" but never "3minsights.com".
+function shortIdentityTokensOf(input: ProvenanceInput): string[] {
+  const out = new Set<string>();
+  const ticker = normalise(input.companyTicker).replace(/[^a-z0-9]/g, "");
+  if (ticker.length >= 2 && ticker.length <= 6 && !GENERIC_TOKENS.has(ticker)) {
+    out.add(ticker);
+  }
+  const nameToks = normalise(input.companyName)
+    .replace(/[\/\\,.'()&]+/g, " ")
+    .split(/\s+/)
+    .map(t => t.replace(/[^a-z0-9]/g, ""))
+    .filter(Boolean);
+  const nonCorp = nameToks.filter(t => !CORP_FORM_TOKENS.has(t));
+  // Only mine short tokens from COMPACT names (<= 2 tokens after dropping
+  // corporate-form words). Long multi-word names yield noisy short words
+  // ("at", "de", "co") that must never be treated as standalone identity.
+  if (nonCorp.length <= 2) {
+    for (const t of nonCorp) {
+      if (t.length >= 2 && t.length <= 4 && !GENERIC_TOKENS.has(t)) out.add(t);
+    }
+  }
+  return [...out];
+}
+
 // Corporate-form / legal-suffix tokens that carry no identity on their own.
 // Stripped from the leading/trailing edges of a name before building the
 // full-name identity phrase. Topic/company-agnostic: a closed list of legal
@@ -617,6 +682,54 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
     }
   }
 
+  // Rule 1a (2026-11): registrable-domain (eTLD+1) match + short-identity
+  // leading-label rescue. Rule 1's exact/sub-domain test misses two legitimate
+  // first-party cases:
+  //   (i)  the stored companyDomain carries an extra sub-domain (e.g.
+  //        "ir.3m.com") while the document lives on the bare registrable
+  //        domain ("3m.com") — host.endsWith("."+d) only matches the OTHER
+  //        direction (doc deeper than the stored domain), so this is missed.
+  //   (ii) a regional/country variant on the SAME registrable label but a
+  //        different TLD (e.g. "3m.co.uk", "3m.de") when only "3m.com" is
+  //        known and the variant isn't in related_domains.
+  // Both are also defeated by the Rule 1b brand rescue's >= 5-char floor, so
+  // short-ticker / acronym issuers ("3M", "AAC", "ACS") never recover their
+  // own-domain documents and get misfiled third_party (the 3M 1/37 case).
+  // Fix: EXACT registrable-domain equality (never substring) for (i), and
+  // EXACT leading-label equality against a short identity token for (ii).
+  if (host) {
+    const hostReg = registrableDomainOf(host);
+    // (i) exact registrable-domain (eTLD+1) match against any issuer domain.
+    for (const d of allIssuerDomains) {
+      const dReg = registrableDomainOf(d);
+      if (hostReg && dReg && hostReg === dReg) {
+        return {
+          provenance: "issuer",
+          reason: `registrable domain matches company domain (${dReg})`,
+          regulatorHost: null,
+          irPlatformHost: null,
+          identitySignal: "url-path",
+        };
+      }
+    }
+    // (ii) short-identity leading-label rescue (ticker / short acronym name
+    // token). EXACT equality on the registrable domain's leading label only.
+    const hostLabel = hostReg.split(".")[0];
+    if (hostLabel) {
+      for (const tok of shortIdentityTokensOf(input)) {
+        if (hostLabel === tok) {
+          return {
+            provenance: "issuer",
+            reason: `short issuer identity token "${tok}" is the registrable-domain label (${hostReg})`,
+            regulatorHost: null,
+            irPlatformHost: null,
+            identitySignal: "url-path",
+          };
+        }
+      }
+    }
+  }
+
   // Rule 1b (R2): brand-token-in-hostname fallback. Catches subsidiary and
   // regional-brand sites that weren't captured in related_domains but carry
   // the parent's distinctive brand token in the host label (e.g.
@@ -800,6 +913,47 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
     };
   }
 
+  // Rule 3.5 (2026-11): domain-policy override (human-in-the-loop). Consulted
+  // AFTER Rules 1/1a/1b/2/3 have all failed to classify as issuer, but BEFORE
+  // the Rule 4 third_party default. A 'primary' decision makes the domain
+  // eligible like a recognised IR/regulator host, but — per Andy's hard
+  // requirement — the three-tier identity check MUST still match before the doc
+  // is treated as issuer (no unconditional promotion; never promotes a different
+  // company's doc on a shared host). A 'third_party' decision silences the
+  // domain permanently. An absent/empty/undefined map changes nothing, so the
+  // pre-feature behaviour is reproduced exactly when no policy applies.
+  const policyMap = input.domainPolicies;
+  if (host && policyMap && policyMap.size > 0) {
+    const regDomain = registrableDomainOf(host);
+    const policy = regDomain ? policyMap.get(regDomain) : undefined;
+    if (policy) {
+      if (policy.decision === "primary") {
+        const identity = threeTierIdentityCheck(input);
+        if (identity.matched) {
+          return {
+            provenance: "issuer",
+            reason: `domain-policy (primary, ${identity.tier} identity match on ${identity.matchedOn})`,
+            regulatorHost: null,
+            irPlatformHost: null,
+            identitySignal: identity.signal,
+          };
+        }
+        // Primary-eligible but no identity signal — do NOT promote. Falls through
+        // to the Rule 4 default (third_party). This is the critical safety
+        // behaviour: a shared host hosting a DIFFERENT company's doc stays
+        // third_party even though Andy approved the domain.
+      } else if (policy.decision === "third_party") {
+        return {
+          provenance: "third_party",
+          reason: `domain-policy (marked third_party)`,
+          regulatorHost: null,
+          irPlatformHost: null,
+          identitySignal: "none",
+        };
+      }
+    }
+  }
+
   // Rule 4: default.
   return {
     provenance: "third_party",
@@ -810,6 +964,55 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
     irPlatformHost: null,
     identitySignal: "none",
   };
+}
+
+// Suggested-bucket classifier for the Source Domains review page (2026-11).
+// Given a registrable domain (or any URL/host), returns which review bucket it
+// belongs to so the UI can group recognised-host identity-misses and genuinely
+// unrecognised hosts apart from obvious aggregators. Reuses the classifier's own
+// regulator/IR-platform host matching so the buckets stay consistent with how
+// documents are actually classified.
+export type SuggestedBucket = "recognised_host_identity_miss" | "known_aggregator" | "unrecognised_host";
+
+// Built-in denylist of obvious aggregators / news / data platforms. These are
+// hosts that cover MANY companies; a doc on one is almost never the issuer's own
+// primary disclosure. Seeded per Andy's list. dataclouds.cninfo.com.cn is the
+// official CN regulator host (NOT an aggregator) and is deliberately excluded.
+export const KNOWN_AGGREGATOR_DOMAINS = new Set<string>([
+  "stocklight.com",
+  "financialfilings.com",
+  "stocktitan.net",
+  "finance.yahoo.com", // yahoo.com registrable; handled specially below
+  "yahoo.com",
+  "companiesmarketcap.com",
+  "alphaspread.com",
+  "fortune.com",
+  "scribd.com",
+  "tradingview.com",
+  "gurufocus.com",
+  "seekingalpha.com",
+  "fool.com",
+  "marketscreener.com",
+  "fintel.io",
+  "last10k.com",
+  "quartr.com",
+  "filingreader.com",
+]);
+
+export function classifySuggestedBucket(domainOrUrl: string): SuggestedBucket {
+  const raw = (domainOrUrl || "").trim();
+  if (!raw) return "unrecognised_host";
+  // Build a usable URL for the host-matching helpers (they expect full URLs).
+  const asUrl = /^https?:\/\//i.test(raw) ? raw : `https://${raw.replace(/^www\./i, "")}`;
+  // Recognised official host whose identity check missed.
+  if (matchRegulatorHost(asUrl) || matchIrPlatform(asUrl)) {
+    return "recognised_host_identity_miss";
+  }
+  const reg = registrableDomainOf(hostOf(asUrl) || raw);
+  if (KNOWN_AGGREGATOR_DOMAINS.has(reg) || KNOWN_AGGREGATOR_DOMAINS.has(raw.toLowerCase().replace(/^www\./i, ""))) {
+    return "known_aggregator";
+  }
+  return "unrecognised_host";
 }
 
 // R2: three-tier identity check for regulator + IR-platform hosts. Runs

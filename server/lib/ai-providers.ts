@@ -514,7 +514,15 @@ class OpenAICompatibleProvider implements AIProvider {
     // precedence, then instance default, ensuring every scoring call is seeded.
     if (this.supportsSeed) {
       const effectiveSeed = opts.seed ?? this.seed ?? 42;
-      body.seed = effectiveSeed;
+      // z.ai native API (api.z.ai) deserialises `seed` as a Java signed int32
+      // (max 2,147,483,647). deterministicSeed() returns an unsigned uint32
+      // (readUInt32BE), so ~50% of company/measure pairs produce seed > 2^31-1
+      // and z.ai rejects the whole request with HTTP 400 (Jackson "Numeric value
+      // out of range of int"). Mask to the low 31 bits for the z.ai family only,
+      // keeping it deterministic while staying inside the signed-int32 range.
+      // DeepSeek / OpenRouter accept full uint32 seeds, so leave them untouched
+      // to preserve reproducibility of their prior runs.
+      body.seed = this.family === "zai" ? (effectiveSeed & 0x7fffffff) : effectiveSeed;
     }
     if (opts.json && this.supportsJsonMode) body.response_format = { type: "json_object" };
     // Additive per-provider body params (e.g. z.ai glm-4.6 `thinking` toggle).

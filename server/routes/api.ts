@@ -29,6 +29,7 @@ import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.j
 // WP02/A1 (additive): explicit research-state accounting. Pure derivation —
 // never affects scores/verdicts; attached to responses as metadata only.
 import { buildManifest, deriveResearchStatus } from "../../shared/research-state.js";
+import { buildEvidenceFunnel } from "../lib/evidence-funnel.js";
 import { runCompletenessValidator } from "../lib/framework-completeness.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -180,7 +181,22 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
       }),
     });
 
-    res.json({ company: enrichedCompany, scores, documents, researchStatus });
+    // Evidence funnel (§3, additive/display-only): per-stage counts + the
+    // same-domain-third-party provenance-health signal. Computed from ALL
+    // document rows (not just gate-accepted) grouped by source_type/gate_verdict,
+    // plus the authoritative fetchCoverage snapshot for discovered/fetched/dead.
+    // Does not change scoring.
+    let evidenceFunnel: any = null;
+    try {
+      const allDocs = await storage.getAllDocumentsForFunnel(company.id);
+      const fetchCoverage =
+        ((company as any).discoveryDiagnostics as any)?.fetchCoverage ?? null;
+      evidenceFunnel = buildEvidenceFunnel(allDocs as any, company as any, fetchCoverage);
+    } catch {
+      /* funnel is additive/best-effort; never block the company read */
+    }
+
+    res.json({ company: enrichedCompany, scores, documents, researchStatus, evidenceFunnel });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -729,6 +745,68 @@ apiRouter.delete("/frameworks/:id", async (req: Request, res: Response) => {
     const frameworkId = parseInt(req.params.id);
     await storage.deleteFramework(frameworkId, workspaceId);
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Domain Policies (Source Domains review) ──────────────────────────────────
+// Workspace-scoped, framework-agnostic human-in-the-loop provenance overrides.
+
+// Raw policy rows for the workspace.
+apiRouter.get("/domain-policies", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const rows = await storage.getDomainPolicies(workspaceId);
+    res.json(rows);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Candidate domains aggregated from the third_party corpus.
+apiRouter.get("/domain-policies/candidates", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const limitRaw = parseInt(String(req.query.limit ?? ""), 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 2000) : 200;
+    const result = await storage.getDomainPolicyCandidates(workspaceId, limit);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Companies affected by an approved (primary) domain policy.
+apiRouter.get("/domain-policies/affected-companies", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const companies = await storage.getAffectedCompanies(workspaceId);
+    res.json(companies);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Upsert a decision for a registrable domain.
+apiRouter.post("/domain-policies", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId, email } = getSessionContext(req);
+    const { registrableDomain, decision, note } = req.body || {};
+    if (!registrableDomain || typeof registrableDomain !== "string") {
+      return res.status(400).json({ error: "registrableDomain is required" });
+    }
+    if (decision !== "primary" && decision !== "third_party") {
+      return res.status(400).json({ error: "decision must be 'primary' or 'third_party'" });
+    }
+    const row = await storage.upsertDomainPolicy(
+      workspaceId,
+      registrableDomain,
+      decision,
+      typeof note === "string" ? note : null,
+      email || null,
+    );
+    res.json(row);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -2383,6 +2461,172 @@ apiRouter.post("/score-anomalies/seed", async (req: Request, res: Response) => {
     });
 
     res.json({ success: true, flagged, totalCompanies: allCompanies.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Document-Discovery Coverage Diagnostics ────────────────────────────────
+// Surfaces companies whose latest document-discovery coverage
+// (discoveryDiagnostics.fetchCoverage) is weak, split into two tiers, and lets
+// the dashboard re-run analysis for all or a selected subset using the SAME
+// non-destructive per-company enqueue path the "Re-examine" buttons use
+// (storage.enqueueReexamination — NOT the broken ANY(array) selector).
+//
+// Tunable thresholds (env-overridable so they are easy to adjust in prod):
+//   LOW_DISCOVERY_RATIO        (default 0.7) — fetchRatio below this = "low"
+//   CRITICAL_DISCOVERY_MIN_DOCS (default 10) — documentsDiscovered below this = critical
+//   CRITICAL_DISCOVERY_RATIO   (default 0.3) — fetchRatio below this = critical
+const LOW_DISCOVERY_RATIO = Number(process.env.LOW_DISCOVERY_RATIO ?? "0.7");
+const CRITICAL_DISCOVERY_MIN_DOCS = Number(process.env.CRITICAL_DISCOVERY_MIN_DOCS ?? "10");
+const CRITICAL_DISCOVERY_RATIO = Number(process.env.CRITICAL_DISCOVERY_RATIO ?? "0.3");
+const CRITICAL_DISCOVERY_MIN_FETCHED = 3; // documentsFetched below this = critical
+
+type DiscoveryRow = {
+  id: number;
+  name: string;
+  sector: string | null;
+  country: string | null;
+  documentsFetched: number;
+  documentsDiscovered: number;
+  fetchRatio: number;
+  budgetExceeded: boolean;
+  lowEvidence: boolean;
+  critical: boolean;
+};
+
+apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    // Resolve the framework the dashboard is scoped to: an explicitly selected
+    // framework (query param) wins, otherwise the workspace's active framework.
+    // Never hardcode a workspace or framework id.
+    const selectedFrameworkId = parseInt(String(req.query.frameworkId ?? ""), 10);
+    let framework: any = null;
+    if (Number.isInteger(selectedFrameworkId) && selectedFrameworkId > 0) {
+      framework = await storage.getFrameworkById(selectedFrameworkId, workspaceId);
+    }
+    if (!framework) {
+      framework = await storage.getActiveFramework(workspaceId);
+    }
+
+    const companies = await storage.getCompanies(workspaceId);
+    // Two DISTINCT signals, one company in exactly one list:
+    //   • discoveryTooLow — too few documents were FOUND in search. A thin corpus
+    //     cannot be fixed by retrying fetches, so this check wins outright.
+    //   • lowRetrieval    — enough documents were found, but too few were actually
+    //     RETRIEVED/fetched (fetchRatio below the threshold). Usually caused by the
+    //     per-company fetch-time budget being hit; re-running retries the un-fetched
+    //     documents. `critical` marks the worst of these (ratio below the critical
+    //     ratio, or fewer than CRITICAL_DISCOVERY_MIN_FETCHED documents retrieved).
+    const discoveryTooLow: DiscoveryRow[] = [];
+    const lowRetrieval: DiscoveryRow[] = [];
+
+    for (const c of companies) {
+      const cov = (c as any).discoveryDiagnostics?.fetchCoverage;
+      if (!cov || typeof cov.fetchRatio !== "number") continue;
+      const documentsFetched = Number(cov.documentsFetched ?? 0);
+      const documentsDiscovered = Number(cov.documentsDiscovered ?? 0);
+      const fetchRatio = Number(cov.fetchRatio ?? 0);
+      const row: DiscoveryRow = {
+        id: c.id,
+        name: c.name,
+        sector: c.sector ?? null,
+        country: c.country ?? null,
+        documentsFetched,
+        documentsDiscovered,
+        fetchRatio,
+        budgetExceeded: cov.budgetExceeded === true,
+        lowEvidence: cov.lowEvidence === true,
+        critical:
+          fetchRatio < CRITICAL_DISCOVERY_RATIO ||
+          documentsFetched < CRITICAL_DISCOVERY_MIN_FETCHED,
+      };
+      if (documentsDiscovered < CRITICAL_DISCOVERY_MIN_DOCS) {
+        discoveryTooLow.push(row);
+      } else if (fetchRatio < LOW_DISCOVERY_RATIO) {
+        lowRetrieval.push(row);
+      }
+    }
+
+    // Worst coverage first within each list.
+    const byRatio = (a: DiscoveryRow, b: DiscoveryRow) => a.fetchRatio - b.fetchRatio;
+    discoveryTooLow.sort(byRatio);
+    lowRetrieval.sort(byRatio);
+
+    res.json({
+      frameworkId: framework?.id ?? null,
+      frameworkName: framework?.name ?? null,
+      thresholds: {
+        lowDiscoveryRatio: LOW_DISCOVERY_RATIO,
+        criticalMinDocs: CRITICAL_DISCOVERY_MIN_DOCS,
+        criticalRatio: CRITICAL_DISCOVERY_RATIO,
+        criticalMinFetched: CRITICAL_DISCOVERY_MIN_FETCHED,
+      },
+      // Signal-split keys (current client).
+      discoveryTooLow,
+      lowRetrieval,
+      // Back-compat aliases for any stale cached bundle (old field names).
+      criticalDiscovery: discoveryTooLow,
+      lowDiscovery: lowRetrieval,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+apiRouter.post("/diagnostics/low-discovery/rerun", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const { companyIds, frameworkId: bodyFrameworkId } = req.body as {
+      companyIds?: number[];
+      frameworkId?: number;
+    };
+    if (!Array.isArray(companyIds) || companyIds.length === 0) {
+      return res.status(400).json({ error: "companyIds required" });
+    }
+    const ids = companyIds
+      .map((n) => Number(n))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    if (ids.length === 0) {
+      return res.status(400).json({ error: "no valid companyIds" });
+    }
+
+    // Resolve the framework to re-analyze under (selected wins, else active).
+    let framework: any = null;
+    const selFw = Number(bodyFrameworkId);
+    if (Number.isInteger(selFw) && selFw > 0) {
+      framework = await storage.getFrameworkById(selFw, workspaceId);
+    }
+    if (!framework) framework = await storage.getActiveFramework(workspaceId);
+    if (!framework) return res.status(400).json({ error: "No active or selected framework" });
+
+    const results: Array<{ companyId: number; batchId: number; jobId: number }> = [];
+    const skipped: Array<{ companyId: number; reason: string }> = [];
+    // Enqueue one company at a time via the SAME non-destructive reset+enqueue
+    // path the existing "Re-examine" buttons use. Never a single ANY(array)
+    // selector (Postgres 42809). Other companies' completed results are untouched.
+    for (const companyId of ids) {
+      const company = await storage.getCompanyById(companyId, workspaceId);
+      if (!company) {
+        skipped.push({ companyId, reason: "not found in workspace" });
+        continue;
+      }
+      const r = await storage.enqueueReexamination({
+        companyId,
+        companyName: company.name,
+        frameworkId: framework.id,
+        workspaceId,
+        recoveryReason: "manual re-run from low-discovery dashboard section",
+      });
+      if (r) {
+        results.push({ companyId, batchId: r.batchId, jobId: r.jobId });
+      } else {
+        skipped.push({ companyId, reason: "could not enqueue" });
+      }
+    }
+
+    res.json({ success: true, reruns: results.length, results, skipped });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { realQuotes } from "../lib/quotes";
 import { Download, Share2, Trash2, X, CheckSquare } from "lucide-react";
 import { normalizeVerdict, isMet } from "@shared/verdict";
 // WP02/A1 (additive): shared research-status columns so CSV shows the SAME
@@ -211,7 +212,7 @@ export default function ResultsPage() {
 
           // (iii) Supporting Quote: verbatim quotes (only for MET measures — a
           // former Partial no longer surfaces quotes since it now scores No).
-          const quotes = (ms.quotes || []).map((q: any) => q.text).filter(Boolean);
+          const quotes = realQuotes(ms.quotes).map((q: any) => q.text).filter(Boolean);
           if (isMet(ms.verdict, ms.score)) {
             measureValues.push(quotes.join(" | "));
           } else {
@@ -224,7 +225,7 @@ export default function ResultsPage() {
           const sourceLinks: string[] = [];
           const seenSources = new Set<string>();
 
-          for (const q of (ms.quotes || [])) {
+          for (const q of realQuotes(ms.quotes)) {
             if (!q.source) continue;
             const srcKey = q.source.toLowerCase();
             if (seenSources.has(srcKey)) continue;

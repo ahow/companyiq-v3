@@ -10,6 +10,7 @@ import {
   Activity,
   BookOpen,
   Globe,
+  ServerCog,
   Layers,
   MoreHorizontal,
   ChevronDown,
@@ -42,6 +43,7 @@ const FRAMEWORKS_GROUP: NavItem[] = [
 const MORE_GROUP: NavItem[] = [
   { id: "diagnostics", label: "Diagnostics", icon: Activity },
   { id: "domains", label: "Domains", icon: Globe },
+  { id: "source-domains", label: "Source Domains", icon: ServerCog },
 ];
 
 // Lightweight dropdown: click to toggle, closes on outside click or Escape, and

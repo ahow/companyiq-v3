@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironment, isHeartbeatStalled, type DeploymentFingerprint, type RunKeyInput, type RunLifecycleState } from "./lib/reliability.js";
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
+import { registrableDomainOf, classifySuggestedBucket, type SuggestedBucket } from "./lib/provenance.js";
 import { diagTags, getDiagContext } from "./lib/diag-context.js";
 import { type AttemptOwnership, type FenceDb, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason, lockJobAndBatch, claimPredicate, successCompletionPredicate, failureRecordPredicate, ownershipFromContext } from "./lib/lifecycle-fence.js";
 import {
@@ -512,6 +513,31 @@ export async function getAcceptedDocuments(companyId: number) {
 }
 
 /**
+ * Evidence funnel (display-only): return ALL document rows for a company with
+ * the provenance / gate / fetch columns needed to build the per-stage funnel
+ * and the same-domain-third-party provenance-health signal. Additive, read-only
+ * — does not change scoring. Unlike getAcceptedDocuments this is NOT filtered to
+ * gate_verdict='accept', because the funnel must show discovered → fetched → dead
+ * → gate-accepted → first/third-party stages across every source_type.
+ */
+export async function getAllDocumentsForFunnel(companyId: number) {
+  return db
+    .select({
+      id: schema.documents.id,
+      url: schema.documents.url,
+      type: schema.documents.type,
+      gateVerdict: schema.documents.gateVerdict,
+      fetchStatus: schema.documents.fetchStatus,
+      failureReason: schema.documents.failureReason,
+      sourceType: schema.documents.sourceType,
+      extractionState: schema.documents.extractionState,
+    })
+    .from(schema.documents)
+    .where(eq(schema.documents.companyId, companyId))
+    .orderBy(asc(schema.documents.id));
+}
+
+/**
  * U17: Update a document's source_type after re-classification with full
  * content. Used by the pipeline's corpus-build provenance filter to persist
  * upgrades (title-only misclassified third_party → issuer once content shows
@@ -737,6 +763,78 @@ export async function recordExtractionState(companyId: number, url: string, stat
     UPDATE documents SET extraction_state = ${state}
     WHERE company_id = ${companyId} AND url = ${url}
   `);
+}
+
+/**
+ * FMP transcript lane (§3.5): persist an executive-only earnings-call transcript
+ * as a ready-to-score first-party document in ONE call. Unlike web-discovered
+ * documents, transcripts already carry their (speaker-filtered) content, so this
+ * both upserts the documents row AND stores the content — bypassing the fetch path.
+ *
+ * The row is written with:
+ *   - type = 'earnings_transcript'  (recognised and kept unconditionally by the
+ *     corpus loop; its provenance is the speaker-level gate, not a host match)
+ *   - source_type = 'first_party'   (executive-only content; §3.5)
+ *   - gate_verdict = 'accept', fetch_status = 'ok'  (so research-state treats it
+ *     as eligible, retrieved evidence)
+ *   - transcript_attribution = per-turn attribution JSON (audit trail)
+ *
+ * Idempotent on (company_id, url): re-ingesting the same transcript refreshes
+ * content + attribution without duplicating the row. Returns the document id.
+ */
+export async function storeTranscriptDocument(data: {
+  companyId: number;
+  url: string;
+  title: string;
+  content: string;
+  attribution: unknown;
+  gateReason?: string;
+}): Promise<number | null> {
+  const urlHash = hashUrl(data.url);
+  const contentLength = data.content.length;
+
+  // Step 1: store content in the deduplicated content table.
+  const dcResult = await db.execute(sql`
+    INSERT INTO document_content (url_hash, url, content, content_length, created_at, updated_at)
+    VALUES (${urlHash}, ${data.url}, ${data.content}, ${contentLength}, NOW(), NOW())
+    ON CONFLICT (url_hash) DO UPDATE SET
+      content = EXCLUDED.content,
+      content_length = EXCLUDED.content_length,
+      updated_at = NOW()
+    RETURNING id
+  `);
+  const contentId = (dcResult.rows[0] as any)?.id ?? null;
+
+  const attributionJson = JSON.stringify(data.attribution ?? null);
+  const gateReason = data.gateReason ?? "fmp_transcript; executive-only speaker gate (§3.5)";
+
+  // Step 2: upsert the documents row with content linked and marked fetched-ok.
+  const docResult = await db.execute(sql`
+    INSERT INTO documents (
+      company_id, url, title, type, gate_verdict, gate_reason,
+      fetch_status, fetch_failures, content_id, source_type,
+      extraction_state, transcript_attribution, fetched_at, created_at
+    )
+    VALUES (
+      ${data.companyId}, ${data.url}, ${data.title}, 'earnings_transcript', 'accept', ${gateReason},
+      'ok', 0, ${contentId}, 'first_party',
+      'complete', ${attributionJson}::jsonb, NOW(), NOW()
+    )
+    ON CONFLICT (company_id, url) DO UPDATE SET
+      title = EXCLUDED.title,
+      type = 'earnings_transcript',
+      gate_verdict = 'accept',
+      gate_reason = EXCLUDED.gate_reason,
+      fetch_status = 'ok',
+      content_id = EXCLUDED.content_id,
+      content = NULL,
+      source_type = 'first_party',
+      extraction_state = 'complete',
+      transcript_attribution = EXCLUDED.transcript_attribution,
+      fetched_at = NOW()
+    RETURNING id
+  `);
+  return (docResult.rows[0] as any)?.id ?? null;
 }
 
 export async function recordFetchFailure(companyId: number, url: string, failureReason?: string) {
@@ -2361,6 +2459,297 @@ export async function suppressPlatformDomain(domain: string) {
 /** Lift suppression so a domain can be auto-detected / re-activated again. */
 export async function unsuppressPlatformSource(id: number) {
   await db.update(schema.platformSources).set({ suppressed: false }).where(eq(schema.platformSources.id, id));
+}
+
+// ─── Domain Policies (Workspace-Scoped, framework-agnostic) ───────────────────
+// Human-in-the-loop provenance overrides. See shared/schema.ts `domainPolicies`.
+
+export type DomainPolicyDecision = "primary" | "third_party";
+
+/** Raw policy rows for a workspace. */
+export async function getDomainPolicies(workspaceId: number) {
+  return db.select().from(schema.domainPolicies)
+    .where(eq(schema.domainPolicies.workspaceId, workspaceId))
+    .orderBy(desc(schema.domainPolicies.decidedAt));
+}
+
+/**
+ * Policy map for the pipeline/classifier, keyed by registrable domain (eTLD+1,
+ * lowercase). Only entries actually present are included; the classifier treats
+ * an absent key as the third_party default.
+ */
+export async function getDomainPolicyMap(
+  workspaceId: number,
+): Promise<Map<string, { decision: DomainPolicyDecision; scope: string }>> {
+  const rows = await db.select().from(schema.domainPolicies)
+    .where(eq(schema.domainPolicies.workspaceId, workspaceId));
+  const map = new Map<string, { decision: DomainPolicyDecision; scope: string }>();
+  for (const r of rows) {
+    const key = (r.registrableDomain || "").toLowerCase().trim();
+    if (!key) continue;
+    map.set(key, { decision: (r.decision as DomainPolicyDecision), scope: r.scope || "issuer_if_identity" });
+  }
+  return map;
+}
+
+/**
+ * Upsert a decision for a (workspace, registrable domain). Normalises the
+ * domain to eTLD+1 lowercase. `scope` is always 'issuer_if_identity' — the
+ * column exists for forward-compat only; 'always_primary' is never written.
+ */
+export async function upsertDomainPolicy(
+  workspaceId: number,
+  registrableDomain: string,
+  decision: DomainPolicyDecision,
+  note?: string | null,
+  decidedBy?: string | null,
+) {
+  const norm = registrableDomainOf(registrableDomain) || (registrableDomain || "").toLowerCase().trim();
+  if (!norm) throw new Error("Invalid domain");
+  if (decision !== "primary" && decision !== "third_party") {
+    throw new Error("Invalid decision");
+  }
+  const [row] = await db.insert(schema.domainPolicies)
+    .values({
+      workspaceId,
+      registrableDomain: norm,
+      decision,
+      scope: "issuer_if_identity",
+      note: note ?? null,
+      decidedBy: decidedBy ?? null,
+      decidedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [schema.domainPolicies.workspaceId, schema.domainPolicies.registrableDomain],
+      set: {
+        decision,
+        scope: "issuer_if_identity",
+        note: note ?? null,
+        decidedBy: decidedBy ?? null,
+        decidedAt: new Date(),
+      },
+    })
+    .returning();
+  return row;
+}
+
+export interface DomainPolicyCandidate {
+  registrableDomain: string;
+  docCount: number;
+  companyCount: number;
+  exampleUrls: string[];
+  suggestedBucket: SuggestedBucket;
+  currentDecision: DomainPolicyDecision;
+  /**
+   * True when this registrable domain is the registered own-domain (or a
+   * related/manual related domain) of SOME company in the workspace. Such a
+   * domain is already first_party for its owner; it only appears in this
+   * third_party review list because OTHER companies cross-reference it. These
+   * are usually red herrings — approving them as "primary" would wrongly treat
+   * another issuer's own site as a primary source for everyone who cites it.
+   */
+  isCompanyOwnedDomain: boolean;
+}
+
+/**
+ * Aggregate the third_party document corpus by registrable domain for the
+ * Source Domains review page. Host extraction + per-host aggregation happens in
+ * SQL (bounded by the number of distinct hosts); registrable-domain folding and
+ * bucket classification happen in JS (reusing the same eTLD+1 helper and the
+ * classifier's regulator/IR-platform matching). Sorted by docCount desc.
+ */
+export async function getDomainPolicyCandidates(
+  workspaceId: number,
+  limit = 200,
+): Promise<{ candidates: DomainPolicyCandidate[]; total: number }> {
+  const res: any = await db.execute(sql`
+    SELECT host,
+           COUNT(*)::int AS doc_count,
+           array_agg(DISTINCT company_id) AS company_ids,
+           (array_agg(url ORDER BY url))[1:3] AS example_urls
+    FROM (
+      SELECT d.company_id,
+             d.url,
+             lower(regexp_replace(substring(d.url from '^https?://([^/:?#]+)'), '^www\\.', '')) AS host
+      FROM documents d
+      JOIN companies c ON c.id = d.company_id
+      WHERE c.workspace_id = ${workspaceId} AND d.source_type = 'third_party'
+    ) sub
+    WHERE host IS NOT NULL AND host <> ''
+    GROUP BY host
+  `);
+  const hostRows = (res.rows as any[]) || [];
+
+  // Fold hosts into their registrable domain (eTLD+1).
+  const byDomain = new Map<string, { docCount: number; companies: Set<number>; examples: string[] }>();
+  for (const r of hostRows) {
+    const reg = registrableDomainOf(String(r.host || ""));
+    if (!reg) continue;
+    let agg = byDomain.get(reg);
+    if (!agg) { agg = { docCount: 0, companies: new Set<number>(), examples: [] }; byDomain.set(reg, agg); }
+    agg.docCount += Number(r.doc_count || 0);
+    for (const cid of (r.company_ids || [])) { if (cid != null) agg.companies.add(Number(cid)); }
+    for (const u of (r.example_urls || [])) { if (u && agg.examples.length < 3) agg.examples.push(String(u)); }
+  }
+
+  // Current decisions (absent => 'third_party' default).
+  const policyMap = await getDomainPolicyMap(workspaceId);
+
+  // Build the set of registrable domains that are the OWN domain (or a
+  // related / manual-related domain) of some company in this workspace. A
+  // candidate whose registrable domain is in this set is already first_party
+  // for its owner and is flagged as such in the UI.
+  const ownedDomains = await getWorkspaceOwnedRegistrableDomains(workspaceId);
+
+  const all: DomainPolicyCandidate[] = [...byDomain.entries()].map(([registrableDomain, agg]) => ({
+    registrableDomain,
+    docCount: agg.docCount,
+    companyCount: agg.companies.size,
+    exampleUrls: agg.examples,
+    suggestedBucket: classifySuggestedBucket(registrableDomain),
+    currentDecision: (policyMap.get(registrableDomain)?.decision ?? "third_party") as DomainPolicyDecision,
+    isCompanyOwnedDomain: ownedDomains.has(registrableDomain),
+  }));
+  // Primary sort by doc volume (most-cited first); company-owned domains are
+  // red herrings so they are pushed below non-owned domains of equal priority.
+  all.sort((a, b) => {
+    if (a.isCompanyOwnedDomain !== b.isCompanyOwnedDomain) return a.isCompanyOwnedDomain ? 1 : -1;
+    return b.docCount - a.docCount;
+  });
+  return { candidates: all.slice(0, Math.max(0, limit)), total: all.length };
+}
+
+/**
+ * Returns the set of registrable domains (eTLD+1) owned by companies in the
+ * workspace — folded from each company's `domain`, `related_domains`, and
+ * `related_domains_manual`. Used to flag Source-Domain candidates that are a
+ * company's own site (already first_party for that owner).
+ */
+export async function getWorkspaceOwnedRegistrableDomains(workspaceId: number): Promise<Set<string>> {
+  const res: any = await db.execute(sql`
+    SELECT domain, related_domains, related_domains_manual
+    FROM companies
+    WHERE workspace_id = ${workspaceId}
+  `);
+  const owned = new Set<string>();
+  const add = (v: unknown) => {
+    if (!v) return;
+    const reg = registrableDomainOf(String(v));
+    if (reg) owned.add(reg);
+  };
+  for (const r of ((res.rows as any[]) || [])) {
+    add(r.domain);
+    for (const key of ["related_domains", "related_domains_manual"]) {
+      const raw = r[key];
+      if (Array.isArray(raw)) { for (const d of raw) add(d); }
+      else if (typeof raw === "string" && raw.trim().startsWith("[")) {
+        try { const arr = JSON.parse(raw); if (Array.isArray(arr)) for (const d of arr) add(d); } catch { /* ignore */ }
+      }
+    }
+  }
+  return owned;
+}
+
+export interface AffectedCompany {
+  companyId: number;
+  name: string;
+  sector: string | null;
+  country: string | null;
+  affectedDocCount: number;
+  totalScore: number | null;
+  lastAnalyzedAt: string | null;
+  policyDecidedAt: string | null;
+  pendingReRun: boolean;
+}
+
+/**
+ * Companies with >=1 third_party doc whose registrable domain has a 'primary'
+ * policy. Computed from LIVE data (does not rely on source_type having been
+ * flipped yet). `pendingReRun` is true when the company's last analysis predates
+ * the newest matching policy decision (so a scoreOnly re-run would pick it up).
+ */
+export async function getAffectedCompanies(workspaceId: number): Promise<AffectedCompany[]> {
+  // Primary-policy registrable domains for this workspace.
+  const policyRows = await db.select().from(schema.domainPolicies)
+    .where(and(eq(schema.domainPolicies.workspaceId, workspaceId), eq(schema.domainPolicies.decision, "primary")));
+  if (policyRows.length === 0) return [];
+  const primaryDecidedAt = new Map<string, number>();
+  for (const r of policyRows) {
+    const key = (r.registrableDomain || "").toLowerCase().trim();
+    if (!key) continue;
+    const t = r.decidedAt ? new Date(r.decidedAt as any).getTime() : 0;
+    primaryDecidedAt.set(key, Math.max(primaryDecidedAt.get(key) ?? 0, t));
+  }
+  const primarySet = new Set(primaryDecidedAt.keys());
+
+  // Per (company, host) third_party doc counts — host extracted in SQL.
+  const res: any = await db.execute(sql`
+    SELECT company_id, host, COUNT(*)::int AS doc_count
+    FROM (
+      SELECT d.company_id,
+             lower(regexp_replace(substring(d.url from '^https?://([^/:?#]+)'), '^www\\.', '')) AS host
+      FROM documents d
+      JOIN companies c ON c.id = d.company_id
+      WHERE c.workspace_id = ${workspaceId} AND d.source_type = 'third_party'
+    ) sub
+    WHERE host IS NOT NULL AND host <> ''
+    GROUP BY company_id, host
+  `);
+  const rows = (res.rows as any[]) || [];
+
+  // Fold to per-company affected doc counts + the newest matching policy decided_at.
+  const perCompany = new Map<number, { affected: number; newestPolicyAt: number }>();
+  for (const r of rows) {
+    const reg = registrableDomainOf(String(r.host || ""));
+    if (!reg || !primarySet.has(reg)) continue;
+    const cid = Number(r.company_id);
+    let agg = perCompany.get(cid);
+    if (!agg) { agg = { affected: 0, newestPolicyAt: 0 }; perCompany.set(cid, agg); }
+    agg.affected += Number(r.doc_count || 0);
+    agg.newestPolicyAt = Math.max(agg.newestPolicyAt, primaryDecidedAt.get(reg) ?? 0);
+  }
+  if (perCompany.size === 0) return [];
+
+  const companyIds = [...perCompany.keys()];
+
+  // Company metadata.
+  const companyRows = await db.select().from(schema.companies)
+    .where(and(eq(schema.companies.workspaceId, workspaceId), inArray(schema.companies.id, companyIds)));
+  const companyById = new Map(companyRows.map(c => [c.id, c]));
+
+  // Last analysis time per company = max measure_scores.created_at.
+  const scoreRes: any = await db.execute(sql`
+    SELECT company_id, MAX(created_at) AS last_scored
+    FROM measure_scores
+    WHERE company_id = ANY(${companyIds})
+    GROUP BY company_id
+  `);
+  const lastScored = new Map<number, number>();
+  for (const r of (scoreRes.rows as any[]) || []) {
+    lastScored.set(Number(r.company_id), r.last_scored ? new Date(r.last_scored).getTime() : 0);
+  }
+
+  const out: AffectedCompany[] = [];
+  for (const [cid, agg] of perCompany.entries()) {
+    const c = companyById.get(cid);
+    if (!c) continue; // company removed; skip
+    const lastAt = lastScored.get(cid) ?? 0;
+    const pendingReRun = lastAt < agg.newestPolicyAt; // analysis older than the policy decision
+    out.push({
+      companyId: cid,
+      name: c.name,
+      sector: c.sector ?? null,
+      country: c.country ?? null,
+      affectedDocCount: agg.affected,
+      totalScore: c.totalScore ?? null,
+      lastAnalyzedAt: lastAt ? new Date(lastAt).toISOString() : null,
+      policyDecidedAt: agg.newestPolicyAt ? new Date(agg.newestPolicyAt).toISOString() : null,
+      pendingReRun,
+    });
+  }
+  // Pending re-runs first, then by affected doc count desc.
+  out.sort((a, b) => (Number(b.pendingReRun) - Number(a.pendingReRun)) || (b.affectedDocCount - a.affectedDocCount));
+  return out;
 }
 
 /**

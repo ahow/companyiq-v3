@@ -178,5 +178,22 @@ export const api = {
   reexamineAnomaly: (id: number) => request(`/score-anomalies/${id}/reexamine`, { method: "POST" }),
   bulkDismissAnomalies: (ids: number[]) => request("/score-anomalies/bulk-dismiss", { method: "POST", body: JSON.stringify({ ids }) }),
   bulkReexamineAnomalies: (ids: number[]) => request("/score-anomalies/bulk-reexamine", { method: "POST", body: JSON.stringify({ ids }) }),
+
+  // Document-Discovery Coverage Diagnostics
+  getLowDiscovery: (frameworkId?: number | null) =>
+    request(`/diagnostics/low-discovery${frameworkId ? `?frameworkId=${frameworkId}` : ""}`),
+  rerunLowDiscovery: (companyIds: number[], frameworkId?: number | null) =>
+    request("/diagnostics/low-discovery/rerun", {
+      method: "POST",
+      body: JSON.stringify({ companyIds, frameworkId: frameworkId ?? undefined }),
+    }),
+
+  // Domain Policies (workspace-scoped provenance overrides)
+  getDomainPolicies: () => request("/domain-policies"),
+  getDomainPolicyCandidates: (limit?: number) =>
+    request(`/domain-policies/candidates${limit ? `?limit=${limit}` : ""}`),
+  upsertDomainPolicy: (data: { registrableDomain: string; decision: "primary" | "third_party"; note?: string }) =>
+    request("/domain-policies", { method: "POST", body: JSON.stringify(data) }),
+  getAffectedCompanies: () => request("/domain-policies/affected-companies"),
 };
 // v1786754269

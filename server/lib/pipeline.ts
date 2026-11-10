@@ -44,6 +44,7 @@ import { buildDecisionTrace, computeFrameworkContentHash } from "./framework-v2/
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
 import { classifyProvenance, provenanceToSourceType, isProvenanceRobustnessEnabled, type IrTenantBinding } from "./provenance.js";
+import { deriveFmpAnchors } from "./fmp-resolver.js";
 import { traceKeep, traceDrop, traceInfo, traceMatches, TRACE_ENABLED } from "./discovery-tracer.js";
 import { deriveAliases } from "./issuer-resolver.js";
 import { ABOUTNESS_ENABLED, ABOUTNESS_DEPRIORITIZE_WEIGHT, scoreAboutness, setAboutnessDocWeights, type AboutnessResult } from "./aboutness.js";
@@ -589,6 +590,37 @@ async function runFetchPhase(opts: {
     .map((d: string) => (d || "").replace(/^www\./, "").toLowerCase())
     .filter(Boolean);
   const companyAliases = deriveAliases((company as any).name || "", (company as any).ticker || null);
+  // §4.1 DEFENSIVE FALLBACK: even if the durable anchor-wiring in discovery.ts has
+  // not yet persisted (older companies, resume paths, or a discovery error), derive
+  // the provenance anchors from the already-resolved FMP identity so Rule 1's
+  // deterministic host match can still fire. Pure + non-destructive: fills BLANK
+  // native values only, never overrides a resolved native domain/ticker, and only
+  // unions the FMP registrable host into related_domains.
+  const fmpAnchorsForClassify = deriveFmpAnchors({
+    nativeDomain: companyDomainLower || null,
+    nativeTicker: (company as any).ticker || null,
+    relatedDomains: relatedDomainsLower,
+    fmpWebsite: (company as any).fmpWebsite ?? (company as any).fmp_website ?? null,
+    fmpSymbol: (company as any).fmpSymbol ?? (company as any).fmp_symbol ?? null,
+  });
+  const classifyCompanyDomain = companyDomainLower || fmpAnchorsForClassify.domain || "";
+  const classifyCompanyTicker = ((company as any).ticker || fmpAnchorsForClassify.ticker || null) as string | null;
+  // Union the FMP registrable host into relatedDomainsLower so the concentration
+  // heuristic and BOTH classifier passes below see it (array is mutated downstream).
+  if (fmpAnchorsForClassify.relatedDomains) {
+    for (const d of fmpAnchorsForClassify.relatedDomains) {
+      const norm = (d || "").replace(/^www\./, "").toLowerCase().trim();
+      if (norm && !relatedDomainsLower.includes(norm)) relatedDomainsLower.push(norm);
+    }
+  }
+  if (fmpAnchorsForClassify.changed) {
+    console.log(
+      `[${companyName}] §4.1 defensive FMP anchors for classify ->` +
+      `${fmpAnchorsForClassify.domain !== undefined ? ` domain=${fmpAnchorsForClassify.domain}` : ""}` +
+      `${fmpAnchorsForClassify.ticker !== undefined ? ` ticker=${fmpAnchorsForClassify.ticker}` : ""}` +
+      `${fmpAnchorsForClassify.relatedDomains !== undefined ? ` related_domains+=fmp-host` : ""}`
+    );
+  }
   // R2 (2026-09-04): resolve SEC CIK once per company so the provenance
   // classifier can perform CIK-path matches on Q4 Inc CDN URLs. Country/ISIN
   // gate inside resolveCikForCompany prevents non-US issuers from resolving
@@ -689,6 +721,10 @@ async function runFetchPhase(opts: {
   }
 
   const irTenantCache = new Map<string, IrTenantBinding>();
+  // Domain-policy overrides (2026-11): loaded once per run, threaded into every
+  // classifyProvenance call the SAME way as knownIrTenants. An empty map is
+  // inert (classifier reproduces pre-feature behaviour).
+  const domainPolicyMap = await storage.getDomainPolicyMap(workspaceId);
   type FirstPassEntry = {
     doc: typeof discoveryResult.documents[number];
     firstProv: ReturnType<typeof classifyProvenance>;
@@ -700,14 +736,15 @@ async function runFetchPhase(opts: {
       url: doc.url,
       title: doc.title,
       content: null,
-      companyDomain: companyDomainLower,
+      companyDomain: classifyCompanyDomain,
       relatedDomains: relatedDomainsLower,
       companyName: (company as any).name || null,
-      companyTicker: (company as any).ticker || null,
+      companyTicker: classifyCompanyTicker,
       companyAliases,
       companyIsin: (company as any).isin || null,
       companySecCik,
       knownIrTenants: irTenantCache,
+      domainPolicies: domainPolicyMap,
     });
     if (firstProv.boundIrTenant) {
       console.log(`[${companyName}] R5c: bound IR tenant ${firstProv.boundIrTenant.platform}:${firstProv.boundIrTenant.tenantId} via ${firstProv.boundIrTenant.confirmedBy}`);
@@ -730,14 +767,15 @@ async function runFetchPhase(opts: {
         url: doc.url,
         title: doc.title,
         content: null,
-        companyDomain: companyDomainLower,
+        companyDomain: classifyCompanyDomain,
         relatedDomains: relatedDomainsLower,
         companyName: (company as any).name || null,
-        companyTicker: (company as any).ticker || null,
+        companyTicker: classifyCompanyTicker,
         companyAliases,
         companyIsin: (company as any).isin || null,
         companySecCik,
         knownIrTenants: irTenantCache,
+        domainPolicies: domainPolicyMap,
       });
       if (second.provenance === "issuer") {
         r5cPass2Upgrades++;
@@ -2015,6 +2053,98 @@ async function runFetchPhase(opts: {
     console.warn(`[${companyName}] CHANGE 5: deferred retry sweep error: ${sweepErr?.message || sweepErr}`);
   }
 
+  // ─── Change 3 (2026-11): env-gated DEAD FIRST-PARTY fetch recovery ──────────
+  // Complements CHANGE 5 (which retries only BUDGET-reason deaths) and Fix 2b
+  // (which recovers only PDFs): this retries dead FIRST-PARTY documents of ANY
+  // failure reason (timeout / empty / 403 / 404), with an explicit headless-
+  // browser fallback for BOTH PDFs and HTML links that fail a direct re-fetch.
+  //
+  // Entirely OFF by default — behaviour is byte-identical unless
+  // FETCH_DEAD_RETRY_ENABLED is set — so it ships dark and is enabled per deploy.
+  // Fully bounded: at most FETCH_DEAD_RETRY_MAX_DOCS documents, FETCH_RETRY_MAX
+  // attempts each, within the REMAINING fetch budget and the UNCHANGED
+  // PER_DOCUMENT_TIMEOUT_MS per attempt (enforced by the operation scope). The
+  // direct re-fetch goes through processDocument, which already honours
+  // SERPER_RESOLVE_ENABLED for link resolution. Successful recoveries flip to
+  // 'ok'; failures leave the existing dead status/reason untouched — no loop, no
+  // re-queue, no scoring impact.
+  const deadRetryEnabled = ["true", "1"].includes((process.env.FETCH_DEAD_RETRY_ENABLED || "false").toLowerCase());
+  if (deadRetryEnabled) {
+    try {
+      const FETCH_RETRY_MAX = Math.max(1, parseInt(process.env.FETCH_RETRY_MAX || "1", 10));
+      const FETCH_DEAD_RETRY_MAX_DOCS = Math.max(0, parseInt(process.env.FETCH_DEAD_RETRY_MAX_DOCS || "25", 10));
+      const browserPdfFallback = ["true", "1"].includes((process.env.BROWSER_PDF_FALLBACK_ENABLED || "false").toLowerCase());
+      const deadRetryBudgetMs = Math.max(0, FETCH_PHASE_BUDGET_MS - (Date.now() - fetchPhaseStart));
+      if (FETCH_DEAD_RETRY_MAX_DOCS > 0 && deadRetryBudgetMs > 1000) {
+        const isIssuerDomainUrl = (u: string): boolean => {
+          try {
+            const h = new URL(u).hostname.replace(/^www\./, "");
+            return (!!companyDomainLower && (h === companyDomainLower || h.endsWith("." + companyDomainLower))) ||
+              relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith("." + rd)));
+          } catch { return false; }
+        };
+        const allDocs = await storage.getAcceptedDocuments(companyId);
+        const deadFirstParty = allDocs
+          .filter(d => d.fetchStatus === "dead" && isIssuerDomainUrl(d.url))
+          .slice(0, FETCH_DEAD_RETRY_MAX_DOCS);
+        if (deadFirstParty.length > 0) {
+          console.log(`[${companyName}] Change 3: dead-first-party recovery — ${deadFirstParty.length} doc(s), retryMax=${FETCH_RETRY_MAX}, browserPdfFallback=${browserPdfFallback}, budget=${Math.round(deadRetryBudgetMs / 1000)}s`);
+          const deadline = Date.now() + deadRetryBudgetMs;
+          let recovered = 0;
+          // Resolve the browser-fallback primitives lazily, only when enabled.
+          let pfFn: ((u: string, s?: any) => Promise<string>) | null = null;
+          let bfFn: ((u: string, s?: any) => Promise<string>) | null = null;
+          if (browserPdfFallback) {
+            try {
+              const proc = await import("./processor.js") as any;
+              pfFn = typeof proc.fetchPdfViaBrowser === "function" ? proc.fetchPdfViaBrowser : null;
+              bfFn = typeof proc.fetchWithBrowser === "function" ? proc.fetchWithBrowser : null;
+            } catch { /* fallback unavailable — direct retry only */ }
+          }
+          for (const doc of deadFirstParty) {
+            if (Date.now() >= deadline) break;
+            const isPdf = /\.pdf(\?|$)/i.test(doc.url);
+            for (let attempt = 1; attempt <= FETCH_RETRY_MAX; attempt++) {
+              if (Date.now() >= deadline) break;
+              const remaining = deadline - Date.now();
+              const scope = createOperationScope({
+                budgetMs: Math.max(1, Math.min(PER_DOCUMENT_TIMEOUT_MS, remaining)),
+                ctx: getDiagContext(),
+                label: `[${companyName}] dead-retry ${doc.url.slice(0, 80)}`,
+              });
+              let content = "";
+              try {
+                // 1) direct re-fetch (processDocument has its own browser escalation).
+                content = await Promise.race([
+                  processDocument(doc.url, inferDocumentType(doc.url), { scope }),
+                  scope.whenAborted(`[${companyName}] dead-retry ${doc.url.slice(0, 80)}`),
+                ]);
+                // 2) explicit headless-browser fallback for PDFs/links still empty.
+                if ((!content || content.length <= 50) && !scope.aborted()) {
+                  if (isPdf && pfFn) content = await pfFn(doc.url, scope);
+                  else if (!isPdf && bfFn) content = await bfFn(doc.url, scope);
+                }
+              } catch {
+                content = "";
+              } finally {
+                scope.dispose();
+              }
+              if (content && content.length > 50 && !scope.aborted()) {
+                await storage.recordFetchSuccess(companyId, doc.url, content, getExtractionCompleteness(doc.url));
+                recovered++;
+                console.log(`[${companyName}] Change 3: recovered ${content.length} chars from ${doc.url.slice(0, 80)} (attempt ${attempt})`);
+                break; // this doc is recovered — stop retrying it
+              }
+            }
+          }
+          console.log(`[${companyName}] Change 3: dead-first-party recovery complete — recovered ${recovered}/${deadFirstParty.length}`);
+        }
+      }
+    } catch (deadRetryErr: any) {
+      console.warn(`[${companyName}] Change 3: dead-first-party recovery error: ${deadRetryErr?.message || deadRetryErr}`);
+    }
+  }
+
   // ─── One-Hop PDF Harvest (P2a + Fix 3: headless DOM + latest-year bias) ────────
   // When a fetched company-domain page is index-like (many links, little substantive text),
   // extract same-domain/CDN PDF links whose anchor text matches the framework topic.
@@ -2509,6 +2639,25 @@ async function runAnalyzePhase(opts: {
     .map((d: string) => (d || "").replace(/^www\./, "").toLowerCase())
     .filter(Boolean);
   const companyAliasesForCorpus = deriveAliases((company as any)?.name || companyName, (company as any)?.ticker || null);
+  // §4.1 DEFENSIVE FALLBACK (corpus re-classification): derive provenance anchors
+  // from the resolved FMP identity so the content-time host match can still fire
+  // for issuers whose native domain/ticker are blank but fmp_website/fmp_symbol
+  // are resolved. Non-destructive: only fills blanks, only unions the FMP host.
+  const fmpAnchorsForCorpus = deriveFmpAnchors({
+    nativeDomain: companyDomainForCorpus || null,
+    nativeTicker: (company as any)?.ticker || null,
+    relatedDomains: relatedDomainsForCorpus,
+    fmpWebsite: (company as any)?.fmpWebsite ?? (company as any)?.fmp_website ?? null,
+    fmpSymbol: (company as any)?.fmpSymbol ?? (company as any)?.fmp_symbol ?? null,
+  });
+  const classifyCompanyDomainForCorpus = companyDomainForCorpus || fmpAnchorsForCorpus.domain || "";
+  const classifyCompanyTickerForCorpus = ((company as any)?.ticker || fmpAnchorsForCorpus.ticker || null) as string | null;
+  if (fmpAnchorsForCorpus.relatedDomains) {
+    for (const d of fmpAnchorsForCorpus.relatedDomains) {
+      const norm = (d || "").replace(/^www\./, "").toLowerCase().trim();
+      if (norm && !relatedDomainsForCorpus.includes(norm)) relatedDomainsForCorpus.push(norm);
+    }
+  }
   // R2: reuse the cached CIK resolution from the discovery step above so
   // Q4 Inc CDN URLs can be re-classified via CIK path match if the title
   // tier doesn't fire.
@@ -2528,7 +2677,7 @@ async function runAnalyzePhase(opts: {
   // Fail OPEN for that company's third_party exclusion — keep the docs and
   // log loudly that provenance ran without a confirmed domain. Exclusion
   // stays active whenever a domain IS confirmed.
-  const domainConfirmedForCorpus = companyDomainForCorpus.length > 0;
+  const domainConfirmedForCorpus = classifyCompanyDomainForCorpus.length > 0;
   const failOpenProvenance = provenanceRobustnessEnabled && provenanceFilterEnabled && !domainConfirmedForCorpus;
   if (failOpenProvenance) {
     console.warn(
@@ -2562,6 +2711,11 @@ async function runAnalyzePhase(opts: {
   // is stronger than title-tier and rarely leaves winnable third_party
   // URLs unbound after the whole fetched-corpus is walked.
   const irTenantCacheContent = new Map<string, IrTenantBinding>();
+  // Domain-policy overrides (2026-11): threaded into the content-time
+  // reclassification the SAME way as knownIrTenants. Because this path already
+  // upgrades third_party->first_party and persists it, an approved+identity-
+  // matched doc is auto-corrected on the next analysis of the company.
+  const domainPolicyMapContent = await storage.getDomainPolicyMap(workspaceId);
   // Proposal A: aboutness at corpus assembly (pre-grade) covers documents fetched
   // in earlier runs too. "reject" (lenient floor) excludes; "deprioritize" registers
   // a ranking multiplier consumed by passage retrieval. Disabled in corpus replay
@@ -2580,6 +2734,20 @@ async function runAnalyzePhase(opts: {
   }
   for (const doc of fetchedDocs) {
     if (!doc.content) continue;
+    // FMP transcript lane (§3.5): earnings_transcript documents carry executive-only
+    // content whose provenance is established by the speaker-level gate at ingest, NOT
+    // by a host match. They must bypass the host-based classifier (whose pseudo-URL host
+    // would otherwise force a third_party downgrade/exclusion here) and be kept as
+    // first-party evidence unconditionally. Aboutness is also skipped — the content is
+    // already reduced to the issuer's executives' own words.
+    if (((doc as any).type) === "earnings_transcript") {
+      if (TRACE_ENABLED && traceMatches(doc.url)) traceKeep(companyName, "S14.u17ProvenanceFilter", doc.url, "FMP earnings_transcript: executive-only first-party content, kept by speaker-level gate");
+      documentTexts.push(doc.content);
+      documentUrls.push(doc.url);
+      documentTitles.push(doc.title || doc.url);
+      documentIds.push(doc.id);
+      continue;
+    }
     if (aboutnessActive && doc.content.length > 50) {
       const ab = scoreAboutness(doc.content, (company as any)?.name || companyName, companyAliasesForCorpus, aboutnessPeerNames);
       if (ab.decision === "reject") {
@@ -2595,14 +2763,15 @@ async function runAnalyzePhase(opts: {
       url: doc.url,
       title: doc.title,
       content: doc.content,
-      companyDomain: companyDomainForCorpus,
+      companyDomain: classifyCompanyDomainForCorpus,
       relatedDomains: relatedDomainsForCorpus,
       companyName: (company as any)?.name || companyName,
-      companyTicker: (company as any)?.ticker || null,
+      companyTicker: classifyCompanyTickerForCorpus,
       companyAliases: companyAliasesForCorpus,
       companyIsin: (company as any)?.isin || null,
       companySecCik: companySecCikForCorpus,
       knownIrTenants: irTenantCacheContent,
+      domainPolicies: domainPolicyMapContent,
     });
     const priorSourceType = (doc as any).source_type || (doc as any).sourceType || null;
     if (prov.provenance === "issuer" && priorSourceType === "third_party") {
@@ -3010,6 +3179,7 @@ async function runAnalyzePhase(opts: {
       console.warn(`[${companyName}] 0%-guard triggered: genuinely empty analysis (all measures Low pre- and post-adjustment, no evidence)`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: "score",
@@ -3238,6 +3408,7 @@ async function runAnalyzePhase(opts: {
   if (scoringDiag && (scoringDiag.scoringFailures > 0 || scoringDiag.fallbackUsed > 0 || scoringDiag.timeouts > 0)) {
     try {
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: "scoring_diagnostics",
@@ -3283,7 +3454,7 @@ async function runAnalyzePhase(opts: {
       });
       try {
         await storage.logProcessingError({
-          companyId, companyName, stage: "mass_scoring_failure",
+          workspaceId, companyId, companyName, stage: "mass_scoring_failure",
           error: `${failuresInAnswered}/${answeredForRatio} measures failed (>${(MASS_FAILURE_THRESHOLD*100).toFixed(0)}% threshold). Score is not substantive.`,
         });
       } catch { /* non-fatal */ }
@@ -3306,6 +3477,7 @@ async function runAnalyzePhase(opts: {
     console.error(`[${companyName}][invariant][FAIL] ${fiInvariant.violations.length} force-include violation(s): ${fiInvariant.violations.map((v) => `${v.measureId} (${v.reason})`).join("; ")}`);
     try {
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: "score",
@@ -3847,6 +4019,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // I45: Persist structured pipeline failure with type classification
       const isTimeout = error instanceof TimeoutError || /timed? ?out|ETIMEDOUT/i.test(error.message);
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: isTimeout ? "pipeline_timeout" : "pipeline_error",
@@ -3912,6 +4085,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // I45: Persist explicit timeout status with structured provenance so Gate
       // Report diagnostics can distinguish timeout zeros from no-evidence zeros.
       await storage.logProcessingError({
+        workspaceId,
         companyId,
         companyName,
         stage: "pipeline_timeout",

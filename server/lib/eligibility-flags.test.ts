@@ -11,6 +11,7 @@
 import {
   computeEligibilityFlags,
   isPositiveVerdict,
+  reviewQuoteAttribution,
   type EligibilityFlagId,
   type EligibilityFlagsInput,
 } from "./eligibility-flags.js";
@@ -60,6 +61,66 @@ const ACME = { name: "Acme Beverages Corporation", ticker: "ABV", domain: "acme-
     company: ACME,
   };
   check("entity-attribution CLEARS when target named", !fired(cleanInput, "entity-attribution"));
+}
+
+// ─── 1b. entity-attribution: QUOTES-ONLY signal (the Accenture bug) ─────────────
+// Mirrors the scoring gate in analyzer.ts: the entity-attribution flag is the ONLY
+// eligibility flag that downgrades. A positive cell is downgraded to No iff the
+// entity-attribution flag fires. This predicate replicates that gate so the
+// downgrade outcome is asserted here, next to the flag logic that drives it.
+function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
+  if (!isPositiveVerdict(input.verdict)) return false;
+  return fired(input, "entity-attribution");
+}
+{
+  // (b) The Accenture pattern: the rationale/summary NAMES the target, but the
+  // supporting QUOTES describe only OTHER entities (clients / case-study
+  // subjects). Combined check would pass (summary mentions Acme); quotes-only
+  // check must fire → flagged AND downgraded.
+  const accenturePattern: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [
+      { text: "A global semiconductor company leveraged an AI-powered cloud platform to reduce costs.", sourceUrl: "https://acme-bev.com/thought-leadership" },
+      { text: "Metro de Madrid deployed AI algorithms to reduce its annual energy intake by 25%.", sourceUrl: "https://acme-bev.com/thought-leadership" },
+    ],
+    evidenceSummary: "These are client/industry case examples in Acme Beverages' own report rather than Acme Beverages' own internal objectives, but they are concrete qualifying instances.",
+    company: ACME,
+  };
+  check("entity-attribution FIRES on quotes-only signal when summary names target but quotes do not (Accenture pattern)", fired(accenturePattern, "entity-attribution"));
+  check("Accenture pattern → downgraded to No", entityGateDowngrades(accenturePattern) === true);
+
+  // (a)/(c) Normal positive cell: the target IS named in the supporting quotes →
+  // not flagged, not downgraded, unaffected.
+  const targetInQuotes: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [
+      { text: "Acme Beverages deployed its own AI platform internally to reduce its annual energy use by 25%.", sourceUrl: "https://acme-bev.com/report" },
+    ],
+    evidenceSummary: "Acme Beverages describes its own internal AI deployment.",
+    company: ACME,
+  };
+  check("entity-attribution CLEARS when target named in the supporting quotes", !fired(targetInQuotes, "entity-attribution"));
+  check("normal positive cell with target in quotes → NOT downgraded", entityGateDowngrades(targetInQuotes) === false);
+
+  // Guard: a positive cell whose only name mention is in the summary (no quotes)
+  // still relies on the combined signal (not the quotes-only branch).
+  const summaryOnlyNamed: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [],
+    evidenceSummary: "Acme Beverages maintains an internal ethics committee.",
+    company: ACME,
+  };
+  check("entity-attribution does not misfire when no quotes present but summary names target", !fired(summaryOnlyNamed, "entity-attribution"));
+
+  // Softer flags stay advisory: a planned-only cell that DOES name the target in
+  // quotes must NOT be downgraded by the entity gate (only entity-attribution gates).
+  const plannedButNamed: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [{ text: "Acme Beverages plans to establish an AI oversight board by 2027.", sourceUrl: "https://acme-bev.com/x" }],
+    company: ACME,
+  };
+  check("planned-only cell that names target in quotes is NOT downgraded by entity gate", entityGateDowngrades(plannedButNamed) === false);
+  check("planned-vs-live still fires advisory on that cell", fired(plannedButNamed, "planned-vs-live"));
 }
 
 // ─── 2. date-window ─────────────────────────────────────────────────────────────
@@ -185,6 +246,74 @@ const ACME = { name: "Acme Beverages Corporation", ticker: "ABV", domain: "acme-
     }
   }
   check("never throws and always returns five advisory flags on bad input", !threw);
+}
+
+// ─── 9. reviewQuoteAttribution: per-quote consistency review ─────────────────────
+// This is the review step the entity-attribution scoring gate uses to mark the
+// specific quotes that do NOT name the target as disqualified, so a downgraded
+// (No) verdict never displays Yes-implying third-party passages (the Accenture bug).
+{
+  // The Accenture pattern: two third-party quotes (client / case-study subjects),
+  // one quote that actually names the target. Only the third-party ones should be
+  // flagged attributedToTarget=false.
+  const quotes = [
+    { text: "A global semiconductor company leveraged an AI-powered cloud platform to reduce costs.", sourceUrl: "https://acme-bev.com/thought-leadership" },
+    { text: "Metro de Madrid deployed AI algorithms to reduce its annual energy intake by 25%.", sourceUrl: "https://acme-bev.com/thought-leadership" },
+    { text: "Acme Beverages deployed its own AI platform internally across all plants.", sourceUrl: "https://acme-bev.com/report" },
+  ];
+  const attr = reviewQuoteAttribution(quotes, ACME);
+  check("reviewQuoteAttribution returns one result per quote", attr.length === 3);
+  check("third-party quote (semiconductor company) → attributedToTarget=false", attr[0].attributedToTarget === false);
+  check("third-party quote (Metro de Madrid) → attributedToTarget=false", attr[1].attributedToTarget === false);
+  check("quote naming the target (Acme Beverages) → attributedToTarget=true", attr[2].attributedToTarget === true);
+  check("indices are preserved in order", attr[0].index === 0 && attr[1].index === 1 && attr[2].index === 2);
+
+  // Ticker mention also counts as naming the target.
+  const tickerQuote = reviewQuoteAttribution([{ text: "ABV reported its board AI committee met quarterly.", sourceUrl: "x" }], ACME);
+  check("quote naming the target by ticker → attributedToTarget=true", tickerQuote[0].attributedToTarget === true);
+
+  // Fail-open / never-throws on malformed input.
+  let qThrew = false;
+  try {
+    reviewQuoteAttribution(null, ACME);
+    reviewQuoteAttribution(undefined as any, ACME);
+    reviewQuoteAttribution([null as any, { text: 123 as any }], ACME);
+    reviewQuoteAttribution([{ text: "x" }], { name: "" } as any);
+  } catch {
+    qThrew = true;
+  }
+  check("reviewQuoteAttribution never throws on malformed input", !qThrew);
+  check("reviewQuoteAttribution returns [] for empty input", reviewQuoteAttribution([], ACME).length === 0);
+}
+
+// ─── 9b. Generic corporate-form words must NOT attribute (prod regression) ───────
+// The live Accenture run kept third-party quotes under a No verdict because the
+// company name "ACCENTURE PUBLIC LIMITED COMPANY" admitted the generic words
+// "public"/"limited"/"company" as identity tokens — so a Metro de Madrid client
+// case study ("...in the public sector...") and a "...the company targeted..."
+// passage were wrongly counted as naming the target. Only the DISTINCTIVE token
+// ("accenture") must attribute.
+{
+  const ACN = { name: "ACCENTURE PUBLIC LIMITED COMPANY", ticker: "ACN" };
+  const quotes = [
+    { text: "In the public sector, Metro de Madrid deployed AI algorithms to reduce its annual energy intake by 25%.", sourceUrl: "https://accenture.com/case-studies" },
+    { text: "By industrializing its AI tools and teams, the company targeted efficiency gains of 5% in its first year.", sourceUrl: "https://accenture.com/insights" },
+    { text: "A leading Asia Pacific beauty product company assessed its responsible AI maturity.", sourceUrl: "https://accenture.com/insights" },
+    { text: "Accenture committed to investing $3 billion in AI and generative AI in FY23.", sourceUrl: "https://accenture.com/news" },
+  ];
+  const attr = reviewQuoteAttribution(quotes, ACN);
+  check("generic 'public' does NOT attribute (Metro de Madrid) → false", attr[0].attributedToTarget === false);
+  check("generic 'company' does NOT attribute (efficiency gains) → false", attr[1].attributedToTarget === false);
+  check("generic 'company' does NOT attribute (beauty product) → false", attr[2].attributedToTarget === false);
+  check("distinctive token 'Accenture' attributes → true", attr[3].attributedToTarget === true);
+
+  // Wholly-generic name still gets tokens via fallback (never zero → never
+  // attributes everything-or-nothing by accident); ticker remains distinctive.
+  const generic = reviewQuoteAttribution(
+    [{ text: "The group holdings company reported results.", sourceUrl: "x" }],
+    { name: "GLOBAL HOLDINGS GROUP", ticker: "GHG" },
+  );
+  check("wholly-generic name: review still returns a verdict", generic.length === 1);
 }
 
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"}`);

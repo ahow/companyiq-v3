@@ -17,17 +17,22 @@ import { db } from "./db.js";
 import { sql } from "drizzle-orm";
 import { getQueue } from "./queue.js";
 
-// A running batch is preserved only when its persisted batch heartbeat and every
-// active job's progress heartbeat are fresh. An unchanged aggregate snapshot is
-// deliberately not part of this decision.
+// A running batch is preserved whenever its persisted batch heartbeat is fresh.
+// The batch heartbeat is touched on every claim/progress/complete/fail, so a
+// fresh value reliably means siblings are still progressing — the correct
+// per-batch liveness signal. Individual `claimed` rows that a restart orphaned
+// are NOT a reason to cancel the whole batch: they are recovered in-place by
+// recoverOrphanedClaims below. (A `stale_active_jobs` count is still computed for
+// logging, but no longer gates preservation — previously it could cancel a live
+// batch merely because some claimed rows had gone idle.)
 const ACTIVITY_WINDOW_SECONDS = parseInt(process.env.RELIABILITY_STALL_THRESHOLD_SECONDS || String(45 * 60), 10);
 
 export async function cleanupOnStartup(): Promise<void> {
   console.log("[Startup] Cleaning up stale jobs from previous server session...");
 
   try {
-    // A live run must have both a fresh batch heartbeat and fresh progress on all
-    // currently active jobs. A single coarse unchanged snapshot cannot stall it.
+    // A live run is identified by a fresh batch heartbeat alone. Orphaned claimed
+    // rows are recovered in-place rather than treated as a cancel trigger.
     const activeBatchResult = await db.execute(sql`
       SELECT b.id,
              COALESCE(b.last_heartbeat_at, MAX(j.last_progress_at), 'epoch') AS last_heartbeat,
@@ -38,7 +43,6 @@ export async function cleanupOnStartup(): Promise<void> {
       WHERE b.status = 'running'
       GROUP BY b.id, b.last_heartbeat_at
       HAVING COALESCE(b.last_heartbeat_at, MAX(j.last_progress_at), 'epoch') > NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds'
-         AND COUNT(*) FILTER (WHERE j.status = 'claimed' AND COALESCE(j.last_progress_at, 'epoch') <= NOW() - INTERVAL '${sql.raw(String(ACTIVITY_WINDOW_SECONDS))} seconds') = 0
       ORDER BY b.id ASC
       LIMIT 1
     `);
@@ -46,14 +50,25 @@ export async function cleanupOnStartup(): Promise<void> {
     if (activeBatchResult.rows.length > 0) {
       const activeBatch = activeBatchResult.rows[0] as any;
       console.log(
-        `[Startup] Preserving live batch ${activeBatch.id} (heartbeat ${activeBatch.last_heartbeat}, ` +
-        `all active job heartbeats within ${ACTIVITY_WINDOW_SECONDS}s) — SKIPPING cleanup`
+        `[Startup] Preserving live batch ${activeBatch.id} (batch heartbeat ${activeBatch.last_heartbeat} within ${ACTIVITY_WINDOW_SECONDS}s, ` +
+        `open_jobs=${activeBatch.open_jobs}, stale_claimed=${activeBatch.stale_active_jobs} to be recovered in-place) — SKIPPING cleanup`
       );
+      // Recover any `claimed` rows in THIS preserved batch that a just-restarted
+      // process orphaned. A busy batch keeps its heartbeat fresh via its siblings,
+      // so the periodic reconciler used to leave such rows claimed-forever; freeing
+      // them here makes recovery immediate on deploy instead of waiting a full
+      // reconcile cycle. See recoverOrphanedClaims for the rolling-replica safety
+      // contract (live-queue guard + fail-safe-on-unknown).
+      try {
+        await recoverOrphanedClaims(Number(activeBatch.id));
+      } catch (e: any) {
+        console.warn(`[Startup] Orphaned-claim recovery error (non-fatal): ${e?.message}`);
+      }
       console.log("[Startup] The worker will resume processing the existing queue on reconnect");
       return;
     }
 
-    // No batch has a fresh batch-and-job heartbeat — safe to quarantine stale state.
+    // No batch has a fresh batch heartbeat — safe to quarantine stale state.
 
     // 1. Mark stale running batches as cancelled, preserving their provenance.
     const staleBatches = await db.execute(sql`
@@ -116,5 +131,91 @@ export async function cleanupOnStartup(): Promise<void> {
   } catch (error: any) {
     console.error(`[Startup] Cleanup error (non-fatal): ${error.message}`);
     // Don't throw — startup cleanup is best-effort
+  }
+}
+
+/**
+ * Read the set of companyIds that currently have a live BullMQ job
+ * (waiting/active/delayed/prioritized/paused). Returns `null` if the queue cannot
+ * be read — the caller MUST treat null as "unknown" and release nothing, so a
+ * transient Redis hiccup can never cause us to yank a job from a live worker.
+ */
+async function liveQueueCompanyIds(): Promise<Set<number> | null> {
+  try {
+    const q = getQueue();
+    const jobs = await q.getJobs(["waiting", "active", "delayed", "prioritized", "paused"]);
+    const ids = new Set<number>();
+    for (const j of jobs) {
+      const cid = (j as any)?.data?.companyId;
+      if (typeof cid === "number") ids.add(cid);
+    }
+    return ids;
+  } catch (e: any) {
+    console.warn(`[Startup] Could not read queue for orphan recovery (fail-safe: releasing nothing): ${e?.message}`);
+    return null;
+  }
+}
+
+/**
+ * Release `claimed` rows in a preserved (still-running) batch back to `pending`
+ * and re-enqueue them, so a worker reclaims them immediately after a restart.
+ *
+ * SAFETY — this runs on EVERY worker replica at boot (WORKER_RUN_CLEANUP=true),
+ * so during a rolling deploy several replicas execute it while siblings are still
+ * processing jobs. Two guards make it safe:
+ *   1. Live-queue guard: a claimed row whose company has ANY live BullMQ entry is
+ *      left untouched — that job is genuinely in-flight on some replica. Only true
+ *      orphans (claimed in DB, absent from the queue) are released.
+ *   2. Won-the-release guard: the UPDATE is `... WHERE status='claimed' RETURNING`,
+ *      so only the replica that actually flips the row re-enqueues it; concurrent
+ *      replicas match 0 rows and never double-enqueue.
+ * If the queue state is unknown (liveQueueCompanyIds -> null) we release nothing.
+ */
+async function recoverOrphanedClaims(batchId: number): Promise<void> {
+  const live = await liveQueueCompanyIds();
+  if (live === null) return; // fail-safe: never release when queue state is unknown
+
+  const claimed = await db.execute(sql`
+    SELECT j.id AS job_id, j.company_id, j.framework_id, j.workspace_id
+    FROM analysis_jobs j
+    WHERE j.batch_id = ${batchId} AND j.status = 'claimed'
+      AND j.id = (SELECT MAX(id) FROM analysis_jobs j2 WHERE j2.company_id = j.company_id)
+  `);
+
+  let released = 0;
+  for (const row of claimed.rows as any[]) {
+    const companyId = Number(row.company_id);
+    if (live.has(companyId)) continue; // a sibling replica is actively working it
+    const jobId = Number(row.job_id);
+
+    const upd = await db.execute(sql`
+      UPDATE analysis_jobs SET status='pending', claimed_at=NULL
+      WHERE id=${jobId} AND status='claimed'
+      RETURNING id
+    `);
+    if (upd.rows.length === 0) continue; // another replica already released it
+
+    try {
+      const q = getQueue();
+      await q.add(
+        `startup-reclaim-${batchId}-${companyId}`,
+        {
+          jobId,
+          companyId,
+          frameworkId: Number(row.framework_id),
+          batchId,
+          workspaceId: Number(row.workspace_id),
+          skipFetch: false,
+        },
+        // Unique BullMQ id so the re-enqueue is never deduped against a stale id.
+        { priority: 2, jobId: `startup-reclaim-${jobId}-${Date.now()}` }
+      );
+    } catch (e: any) {
+      console.warn(`[Startup] Could not re-enqueue reclaimed job ${jobId} (will rely on reconciler): ${e?.message}`);
+    }
+    released++;
+  }
+  if (released > 0) {
+    console.log(`[Startup] Released ${released} orphaned claimed job(s) in preserved batch ${batchId} back to pending + re-enqueued`);
   }
 }

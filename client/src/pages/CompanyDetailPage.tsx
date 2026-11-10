@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { realQuotes } from "../lib/quotes";
 import { useState } from "react";
 import { ArrowLeft, Play, Camera, Upload, ExternalLink, FileText, CheckCircle2, XCircle } from "lucide-react";
 import { isMet } from "@shared/verdict";
@@ -25,7 +26,16 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
 
   if (!data) return <div className="text-center py-8 text-gray-400">Loading...</div>;
 
-  const { company, scores, documents, researchStatus } = data as any;
+  const { company, scores, documents, researchStatus, evidenceFunnel } = data as any;
+
+  // Evidence funnel (§3, display-only): per-stage counts + provenance-health
+  // signal from the API. Flags issuer-domain docs sitting in the third-party
+  // bucket (the 3M signature) so a classification problem is not mistaken for a
+  // genuinely low score. Never affects scoring.
+  const funnel = (evidenceFunnel as any) || null;
+  const provHealth = funnel?.provenanceHealth || null;
+  const showProvenanceWarning = !!provHealth?.warning;
+  const sameDomainThirdPartyCount: number = provHealth?.sameDomainThirdPartyCount ?? 0;
 
   // Issue 5 (part 2): for low-scoring companies (<= 2/36 met), surface the
   // essential-document checklist next to the score so a reviewer can tell
@@ -110,10 +120,72 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
           </div>
         </div>
         <div className="bg-white rounded-lg border p-4">
-          <div className="text-sm text-gray-500">Documents</div>
-          <div className="text-3xl font-bold text-gray-900">{documents?.length || company.documentsFound || 0}</div>
+          <div className="text-sm text-gray-500">Scored evidence</div>
+          <div className="text-3xl font-bold text-gray-900">
+            {funnel ? funnel.scoredEvidence : (documents?.length || company.documentsFound || 0)}
+          </div>
+          {funnel && (
+            <div className="text-xs text-gray-400 mt-0.5">
+              first-party, gate-accepted · {funnel.discovered} discovered
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Evidence funnel (§3, display-only). Replaces the misleading bare
+          "Documents: N" total with every stage from discovery to scored
+          evidence, so the first-party/third-party split (what actually drives
+          the score) is explicit. Additive — same pattern as Research Status. */}
+      {funnel && (
+        <div className="bg-white rounded-lg border p-4">
+          <div className="text-sm font-semibold uppercase text-gray-500 mb-3">Evidence funnel</div>
+          <div className="space-y-0.5">
+            {([
+              { label: "Discovered", value: funnel.discovered, hint: "surfaced by discovery", indent: false, strong: false },
+              { label: "Fetched", value: funnel.fetched, hint: "downloaded + extracted", indent: false, strong: false },
+              { label: "Dead / unreachable", value: funnel.dead, hint: "failed fetch (true dead links)", indent: false, strong: false },
+              { label: "Gate-accepted", value: funnel.gateAccepted, hint: "passed relevance/quality gate", indent: false, strong: false },
+              { label: "— First-party (issuer)", value: funnel.firstParty, hint: "company's own documents → scoring-eligible", indent: true, strong: false },
+              { label: "— Third-party", value: funnel.thirdParty, hint: "Third-party documents are about the company but not authored/filed by it, so they are not counted as the company's own disclosure.", indent: true, strong: false },
+              { label: "Scored evidence", value: funnel.scoredEvidence, hint: "what the score is actually based on (first-party, gate-accepted)", indent: false, strong: true },
+            ] as const).map((row, i) => (
+              <div
+                key={i}
+                title={row.hint}
+                className={`flex items-center justify-between py-1.5 ${
+                  row.strong ? "border-t mt-1 pt-2 font-semibold text-gray-900" : "text-gray-700"
+                }`}
+              >
+                <span className={`text-sm ${row.indent ? "pl-4 text-gray-600" : ""}`}>{row.label}</span>
+                <span className={`text-sm tabular-nums ${row.strong ? "text-gray-900" : "text-gray-800"}`}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+          {/* Rule 4: budget-noted is informational, NOT dead. */}
+          {funnel.budgetNoted > 0 && (
+            <div className="text-xs text-gray-500 mt-2">
+              {funnel.budgetNoted} document{funnel.budgetNoted === 1 ? "" : "s"} fetched OK with an
+              informational budget note (not counted as dead).
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Rule 3: provenance-health warning — first-party is low AND issuer-domain
+          documents are sitting in the third-party bucket (the 3M signature). This
+          flags a classification problem rather than a genuinely low score. */}
+      {showProvenanceWarning && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+          <div className="text-sm font-semibold uppercase text-red-600">Provenance health warning</div>
+          <div className="text-sm text-red-800 mt-1">
+            First-party evidence is low ({funnel.firstParty}), but {sameDomainThirdPartyCount} document
+            {sameDomainThirdPartyCount === 1 ? " on the issuer's own domain is" : "s on the issuer's own domain are"} currently
+            classified <strong>third-party</strong>
+            {provHealth?.issuerDomain ? ` (${provHealth.issuerDomain})` : ""}. The low score may reflect a
+            provenance-classification problem rather than absent disclosure.
+          </div>
+        </div>
+      )}
 
       {/* WP02/A1: Research status banner. Additive, display-only — never claims
           "comprehensive" when there is an unresolved essential gap. */}
@@ -178,18 +250,32 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                   : item.status === "partial"
                   ? "text-amber-700"
                   : "text-red-700";
+              // Rule 5: when an item is "Not found" but same-domain documents are
+              // classified third-party, state the basis — the gap may be
+              // attribution, not absence.
+              const notFoundAttributed =
+                item.status !== "found" &&
+                item.status !== "partial" &&
+                sameDomainThirdPartyCount > 0;
               const label =
                 item.status === "found"
                   ? "Found"
                   : item.status === "partial"
                   ? "Partial"
+                  : notFoundAttributed
+                  ? "Not found*"
                   : "Not found";
+              const detail = notFoundAttributed
+                ? `Not found in first-party evidence (${sameDomainThirdPartyCount} same-domain document${
+                    sameDomainThirdPartyCount === 1 ? "" : "s"
+                  } are currently classified third-party)`
+                : item.detail;
               return (
                 <li key={i} className="flex items-start gap-2 text-sm">
                   <span className={`font-semibold ${color} w-20 shrink-0`}>{label}</span>
                   <span className="text-gray-800">
                     {item.label}
-                    <span className="text-gray-500"> — {item.detail}</span>
+                    <span className="text-gray-500"> — {detail}</span>
                   </span>
                 </li>
               );
@@ -271,12 +357,29 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                                 </p>
                               </div>
                             )}
-                            {/* (v) Evidence quote + (vi) Source (hyperlinked where a URL exists) */}
-                            {m.quotes && m.quotes.length > 0 && (
+                            {/* (v) Evidence quote + (vi) Source (hyperlinked where a URL exists).
+                                Diagnostic trace blobs (diag:// / retrieval-diagnostic / evidence-gate)
+                                are filtered out here so only human-readable verbatim quotes show. */}
+                            {realQuotes(m.quotes).length > 0 && (
                               <div className="ml-6 mt-2 space-y-1">
-                                {m.quotes.map((q: any, idx: number) => (
-                                  <blockquote key={idx} className="text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic">
-                                    "{q.text}"
+                                {realQuotes(m.quotes).map((q: any, idx: number) => (
+                                  <blockquote
+                                    key={idx}
+                                    className={
+                                      q.disqualified
+                                        ? "text-xs text-gray-400 border-l-2 border-red-300 pl-2 italic"
+                                        : "text-xs text-gray-500 border-l-2 border-blue-200 pl-2 italic"
+                                    }
+                                    title={q.disqualified ? q.disqualReason : undefined}
+                                  >
+                                    {q.disqualified && (
+                                      <span className="not-italic font-semibold text-red-600 mr-1">
+                                        ✗ Disqualified —
+                                      </span>
+                                    )}
+                                    <span className={q.disqualified ? "line-through decoration-gray-300" : ""}>
+                                      "{q.text}"
+                                    </span>
                                     {q.source && (
                                       q.sourceUrl ? (
                                         <a
@@ -291,6 +394,11 @@ export default function CompanyDetailPage({ companyId, onBack }: CompanyDetailPa
                                       ) : (
                                         <span className="text-gray-400 ml-1">— {q.source}</span>
                                       )
+                                    )}
+                                    {q.disqualified && q.disqualReason && (
+                                      <div className="not-italic text-[11px] text-red-500 mt-0.5 leading-snug">
+                                        {q.disqualReason}
+                                      </div>
                                     )}
                                   </blockquote>
                                 ))}

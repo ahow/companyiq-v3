@@ -37,7 +37,7 @@ import { applyProvenanceGate, isScoringTimeGateEnabled } from "./provenance-gate
 import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scoring-contract.js";
 import { buildCanonicalRuleTrace, buildCanonicalRule, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
 import { PASSAGE_LEVEL_EQUIVALENCE_CLAUSE } from "./framework-v2/structured-guidance.js";
-import { computeEligibilityFlags, isPositiveVerdict, type EligibilityFlag } from "./eligibility-flags.js";
+import { computeEligibilityFlags, isPositiveVerdict, reviewQuoteAttribution, type EligibilityFlag } from "./eligibility-flags.js";
 // A3 / WP04: end-to-end entity/provenance/temporal eligibility composition guardrail.
 // Attached per measure in SHADOW mode by default (observability only); verdict-
 // mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
@@ -139,7 +139,7 @@ export interface MeasureResult {
   coverage: string | null;
   confidence: string;
   evidenceSummary: string;
-  quotes: Array<{ text: string; source: string; sourceUrl?: string; page?: number }>;
+  quotes: Array<{ text: string; source: string; sourceUrl?: string; page?: number; disqualified?: boolean; disqualReason?: string }>;
   verdict: "Yes" | "No" | "Partial" | "Insufficient evidence" | "Scoring error";
   verdictNuance: string | null;
   displayOrder: number;
@@ -3406,6 +3406,35 @@ export async function analyzeCompanyMeasures(opts: {
           if (triggeredCount > 0) {
             console.log(`[${companyName}] eligibility-flags ${result.measureId}: ${triggeredCount} advisory flag(s) — ${flags.filter((f) => f.triggered).map((f) => f.id).join(", ")} (non-blocking)`);
           }
+
+          // ENTITY-ATTRIBUTION SCORING GATE (highest-precision signal ONLY).
+          // The strengthened `entity-attribution` flag (quotes-only check) fires
+          // when NONE of the target company's identity tokens appear in any
+          // supporting QUOTE — the client/case-study self-attribution pattern
+          // (e.g. an AI consultancy's own thought-leadership report crediting its
+          // CLIENTS' outcomes to itself, the Accenture bug). This is the ONE
+          // eligibility flag allowed to change the verdict: a positive cell whose
+          // supporting quotes describe other entities is downgraded Yes/Partial →
+          // No (score 0). The softer advisory flags (date-window, planned-vs-live,
+          // author-vs-adopter, claim-level-source-link) STAY advisory and never
+          // gate. Kill switch: ENTITY_ATTRIBUTION_GATE=off restores advisory-only.
+          const entityGateOff = (process.env.ENTITY_ATTRIBUTION_GATE || "").trim().toLowerCase() === "off";
+          const entityFlag = flags.find((f) => f.id === "entity-attribution");
+          if (!entityGateOff && entityFlag?.triggered && isPositiveVerdict(result.verdict)) {
+            const prevVerdict = result.verdict;
+            const prevScore = result.score;
+            result.verdict = "No";
+            result.score = 0;
+            const gateNote = `[Entity-attribution gate: downgraded ${prevVerdict}→No — ${entityFlag.reason}]`;
+            result.evidenceSummary = (result.evidenceSummary ? `${result.evidenceSummary} ` : "") + gateNote;
+            result.verdictNuance = (result.verdictNuance ? `${result.verdictNuance} ` : "") + gateNote;
+            // NOTE: the supporting quotes attached to this (now overturned) verdict
+            // are marked disqualified by the path-independent QUOTE–VERDICT
+            // CONSISTENCY REVIEW at the end of runProvenanceGate — which also
+            // covers No verdicts that arrive by other routes (A3 gate, direct-LLM,
+            // reused/cache-hit), not just this gate.
+            console.log(`[${companyName}] ENTITY-ATTRIBUTION DOWNGRADE ${result.measureId}: ${prevVerdict} (score ${prevScore}) → No (0) — supporting quotes do not name the target company (client/case-study self-attribution)`);
+          }
         }
       } catch (err) {
         console.warn(`[${companyName}] eligibility-flags ${result.measureId}: computation skipped (${(err as Error)?.message ?? "error"}) — advisory only, not blocking`);
@@ -3526,6 +3555,50 @@ export async function analyzeCompanyMeasures(opts: {
       } catch (err) {
         console.warn(`[${companyName}] A3 eligibility-decision ${result.measureId}: composition skipped (${(err as Error)?.message ?? "error"}) — shadow only, not blocking`);
       }
+
+      // QUOTE–VERDICT CONSISTENCY REVIEW (path-independent — runs for EVERY
+      // measure). This is the single chokepoint every result flows through:
+      // freshly-scored cells, entity-attribution and A3 downgrades, direct-from-LLM
+      // No verdicts, AND reused (cache-hit) verdicts all return via runProvenanceGate.
+      // For any NON-POSITIVE (No / insufficient) verdict, re-review each supporting
+      // quote and MARK (never delete — audit trail) the ones that do NOT name the
+      // target company as disqualified, with the reason. This keeps the displayed
+      // evidence consistent with the verdict: a No never shows unattributed,
+      // Yes-implying third-party passages (the Accenture bug — e.g. BBVA / Metro de
+      // Madrid client case-study quotes under a red "No") as if they were clean
+      // positive support. Positive verdicts are left untouched (their supporting
+      // quotes stand). Diagnostic sidecars (diag://...) are never user-facing and
+      // are skipped. Never throws.
+      try {
+        if (!isPositiveVerdict(result.verdict) && Array.isArray(result.quotes) && result.quotes.length > 0) {
+          const targetName = company?.name || companyName;
+          const attributions = reviewQuoteAttribution(result.quotes, {
+            name: targetName,
+            ticker: company?.ticker ?? null,
+            aliases: (company as any)?.aliases ?? null,
+            domain: company?.domain ?? null,
+            relatedDomains: company?.relatedDomains ?? null,
+          }, result.evidence_summary);
+          const attrByIndex = new Map(attributions.map((a) => [a.index, a.attributedToTarget]));
+          let disqCount = 0;
+          result.quotes = result.quotes.map((q, i) => {
+            if (String((q as any)?.sourceUrl ?? "").startsWith("diag://")) return q;
+            if (attrByIndex.get(i) === true) return q; // names the target → keep as support/context
+            disqCount++;
+            return {
+              ...q,
+              disqualified: true,
+              disqualReason: `Not attributable to ${targetName} — this passage describes another entity (e.g. a client, case-study subject, group affiliate, vendor or partner), so it does not evidence ${targetName}'s own practice.`,
+            };
+          });
+          if (disqCount > 0) {
+            console.log(`[${companyName}] QUOTE-REVIEW ${result.measureId}: marked ${disqCount} supporting quote(s) disqualified (not attributable to target) on ${result.verdict} verdict`);
+          }
+        }
+      } catch (qerr) {
+        console.warn(`[${companyName}] QUOTE-REVIEW ${result.measureId}: skipped (${(qerr as Error)?.message ?? "error"}) — verdict unchanged`);
+      }
+
       return result;
     }
 
@@ -3949,7 +4022,13 @@ async function scoreSingleMeasurePass(opts: {
       system,
       prompt,
       json: true,
-      maxTokens: 2000,
+      // Raised 2000 -> 6000 (2026-11-06): on evidence-dense companies the scoring
+      // JSON (verdict + rationale + multiple attributed quotes) exceeded 2000 output
+      // tokens, returning finish_reason=length. A truncated/invalid JSON made every
+      // provider in the cascade "fail", burning the full cascade+fallback chain per
+      // measure and eventually hitting the 3000s pipeline timeout with 0 scores.
+      // 6000 gives comfortable headroom for the largest observed rationales.
+      maxTokens: 6000,
       seed,
       logMeta: { measureId: measure.measureId },
     });

@@ -785,3 +785,182 @@ test("genuine third_party (reuters) stays third_party even with tenant declarati
   });
   assert.equal(r.provenance, "third_party");
 });
+
+
+
+// ─── Rule 1a (2026-11): short-ticker / registrable-domain own-domain rescue ──
+// Short-ticker issuers ("3M", "AAC", "ACS") whose distinctive name token is
+// < 5 chars were defeated by the Rule 1b brand rescue's >= 5-char floor and
+// fell through to third_party even for their OWN domains (the 3M 1/37 case).
+
+const THREE_M = {
+  companyName: "3M Company",
+  companyDomain: "3m.com",
+  relatedDomains: [],
+  companyTicker: "MMM",
+  companyAliases: ["3m"],
+};
+
+test("Rule 1a — 3M own registrable domain (exact) is first_party via Rule 1", () => {
+  const r = classifyProvenance({
+    url: "https://www.3m.com/3M/en_US/sustainability-us/",
+    title: "Sustainability",
+    ...THREE_M,
+  });
+  assert.equal(r.provenance, "issuer");
+});
+
+test("Rule 1a(i) — stored domain has sub-domain, doc on bare registrable domain", () => {
+  // companyDomain = "ir.3m.com"; document lives on "3m.com". Rule 1's
+  // host.endsWith("."+d) only matches the other direction, so this needs 1a.
+  const r = classifyProvenance({
+    url: "https://3m.com/3M/en_US/responsibility/report.pdf",
+    title: "Global Impact Report",
+    companyName: "3M Company",
+    companyDomain: "ir.3m.com",
+    relatedDomains: [],
+    companyTicker: "MMM",
+    companyAliases: ["3m"],
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /registrable domain matches/);
+});
+
+test("Rule 1a(ii) — regional TLD variant 3m.co.uk rescued by short name token", () => {
+  // Only 3m.com is known; the UK regional site is a different registrable
+  // domain. The short name token "3m" equals its leading label exactly.
+  const r = classifyProvenance({
+    url: "https://www.3m.co.uk/3M/en_GB/company-uk/sustainability/",
+    title: "Sustainability UK",
+    ...THREE_M,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /short issuer identity token/);
+});
+
+test("Rule 1a(ii) — AAC short identity token rescues own domain", () => {
+  const r = classifyProvenance({
+    url: "https://aac.com/investor/esg-report.pdf",
+    title: "ESG Report",
+    companyName: "AAC Technologies",
+    companyDomain: null,
+    relatedDomains: [],
+    companyTicker: "2018",
+    companyAliases: ["aac"],
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /short issuer identity token/);
+});
+
+test("Rule 1a(ii) NEGATIVE — short token must NOT match a longer leading label", () => {
+  // "3m" must not rescue "3minsights.com" (EXACT leading-label equality only).
+  const r = classifyProvenance({
+    url: "https://www.3minsights.com/articles/3m-company-profile",
+    title: "3M Company profile",
+    ...THREE_M,
+  });
+  assert.equal(r.provenance, "third_party");
+});
+
+test("Rule 1a(i) NEGATIVE — substring registrable domain is NOT a match", () => {
+  // "my3m.com" shares the substring "3m" but is a different registrable
+  // domain and a different leading label ("my3m"), so it stays third_party.
+  const r = classifyProvenance({
+    url: "https://my3m.com/some/third-party/page",
+    title: "Third party page",
+    ...THREE_M,
+  });
+  assert.equal(r.provenance, "third_party");
+});
+
+
+
+// ─── Domain-policy overrides (2026-11, human-in-the-loop) ────────────────────
+
+const NEWMONT_POLICY = {
+  companyName: "Newmont Corporation",
+  companyDomain: "newmont.com",
+  relatedDomains: [],
+  companyTicker: "NEM",
+  companyAliases: ["newmont"],
+};
+
+test("domain-policy (a) primary + identity match on title -> issuer", () => {
+  // annualreports.com is NOT a recognised IR/regulator host, so without a policy
+  // it would default to third_party. With a 'primary' policy AND a title identity
+  // match, it is promoted to issuer.
+  const policies = new Map<string, { decision: "primary" | "third_party"; scope: string }>([
+    ["annualreports.com", { decision: "primary", scope: "issuer_if_identity" }],
+  ]);
+  const r = classifyProvenance({
+    url: "https://www.annualreports.com/HostedData/AnnualReports/PDF/newmont-2024.pdf",
+    title: "Newmont Corporation 2024 Annual Report",
+    domainPolicies: policies,
+    ...NEWMONT_POLICY,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /domain-policy \(primary/);
+});
+
+test("domain-policy (b) primary + NO identity match -> third_party (MUST NOT promote)", () => {
+  // Same approved domain, but the doc is a DIFFERENT company's report with no
+  // Newmont identity signal anywhere (title/url/content). It must stay third_party.
+  const policies = new Map<string, { decision: "primary" | "third_party"; scope: string }>([
+    ["annualreports.com", { decision: "primary", scope: "issuer_if_identity" }],
+  ]);
+  const r = classifyProvenance({
+    url: "https://www.annualreports.com/HostedData/AnnualReports/PDF/acme-widgets-2024.pdf",
+    title: "Acme Widgets Inc 2024 Annual Report",
+    content: "Acme Widgets Inc reported strong growth across all divisions.",
+    domainPolicies: policies,
+    ...NEWMONT_POLICY,
+  });
+  assert.equal(r.provenance, "third_party");
+});
+
+test("domain-policy (c) third_party decision -> third_party (silences domain)", () => {
+  // A domain explicitly marked third_party stays third_party even when an
+  // identity signal is present.
+  const policies = new Map<string, { decision: "primary" | "third_party"; scope: string }>([
+    ["seekingalpha.com", { decision: "third_party", scope: "issuer_if_identity" }],
+  ]);
+  const r = classifyProvenance({
+    url: "https://seekingalpha.com/article/newmont-corporation-deep-dive",
+    title: "Newmont Corporation deep dive",
+    content: "Newmont Corporation Newmont Corporation analysis.",
+    domainPolicies: policies,
+    ...NEWMONT_POLICY,
+  });
+  assert.equal(r.provenance, "third_party");
+  assert.match(r.reason, /domain-policy \(marked third_party\)/);
+});
+
+test("domain-policy (d) empty map -> identical to no-policy behaviour", () => {
+  const sample = {
+    url: "https://www.annualreports.com/HostedData/AnnualReports/PDF/newmont-2024.pdf",
+    title: "Newmont Corporation 2024 Annual Report",
+    ...NEWMONT_POLICY,
+  };
+  const baseline = classifyProvenance(sample);
+  const withEmpty = classifyProvenance({ ...sample, domainPolicies: new Map() });
+  assert.equal(withEmpty.provenance, baseline.provenance);
+  assert.equal(withEmpty.reason, baseline.reason);
+  // And the baseline (no recognised host, no policy) is third_party.
+  assert.equal(baseline.provenance, "third_party");
+});
+
+test("domain-policy does NOT override an earlier issuer rule (own domain)", () => {
+  // A 'third_party' policy on the company's OWN registrable domain must not win,
+  // because Rule 1 classifies issuer before the policy block is consulted.
+  const policies = new Map<string, { decision: "primary" | "third_party"; scope: string }>([
+    ["newmont.com", { decision: "third_party", scope: "issuer_if_identity" }],
+  ]);
+  const r = classifyProvenance({
+    url: "https://www.newmont.com/investors/annual-report.pdf",
+    title: "Newmont Annual Report",
+    domainPolicies: policies,
+    ...NEWMONT_POLICY,
+  });
+  assert.equal(r.provenance, "issuer");
+  assert.match(r.reason, /hostname matches company domain/);
+});

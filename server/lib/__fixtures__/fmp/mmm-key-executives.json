@@ -1,0 +1,122 @@
+[
+  {
+    "title": "Executive Vice President & Chief Human Resources Officer",
+    "name": "Jennifer Cunningham",
+    "pay": null,
+    "currencyPay": "USD",
+    "gender": "female",
+    "yearBorn": null,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Senior Vice President of New Growth Ventures",
+    "name": "Mark Copman",
+    "pay": null,
+    "currencyPay": "USD",
+    "gender": "male",
+    "yearBorn": null,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Chief Executive Officer & Chairman",
+    "name": "William Brown",
+    "pay": 6249915,
+    "currencyPay": "USD",
+    "gender": "male",
+    "yearBorn": 1963,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Executive Vice President, Chief Technology Officer & Environmental Responsibility",
+    "name": "John Banovetz",
+    "pay": null,
+    "currencyPay": "USD",
+    "gender": null,
+    "yearBorn": 1968,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Executive Vice President, Chief Technology Officer & Environmental Responsibility",
+    "name": "Tushar Kshirsagar",
+    "pay": null,
+    "currencyPay": "USD",
+    "gender": null,
+    "yearBorn": null,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Executive Vice President & Chief Information and Digital Officer",
+    "name": "Bobby K. George",
+    "pay": null,
+    "currencyPay": "USD",
+    "gender": "male",
+    "yearBorn": 1973,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Senior Vice President of Investor Relations and Financial Planning & Analysis",
+    "name": "Chinmay Trivedi",
+    "pay": null,
+    "currencyPay": "USD",
+    "gender": "male",
+    "yearBorn": null,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Managing Director of 3M Brazil",
+    "name": "Luigi Faltoni",
+    "pay": null,
+    "currencyPay": "USD",
+    "gender": "male",
+    "yearBorn": null,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Executive Vice President, Chief Legal Affairs Officer & Secretary",
+    "name": "Kevin H. Rhodes",
+    "pay": 2028668,
+    "currencyPay": "USD",
+    "gender": "male",
+    "yearBorn": 1963,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Chief Financial Officer & Executive Vice President",
+    "name": "Anurag Maheshwari",
+    "pay": 2950434,
+    "currencyPay": "USD",
+    "gender": "male",
+    "yearBorn": 1974,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Group President of Safety & Industrial",
+    "name": "Christian T. Goralski Jr.",
+    "pay": 2080109,
+    "currencyPay": "USD",
+    "gender": "male",
+    "yearBorn": 1972,
+    "titleSince": null,
+    "active": true
+  },
+  {
+    "title": "Group President of Transportation & Electronics Business Group",
+    "name": "Wendy A. Bauer",
+    "pay": 1853308,
+    "currencyPay": "USD",
+    "gender": "female",
+    "yearBorn": 1976,
+    "titleSince": null,
+    "active": true
+  }
+]
