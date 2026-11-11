@@ -346,6 +346,13 @@ initializeDatabase().then(async () => {
 
   // Self-heal: recover any completed batches that lost their snapshot
   // (e.g. due to a redeploy/crash during the old setTimeout window).
+  // Run in the BACKGROUND (not awaited): rebuilding a large snapshot for an old
+  // completed batch iterates every company with serial DB reads and can take many
+  // minutes. If awaited here it blocks app.listen() below and takes production
+  // offline for the whole duration (and on every restart until the snapshot is
+  // saved). Fire-and-forget so the HTTP server binds immediately; the snapshot
+  // self-heals concurrently without affecting site availability.
+  void (async () => {
   try {
     const storage = await import("./storage.js");
     const { saveBatchSnapshot } = await import("./worker.js");
@@ -381,6 +388,7 @@ initializeDatabase().then(async () => {
   } catch (e: any) {
     console.warn("[Recovery] Snapshot self-heal failed (non-fatal): " + e.message);
   }
+  })();
 
   // B7: Validate framework regex patterns on startup
   try {
