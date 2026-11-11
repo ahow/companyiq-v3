@@ -94,6 +94,16 @@ const ADOPTER_CUES: RegExp[] = [
 ];
 
 const PRONOUNS_REGEX = /\b(we|our|us|the company|the group|the firm|the bank|the carrier|the insurer|the airline|the utility|the retailer|the manufacturer|this company|this group|both parties|本集团|本公司|我们|我司|双方|本行|本行及子公司)\b/i;
+// First-party cues in CJK (Chinese / Japanese / Korean) filings. JS `\b` word
+// boundaries do NOT work around CJK characters (they are non-\w), so the CJK
+// entries in PRONOUNS_REGEX above never match inside a run of CJK text. This
+// boundary-free pattern captures the common first-party references a company
+// uses about ITSELF in its own regulatory filings — "公司/本公司/集团/本集团/
+// 本行" (zh), "当社/当グループ/弊社/わが社" (ja), "당사/본사/회사" (ko). It is
+// ONLY consulted behind the isTrustedSource() gate (company's own domain or a
+// primary regulator domain), so it recovers first-party evidence without
+// trusting third-party/case-study passages.
+const CJK_FIRST_PARTY_REGEX = /(本公司|本集团|本行|我司|我公司|我集团|公司|该公司|集团|当社|当グループ|当行|弊社|わが社|当グループ|당사|본사|회사|당행)/;
 const CASE_STUDY_NEGATIVES = /\b(for a client|assisted a partner|major retailer case study|customer case study|client case study|vendor to|partnered with)\b/i;
 const REPORTS_REGEX = /\b(Annual Report|Sustainability Report|ESG Report|ESG Fact|10-K|20-F|Integrated Report|Terms & Conditions|Consent Form|Proxy Statement|Notice of Meeting|Policy|Statement|Code of Conduct|Charter|Guidelines)\b/i;
 const COMMITMENT_VERBS = /\b(Establish|Implement|Ensure|Adopt|Maintain|Retain|Monitor|Protect|Secure|Disclose)\b/i;
@@ -145,6 +155,27 @@ function isTrustedSource(url: string | undefined, company: CompanyIdentity): boo
       .map(d => d.toLowerCase().replace(/^www\./, ""));
     for (const t of targets) {
       if (hostname === t || hostname.endsWith("." + t)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+// True only when the URL's host matches the COMPANY'S OWN domain(s) — never a
+// shared aggregator/regulator in PRIMARY_DOMAINS (cninfo, sina, hkexnews, …),
+// which host many different companies' filings. Content a company publishes on
+// its own site/domain is first-party by construction, so this is a high-precision
+// attribution signal independent of the language or phrasing of the passage.
+function isOwnDomainSource(url: string | undefined, company: CompanyIdentity): boolean {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    const targets = [company.domain, ...(company.relatedDomains || [])]
+      .filter(nonEmpty)
+      .map(d => d.toLowerCase().replace(/^www\./, ""));
+    for (const t of targets) {
+      if (t.length >= 4 && (hostname === t || hostname.endsWith("." + t))) return true;
     }
   } catch {
     return false;
@@ -240,10 +271,31 @@ export function reviewQuoteAttribution(
         return { index, attributedToTarget: true };
       }
 
+      // Rule: Company's OWN domain = first-party by construction. A substantive
+      // passage published on the company's own website/domain describes the
+      // company's own practice, regardless of language (handles non-English
+      // filings where the Latin identity tokens never appear in the body) or of
+      // first-party phrasing. Shared regulator/aggregator domains (cninfo, sina,
+      // hkexnews) are explicitly NOT own-domain and fall through to the stricter
+      // trusted-source rules below. Case-study passages are already excluded above.
+      if (isOwnDomainSource(q.sourceUrl, company) && text.trim().length >= 12) {
+        return { index, attributedToTarget: true, reason: "Company Own Domain (First-Party)" };
+      }
+
       // Rule: Trusted Source + First-Party framing
       const trusted = isTrustedSource(q.sourceUrl, company);
       if (trusted) {
         if (PRONOUNS_REGEX.test(text)) return { index, attributedToTarget: true, reason: "Trusted Source + First-Party" };
+        if (CJK_FIRST_PARTY_REGEX.test(text)) return { index, attributedToTarget: true, reason: "Trusted Source + First-Party (CJK)" };
+        // Trusted source whose TITLE names the target (Latin) company = the
+        // company's OWN filing/page (e.g. "<Company> 年度报告 (cninfo official)").
+        // Its substantive CJK passages are first-party even when the passage body
+        // names the company only in Chinese (保利发展控股) — a name absent from the
+        // Latin-only DB record, so it never matches identity tokens directly.
+        const titleNamesTarget = toks.some(t => t.length >= 3 && (q.source || "").toLowerCase().includes(t));
+        if (titleNamesTarget && /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{4,}/.test(text)) {
+          return { index, attributedToTarget: true, reason: "Trusted Source + Title Names Target (CJK body)" };
+        }
         if (REPORTS_REGEX.test(q.source || "")) {
            if (text.split(/\s+/).length > 5 || COMMITMENT_VERBS.test(text)) {
              return { index, attributedToTarget: true, reason: "Trusted Report Title" };
