@@ -1120,8 +1120,12 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       // Framework-scoped score read: only retrieve scores for this framework
       // to prevent cross-framework contamination in the snapshot.
       const scores = await storage.getMeasureScores(company.id, frameworkId);
-      // Get source documents used in analysis
-      const docs = await storage.getFetchedDocuments(company.id);
+      // Get source documents used in analysis.
+      // METADATA-ONLY: the snapshot only needs {url, title}. Using the
+      // content-returning getFetchedDocuments here loaded the full corpus
+      // (~16GB for a large batch) into memory and OOM-crashed the app during
+      // snapshot/finalise/re-examine. getFetchedDocumentsMeta never reads content.
+      const docs = await storage.getFetchedDocumentsMeta(company.id);
       const sourceDocuments = docs.map(d => ({ url: d.url, title: d.title || d.url }));
       // Extract coverage level from discovery diagnostics
       const diagnostics = company.discoveryDiagnostics as any;

@@ -625,6 +625,27 @@ export async function getFetchedDocuments(companyId: number) {
 }
 
 /**
+ * Metadata-only variant of getFetchedDocuments. Returns ONLY {id, url, title}
+ * and never reads the (potentially hundreds-of-MB) document content. Used by the
+ * batch snapshot builder, which only needs url+title per source document. The
+ * content-returning getFetchedDocuments above dragged the full corpus (~16GB for
+ * a large batch) into the app process and OOM-crashed it during snapshot/finalise.
+ */
+export async function getFetchedDocumentsMeta(companyId: number) {
+  const rows = await db.execute(sql`
+    SELECT d.id, d.url, d.title
+    FROM documents d
+    WHERE d.company_id = ${companyId} AND d.fetch_status = 'ok'
+    ORDER BY d.id
+  `);
+  return rows.rows as Array<{
+    id: number;
+    url: string;
+    title: string | null;
+  }>;
+}
+
+/**
  * Total character count of the company's USABLE corpus (all `ok` documents,
  * COALESCE-joined to deduplicated content). This is the decisive signal that
  * lets the auto-reexamination gate distinguish a fetch-coverage artifact (thin
