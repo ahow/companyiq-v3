@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, boolean, timestamp, real, jsonb, uniqueIndex, index, doublePrecision, uuid } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, timestamp, real, jsonb, uniqueIndex, index, doublePrecision, uuid, customType } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
 // ─── Users & Workspaces ─────────────────────────────────────────────────────
@@ -682,6 +682,28 @@ export const analysisResults = pgTable("analysis_results", {
   uniqueRunIdx: uniqueIndex("analysis_results_workspace_run_idx").on(table.workspaceId, table.runKey).where(sql`${table.runKey} IS NOT NULL`),
 }));
 
+// Postgres BYTEA mapped to a Node Buffer (drizzle has no built-in bytea column).
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
+
+// Per-company detail rows for an analysis_results snapshot. Each row holds the
+// gzipped full per-company result object. The parent results_data jsonb column
+// holds only a slim per-company summary. See server/db.ts for the authoritative
+// DDL (migration-on-boot); this definition is kept for schema consistency. The
+// write/read path uses raw SQL via the pool for the BYTEA + gzip handling.
+export const analysisResultCompanies = pgTable("analysis_result_companies", {
+  id: serial("id").primaryKey(),
+  resultId: integer("result_id").references(() => analysisResults.id, { onDelete: "cascade" }).notNull(),
+  companyId: integer("company_id"),
+  seq: integer("seq"),
+  detailGz: bytea("detail_gz").notNull(),
+}, (table) => ({
+  resultIdx: index("idx_arc_result_id").on(table.resultId),
+}));
+
 // ─── Score Anomalies (Expected-Score Outlier Detection) ─────────────────────
 
 export const scoreAnomalies = pgTable("score_anomalies", {
@@ -735,6 +757,8 @@ export type AnalysisJob = typeof analysisJobs.$inferSelect;
 export type TrustedSource = typeof trustedSources.$inferSelect;
 export type WorkspaceSetting = typeof workspaceSettings.$inferSelect;
 export type AnalysisResultSnapshot = typeof analysisResults.$inferSelect;
+export type AnalysisResultCompany = typeof analysisResultCompanies.$inferSelect;
+export type InsertAnalysisResultCompany = typeof analysisResultCompanies.$inferInsert;
 export type ExcludedSource = typeof excludedSources.$inferSelect;
 export type PlatformSource = typeof platformSources.$inferSelect;
 export type ScoreAnomaly = typeof scoreAnomalies.$inferSelect;

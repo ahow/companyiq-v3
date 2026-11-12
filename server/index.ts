@@ -220,13 +220,6 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
     const metaRow = (metaResult.rows as any[])?.[0];
     if (!metaRow) return res.status(404).json({ error: "Result not found" });
 
-    // Fetch results_data as raw text (no JSON parse by pg driver)
-    const dataResult = await db.execute(sql`
-      SELECT ar.results_data::text AS raw_data
-      FROM analysis_results ar WHERE ${whereClause}
-    `);
-    const rawData = (dataResult.rows as any[])?.[0]?.raw_data || "[]";
-
     const meta: any = {
       id: metaRow.id,
       shareToken: metaRow.share_token,
@@ -238,13 +231,40 @@ app.get("/api/results/:idOrToken/share", async (req, res) => {
       createdAt: metaRow.created_at,
       format: "full",
     };
+
+    // Per-company storage: if gzipped detail rows exist for this result, stream
+    // them one company at a time (gunzip each, write it) so we never build one
+    // giant string. Legacy snapshots (no detail rows) stream results_data as raw
+    // text (already a valid JSON array) exactly as before.
+    const detailResult = await db.execute(sql`
+      SELECT arc.detail_gz
+      FROM analysis_result_companies arc WHERE arc.result_id = ${metaRow.id}
+      ORDER BY arc.seq ASC
+    `);
+    const detailRows = (detailResult.rows as any[]) || [];
+
     res.write('{');
     for (const [k, v] of Object.entries(meta)) {
       res.write(JSON.stringify(k) + ':' + JSON.stringify(v) + ',');
     }
-    // Write results_data directly as raw JSON text (already a valid JSON array)
     res.write('"results":');
-    res.write(rawData);
+    if (detailRows.length > 0) {
+      const { gunzipSync } = await import("node:zlib");
+      res.write('[');
+      for (let i = 0; i < detailRows.length; i++) {
+        if (i > 0) res.write(',');
+        res.write(gunzipSync(detailRows[i].detail_gz as Buffer).toString("utf8"));
+      }
+      res.write(']');
+    } else {
+      // Fetch results_data as raw text (no JSON parse by pg driver)
+      const dataResult = await db.execute(sql`
+        SELECT ar.results_data::text AS raw_data
+        FROM analysis_results ar WHERE ${whereClause}
+      `);
+      const rawData = (dataResult.rows as any[])?.[0]?.raw_data || "[]";
+      res.write(rawData);
+    }
     res.write('}');
     return res.end();
   } catch (error: any) {

@@ -757,6 +757,24 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS immutable_snapshot BOOLEAN NOT NULL DEFAULT TRUE`);
     await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS analysis_results_workspace_run_idx ON analysis_results(workspace_id, run_key) WHERE run_key IS NOT NULL`);
 
+    // Per-company detail rows for an analysis_results snapshot. The parent
+    // analysis_results.results_data column holds only a SLIM per-company summary
+    // (the light fields the SQL projections read directly). The heavy full
+    // per-company object (measureScores, publicationRecords, etc.) is gzipped and
+    // stored one row per company here, so a snapshot is NEVER serialised as one
+    // giant jsonb value or one giant JS string. Legacy snapshots (no rows here)
+    // keep the full array in results_data and continue to work unchanged.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS analysis_result_companies (
+        id SERIAL PRIMARY KEY,
+        result_id INTEGER NOT NULL REFERENCES analysis_results(id) ON DELETE CASCADE,
+        company_id INTEGER,
+        seq INTEGER,
+        detail_gz BYTEA NOT NULL
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_arc_result_id ON analysis_result_companies(result_id)`);
+
     // ─── Durable Gate Reports ────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS gate_reports (

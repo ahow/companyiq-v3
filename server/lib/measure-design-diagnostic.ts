@@ -621,10 +621,16 @@ export async function runMeasureDesignDiagnostic(opts: RunDiagnosticOptions): Pr
       .where(inArray(analysisResults.batchId, batchIds));
 
     // Group rows by batch (a batch may have one row holding all companies).
+    // Per-company storage: the full per-company objects (incl. measureScores)
+    // now live as gzipped detail rows, with only a slim summary in results_data.
+    // Rehydrate the full array so extractCells sees measureScores as before.
+    // Legacy snapshots (no detail rows) keep the full array in results_data.
+    const { rehydrateAnalysisResultsData } = await import("../storage.js");
     const cellsPerBatch = new Map<number, StoredCell[]>();
     for (const row of resultRows) {
       if (row.frameworkId !== frameworkId) continue; // scope to this framework
-      const cells = extractCells(row.resultsData);
+      const rehydrated = await rehydrateAnalysisResultsData(row.id);
+      const cells = extractCells(rehydrated ?? row.resultsData);
       const existing = cellsPerBatch.get(row.batchId) || [];
       cellsPerBatch.set(row.batchId, existing.concat(cells));
     }

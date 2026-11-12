@@ -3,6 +3,7 @@ import { eq, and, sql, desc, asc, inArray, isNull } from "drizzle-orm";
 import * as schema from "../shared/schema.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironment, isHeartbeatStalled, type DeploymentFingerprint, type RunKeyInput, type RunLifecycleState } from "./lib/reliability.js";
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 import { registrableDomainOf, classifySuggestedBucket, type SuggestedBucket } from "./lib/provenance.js";
@@ -2939,6 +2940,75 @@ export async function logProcessingError(data: { workspaceId?: number; companyId
 
 // ─── Analysis Results ───────────────────────────────────────────────────────
 
+// Per-company snapshot storage.
+//
+// A large batch snapshot (e.g. 1,700+ companies, each carrying decisionTrace,
+// quotes and evidenceSummary per measure) exceeds BOTH the Postgres jsonb hard
+// limit (~256MB) and V8's max single-string length (~512MB) when stored as one
+// giant results_data jsonb value. To avoid that, we store:
+//   • results_data (jsonb)  -> only a SLIM per-company summary (a few KB each),
+//     exactly the light fields the SQL summary projections read directly.
+//   • analysis_result_companies -> one gzipped row per company holding the FULL
+//     per-company object, so nothing is ever serialised as one giant value/string.
+// Readers rehydrate the full array from the detail rows. Legacy snapshots (no
+// detail rows) keep the full array in results_data and work unchanged.
+
+// Build the slim per-company summary stored in results_data jsonb. MUST include
+// every key the SQL summary projections read via jsonb_array_elements
+// (server/routes/api.ts and server/index.ts). Values are copied verbatim so the
+// projections produce the SAME output as when the full object lived in jsonb.
+function buildSlimCompanySummary(company: any): any {
+  return {
+    companyId: company?.companyId ?? company?.company_id,
+    companyName: company?.companyName,
+    isin: company?.isin,
+    sector: company?.sector,
+    country: company?.country,
+    totalScore: company?.totalScore,
+    measuresMetCount: company?.measuresMetCount,
+    measuresTotalCount: company?.measuresTotalCount,
+    coverageLevel: company?.coverageLevel,
+    corpusValidityWarning: company?.corpusValidityWarning,
+    hasRequiredDataDoc: company?.hasRequiredDataDoc,
+    corpusHash: company?.corpusHash,
+    researchStatus: company?.researchStatus,
+  };
+}
+
+// Delete any existing detail rows for this result and (re)write one gzipped row
+// per company, in batches, within the provided transaction. Never serialises the
+// whole array; each company is gzipped individually.
+async function writeAnalysisResultCompanies(tx: any, resultId: number, companies: any[]): Promise<void> {
+  await tx.execute(sql`DELETE FROM analysis_result_companies WHERE result_id = ${resultId}`);
+  const BATCH = 100;
+  for (let i = 0; i < companies.length; i += BATCH) {
+    const chunk = companies.slice(i, i + BATCH);
+    const tuples = chunk.map((company, j) => {
+      const seq = i + j;
+      const rawId = company?.companyId ?? company?.company_id;
+      const companyId = Number.isFinite(Number(rawId)) ? Number(rawId) : null;
+      const gz = gzipSync(Buffer.from(JSON.stringify(company)));
+      return sql`(${resultId}, ${companyId}, ${seq}, ${gz})`;
+    });
+    await tx.execute(sql`INSERT INTO analysis_result_companies (result_id, company_id, seq, detail_gz) VALUES ${sql.join(tuples, sql`, `)}`);
+  }
+}
+
+// Rehydrate the full per-company results array from the gzipped detail rows,
+// ordered by seq. Returns null when no detail rows exist (legacy snapshot), so
+// callers can fall back to the full array stored in the results_data column.
+export async function rehydrateAnalysisResultsData(resultId: number): Promise<any[] | null> {
+  const res: any = await db.execute(sql`SELECT detail_gz FROM analysis_result_companies WHERE result_id = ${resultId} ORDER BY seq ASC`);
+  const rows = (res?.rows ?? res) as any[];
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const out: any[] = [];
+  for (const row of rows) {
+    const buf = row.detail_gz as Buffer;
+    out.push(JSON.parse(gunzipSync(buf).toString("utf8")));
+  }
+  return out;
+}
+
 export async function getAnalysisResultByRunKey(runKey: string, workspaceId: number) {
   const [row] = await db.select().from(schema.analysisResults)
     .where(and(eq(schema.analysisResults.workspaceId, workspaceId), eq(schema.analysisResults.runKey, runKey)))
@@ -2973,6 +3043,14 @@ export async function saveAnalysisResults(data: {
     return null;
   }
 
+  // Per-company snapshot storage: store only a SLIM per-company summary in the
+  // results_data jsonb column, and the FULL per-company objects as individually
+  // gzipped rows in analysis_result_companies. Nothing is ever serialised as one
+  // giant jsonb value or one giant JS string. `fullCompanies` is the full array
+  // passed in; `slimSummary` is what goes into results_data.
+  const fullCompanies: any[] = Array.isArray(data.resultsData) ? data.resultsData : [];
+  const slimSummary = fullCompanies.map(buildSlimCompanySummary);
+
   if (data.runKey) {
     const existing = await getAnalysisResultByRunKey(data.runKey, data.workspaceId);
     if (existing) {
@@ -2998,58 +3076,81 @@ export async function saveAnalysisResults(data: {
           return existing;
         }
         console.log(`[saveAnalysisResults] Updating stale snapshot: existing batch=${existing.batchId} companies=${existing.companiesCount} -> new batch=${data.batchId} companies=${data.companiesCount}`);
-        const [updated] = await db.update(schema.analysisResults).set({
-          batchId: data.batchId,
-          runId: data.runId ?? null,
-          frameworkId: data.frameworkId,
-          frameworkName: data.frameworkName,
-          listName: data.listName ?? null,
-          resultsData: data.resultsData,
-          companiesCount: data.companiesCount,
-          averageScore: data.averageScore ?? null,
-          deploymentFingerprint: data.deploymentFingerprint ?? null,
-          acceptanceState: data.acceptanceState ?? "pending",
-          acceptedAt: data.acceptedAt ?? null,
-          rejectionReason: data.rejectionReason ?? null,
-        }).where(eq(schema.analysisResults.id, existing.id)).returning();
-        return updated || null;
+        // Atomic: update the parent row (slim summary) + rewrite the per-company
+        // detail rows (DELETE existing, then re-insert) in one transaction.
+        const updated = await db.transaction(async (tx) => {
+          const [row] = await tx.update(schema.analysisResults).set({
+            batchId: data.batchId,
+            runId: data.runId ?? null,
+            frameworkId: data.frameworkId,
+            frameworkName: data.frameworkName,
+            listName: data.listName ?? null,
+            resultsData: slimSummary,
+            companiesCount: data.companiesCount,
+            averageScore: data.averageScore ?? null,
+            deploymentFingerprint: data.deploymentFingerprint ?? null,
+            acceptanceState: data.acceptanceState ?? "pending",
+            acceptedAt: data.acceptedAt ?? null,
+            rejectionReason: data.rejectionReason ?? null,
+          }).where(eq(schema.analysisResults.id, existing.id)).returning();
+          if (row) await writeAnalysisResultCompanies(tx, row.id, fullCompanies);
+          return row;
+        });
+        if (!updated) return null;
+        // Return the full array to callers (return shape identical to before).
+        (updated as any).resultsData = data.resultsData;
+        return updated;
       }
       // Same batch, same or more companies, not accepted — true idempotent
       return existing;
     }
   }
   try {
-    const [result] = await db.insert(schema.analysisResults).values({
-      ...data,
-      runId: data.runId ?? null,
-      runKey: data.runKey ?? null,
-      deploymentFingerprint: data.deploymentFingerprint ?? null,
-      acceptanceState: data.acceptanceState ?? "pending",
-      acceptedAt: data.acceptedAt ?? null,
-      rejectionReason: data.rejectionReason ?? null,
-      immutableSnapshot: true,
-    }).returning();
+    // Atomic: insert the parent row (slim summary) + the per-company detail rows
+    // in one transaction.
+    const result = await db.transaction(async (tx) => {
+      const [row] = await tx.insert(schema.analysisResults).values({
+        ...data,
+        resultsData: slimSummary,
+        runId: data.runId ?? null,
+        runKey: data.runKey ?? null,
+        deploymentFingerprint: data.deploymentFingerprint ?? null,
+        acceptanceState: data.acceptanceState ?? "pending",
+        acceptedAt: data.acceptedAt ?? null,
+        rejectionReason: data.rejectionReason ?? null,
+        immutableSnapshot: true,
+      }).returning();
+      if (row) await writeAnalysisResultCompanies(tx, row.id, fullCompanies);
+      return row;
+    });
+    if (result) (result as any).resultsData = data.resultsData;
     return result;
   } catch (error: any) {
     if (error?.code !== "23505" || !data.runKey) throw error;
     // Race condition: another process inserted first — retry the upsert logic
     const raced = await getAnalysisResultByRunKey(data.runKey, data.workspaceId);
     if (raced && raced.batchId !== data.batchId && raced.acceptanceState !== "accepted") {
-      const [updated] = await db.update(schema.analysisResults).set({
-        batchId: data.batchId,
-        runId: data.runId ?? null,
-        frameworkId: data.frameworkId,
-        frameworkName: data.frameworkName,
-        listName: data.listName ?? null,
-        resultsData: data.resultsData,
-        companiesCount: data.companiesCount,
-        averageScore: data.averageScore ?? null,
-        deploymentFingerprint: data.deploymentFingerprint ?? null,
-        acceptanceState: data.acceptanceState ?? "pending",
-        acceptedAt: data.acceptedAt ?? null,
-        rejectionReason: data.rejectionReason ?? null,
-      }).where(eq(schema.analysisResults.id, raced.id)).returning();
-      return updated || null;
+      const updated = await db.transaction(async (tx) => {
+        const [row] = await tx.update(schema.analysisResults).set({
+          batchId: data.batchId,
+          runId: data.runId ?? null,
+          frameworkId: data.frameworkId,
+          frameworkName: data.frameworkName,
+          listName: data.listName ?? null,
+          resultsData: slimSummary,
+          companiesCount: data.companiesCount,
+          averageScore: data.averageScore ?? null,
+          deploymentFingerprint: data.deploymentFingerprint ?? null,
+          acceptanceState: data.acceptanceState ?? "pending",
+          acceptedAt: data.acceptedAt ?? null,
+          rejectionReason: data.rejectionReason ?? null,
+        }).where(eq(schema.analysisResults.id, raced.id)).returning();
+        if (row) await writeAnalysisResultCompanies(tx, row.id, fullCompanies);
+        return row;
+      });
+      if (!updated) return null;
+      (updated as any).resultsData = data.resultsData;
+      return updated;
     }
     return raced;
   }
@@ -3087,7 +3188,13 @@ export async function getAnalysisResultById(id: number, workspaceId: number) {
     .select()
     .from(schema.analysisResults)
     .where(and(eq(schema.analysisResults.id, id), eq(schema.analysisResults.workspaceId, workspaceId)));
-  return row || null;
+  if (!row) return null;
+  // Per-company storage: rehydrate the full results array from the gzipped detail
+  // rows so callers see the SAME full resultsData they always did. Legacy
+  // snapshots (no detail rows) keep the full array already in results_data.
+  const rehydrated = await rehydrateAnalysisResultsData(row.id);
+  if (rehydrated) (row as any).resultsData = rehydrated;
+  return row;
 }
 
 export async function deleteAnalysisResult(id: number, workspaceId: number) {

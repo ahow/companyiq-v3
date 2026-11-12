@@ -1825,7 +1825,6 @@ apiRouter.get("/results/:id/share", async (req: Request, res: Response) => {
     // ~100MB copy. Compression middleware gzips this on the wire (~100MB -> a few MB).
     const [result] = await db.execute(sql`SELECT * FROM analysis_results WHERE id = ${id}`).then((x: any) => x.rows) as any[];
     if (!result) return res.status(404).json({ error: "Result not found" });
-    const rows: any[] = Array.isArray(result.results_data) ? result.results_data : [];
     const meta = {
       id: result.id,
       frameworkName: result.framework_name,
@@ -1835,14 +1834,28 @@ apiRouter.get("/results/:id/share", async (req: Request, res: Response) => {
       createdAt: result.created_at,
       format: "full",
     };
+    // Per-company storage: if gzipped detail rows exist, stream them one company
+    // at a time (gunzip each row, write it) so we never build one giant string.
+    // Legacy snapshots (no detail rows) stream from the results_data column array.
+    const { gunzipSync } = await import("node:zlib");
+    const detail = await db.execute(sql`SELECT detail_gz FROM analysis_result_companies WHERE result_id = ${id} ORDER BY seq ASC`).then((x: any) => x.rows) as any[];
     res.write('{');
     for (const [k, v] of Object.entries(meta)) {
       res.write(JSON.stringify(k) + ':' + JSON.stringify(v) + ',');
     }
     res.write('"results":[');
-    for (let i = 0; i < rows.length; i++) {
-      if (i > 0) res.write(',');
-      res.write(JSON.stringify(rows[i]));
+    if (Array.isArray(detail) && detail.length > 0) {
+      for (let i = 0; i < detail.length; i++) {
+        if (i > 0) res.write(',');
+        // detail_gz is a gzipped JSON string of one company object — write it verbatim.
+        res.write(gunzipSync(detail[i].detail_gz as Buffer).toString("utf8"));
+      }
+    } else {
+      const rows: any[] = Array.isArray(result.results_data) ? result.results_data : [];
+      for (let i = 0; i < rows.length; i++) {
+        if (i > 0) res.write(',');
+        res.write(JSON.stringify(rows[i]));
+      }
     }
     res.write(']}');
     return res.end();
