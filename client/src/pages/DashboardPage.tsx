@@ -973,6 +973,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                       <th className="p-1.5 text-left text-red-800">Country</th>
                       <th className="p-1.5 text-right text-red-800">Fetched / Discovered</th>
                       <th className="p-1.5 text-right text-red-800" title="Fraction of discovered documents that were actually downloaded (fetched ÷ discovered).">Fetch ratio</th>
+                      <th className="p-1.5 text-right text-red-800" title="Company's overall framework score (same figure shown in Results).">Score</th>
                       <th className="p-1.5 text-left text-red-800">Flags</th>
                       <th className="p-1.5 text-center text-red-800">Actions</th>
                     </tr>
@@ -999,6 +1000,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                         <td className="p-1.5 text-gray-600">{r.country || "—"}</td>
                         <td className="p-1.5 text-right text-gray-700">{r.documentsFetched} / {r.documentsDiscovered}</td>
                         <td className="p-1.5 text-right font-bold text-red-700">{Math.round((r.fetchRatio ?? 0) * 100)}%</td>
+                        <td className={`p-1.5 text-right font-medium ${getScoreColor(r.score ?? null)}`}>{r.score != null ? `${Math.round(r.score)}%` : "—"}</td>
                         <td className="p-1.5 text-gray-500">
                           <DiscoveryFlagCell budgetExceeded={r.budgetExceeded} lowEvidence={r.lowEvidence} />
                         </td>
@@ -1092,6 +1094,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                       <th className="p-1.5 text-left text-amber-800">Country</th>
                       <th className="p-1.5 text-right text-amber-800">Fetched / Discovered</th>
                       <th className="p-1.5 text-right text-amber-800" title="Fraction of discovered documents that were actually downloaded (fetched ÷ discovered).">Fetch ratio</th>
+                      <th className="p-1.5 text-right text-amber-800" title="Company's overall framework score (same figure shown in Results).">Score</th>
                       <th className="p-1.5 text-left text-amber-800">Flags</th>
                       <th className="p-1.5 text-center text-amber-800">Actions</th>
                     </tr>
@@ -1118,6 +1121,7 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                         <td className="p-1.5 text-gray-600">{r.country || "—"}</td>
                         <td className="p-1.5 text-right text-gray-700">{r.documentsFetched} / {r.documentsDiscovered}</td>
                         <td className="p-1.5 text-right font-bold text-amber-700">{Math.round((r.fetchRatio ?? 0) * 100)}%</td>
+                        <td className={`p-1.5 text-right font-medium ${getScoreColor(r.score ?? null)}`}>{r.score != null ? `${Math.round(r.score)}%` : "—"}</td>
                         <td className="p-1.5 text-gray-500">
                           <DiscoveryFlagCell budgetExceeded={r.budgetExceeded} lowEvidence={r.lowEvidence} critical={r.critical} />
                         </td>

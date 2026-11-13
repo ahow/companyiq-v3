@@ -2506,6 +2506,7 @@ type DiscoveryRow = {
   budgetExceeded: boolean;
   lowEvidence: boolean;
   critical: boolean;
+  score: number | null;
 };
 
 apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) => {
@@ -2554,6 +2555,9 @@ apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) 
         critical:
           fetchRatio < CRITICAL_DISCOVERY_RATIO ||
           documentsFetched < CRITICAL_DISCOVERY_MIN_FETCHED,
+        // Company score (same totalScore shown across the dashboard/Results/CSV),
+        // so the diagnostics tables stay consistent with the rest of the UI.
+        score: typeof (c as any).totalScore === "number" ? (c as any).totalScore : null,
       };
       if (documentsDiscovered < CRITICAL_DISCOVERY_MIN_DOCS) {
         discoveryTooLow.push(row);
