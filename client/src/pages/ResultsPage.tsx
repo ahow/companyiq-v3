@@ -1,12 +1,11 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { realQuotes } from "../lib/quotes";
 import { Download, Share2, Trash2, X, CheckSquare } from "lucide-react";
-import { normalizeVerdict, isMet } from "@shared/verdict";
-// WP02/A1 (additive): shared research-status columns so CSV shows the SAME
-// status as the API/UI/export (CV07). Pure formatting — no score/verdict effect.
-import { researchStatusCsvColumns } from "@shared/research-state";
+// NOTE: CSV column/scoring logic now lives server-side in the streaming endpoint
+// GET /api/results/:id/csv (see server/routes/api.ts). The in-browser CSV builder
+// — which imported realQuotes / normalizeVerdict / isMet / researchStatusCsvColumns
+// — was removed because it failed for large snapshots (V8 "Invalid string length").
 
 export default function ResultsPage() {
   const queryClient = useQueryClient();
@@ -90,219 +89,25 @@ export default function ResultsPage() {
     }
   };
 
-  const handleExportCSV = async (result: any) => {
-    // The list endpoint returns metadata only; fetch the full snapshot on demand.
-    let rows = result.resultsData || [];
-    if (rows.length === 0) {
-      try {
-        const full = await api.getResultById(result.id);
-        rows = full?.resultsData || [];
-      } catch (e) {
-        alert("Could not load full results for export. Please try again.");
-        return;
-      }
-    }
-    if (rows.length === 0) return;
-
-    // Issue 5 (part 3): when the opt-in toggle is ON, exclude companies whose
-    // research is explicitly NOT comprehensive so their scores are not ranked
-    // alongside fully-researched ones. Default OFF keeps every row (flagged via
-    // the research-status columns). Rows without a research status (legacy
-    // snapshots) are always kept — we never drop a row we cannot classify.
-    if (excludeNonComprehensive) {
-      rows = rows.filter((r: any) => r.researchStatus?.comprehensive !== false);
-      if (rows.length === 0) {
-        alert("Every company in this result is flagged as non-comprehensive, so there is nothing to export with the current filter. Untick \u201CExclude non-comprehensive\u201D to export all rows.");
-        return;
-      }
-    }
-
-    // Get all unique measure titles from the first row that has measureScores
-    const measureTitles: string[] = [];
-    for (const row of rows) {
-      if (row.measureScores && Array.isArray(row.measureScores) && row.measureScores.length > 0) {
-        row.measureScores.forEach((ms: any) => {
-          if (ms.title && !measureTitles.includes(ms.title)) {
-            measureTitles.push(ms.title);
-          }
-        });
-        break;
-      }
-    }
-
-    // Build headers: company info + 6 columns per measure + source documents
-    const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total", "Coverage Level", "Missing Tier 1 Sources"];
-    const measureHeaders: string[] = [];
-    for (const title of measureTitles) {
-      measureHeaders.push(`${title} - Score`);
-      measureHeaders.push(`${title} - Rationale`);
-      measureHeaders.push(`${title} - Supporting Quote`);
-      measureHeaders.push(`${title} - Source Document`);
-      measureHeaders.push(`${title} - Source Link`);
-      measureHeaders.push(`${title} - Confidence`);
-      // WS-B (P1) per-decision traceability: additive columns appended AFTER the
-      // existing six so no existing column position/order changes. Sourced from the
-      // decisionTrace record persisted per measure score (topic-agnostic).
-      measureHeaders.push(`${title} - Rule ID`);
-      measureHeaders.push(`${title} - Rule Version`);
-      measureHeaders.push(`${title} - Rule Provenance`);
-      measureHeaders.push(`${title} - Rule Source Field`);
-      measureHeaders.push(`${title} - Framework Hash`);
-      measureHeaders.push(`${title} - Fallback Reason`);
-      measureHeaders.push(`${title} - Validation Status`);
-      measureHeaders.push(`${title} - Trace Diagnostics`);
-    }
-    // WP02/A1 (additive): research-status columns appended at the very END (after
-    // Source Documents) so no existing column position/order changes. Stable
-    // headers come from researchStatusCsvColumns(null).
-    const researchHeaders = researchStatusCsvColumns(null).map((c) => c.header);
-    const headers = [...baseHeaders, ...measureHeaders, "Source Documents", ...researchHeaders];
-
-    // Build rows
-    const csvRows = rows.map((row: any) => {
-      // BINARY SCORING: recompute Total Score (%) and Measures Met from the
-      // per-measure snapshot so a former "Partial" (0.5) counts exactly as a No
-      // (0) — never as met and never contributing to the score. Denominator is
-      // the ASSESSED (non-backfilled) measures, matching how the snapshot's own
-      // aggregates were built; we only remove the partial-credit contribution.
-      const assessedMeasures = (row.measureScores || []).filter((m: any) => !m.backfilled);
-      const metMeasures = assessedMeasures.filter((m: any) => isMet(m.verdict, m.score));
-      const binaryTotalScore =
-        assessedMeasures.length > 0
-          ? Math.round((metMeasures.length / assessedMeasures.length) * 100)
-          : (row.totalScore ?? 0);
-      const binaryMeasuresMet =
-        assessedMeasures.length > 0 ? metMeasures.length : (row.measuresMetCount ?? "");
-
-      const baseValues = [
-        row.companyName || "",
-        row.isin || "",
-        row.sector || "",
-        row.country || "",
-        binaryTotalScore,
-        binaryMeasuresMet,
-        row.measuresTotalCount ?? "",
-        row.coverageLevel || "unknown",
-        (row.missingTier1 || []).join("; "),
-      ];
-
-      // Build a lookup from document title -> URL using sourceDocuments
-      const titleToUrl: Record<string, string> = {};
-      for (const doc of (row.sourceDocuments || [])) {
-        if (doc.title && doc.url) {
-          titleToUrl[doc.title.toLowerCase()] = doc.url;
-        }
-        // Also map URL as key to itself (in case source is already a URL)
-        if (doc.url) {
-          titleToUrl[doc.url.toLowerCase()] = doc.url;
-        }
-      }
-
-      // Map each measure title to 6 fields
-      const measureValues: string[] = [];
-      for (const title of measureTitles) {
-        const ms = (row.measureScores || []).find((m: any) => m.title === title);
-        if (ms) {
-          // (i) Score: BINARY verdict (Yes/No only — a former "Partial" collapses
-          // to "No"). "not_assessed"/abstain sentinels pass through unchanged.
-          measureValues.push(normalizeVerdict(ms.verdict || (ms.score > 0 ? "Yes" : "No")));
-
-          // (ii) Rationale: evidenceSummary
-          measureValues.push(ms.evidenceSummary || "");
-
-          // (iii) Supporting Quote: verbatim quotes (only for MET measures — a
-          // former Partial no longer surfaces quotes since it now scores No).
-          const quotes = realQuotes(ms.quotes).map((q: any) => q.text).filter(Boolean);
-          if (isMet(ms.verdict, ms.score)) {
-            measureValues.push(quotes.join(" | "));
-          } else {
-            measureValues.push("");
-          }
-
-          // (iv) Source Document name(s) and (v) Source Link(s)
-          // Quote sources are document titles; map them to URLs
-          const sourceNames: string[] = [];
-          const sourceLinks: string[] = [];
-          const seenSources = new Set<string>();
-
-          for (const q of realQuotes(ms.quotes)) {
-            if (!q.source) continue;
-            const srcKey = q.source.toLowerCase();
-            if (seenSources.has(srcKey)) continue;
-            seenSources.add(srcKey);
-
-            sourceNames.push(q.source);
-            // Look up URL from title
-            const url = titleToUrl[srcKey] || "";
-            if (url) {
-              sourceLinks.push(url);
-            } else {
-              // Try partial match
-              const matchedKey = Object.keys(titleToUrl).find(k => k.includes(srcKey) || srcKey.includes(k));
-              sourceLinks.push(matchedKey ? titleToUrl[matchedKey] : "");
-            }
-          }
-
-          measureValues.push(sourceNames.join(" ; "));
-          measureValues.push(sourceLinks.join(" ; "));
-
-          // (vi) Confidence level
-          measureValues.push(ms.confidence || "Low");
-
-          // WS-B (P1) per-decision traceability (additive; appended after the six
-          // existing columns). Fail-loud: an un-attributable decision surfaces its
-          // diagnostics here rather than being silently blank.
-          const dt = ms.decisionTrace || null;
-          const cr = dt?.canonicalRule || null;
-          measureValues.push(cr?.ruleId ?? "");
-          measureValues.push(cr?.ruleVersion != null ? String(cr.ruleVersion) : "");
-          measureValues.push(cr?.provenance ?? "");
-          measureValues.push(cr?.sourceField ?? "");
-          measureValues.push(dt?.frameworkHash ?? "");
-          measureValues.push(dt?.fallbackActivated ? (dt?.fallbackReason ?? "") : "");
-          measureValues.push(dt?.validation?.status ?? "");
-          measureValues.push((dt?.diagnostics || []).join(" | "));
-        } else {
-          measureValues.push("", "", "", "", "", "");
-          // WS-B trace columns (8) kept aligned for measures absent on this row.
-          measureValues.push("", "", "", "", "", "", "", "");
-        }
-      }
-
-      // Source documents used for this company (all docs)
-      const sourceDocs = (row.sourceDocuments || [])
-        .map((d: any) => `${d.title || ""} [${d.url || ""}]`)
-        .filter(Boolean)
-        .join(" ; ");
-
-      // WP02/A1 (additive): research-status values appended at the END, aligned
-      // with researchHeaders. row.researchStatus is undefined for legacy snapshots
-      // (columns render blank), never throwing.
-      const researchValues = researchStatusCsvColumns(row.researchStatus).map((c) => c.value);
-
-      return [...baseValues, ...measureValues, sourceDocs, ...researchValues];
-    });
-
-    // Escape and format CSV
-    const escapeCSV = (val: any) => {
-      const str = String(val ?? "");
-      return str.includes(",") || str.includes('"') || str.includes("\n")
-        ? `"${str.replace(/"/g, '""')}"`
-        : str;
-    };
-
-    const csv = [
-      headers.map(escapeCSV).join(","),
-      ...csvRows.map((row: any[]) => row.map(escapeCSV).join(",")),
-    ].join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
+  const handleExportCSV = (result: any) => {
+    // CSV is now built and STREAMED by the server at GET /api/results/:id/csv.
+    // The old path fetched the entire snapshot as one JSON and assembled the CSV
+    // in the browser; for large snapshots (>~850 companies) that single giant
+    // string exceeded V8's max string length and failed with HTTP 500 "Invalid
+    // string length". The server streams one row at a time, so the download now
+    // works for snapshots of ANY size. Auth is the same-origin httpOnly session
+    // cookie, sent automatically with a plain navigation/anchor download; the
+    // server's Content-Disposition sets the filename, and the
+    // `excludeNonComprehensive` filter is applied server-side via the query param.
+    const params = excludeNonComprehensive ? "?excludeNonComprehensive=1" : "";
+    const href = `/api/results/${result.id}/csv${params}`;
     const a = document.createElement("a");
-    a.href = url;
+    a.href = href;
+    // download is advisory; the server's Content-Disposition is authoritative.
     a.download = `${result.frameworkName}-${formatDate(result.createdAt)}.csv`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
   };
 
   const handleShare = async (result: any) => {

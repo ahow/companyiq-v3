@@ -28,7 +28,7 @@ import { runMeasureDesignDiagnostic } from "../lib/measure-design-diagnostic.js"
 import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.js";
 // WP02/A1 (additive): explicit research-state accounting. Pure derivation —
 // never affects scores/verdicts; attached to responses as metadata only.
-import { buildManifest, deriveResearchStatus } from "../../shared/research-state.js";
+import { buildManifest, deriveResearchStatus, researchStatusCsvColumns } from "../../shared/research-state.js";
 import { buildEvidenceFunnel } from "../lib/evidence-funnel.js";
 import { runCompletenessValidator } from "../lib/framework-completeness.js";
 export const apiRouter = Router();
@@ -1650,6 +1650,213 @@ apiRouter.get("/results/:id/cost", async (req: Request, res: Response) => {
       costComplete: unpricedModels.length === 0,
     });
   } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Streaming CSV export for a saved result. Defined BEFORE "/results/:id" so the
+// literal sub-path takes precedence (same pattern as "/results/:id/cost" and
+// "/results/:id/share"). This replaces the old client-side path that fetched the
+// entire snapshot as one JSON and built the CSV in the browser: for large
+// snapshots (>~850 companies) JSON.stringify over all rows exceeded V8's ~512MB
+// max string length and the JSON endpoint returned HTTP 500 "Invalid string
+// length". Here the CSV is written row-by-row with res.write(...) so the full CSV
+// text is NEVER assembled as one string in memory (neither on the server nor in
+// the browser). The COLUMN LOGIC is a byte-for-byte port of the client's old
+// handleExportCSV so the output is structurally identical to what small snapshots
+// produced before.
+apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id." });
+    const row = await storage.getAnalysisResultById(id, workspaceId);
+    if (!row) return res.status(404).json({ error: "Result not found." });
+
+    // Replicate the client filter: when excludeNonComprehensive is on, drop rows
+    // whose research is explicitly NOT comprehensive; ALWAYS keep rows with no
+    // research status (legacy snapshots — never drop a row we cannot classify).
+    const exclParam = String((req.query.excludeNonComprehensive ?? "")).toLowerCase();
+    const excludeNonComprehensive = exclParam === "1" || exclParam === "true";
+
+    let rows: any[] = Array.isArray((row as any).resultsData) ? (row as any).resultsData : [];
+    if (excludeNonComprehensive) {
+      rows = rows.filter((r: any) => r.researchStatus?.comprehensive !== false);
+    }
+
+    // ── CSV escaping: identical to the client's escapeCSV ────────────────────
+    const escapeCSV = (val: any) => {
+      const str = String(val ?? "");
+      return str.includes(",") || str.includes('"') || str.includes("\n")
+        ? `"${str.replace(/"/g, '""')}"`
+        : str;
+    };
+
+    // ── realQuotes: port of client/src/lib/quotes.ts (filter diagnostic blobs) ─
+    const DIAG_SOURCE_URL_PREFIX = "diag://";
+    const DIAG_SOURCES = new Set(["retrieval-diagnostic", "evidence-gate"]);
+    const isRealQuote = (q: any): boolean => {
+      if (!q) return false;
+      const url = (q.sourceUrl || "").trim();
+      if (url.toLowerCase().startsWith(DIAG_SOURCE_URL_PREFIX)) return false;
+      const src = (q.source || "").trim().toLowerCase();
+      if (DIAG_SOURCES.has(src)) return false;
+      const text = (q.text || "").trim();
+      if (!text) return false;
+      if (text.startsWith('{"v":') || text.startsWith('{"topChunks"') || text.startsWith('{"quotesTotal"')) return false;
+      return true;
+    };
+    const realQuotes = (quotes: any[] | null | undefined): any[] => (quotes || []).filter(isRealQuote);
+
+    // Filename: match the client format `${frameworkName}-${formatDate(createdAt)}.csv`
+    // where formatDate uses en-GB "DD Mon YYYY".
+    const formatDate = (d: Date) =>
+      new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    const frameworkName = (row as any).frameworkName || "results";
+    const filename = `${frameworkName}-${formatDate((row as any).createdAt)}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename.replace(/"/g, "'")}"`);
+
+    // Derive measure titles from the first row that has measureScores (same as
+    // the client).
+    const measureTitles: string[] = [];
+    for (const r of rows) {
+      if (r.measureScores && Array.isArray(r.measureScores) && r.measureScores.length > 0) {
+        r.measureScores.forEach((ms: any) => {
+          if (ms.title && !measureTitles.includes(ms.title)) measureTitles.push(ms.title);
+        });
+        break;
+      }
+    }
+
+    // ── Header row (identical column set/order to the client) ────────────────
+    const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total", "Coverage Level", "Missing Tier 1 Sources"];
+    const measureHeaders: string[] = [];
+    for (const title of measureTitles) {
+      measureHeaders.push(`${title} - Score`);
+      measureHeaders.push(`${title} - Rationale`);
+      measureHeaders.push(`${title} - Supporting Quote`);
+      measureHeaders.push(`${title} - Source Document`);
+      measureHeaders.push(`${title} - Source Link`);
+      measureHeaders.push(`${title} - Confidence`);
+      measureHeaders.push(`${title} - Rule ID`);
+      measureHeaders.push(`${title} - Rule Version`);
+      measureHeaders.push(`${title} - Rule Provenance`);
+      measureHeaders.push(`${title} - Rule Source Field`);
+      measureHeaders.push(`${title} - Framework Hash`);
+      measureHeaders.push(`${title} - Fallback Reason`);
+      measureHeaders.push(`${title} - Validation Status`);
+      measureHeaders.push(`${title} - Trace Diagnostics`);
+    }
+    const researchHeaders = researchStatusCsvColumns(null).map((c) => c.header);
+    const headers = [...baseHeaders, ...measureHeaders, "Source Documents", ...researchHeaders];
+
+    // Write the header line first, then one row at a time. Rows are joined with a
+    // leading "\n" separator (never a trailing one) so the byte output is
+    // identical to the client's old `[header, ...rows].join("\n")`. The full CSV
+    // string is never assembled in memory.
+    res.write(headers.map(escapeCSV).join(","));
+
+    for (const r of rows) {
+      // BINARY SCORING recompute (Partial=0; denominator = assessed/non-backfilled).
+      const assessedMeasures = (r.measureScores || []).filter((m: any) => !m.backfilled);
+      const metMeasures = assessedMeasures.filter((m: any) => isMet(m.verdict, m.score));
+      const binaryTotalScore =
+        assessedMeasures.length > 0
+          ? Math.round((metMeasures.length / assessedMeasures.length) * 100)
+          : (r.totalScore ?? 0);
+      const binaryMeasuresMet =
+        assessedMeasures.length > 0 ? metMeasures.length : (r.measuresMetCount ?? "");
+
+      const baseValues = [
+        r.companyName || "",
+        r.isin || "",
+        r.sector || "",
+        r.country || "",
+        binaryTotalScore,
+        binaryMeasuresMet,
+        r.measuresTotalCount ?? "",
+        r.coverageLevel || "unknown",
+        (r.missingTier1 || []).join("; "),
+      ];
+
+      // Lookup title -> URL from sourceDocuments.
+      const titleToUrl: Record<string, string> = {};
+      for (const doc of (r.sourceDocuments || [])) {
+        if (doc.title && doc.url) titleToUrl[doc.title.toLowerCase()] = doc.url;
+        if (doc.url) titleToUrl[doc.url.toLowerCase()] = doc.url;
+      }
+
+      const measureValues: string[] = [];
+      for (const title of measureTitles) {
+        const ms = (r.measureScores || []).find((m: any) => m.title === title);
+        if (ms) {
+          measureValues.push(normalizeVerdict(ms.verdict || (ms.score > 0 ? "Yes" : "No")));
+          measureValues.push(ms.evidenceSummary || "");
+
+          const quotes = realQuotes(ms.quotes).map((q: any) => q.text).filter(Boolean);
+          if (isMet(ms.verdict, ms.score)) {
+            measureValues.push(quotes.join(" | "));
+          } else {
+            measureValues.push("");
+          }
+
+          const sourceNames: string[] = [];
+          const sourceLinks: string[] = [];
+          const seenSources = new Set<string>();
+          for (const q of realQuotes(ms.quotes)) {
+            if (!q.source) continue;
+            const srcKey = q.source.toLowerCase();
+            if (seenSources.has(srcKey)) continue;
+            seenSources.add(srcKey);
+            sourceNames.push(q.source);
+            const url = titleToUrl[srcKey] || "";
+            if (url) {
+              sourceLinks.push(url);
+            } else {
+              const matchedKey = Object.keys(titleToUrl).find((k) => k.includes(srcKey) || srcKey.includes(k));
+              sourceLinks.push(matchedKey ? titleToUrl[matchedKey] : "");
+            }
+          }
+          measureValues.push(sourceNames.join(" ; "));
+          measureValues.push(sourceLinks.join(" ; "));
+          measureValues.push(ms.confidence || "Low");
+
+          const dt = ms.decisionTrace || null;
+          const cr = dt?.canonicalRule || null;
+          measureValues.push(cr?.ruleId ?? "");
+          measureValues.push(cr?.ruleVersion != null ? String(cr.ruleVersion) : "");
+          measureValues.push(cr?.provenance ?? "");
+          measureValues.push(cr?.sourceField ?? "");
+          measureValues.push(dt?.frameworkHash ?? "");
+          measureValues.push(dt?.fallbackActivated ? (dt?.fallbackReason ?? "") : "");
+          measureValues.push(dt?.validation?.status ?? "");
+          measureValues.push((dt?.diagnostics || []).join(" | "));
+        } else {
+          measureValues.push("", "", "", "", "", "");
+          measureValues.push("", "", "", "", "", "", "", "");
+        }
+      }
+
+      const sourceDocs = (r.sourceDocuments || [])
+        .map((d: any) => `${d.title || ""} [${d.url || ""}]`)
+        .filter(Boolean)
+        .join(" ; ");
+
+      const researchValues = researchStatusCsvColumns(r.researchStatus).map((c) => c.value);
+
+      const rowValues = [...baseValues, ...measureValues, sourceDocs, ...researchValues];
+      res.write("\n" + rowValues.map(escapeCSV).join(","));
+    }
+
+    res.end();
+  } catch (error: any) {
+    // If headers were already sent, we can only abort the stream.
+    if (res.headersSent) {
+      try { res.end(); } catch { /* noop */ }
+      return;
+    }
     res.status(500).json({ error: error.message });
   }
 });
