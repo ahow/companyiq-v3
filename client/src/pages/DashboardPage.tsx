@@ -137,6 +137,8 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   // Document-discovery coverage sections (low tier + critical tier).
   const [lowDiscExpanded, setLowDiscExpanded] = useState(false);
   const [criticalDiscExpanded, setCriticalDiscExpanded] = useState(false);
+  // Universe completeness — list-level silent-failure detector (members with no score).
+  const [universeExpanded, setUniverseExpanded] = useState(false);
   const [selectedLowDiscIds, setSelectedLowDiscIds] = useState<Set<number>>(new Set());
   const [selectedCriticalDiscIds, setSelectedCriticalDiscIds] = useState<Set<number>>(new Set());
   // Understated — pending domain review (companies affected by approved Source Domains).
@@ -417,6 +419,19 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   // rate). Fall back to the old field names for a stale cached API response.
   const criticalDiscRows = lowDiscovery?.discoveryTooLow ?? lowDiscovery?.criticalDiscovery ?? [];
   const lowDiscRows = lowDiscovery?.lowRetrieval ?? lowDiscovery?.lowDiscovery ?? [];
+
+  // ── Universe completeness ─────────────────────────────────────────────────
+  // UNCONDITIONAL list-level check: every member of the list that produced NO
+  // score for the framework, classified by why (unlike low-discovery, which only
+  // sees companies that wrote fetch-coverage diagnostics). Defaults on the server
+  // to the active framework + the list of the most recent batch; we pass the
+  // dashboard's current selections when present so the card tracks the dropdowns.
+  const { data: universe } = useQuery({
+    queryKey: ["universeCompleteness", selectedList ?? null, effectiveFrameworkId ?? null],
+    queryFn: () => api.getUniverseCompleteness(selectedList, effectiveFrameworkId),
+    refetchInterval: 60000,
+  });
+  const universeMissing = universe?.missingCompanies ?? [];
 
   const rerunDiscoveryMutation = useMutation({
     mutationFn: (companyIds: number[]) => api.rerunLowDiscovery(companyIds, effectiveFrameworkId),
@@ -893,6 +908,80 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                             Re-run
                           </button>
                         </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Universe Incomplete — list-level silent-failure detector (red) */}
+      {universeMissing.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 flex-wrap">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              <span className="text-sm font-semibold text-red-900">
+                Universe Incomplete — {universeMissing.length} of {universe?.listTotal ?? 0} member{(universe?.listTotal ?? 0) !== 1 ? "s" : ""} unscored
+              </span>
+              <span className="text-xs text-red-600">
+                {universe?.listName ? `${universe.listName} · ` : ""}{universe?.frameworkName ?? ""} — these list members produced no score and raised no other warning
+              </span>
+              {universe?.byClassification &&
+                Object.entries(universe.byClassification as Record<string, number>).map(([k, v]) => (
+                  <span key={k} className="text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-800 border border-red-200">
+                    {k}: {v}
+                  </span>
+                ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setUniverseExpanded((v) => !v)}
+                className="text-xs text-red-700 underline hover:text-red-900"
+              >
+                {universeExpanded ? "Collapse" : "Expand"}
+              </button>
+            </div>
+          </div>
+
+          {universeExpanded && (
+            <div className="mt-3">
+              <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-red-100 sticky top-0">
+                    <tr>
+                      <th className="p-1.5 text-left text-red-800">Company</th>
+                      <th className="p-1.5 text-left text-red-800">Status</th>
+                      <th className="p-1.5 text-left text-red-800">Classification</th>
+                      <th className="p-1.5 text-left text-red-800">Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {universeMissing.map((r: any) => (
+                      <tr key={r.id} className="border-t border-red-100 hover:bg-red-50">
+                        <td className="p-1.5 font-medium text-gray-900">
+                          <button onClick={() => onViewCompany(r.id)} className="hover:underline text-left">{r.name ?? `#${r.id}`}</button>
+                        </td>
+                        <td className="p-1.5 text-gray-600">{r.analysisStatus || "—"}</td>
+                        <td className="p-1.5">
+                          <span
+                            className={`px-1.5 py-0.5 rounded border text-[11px] ${
+                              r.classification === "No corpus / evidence gap"
+                                ? "bg-amber-100 text-amber-800 border-amber-200"
+                                : r.classification === "Processing failure"
+                                ? "bg-red-100 text-red-800 border-red-200"
+                                : r.classification === "In progress / stuck"
+                                ? "bg-blue-100 text-blue-800 border-blue-200"
+                                : "bg-gray-100 text-gray-700 border-gray-200"
+                            }`}
+                          >
+                            {r.classification}
+                          </span>
+                        </td>
+                        <td className="p-1.5 text-gray-500 max-w-md truncate" title={r.errorSnippet || ""}>{r.errorSnippet || "—"}</td>
                       </tr>
                     ))}
                   </tbody>

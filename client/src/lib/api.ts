@@ -187,6 +187,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ companyIds, frameworkId: frameworkId ?? undefined }),
     }),
+  // Universe completeness (list-level silent-failure detector)
+  getUniverseCompleteness: (listId?: number | null, frameworkId?: number | null) => {
+    const qs = new URLSearchParams();
+    if (listId) qs.set("listId", String(listId));
+    if (frameworkId) qs.set("frameworkId", String(frameworkId));
+    const q = qs.toString();
+    return request(`/diagnostics/universe-completeness${q ? `?${q}` : ""}`);
+  },
 
   // Domain Policies (workspace-scoped provenance overrides)
   getDomainPolicies: () => request("/domain-policies"),

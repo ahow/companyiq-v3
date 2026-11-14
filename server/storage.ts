@@ -2279,7 +2279,7 @@ export async function failJob(jobId: number, error: string, ownership?: AttemptO
       last_progress_at = ${now},
       progress_detail = ${detail}::jsonb
     WHERE id = ${jobId}
-    RETURNING batch_id, status
+    RETURNING batch_id, status, company_id
   `);
   let row: any = null;
   let batchTerminal = false;
@@ -2304,7 +2304,29 @@ export async function failJob(jobId: number, error: string, ownership?: AttemptO
   const batchId = row?.batch_id;
   // Progress heartbeat strictly AFTER commit (never inside the lock txn).
   if (batchId) await touchBatchHeartbeat(Number(batchId), { lastProgressAt: now, detail: { jobId, status: "failed", error } });
-  return { transitioned, finalFailed: row?.status === "failed", batchTerminal: transitioned && batchTerminal };
+  const finalFailed = row?.status === "failed";
+  // FIX 2 — roll the company out of a frozen transient status when the job is
+  // FINALLY failed (attempts exhausted / batch terminal), so it shows as 'failed'
+  // instead of looking "in progress" forever. This was the silent-failure root
+  // cause: failJob only touched analysis_jobs, never companies.analysis_status.
+  //   • Only on finalFailed — never on a transient retry that goes back to 'pending'.
+  //   • Additive & conditional — only flips transient statuses; NEVER overwrites
+  //     'completed' or 'insufficient_corpus' (so an evidence-gap outcome stays put).
+  //   • Best-effort, OUTSIDE the job-lock transaction; must never throw out of failJob.
+  const companyId = row?.company_id;
+  if (finalFailed && companyId != null) {
+    try {
+      await db.execute(sql`
+        UPDATE companies
+        SET analysis_status = 'failed'
+        WHERE id = ${Number(companyId)}
+          AND analysis_status IN ('fetching','fetched','analyzing','queued','processing')
+      `);
+    } catch (e) {
+      console.warn(`[DIAG][failJob] best-effort company transient-status reset failed company=${companyId} job=${jobId}: ${String((e as any)?.message ?? e)}`);
+    }
+  }
+  return { transitioned, finalFailed, batchTerminal: transitioned && batchTerminal };
 }
 
 // DIAGNOSTIC-ONLY (batch-1255 §6.2): additively stamp the current attempt_id

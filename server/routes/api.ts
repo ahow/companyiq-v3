@@ -2799,6 +2799,172 @@ apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) 
   }
 });
 
+// ─── Universe completeness (list-level silent-failure detector) ──────────────
+// FIX 1+3. /diagnostics/low-discovery above only sees companies that wrote
+// fetch-coverage diagnostics — it SKIPS (`continue`) anything that failed before
+// writing them, so silently-failed members never surface in any warning. This
+// endpoint is UNCONDITIONAL: it enumerates every member of a list and reports
+// each one that produced NO real measure score for the framework, then
+// classifies WHY. This is the exact silent-failure class that slipped through on
+// list MSCI_ACWI_011126 / framework 21 (stuck-transient jobs + evidence gaps).
+apiRouter.get("/diagnostics/universe-completeness", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const { db } = await import("../db.js");
+    const { sql } = await import("drizzle-orm");
+
+    // Framework: an explicitly selected framework (query param) wins, otherwise
+    // the workspace's active framework. Never hardcode a workspace/framework id.
+    const selectedFrameworkId = parseInt(String(req.query.frameworkId ?? ""), 10);
+    let framework: any = null;
+    if (Number.isInteger(selectedFrameworkId) && selectedFrameworkId > 0) {
+      framework = await storage.getFrameworkById(selectedFrameworkId, workspaceId);
+    }
+    if (!framework) {
+      framework = await storage.getActiveFramework(workspaceId);
+    }
+    const frameworkId: number | null = framework?.id ?? null;
+
+    const emptyPayload = {
+      frameworkId,
+      frameworkName: framework?.name ?? null,
+      listId: null as number | null,
+      listName: null as string | null,
+      listTotal: 0,
+      scored: 0,
+      missing: 0,
+      byClassification: {} as Record<string, number>,
+      missingCompanies: [] as any[],
+    };
+    if (!frameworkId) {
+      return res.json(emptyPayload);
+    }
+
+    // List: an explicit query param wins, otherwise the list of the most recent
+    // batch run for this framework in the workspace (the universe last analysed).
+    let listId = parseInt(String(req.query.listId ?? ""), 10);
+    if (!Number.isInteger(listId) || listId <= 0) {
+      const latest = (await db
+        .execute(sql`
+          SELECT list_id FROM batch_runs
+          WHERE workspace_id = ${workspaceId}
+            AND framework_id = ${frameworkId}
+            AND list_id IS NOT NULL
+          ORDER BY id DESC LIMIT 1
+        `)
+        .then((x: any) => x.rows)) as any[];
+      listId = Number(latest?.[0]?.list_id ?? 0);
+    }
+    if (!listId) {
+      return res.json({ ...emptyPayload, frameworkId });
+    }
+
+    const listRow = (await db
+      .execute(sql`SELECT name FROM company_lists WHERE id = ${listId}`)
+      .then((x: any) => x.rows)) as any[];
+    const listName: string | null = listRow?.[0]?.name ?? null;
+
+    const totalRows = (await db
+      .execute(sql`
+        SELECT COUNT(*)::int AS n
+        FROM company_list_members m
+        JOIN companies c ON c.id = m.company_id
+        WHERE m.list_id = ${listId} AND c.workspace_id = ${workspaceId}
+      `)
+      .then((x: any) => x.rows)) as any[];
+    const listTotal = Number(totalRows?.[0]?.n ?? 0);
+
+    // One set-based pass over the ~2.3k members: each list member LEFT JOINed to
+    // (a) whether it has ANY measure score for this framework, and (b) its latest
+    // analysis job for this framework. Keep only members with no measure score.
+    const missingRows = (await db
+      .execute(sql`
+        WITH members AS (
+          SELECT m.company_id, c.name, c.analysis_status, c.summary
+          FROM company_list_members m
+          JOIN companies c ON c.id = m.company_id
+          WHERE m.list_id = ${listId} AND c.workspace_id = ${workspaceId}
+        ),
+        scored AS (
+          SELECT DISTINCT company_id FROM measure_scores WHERE framework_id = ${frameworkId}
+        ),
+        latest_job AS (
+          SELECT DISTINCT ON (company_id) company_id, status AS job_status, last_error
+          FROM analysis_jobs
+          WHERE framework_id = ${frameworkId}
+          ORDER BY company_id, id DESC
+        )
+        SELECT mem.company_id, mem.name, mem.analysis_status, mem.summary,
+               lj.job_status, lj.last_error
+        FROM members mem
+        LEFT JOIN scored sc ON sc.company_id = mem.company_id
+        LEFT JOIN latest_job lj ON lj.company_id = mem.company_id
+        WHERE sc.company_id IS NULL
+        ORDER BY mem.company_id
+      `)
+      .then((x: any) => x.rows)) as any[];
+
+    // Classify each missing member. Priority is deliberate: a company's DURABLE
+    // state (analysis_status / summary) wins over its latest job row, because a
+    // completed-with-insufficient-corpus company can have a LATER orphaned
+    // 'failed' job that does not reflect the real outcome (observed on 88/718/
+    // 1616). FIX 3 (SAFE PATH): we classify here rather than mutating
+    // analysis_status at the pipeline sites — see the reader-audit comment in
+    // server/lib/pipeline.ts for why that durable rewrite is unsafe.
+    const CORPUS_RE = /insufficient corpus|primaries missing|primary disclosure|no documents could be fetched/i;
+    const TRANSIENT = new Set(["fetching", "fetched", "analyzing", "queued", "processing"]);
+    const byClassification: Record<string, number> = {};
+    const missingCompanies = (missingRows || []).map((r: any) => {
+      const status = String(r.analysis_status ?? "").toLowerCase();
+      const summary = String(r.summary ?? "");
+      const jobStatus = String(r.job_status ?? "").toLowerCase();
+      const lastError = String(r.last_error ?? "");
+      let classification: string;
+      let errorSnippet: string | null = null;
+      if (TRANSIENT.has(status)) {
+        // Job frozen in a transient state — looks "in progress" forever.
+        classification = "In progress / stuck";
+        errorSnippet = lastError ? lastError.slice(0, 160) : null;
+      } else if (status === "completed" || CORPUS_RE.test(summary) || CORPUS_RE.test(lastError)) {
+        // Pipeline finished but refused to score an incomplete corpus — reads as
+        // "completed, score 0" with no measure rows at all.
+        classification = "No corpus / evidence gap";
+        errorSnippet = (summary || lastError || "").slice(0, 200) || null;
+      } else if (status === "failed" || jobStatus === "failed") {
+        // Compute/worker failure (EAGAIN / SIGABRT / timeout, etc.).
+        classification = "Processing failure";
+        errorSnippet = (lastError || summary || "").slice(0, 200) || null;
+      } else {
+        // No job and no scores — never analysed for this framework.
+        classification = "Not analysed";
+        errorSnippet = lastError ? lastError.slice(0, 160) : null;
+      }
+      byClassification[classification] = (byClassification[classification] ?? 0) + 1;
+      return {
+        id: Number(r.company_id),
+        name: r.name ?? null,
+        analysisStatus: r.analysis_status ?? null,
+        classification,
+        errorSnippet,
+      };
+    });
+
+    res.json({
+      frameworkId,
+      frameworkName: framework?.name ?? null,
+      listId,
+      listName,
+      listTotal,
+      scored: listTotal - missingCompanies.length,
+      missing: missingCompanies.length,
+      byClassification,
+      missingCompanies,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 apiRouter.post("/diagnostics/low-discovery/rerun", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);

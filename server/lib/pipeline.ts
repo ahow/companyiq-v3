@@ -3704,6 +3704,19 @@ async function maybeZeroCorpusRerun(opts: {
     // cannot fix provenance). The worker already treats no-domain as
     // non-retriable; we keep that and refuse to loop here too.
     const domain = ((fresh?.domain as string) || "").trim();
+    // FIX 3 — SAFE PATH / reader-audit note: the insufficient-corpus outcomes in
+    // this file deliberately keep analysis_status = "completed" (not a new
+    // "insufficient_corpus" value). A reader audit showed many consumers key off
+    // the literal "completed" — the server "Analyzed" stat (api.ts), the
+    // reconciler zero-score re-exam sweep that re-queues completed+0 companies
+    // (reconciler.ts), storage.getCompletedCompanyIds, and the client Analyzed
+    // count / score distribution / average score (DashboardPage). Rewriting the
+    // durable status here would silently drop these companies from the re-exam
+    // sweep and skew the dashboard. The evidence gap is instead detected and
+    // CLASSIFIED read-side by GET /api/diagnostics/universe-completeness (it
+    // reads this "completed + zero measure scores + Insufficient-corpus summary"
+    // shape). Same reasoning applies to the other "completed" corpus-refusal
+    // sites below (budget-exhausted rerun, no-documents-fetched, primaries-missing).
     const persistQuarantine = async (reason: string) => {
       try {
         await storage.updateCompany(companyId, workspaceId, {
