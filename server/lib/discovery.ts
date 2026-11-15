@@ -16,6 +16,7 @@ import {
 } from "./discovery-parallel.js";
 import { recordPaidCall } from "./paid-call-attribution.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
+import { coerceRegistries } from "./framework-data-patterns.js";
 import { traceKeep, traceDrop, traceInfo, traceSessionHeader, traceMatches, TRACE_ENABLED, flushTraceBuffer } from "./discovery-tracer.js";
 import {
   computeRankSignals,
@@ -3345,7 +3346,7 @@ function calculatePriority(
     "hrc.org", "disabilityin.org", "ungpreporting.org", "unpri.org", "weps.org",
   ];
   // Framework-scoped priority domains from framework.authoritativeRegistries
-  const frameworkRegistries = ((framework as any).authoritativeRegistries as string[] | null) || [];
+  const frameworkRegistries = coerceRegistries((framework as any).authoritativeRegistries);
   const allPriorityDomains = [...UNIVERSAL_PRIORITY_DOMAINS, ...frameworkRegistries];
   if (allPriorityDomains.some((d) => urlLower.includes(d))) {
     priority -= 4;
@@ -3946,7 +3947,7 @@ async function searchCompanyDocumentsInner(opts: {
 
   // Authoritative registry lane — domains and search terms come from framework data.
   // Instruction 46: Enhanced with issuer-profile-driven search terms and entity verification.
-  const frameworkRegistries = ((framework as any).authoritativeRegistries as string[] | null) || [];
+  const frameworkRegistries = coerceRegistries((framework as any).authoritativeRegistries);
   if (frameworkRegistries.length > 0) {
     // Use issuer profile search terms when available (more comprehensive than just name+aliases)
     const registrySearchTerms = issuerProfile
@@ -5529,7 +5530,7 @@ async function searchCompanyDocumentsInner(opts: {
     companyDomain: effectiveDomain || companyDomain || null,
     topicPhrases,
     nativeNonLatinMarket,
-    frameworkRegistries: (framework as any).authoritativeRegistries || undefined,
+    frameworkRegistries: coerceRegistries((framework as any).authoritativeRegistries),
     frameworkFilingTypes: (framework as any).authoritativeFilingTypes || undefined,
     // ─── PR 1 · Change 1b: pass through issuerProfile + retrievalV2 so the
     // ranker can apply subsidiary/vintage/press-page penalties when enabled.

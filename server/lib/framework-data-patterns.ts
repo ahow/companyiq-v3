@@ -39,3 +39,60 @@ export function coerceDataPatterns(raw: unknown): string[] {
   }
   return [];
 }
+
+/**
+ * Coerce a framework's declared `authoritativeRegistries` into a flat
+ * `string[]` of registry domains/URLs, regardless of the stored shape.
+ *
+ * The discovery engine consumes this list as plain strings — it iterates each
+ * entry and calls `.trim().replace(/^https?:\/\//i, "")...` to extract a bare
+ * domain for `site:` searches and authority-class ranking. v2-builder
+ * frameworks store it as a flat `string[]` of domains ("oecd.ai", ...), but
+ * some frameworks (including imported climate frameworks) store it as an array
+ * of OBJECTS — e.g. `[{ name: "CDP Climate Change", source: "https://www.cdp.net/" }]`.
+ * Passing those objects straight into the engine crashed with
+ *   "registry.trim is not a function"
+ * which failed every company in the batch before any discovery could happen.
+ *
+ * This normaliser accepts any shape and always returns a flat `string[]`:
+ *   - string entry        -> the string
+ *   - object entry        -> its source/url/domain/host/link, else name/title/id
+ *   - object of arrays    -> same treatment applied to every nested entry
+ *   - null/other          -> []
+ *
+ * It is topic-agnostic and never hardcodes any registry name.
+ */
+export function coerceRegistries(raw: unknown): string[] {
+  const out: string[] = [];
+  const pushEntry = (entry: unknown): void => {
+    if (typeof entry === "string") {
+      if (entry.trim().length > 0) out.push(entry);
+      return;
+    }
+    if (entry && typeof entry === "object") {
+      const rec = entry as Record<string, unknown>;
+      const candidate =
+        rec.source ?? rec.url ?? rec.domain ?? rec.host ?? rec.link ??
+        rec.name ?? rec.title ?? rec.id;
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        out.push(candidate);
+      }
+    }
+  };
+  if (!raw) return out;
+  if (Array.isArray(raw)) {
+    for (const entry of raw) pushEntry(entry);
+    return out;
+  }
+  if (typeof raw === "object") {
+    for (const v of Object.values(raw as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        for (const entry of v) pushEntry(entry);
+      } else {
+        pushEntry(v);
+      }
+    }
+    return out;
+  }
+  return out;
+}
