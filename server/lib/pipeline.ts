@@ -27,6 +27,7 @@
  */
 
 import * as storage from "../storage.js";
+import { coerceDataPatterns } from "./framework-data-patterns.js";
 import { getDiagContext, setDiagStage, diagTags, startStageTimer, runWithChildTimer } from "./diag-context.js";
 import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
 import { LifecycleCancelledError, isLifecycleCancelledError, requireOwnershipForBatchWrite, revokeAttempt, createOperationScope, OperationAbortedError, isOperationAbortedError, type OperationScope } from "./lifecycle-fence.js";
@@ -972,7 +973,7 @@ async function runFetchPhase(opts: {
     // time (by the builder) and stored on the framework record. The code here simply
     // REFERENCES those fields. No topic knowledge lives in this code path.
     const frameworkDocTypes = (framework as any).requiredDocTypes as string[] | null;
-    const frameworkDataPatterns = (framework as any).dataPatterns as string[] | null;
+    const frameworkDataPatterns = coerceDataPatterns((framework as any).dataPatterns);
 
     // Build the expected-type label from the framework's declared doc types
     const expectedLabel = frameworkDocTypes && frameworkDocTypes.length > 0

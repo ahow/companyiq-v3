@@ -1,4 +1,5 @@
 import * as storage from "../storage.js";
+import { coerceDataPatterns } from "./framework-data-patterns.js";
 import { completeWithFallback, completeScoring, getProvider, getIndependentTieBreakerProvider } from "./ai-providers.js";
 import { ProviderScoringError } from "./credit-breaker.js";
 import { classifyProviderError, type ProviderFailureClass } from "./provider-resilience.js";
@@ -1385,11 +1386,9 @@ async function summarizeDocumentsCompute(opts: {
   // description and framework name. dataPatternTokens add the exact strings the
   // framework author declared as topic-defining.
   const derivedTerms = deriveTopicTerms(topicDescription, undefined);
-  const dataPatternTokens = (framework as any).dataPatterns
-    ? ((framework as any).dataPatterns as string[])
-        .flatMap((p: string) => p.replace(/[\\^$.|?*+()\[\]{}]/g, " ").split(/\s+/))
-        .filter((t: string) => t.length >= 4)
-    : [];
+  const dataPatternTokens = coerceDataPatterns((framework as any).dataPatterns)
+    .flatMap((p: string) => p.replace(/[\\^$.|?*+()\[\]{}]/g, " ").split(/\s+/))
+    .filter((t: string) => t.length >= 4);
 
   // Instruction 34 REVERTED (Instruction 35): the universal governance vocabulary
   // hurt Stage-1 retrieval on document-rich corpora. Long compliance/annual-report
@@ -1473,7 +1472,7 @@ async function summarizeDocumentsCompute(opts: {
   // dataPatterns are framework-declared regexes that fire only on topic-specific text.
   // This differentiates documents that mention the topic generically from documents
   // that materially discuss it.
-  const dataPatterns = ((framework as any).dataPatterns as string[] | null) || [];
+  const dataPatterns = coerceDataPatterns((framework as any).dataPatterns);
   const dataPatternRegexes = dataPatterns.map((p: string) => {
     try { return new RegExp(p, "gi"); } catch { return null; }
   }).filter((r): r is RegExp => r !== null);
@@ -2413,7 +2412,7 @@ export async function analyzeCompanyMeasures(opts: {
     // small corpora. Uses the SAME classifyDoc heuristic as the summarizer, plus
     // content-based promotion via dataPatterns.
     try {
-      const dataPatterns = ((framework as any).dataPatterns as string[] | null) || [];
+      const dataPatterns = coerceDataPatterns((framework as any).dataPatterns);
       const dataPatternRegexes = dataPatterns
         .map((p: string) => { try { return new RegExp(p, "gi"); } catch { return null; } })
         .filter((r): r is RegExp => r !== null);
