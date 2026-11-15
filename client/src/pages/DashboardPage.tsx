@@ -341,6 +341,23 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     onError: (error: any) => alert(`Finalise failed: ${error.message}`),
   });
 
+  // Force-save the snapshot for a terminal (e.g. cancelled) batch that scored
+  // companies but was never saved to the Results page.
+  const recoverMutation = useMutation({
+    mutationFn: (batchId: number) => api.recoverBatchResults(batchId),
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["results"] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      if (res?.saved) {
+        alert(`Saved ${res?.companiesCount ?? ""} compan${(res?.companiesCount === 1) ? "y" : "ies"} to the Results page.`.replace("  ", " "));
+      } else {
+        alert("Save completed, but no snapshot row was produced (no scored companies to save).");
+      }
+    },
+    onError: (error: any) => alert(`Save results failed: ${error.message}`),
+  });
+
   const resetCompanyMutation = useMutation({
     mutationFn: (id: number) => api.resetCompany(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["companies"] }),
@@ -656,6 +673,49 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                 className="flex items-center gap-1 px-3 py-1 text-sm bg-white border border-orange-400 text-orange-700 rounded hover:bg-orange-100 disabled:opacity-50"
               >
                 <XCircle className="w-3 h-3" /> Discard &amp; Finalise
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recoverable terminal batch — scored companies not yet saved to Results.
+          Shown for a cancelled/completed/failed run that produced scores but was
+          never snapshotted. Guarded so it never shows alongside the pending_review
+          banner or while a run is in flight (server already ensures only one of
+          review/recoverable is set at a time). */}
+      {batchStatus?.recoverable && !batchStatus?.review && !batchStatus?.running && (
+        <div className="bg-green-50 border border-green-300 rounded-lg p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-green-900">
+                  This run has {batchStatus.recoverable.scoredCount} scored{" "}
+                  {batchStatus.recoverable.scoredCount === 1 ? "company" : "companies"} not yet saved to Results.
+                </p>
+                <p className="text-xs text-green-800 mt-1">
+                  {batchStatus.recoverable.frameworkName} · run ended{" "}
+                  {batchStatus.recoverable.status}. Save these scores to the Results page to keep them.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2 flex-shrink-0">
+              <button
+                onClick={() => {
+                  const n = batchStatus.recoverable.scoredCount;
+                  if (
+                    window.confirm(
+                      `Save the ${n} scored ${n === 1 ? "company" : "companies"} from this run to the Results page?`
+                    )
+                  ) {
+                    recoverMutation.mutate(batchStatus.recoverable.batchId);
+                  }
+                }}
+                disabled={recoverMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+              >
+                <Download className="w-3 h-3" /> {recoverMutation.isPending ? "Saving…" : "Save results to Results page"}
               </button>
             </div>
           </div>

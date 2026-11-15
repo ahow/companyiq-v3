@@ -121,6 +121,9 @@ export const api = {
   getBatchReview: () => request("/batch/review"),
   reexamineFailures: () => request("/batch/review/reexamine", { method: "POST" }),
   finalizeBatchReview: () => request("/batch/review/finalize", { method: "POST" }),
+  // Force-save the snapshot for a terminal (e.g. cancelled) batch that scored
+  // companies but was never saved to Results.
+  recoverBatchResults: (batchId: number) => request(`/batch/${batchId}/recover-results`, { method: "POST" }),
 
   // Results
   getResults: () => request("/results"),

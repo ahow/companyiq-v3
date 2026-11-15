@@ -746,7 +746,10 @@ apiRouter.delete("/frameworks/:id", async (req: Request, res: Response) => {
     await storage.deleteFramework(frameworkId, workspaceId);
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    // deleteFramework throws FrameworkDeleteBlockedError (httpStatus 409) when the
+    // framework has saved results or is active, and httpStatus 404 when not found.
+    const status = Number(error?.httpStatus) || 500;
+    res.status(status).json({ error: error.message });
   }
 });
 
@@ -974,10 +977,21 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       }
     } catch { /* non-fatal */ }
 
+    // A TERMINAL batch (cancelled/completed/failed) that scored companies but was
+    // never saved to Results is surfaced via `recoverable` so the dashboard can
+    // offer a "Save results" control. pending_review batches are handled by the
+    // `review` path above, so never double-surface: if a review is set, skip.
+    let recoverable: any = null;
+    try {
+      if (!review) {
+        recoverable = await storage.getLatestRecoverableBatch(workspaceId);
+      }
+    } catch { /* non-fatal */ }
+
     if (!batch) {
       // Even with no `running` batch row, there may be genuine in-flight work
       // (e.g. re-exam jobs). `activeRun` reflects that truthfully.
-      return res.json({ running: !!activeRun, completed: 0, total: 0, failed: 0, review, activeRun });
+      return res.json({ running: !!activeRun, completed: 0, total: 0, failed: 0, review, recoverable, activeRun });
     }
 
     let reliabilityStatus: any = null;
@@ -1027,6 +1041,7 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       paused: !!alert,
       alert,
       review,
+      recoverable,
       activeRun,
       reliabilityStatus,
     });
@@ -2484,7 +2499,9 @@ apiRouter.delete("/frameworks/:id", async (req: Request, res: Response) => {
     await storage.deleteFramework(id, workspaceId);
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    // See FrameworkDeleteBlockedError — map refusals to 409 (and 404 not-found).
+    const status = Number(error?.httpStatus) || 500;
+    res.status(status).json({ error: error.message });
   }
 });
 

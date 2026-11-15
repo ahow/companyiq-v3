@@ -1769,6 +1769,60 @@ export async function getLatestReviewableBatch(workspaceId: number) {
   return batch || null;
 }
 
+/**
+ * The most recent TERMINAL batch for this workspace that scored companies but was
+ * never snapshotted to the Results page — i.e. a run the user can still "Save
+ * results" for. Distinct from getLatestReviewableBatch:
+ *   - pending_review batches are the review path's job (handled there), so they
+ *     are EXCLUDED here (status IN cancelled/completed/failed only) — no double
+ *     banner.
+ *   - Once snapshot_saved flips true the batch stops being recoverable.
+ *   - Reliability runs (reliability_run_id set) and framework-builder test drives
+ *     are excluded.
+ *   - "scored company" count uses the SAME source saveAnalysisResultsForBatch
+ *     uses: analysis_jobs with status='completed' for the batch_id. If 0, not
+ *     surfaced.
+ * Returns the recoverable descriptor or null.
+ * NOTE: snapshot_saved is a DB column not mapped in the Drizzle schema, so this
+ * uses raw SQL.
+ */
+export async function getLatestRecoverableBatch(workspaceId: number): Promise<
+  { batchId: number; frameworkId: number; frameworkName: string; scoredCount: number; status: string; since: Date | null } | null
+> {
+  const candidates = await db.execute(sql`
+    SELECT id, framework_id, status, started_at, completed_at
+    FROM batch_runs
+    WHERE workspace_id = ${workspaceId}
+      AND status IN ('cancelled', 'completed', 'failed')
+      AND snapshot_saved = false
+      AND reliability_run_id IS NULL
+    ORDER BY started_at DESC
+    LIMIT 10
+  `);
+  for (const b of (candidates.rows as any[])) {
+    const batchId = Number(b.id);
+    // Exclude framework-builder test drives.
+    if (await isTestDriveBatch(batchId)) continue;
+    // Count scored companies exactly how saveAnalysisResultsForBatch counts them.
+    const r = await db.execute(sql`
+      SELECT COUNT(*)::int AS n FROM analysis_jobs
+      WHERE batch_id = ${batchId} AND status = 'completed'
+    `);
+    const scoredCount = Number((r.rows?.[0] as any)?.n || 0);
+    if (scoredCount <= 0) continue;
+    const fw = await getFrameworkById(Number(b.framework_id), workspaceId);
+    return {
+      batchId,
+      frameworkId: Number(b.framework_id),
+      frameworkName: fw?.name ?? `Framework ${b.framework_id}`,
+      scoredCount,
+      status: String(b.status),
+      since: (b.completed_at ?? b.started_at ?? null) as Date | null,
+    };
+  }
+  return null;
+}
+
 /** How many batches are awaiting review (status = pending_review) for a workspace. */
 export async function countReviewableBatches(workspaceId: number): Promise<number> {
   const r = await db.execute(sql`
@@ -3409,9 +3463,83 @@ export async function deleteList(listId: number, workspaceId: number) {
 }
 
 // ─── Framework & Measure Deletion ───────────────────────────────────────────
+/**
+ * Error thrown by deleteFramework when deletion is refused (saved results exist,
+ * or the framework is active). The DELETE endpoint maps `.httpStatus` to the
+ * response status (409) and surfaces `.message` to the user.
+ */
+export class FrameworkDeleteBlockedError extends Error {
+  httpStatus = 409;
+  constructor(message: string) {
+    super(message);
+    this.name = "FrameworkDeleteBlockedError";
+  }
+}
+
+/**
+ * Delete a framework and all of its dependent OPERATIONAL rows in FK-safe order,
+ * inside a transaction. Workspace-scoped and defensive.
+ *
+ * Refuses (FrameworkDeleteBlockedError → 409) when:
+ *   1. the framework has any saved Results-page snapshot (analysis_results); or
+ *   2. the framework is the active framework.
+ * Saved analysis_results are NEVER deleted here — they are user-facing results on
+ * the Results page and must be removed from there first.
+ *
+ * FK-safe delete order verified against prod information_schema:
+ *   batch_runs.reliability_run_id -> reliability_runs (batch_runs is a CHILD of
+ *   reliability_runs), and analysis_jobs.batch_id / score_anomalies.batch_id ->
+ *   batch_runs. So children of batch_runs (score_anomalies, analysis_jobs) are
+ *   deleted first, THEN batch_runs, THEN reliability_runs. (framework_v2_iterations
+ *   / framework_v2_truth_findings cascade automatically.)
+ */
 export async function deleteFramework(frameworkId: number, workspaceId: number) {
-  await db.execute(sql`DELETE FROM framework_measures WHERE framework_id = ${frameworkId}`);
-  await db.execute(sql`DELETE FROM frameworks WHERE id = ${frameworkId} AND workspace_id = ${workspaceId}`);
+  // Framework must belong to this workspace.
+  const fwRes = await db.execute(sql`
+    SELECT id, name, is_active FROM frameworks
+    WHERE id = ${frameworkId} AND workspace_id = ${workspaceId}
+    LIMIT 1
+  `);
+  const fw = fwRes.rows?.[0] as any;
+  if (!fw) {
+    const err: any = new Error("Framework not found in this workspace.");
+    err.httpStatus = 404;
+    throw err;
+  }
+  const name = fw.name || `Framework ${frameworkId}`;
+
+  // 1. Refuse if the framework has saved Results-page snapshots.
+  const arRes = await db.execute(sql`
+    SELECT COUNT(*)::int AS n FROM analysis_results
+    WHERE framework_id = ${frameworkId} AND workspace_id = ${workspaceId}
+  `);
+  const savedCount = Number((arRes.rows?.[0] as any)?.n || 0);
+  if (savedCount > 0) {
+    throw new FrameworkDeleteBlockedError(
+      `Cannot delete "${name}": it has ${savedCount} saved result set(s) on the Results page. Delete those from Results first.`,
+    );
+  }
+
+  // 2. Refuse to delete the active framework.
+  if (fw.is_active === true) {
+    throw new FrameworkDeleteBlockedError(
+      `Cannot delete "${name}": it is the active framework. Activate another framework first.`,
+    );
+  }
+
+  // 3. Delete dependent operational rows in FK-safe order, then the framework.
+  await db.transaction(async (tx) => {
+    // Children of batch_runs must go before batch_runs.
+    await tx.execute(sql`DELETE FROM score_anomalies WHERE framework_id = ${frameworkId}`);
+    await tx.execute(sql`DELETE FROM terminology_cache WHERE framework_id = ${frameworkId}`);
+    await tx.execute(sql`DELETE FROM analysis_jobs WHERE framework_id = ${frameworkId}`);
+    await tx.execute(sql`DELETE FROM measure_scores WHERE framework_id = ${frameworkId}`);
+    // batch_runs BEFORE reliability_runs (batch_runs.reliability_run_id FK).
+    await tx.execute(sql`DELETE FROM batch_runs WHERE framework_id = ${frameworkId}`);
+    await tx.execute(sql`DELETE FROM reliability_runs WHERE framework_id = ${frameworkId}`);
+    await tx.execute(sql`DELETE FROM framework_measures WHERE framework_id = ${frameworkId}`);
+    await tx.execute(sql`DELETE FROM frameworks WHERE id = ${frameworkId} AND workspace_id = ${workspaceId}`);
+  });
 }
 
 export async function deleteFrameworkMeasure(measureId: number, workspaceId: number) {
