@@ -358,6 +358,19 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     onError: (error: any) => alert(`Save results failed: ${error.message}`),
   });
 
+  // Clear a terminal batch that scored 0 companies (all failed) so it stops
+  // surfacing as an incomplete run. Nothing is saved or lost.
+  const clearMutation = useMutation({
+    mutationFn: (batchId: number) => api.clearBatch(batchId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["universeCompleteness"] });
+      queryClient.invalidateQueries({ queryKey: ["results"] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+    },
+    onError: (error: any) => alert(`Clear failed: ${error.message}`),
+  });
+
   const resetCompanyMutation = useMutation({
     mutationFn: (id: number) => api.resetCompany(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["companies"] }),
@@ -716,6 +729,44 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                 className="flex items-center gap-1 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
               >
                 <Download className="w-3 h-3" /> {recoverMutation.isPending ? "Saving…" : "Save results to Results page"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clearable terminal batch — scored 0 of N companies (all failed), nothing
+          to save. Neutral styling (nothing is being saved). Disjoint from the
+          recoverable/review banners by construction; guarded defensively. */}
+      {batchStatus?.clearable && !batchStatus?.recoverable && !batchStatus?.review && !batchStatus?.running && (
+        <div className="bg-gray-50 border border-gray-300 rounded-lg p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-gray-500 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-gray-800">
+                  This run scored 0 of {batchStatus.clearable.total} companies — all failed, nothing to save.
+                </p>
+                <p className="text-xs text-gray-600 mt-1">
+                  {batchStatus.clearable.frameworkName} · run ended {batchStatus.clearable.status}. Clearing removes it so it stops showing as an incomplete run.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2 flex-shrink-0">
+              <button
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Clear this failed run? It scored no companies, so nothing is saved or lost. This removes it so it stops showing as an incomplete run."
+                    )
+                  ) {
+                    clearMutation.mutate(batchStatus.clearable.batchId);
+                  }
+                }}
+                disabled={clearMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1 text-sm bg-white border border-gray-400 text-gray-700 rounded hover:bg-gray-100 disabled:opacity-50"
+              >
+                <Trash2 className="w-3 h-3" /> {clearMutation.isPending ? "Clearing…" : "Clear this run"}
               </button>
             </div>
           </div>

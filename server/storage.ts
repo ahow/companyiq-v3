@@ -1823,6 +1823,164 @@ export async function getLatestRecoverableBatch(workspaceId: number): Promise<
   return null;
 }
 
+/**
+ * The most recent TERMINAL batch for this workspace that scored ZERO companies
+ * (every job failed) and was never snapshotted — i.e. a run with nothing to save
+ * that still surfaces (e.g. in the Universe-Incomplete banner) and should be
+ * clearable. Mirrors getLatestRecoverableBatch exactly EXCEPT it requires the
+ * scored-company count to be 0. The two are therefore DISJOINT by the scored
+ * count: a batch is either recoverable (>=1 scored) or clearable (0 scored),
+ * never both.
+ *   - status IN cancelled/completed/failed, snapshot_saved = false,
+ *     reliability_run_id IS NULL, not a framework-builder test drive.
+ *   - scored count uses the SAME source saveAnalysisResultsForBatch uses
+ *     (analysis_jobs status='completed' for the batch_id).
+ * Returns the clearable descriptor or null.
+ */
+export async function getLatestClearableBatch(workspaceId: number): Promise<
+  { batchId: number; frameworkId: number; frameworkName: string; failedCount: number; total: number; status: string; since: Date | null } | null
+> {
+  const candidates = await db.execute(sql`
+    SELECT id, framework_id, status, total_jobs, started_at, completed_at
+    FROM batch_runs
+    WHERE workspace_id = ${workspaceId}
+      AND status IN ('cancelled', 'completed', 'failed')
+      AND snapshot_saved = false
+      AND reliability_run_id IS NULL
+    ORDER BY started_at DESC
+    LIMIT 10
+  `);
+  for (const b of (candidates.rows as any[])) {
+    const batchId = Number(b.id);
+    // Exclude framework-builder test drives.
+    if (await isTestDriveBatch(batchId)) continue;
+    // Scored count — same source saveAnalysisResultsForBatch uses.
+    const scoredRes = await db.execute(sql`
+      SELECT COUNT(*)::int AS n FROM analysis_jobs
+      WHERE batch_id = ${batchId} AND status = 'completed'
+    `);
+    const scoredCount = Number((scoredRes.rows?.[0] as any)?.n || 0);
+    // Clearable ONLY when nothing scored (disjoint from recoverable).
+    if (scoredCount !== 0) continue;
+    const failedRes = await db.execute(sql`
+      SELECT COUNT(*)::int AS n FROM analysis_jobs
+      WHERE batch_id = ${batchId} AND status = 'failed'
+    `);
+    const failedCount = Number((failedRes.rows?.[0] as any)?.n || 0);
+    let total = Number(b.total_jobs || 0);
+    if (!total) {
+      const totRes = await db.execute(sql`SELECT COUNT(*)::int AS n FROM analysis_jobs WHERE batch_id = ${batchId}`);
+      total = Number((totRes.rows?.[0] as any)?.n || 0);
+    }
+    const fw = await getFrameworkById(Number(b.framework_id), workspaceId);
+    return {
+      batchId,
+      frameworkId: Number(b.framework_id),
+      frameworkName: fw?.name ?? `Framework ${b.framework_id}`,
+      failedCount,
+      total,
+      status: String(b.status),
+      since: (b.completed_at ?? b.started_at ?? null) as Date | null,
+    };
+  }
+  return null;
+}
+
+/**
+ * Error thrown by clearEmptyBatch when the batch has scored work and must not be
+ * deleted. The /batch/:batchId/clear endpoint maps `.httpStatus` (409) to the
+ * response status.
+ */
+export class BatchClearBlockedError extends Error {
+  httpStatus = 409;
+  constructor(message: string) {
+    super(message);
+    this.name = "BatchClearBlockedError";
+  }
+}
+
+/**
+ * Delete a TERMINAL batch that scored ZERO companies, so it stops surfacing as an
+ * incomplete run. Workspace-scoped and defensive.
+ *
+ * Re-asserts every safety precondition server-side and REFUSES
+ * (BatchClearBlockedError -> 409) if any fails:
+ *   - snapshot_saved is true (results already saved),
+ *   - reliability_run_id is set (reliability run — own lifecycle),
+ *   - it is a framework-builder test drive,
+ *   - it has >=1 scored company (use Save instead),
+ *   - it has any saved analysis_results snapshot row (never delete saved results).
+ *
+ * Then, in a transaction, deletes every row keyed by batch_id (FK children of
+ * batch_runs) and the batch_runs row itself. All deletes are scoped by batch_id,
+ * so no other batch's data is touched. FK children verified against prod
+ * information_schema: analysis_jobs, provider_failure_events,
+ * reliability_audit_events, reliability_status_traces, score_anomalies
+ * (analysis_results is refused above, not deleted). measure_scores carries a
+ * batch_id column (no FK) — deleted by batch_id defensively (a 0-scored batch has
+ * none; rows from other batches have a different batch_id). The self-referential
+ * batch_runs.source_batch_id is NULLed so a replay child never dangles.
+ */
+export async function clearEmptyBatch(batchId: number, workspaceId: number): Promise<void> {
+  const b = await getBatchRunById(batchId, workspaceId);
+  if (!b) {
+    const err: any = new Error("Batch not found in this workspace.");
+    err.httpStatus = 404;
+    throw err;
+  }
+  // snapshot_saved is a DB column not mapped in Drizzle — read it raw.
+  const metaRes = await db.execute(sql`
+    SELECT snapshot_saved, reliability_run_id FROM batch_runs WHERE id = ${batchId} AND workspace_id = ${workspaceId} LIMIT 1
+  `);
+  const meta = metaRes.rows?.[0] as any;
+  if (meta?.snapshot_saved === true) {
+    throw new BatchClearBlockedError("Refusing to clear: this run already has saved results.");
+  }
+  if (meta?.reliability_run_id != null) {
+    throw new BatchClearBlockedError("Refusing to clear: this is a reliability run with its own lifecycle.");
+  }
+  if (await isTestDriveBatch(batchId)) {
+    throw new BatchClearBlockedError("Refusing to clear: this is a framework-builder test drive.");
+  }
+  const scoredRes = await db.execute(sql`
+    SELECT COUNT(*)::int AS n FROM analysis_jobs WHERE batch_id = ${batchId} AND status = 'completed'
+  `);
+  const scoredCount = Number((scoredRes.rows?.[0] as any)?.n || 0);
+  if (scoredCount > 0) {
+    throw new BatchClearBlockedError(`Refusing to clear: this run has ${scoredCount} scored compan${scoredCount === 1 ? "y" : "ies"} — use Save instead.`);
+  }
+  const arRes = await db.execute(sql`
+    SELECT COUNT(*)::int AS n FROM analysis_results WHERE batch_id = ${batchId} AND workspace_id = ${workspaceId}
+  `);
+  if (Number((arRes.rows?.[0] as any)?.n || 0) > 0) {
+    throw new BatchClearBlockedError("Refusing to clear: this run has a saved results snapshot — use Save/Results instead.");
+  }
+
+  await db.transaction(async (tx) => {
+    // Detach any replay child that points at this batch as its source.
+    await tx.execute(sql`UPDATE batch_runs SET source_batch_id = NULL WHERE source_batch_id = ${batchId}`);
+    // Delete all FK children keyed by batch_id (verified via information_schema).
+    await tx.execute(sql`DELETE FROM score_anomalies WHERE batch_id = ${batchId}`);
+    await tx.execute(sql`DELETE FROM reliability_status_traces WHERE batch_id = ${batchId}`);
+    await tx.execute(sql`DELETE FROM reliability_audit_events WHERE batch_id = ${batchId}`);
+    await tx.execute(sql`DELETE FROM provider_failure_events WHERE batch_id = ${batchId}`);
+    await tx.execute(sql`DELETE FROM measure_scores WHERE batch_id = ${batchId}`);
+    await tx.execute(sql`DELETE FROM analysis_jobs WHERE batch_id = ${batchId}`);
+    await tx.execute(sql`DELETE FROM batch_runs WHERE id = ${batchId} AND workspace_id = ${workspaceId}`);
+  });
+
+  // Best-effort: deactivate a stale batch_review alert that referenced THIS batch.
+  try {
+    const alertRes = await db.execute(sql`
+      SELECT id FROM system_alerts
+      WHERE kind = 'batch_review' AND active = TRUE AND (metadata->>'batchId')::int = ${batchId}
+    `);
+    for (const row of (alertRes.rows as any[])) {
+      await db.execute(sql`UPDATE system_alerts SET active = FALSE, updated_at = NOW() WHERE id = ${row.id}`);
+    }
+  } catch { /* non-fatal */ }
+}
+
 /** How many batches are awaiting review (status = pending_review) for a workspace. */
 export async function countReviewableBatches(workspaceId: number): Promise<number> {
   const r = await db.execute(sql`

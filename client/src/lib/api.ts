@@ -124,6 +124,9 @@ export const api = {
   // Force-save the snapshot for a terminal (e.g. cancelled) batch that scored
   // companies but was never saved to Results.
   recoverBatchResults: (batchId: number) => request(`/batch/${batchId}/recover-results`, { method: "POST" }),
+  // Clear a terminal batch that scored 0 companies (all failed) so it stops
+  // surfacing as an incomplete run.
+  clearBatch: (batchId: number) => request(`/batch/${batchId}/clear`, { method: "POST" }),
 
   // Results
   getResults: () => request("/results"),

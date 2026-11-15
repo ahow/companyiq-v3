@@ -988,10 +988,24 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       }
     } catch { /* non-fatal */ }
 
+    // A TERMINAL batch that scored ZERO companies (all failed) is surfaced via
+    // `clearable` so the dashboard can offer a "Clear this run" control.
+    // Disjoint from `recoverable` by scored count; defensively, if they resolve
+    // to the same batchId prefer `recoverable` and null out `clearable`.
+    let clearable: any = null;
+    try {
+      if (!review) {
+        clearable = await storage.getLatestClearableBatch(workspaceId);
+        if (clearable && recoverable && clearable.batchId === recoverable.batchId) {
+          clearable = null;
+        }
+      }
+    } catch { /* non-fatal */ }
+
     if (!batch) {
       // Even with no `running` batch row, there may be genuine in-flight work
       // (e.g. re-exam jobs). `activeRun` reflects that truthfully.
-      return res.json({ running: !!activeRun, completed: 0, total: 0, failed: 0, review, recoverable, activeRun });
+      return res.json({ running: !!activeRun, completed: 0, total: 0, failed: 0, review, recoverable, clearable, activeRun });
     }
 
     let reliabilityStatus: any = null;
@@ -1042,6 +1056,7 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       alert,
       review,
       recoverable,
+      clearable,
       activeRun,
       reliabilityStatus,
     });
@@ -1491,6 +1506,24 @@ apiRouter.post("/batch/:batchId/recover-results", async (req: Request, res: Resp
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Clear a terminal batch that scored ZERO companies (all failed) so it stops
+// surfacing as an incomplete run. storage.clearEmptyBatch re-asserts every safety
+// precondition server-side and throws BatchClearBlockedError (httpStatus 409) if
+// the batch has any scored work — never deletes a batch with scored companies.
+apiRouter.post("/batch/:batchId/clear", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const batchId = parseInt(String(req.params.batchId), 10);
+    if (!Number.isFinite(batchId)) return res.status(400).json({ error: "Invalid batchId." });
+    await storage.clearEmptyBatch(batchId, workspaceId);
+    res.json({ success: true, cleared: true, batchId });
+  } catch (error: any) {
+    // BatchClearBlockedError -> 409 (safety refusal); 404 not-found; else 500.
+    const status = Number(error?.httpStatus) || 500;
+    res.status(status).json({ error: error.message });
   }
 });
 
