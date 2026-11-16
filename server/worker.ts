@@ -125,6 +125,7 @@ export interface AnalysisJobData {
   skipFetch?: boolean;
   skipDiscovery?: boolean; // Resume-not-restart retry: reuse persisted corpus, skip discovery search
   sourceBatchId?: number; // Corpus replay: read corpus from this source batch
+  recheck?: boolean; // Re-examine / re-run job: use the longer fetch-phase budget
 }
 
 export interface ReliabilityFinalizerData {
@@ -269,7 +270,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   if (job.data.kind === "reliability_finalizer") {
     return finalizeReliabilityCycle(job.data);
   }
-  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, skipDiscovery, sourceBatchId } = job.data;
+  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, skipDiscovery, sourceBatchId, recheck } = job.data;
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
 
@@ -517,6 +518,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
             skipFetch,
             skipDiscovery,
             sourceBatchId,
+            recheck,
             attemptId, // DIAGNOSTIC-ONLY: log correlation / score provenance
             // 42-F: Share circuit-breaker state across all companies in the batch
             batchFetchState: (() => {

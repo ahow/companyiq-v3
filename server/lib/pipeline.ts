@@ -101,7 +101,14 @@ export function isIssuerSummaryFromDiagnosticsEnabled(): boolean {
 // processor's binary fetch timeout (FETCH_TIMEOUT_BINARY, default 90s) to let a
 // legitimately slow download finish instead of being cut off and marked dead.
 const PIPELINE_TIMEOUT_MS = parseInt(process.env.PIPELINE_TIMEOUT_MS || "540000", 10); // 9 min
-const FETCH_PHASE_BUDGET_MS = parseInt(process.env.FETCH_PHASE_BUDGET_MS || "360000", 10); // 6 min
+const FETCH_PHASE_BUDGET_MS = parseInt(process.env.FETCH_PHASE_BUDGET_MS || "360000", 10); // 6 min default; prod=1200000 (20 min)
+// Longer fetch-phase budget used ONLY for re-examine / re-run (recheck) jobs.
+// First-pass batch jobs keep FETCH_PHASE_BUDGET_MS; recheck jobs run alone with
+// far less worker contention and only re-fetch the handful of previously-dead
+// docs (fetch-cache preserves `ok` docs), so the extra clock is spent precisely
+// where slow own-host primaries (e.g. NVR's IR PDFs) need it. Keep under
+// JOB_TIMEOUT_MS (55 min) so the job watchdog never fires first.
+const FETCH_PHASE_BUDGET_RECHECK_MS = parseInt(process.env.FETCH_PHASE_BUDGET_RECHECK_MS || "2700000", 10); // 45 min
 const PER_DOCUMENT_TIMEOUT_MS = parseInt(process.env.PER_DOCUMENT_TIMEOUT_MS || "100000", 10); // 100 sec
 // Max documents fetched concurrently WITHIN a single company. Kept small so it
 // composes safely with worker concurrency and the shared browser-slot pool
@@ -155,6 +162,7 @@ export interface PipelineOptions {
   skipFetch?: boolean; // If true, skip fetch phase (reuse existing documents)
   skipDiscovery?: boolean; // Resume-not-restart retry: skip discovery search, still run fetch on persisted corpus
   sourceBatchId?: number; // Corpus replay: read corpus from this source batch instead of current
+  recheck?: boolean; // Re-examine / re-run job: use the longer fetch-phase budget
   batchFetchState?: BatchFetchState; // 42-F: batch-scoped circuit-breaker
   attemptId?: string; // DIAGNOSTIC-ONLY: worker-minted per-claim UUID (log correlation / score provenance)
 }
@@ -397,11 +405,18 @@ async function runFetchPhase(opts: {
   cancelCheck?: () => boolean;
   batchFetchState?: BatchFetchState; // 42-F
   skipDiscovery?: boolean; // Resume-not-restart retry: reuse persisted accepted docs, no fresh search
+  recheck?: boolean; // Re-examine / re-run job: use the longer FETCH_PHASE_BUDGET_RECHECK_MS
 }): Promise<{ fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } }> {
-  const { company, framework, workspaceId, batchId, cancelCheck, skipDiscovery } = opts;
+  const { company, framework, workspaceId, batchId, cancelCheck, skipDiscovery, recheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
   const fetchPhaseStart = Date.now();
+  // Recheck (re-examine / re-run) jobs get the longer fetch budget; first-pass
+  // batch jobs keep the standard one. Used for EVERY budget check below.
+  const effectiveFetchBudgetMs = recheck ? FETCH_PHASE_BUDGET_RECHECK_MS : FETCH_PHASE_BUDGET_MS;
+  if (recheck) {
+    console.log(`[${companyName}] recheck job — fetch-phase budget ${Math.round(effectiveFetchBudgetMs / 1000)}s (vs standard ${Math.round(FETCH_PHASE_BUDGET_MS / 1000)}s)`);
+  }
 
   console.log(`[${companyName}] === PHASE 1: FETCH ===`);
 
@@ -1148,8 +1163,8 @@ async function runFetchPhase(opts: {
 
     // ─── FETCH PHASE TIME BUDGET CHECK ──────────────────────────────────
     const elapsed = Date.now() - fetchPhaseStart;
-    if (elapsed > FETCH_PHASE_BUDGET_MS) {
-      console.warn(`[${companyName}] Fetch phase budget exceeded (${Math.round(elapsed / 1000)}s > ${Math.round(FETCH_PHASE_BUDGET_MS / 1000)}s) — proceeding with available documents`);
+    if (elapsed > effectiveFetchBudgetMs) {
+      console.warn(`[${companyName}] Fetch phase budget exceeded (${Math.round(elapsed / 1000)}s > ${Math.round(effectiveFetchBudgetMs / 1000)}s) — proceeding with available documents`);
       fetchBudgetExceeded = true;
       // Force-mark remaining pending docs as dead so we can proceed
       const remainingPending = (await storage.getAcceptedDocuments(companyId)).filter(d => d.fetchStatus === "pending");
@@ -1258,7 +1273,7 @@ async function runFetchPhase(opts: {
       if (cancelCheck?.()) return;
 
       // Check budget before starting this document
-      if (Date.now() - fetchPhaseStart > FETCH_PHASE_BUDGET_MS) {
+      if (Date.now() - fetchPhaseStart > effectiveFetchBudgetMs) {
         fetchBudgetExceeded = true;
         return;
       }
@@ -1584,7 +1599,7 @@ async function runFetchPhase(opts: {
     const runWorker = async (): Promise<void> => {
       while (true) {
         if (cancelCheck?.()) return;
-        if (Date.now() - fetchPhaseStart > FETCH_PHASE_BUDGET_MS) {
+        if (Date.now() - fetchPhaseStart > effectiveFetchBudgetMs) {
           fetchBudgetExceeded = true;
           return;
         }
@@ -1855,7 +1870,7 @@ async function runFetchPhase(opts: {
         // budget is introduced or changed; the PDF_RECOVERY_MAX_BUDGET_MS cap is
         // still applied downstream (min(cap, remainingMs)). The default fetchFn is
         // the REAL fetchIssuerPdfsWithPrimedSession.
-        const recoveryRemainingMs = remainingFetchBudgetMs(fetchPhaseStart);
+        const recoveryRemainingMs = remainingFetchBudgetMs(fetchPhaseStart, effectiveFetchBudgetMs);
         const recoveryResult = await runCompanyPdfRecovery({
           candidatesByOrigin,
           attemptBudget,
@@ -2075,7 +2090,7 @@ async function runFetchPhase(opts: {
       const FETCH_RETRY_MAX = Math.max(1, parseInt(process.env.FETCH_RETRY_MAX || "1", 10));
       const FETCH_DEAD_RETRY_MAX_DOCS = Math.max(0, parseInt(process.env.FETCH_DEAD_RETRY_MAX_DOCS || "25", 10));
       const browserPdfFallback = ["true", "1"].includes((process.env.BROWSER_PDF_FALLBACK_ENABLED || "false").toLowerCase());
-      const deadRetryBudgetMs = Math.max(0, FETCH_PHASE_BUDGET_MS - (Date.now() - fetchPhaseStart));
+      const deadRetryBudgetMs = Math.max(0, effectiveFetchBudgetMs - (Date.now() - fetchPhaseStart));
       if (FETCH_DEAD_RETRY_MAX_DOCS > 0 && deadRetryBudgetMs > 1000) {
         const isIssuerDomainUrl = (u: string): boolean => {
           try {
@@ -3811,7 +3826,7 @@ async function maybeZeroCorpusRerun(opts: {
 // ─── Combined Pipeline (both phases in sequence) ────────────────────────────
 
 export async function runAnalysisPipeline(opts: PipelineOptions): Promise<PipelineResult> {
-  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch, skipDiscovery, sourceBatchId } = opts;
+  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch, skipDiscovery, sourceBatchId, recheck } = opts;
   const companyName = company.name;
   const companyId = company.id;
   const pipelineStart = Date.now();
@@ -3863,7 +3878,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } } = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
         setDiagStage("fetch");
-        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck: effectiveCancel, batchFetchState: opts.batchFetchState, skipDiscovery });
+        fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck: effectiveCancel, batchFetchState: opts.batchFetchState, skipDiscovery, recheck });
         
         if (effectiveCancel()) {
           return { success: false, error: "Cancelled", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0, failureType: "cancelled" as const };

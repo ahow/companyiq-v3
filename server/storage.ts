@@ -2373,7 +2373,10 @@ export async function enqueueReexamination(opts: {
   const q = getQueue();
   await q.add(
     `reexam-${batch.id}-${companyId}`,
-    { jobId: job.id, companyId, frameworkId, batchId: batch.id, workspaceId, skipFetch: false },
+    // recheck:true → the re-examine/re-run runs with the longer FETCH_PHASE_BUDGET_RECHECK_MS
+    // (every recovery path — dashboard re-examine, low-discovery rerun, reconciler,
+    // worker self-heal — funnels through enqueueReexamination, so all get the extra budget).
+    { jobId: job.id, companyId, frameworkId, batchId: batch.id, workspaceId, skipFetch: false, recheck: true },
     { priority: 1, jobId: `reexam-company-${companyId}-batch-${batch.id}` }
   );
 

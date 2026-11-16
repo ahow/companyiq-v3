@@ -1710,6 +1710,10 @@ apiRouter.post("/batch/review/reexamine", async (req: Request, res: Response) =>
       frameworkId: j.frameworkId,
       batchId: batch.id,
       workspaceId,
+      // Re-examine (second iteration): give these jobs the longer fetch-phase
+      // budget so slow own-host primaries that were cut off on the first pass
+      // (budget_exceeded) get fetched this time.
+      recheck: true,
     }));
     await addBatchJobs(queueJobs, workspaceId, batch.id);
 
