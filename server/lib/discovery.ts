@@ -4844,7 +4844,19 @@ async function searchCompanyDocumentsInner(opts: {
 
   // Lane 5: Known disclosure URLs from framework
   if (framework.knownDisclosureUrls) {
-    for (const url of framework.knownDisclosureUrls) {
+    for (const entry of framework.knownDisclosureUrls as unknown[]) {
+      // The column is declared string[], but imported / builder-authored
+      // frameworks sometimes carry richer {url, name} objects here. Coerce each
+      // entry to a plain URL string so the candidate.url invariant (always a
+      // string) holds downstream — otherwise c.url.toLowerCase() later throws
+      // and aborts the entire company analysis.
+      const url =
+        typeof entry === "string"
+          ? entry
+          : entry && typeof entry === "object"
+            ? ((entry as any).url ?? (entry as any).link ?? (entry as any).href)
+            : undefined;
+      if (typeof url !== "string" || url.trim().length === 0) continue;
       if (!seenUrls.has(url)) {
         seenUrls.add(url);
         allCandidates.push({
@@ -5377,6 +5389,22 @@ async function searchCompanyDocumentsInner(opts: {
   // Fix 3 (Dead-fetch diagnosis): Filter out low-quality SEC EDGAR URLs that are
   // guaranteed to fail fetch — index pages, bare accession-folder URLs, XBRL viewers,
   // and non-primary exhibits (schedule 13G, form 4, etc.).
+  // Defence-in-depth: drop any candidate whose url is not a non-empty string
+  // before the url-based filters run. A single malformed candidate (e.g. an
+  // object-shaped knownDisclosureUrls entry) would otherwise throw at
+  // c.url.toLowerCase() and abort the whole company analysis. Each lane that
+  // builds candidates should guarantee a string url; this is the backstop.
+  {
+    const beforeSanitise = allCandidates.length;
+    for (let i = allCandidates.length - 1; i >= 0; i--) {
+      const cu = (allCandidates[i] as any)?.url;
+      if (typeof cu !== "string" || cu.trim().length === 0) allCandidates.splice(i, 1);
+    }
+    if (allCandidates.length < beforeSanitise) {
+      console.warn(`[${companyName}] dropped ${beforeSanitise - allCandidates.length} candidate(s) with a non-string url`);
+    }
+  }
+
   const preEdgarFilterCount = allCandidates.length;
   // TRACE session header once we know which company/framework we're processing
   traceSessionHeader(companyName, framework.name || `framework:${framework.id}`);
