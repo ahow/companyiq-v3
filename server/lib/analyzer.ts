@@ -31,6 +31,7 @@ import {
   sha256Hex,
 } from "./pipeline-cache.js";
 import { translateDocumentsToEnglish } from "./translation.js";
+import { MULTILINGUAL_EVIDENCE_TRANSLATE } from "./robustness-flags.js";
 import { corpusSourceTypes } from "./discovery.js";
 import { isCorpusHygieneEnabled, applyCorpusHygiene, type HygieneDoc } from "./corpus-hygiene.js";
 import { composeAntiInferenceRules } from "./anti-inference.js";
@@ -2361,15 +2362,24 @@ export async function analyzeCompanyMeasures(opts: {
   // summarization, BM25 retrieval, and the English topic-floor run — so the
   // whole downstream pipeline operates over English while originals are
   // preserved inline for audit. English documents pass through untouched.
+  // W6: gated behind MULTILINGUAL_EVIDENCE_TRANSLATE (default OFF — translation
+  // spends money, per the ENV-FLAG POLICY). When the flag is off, documents pass
+  // through untranslated (prior non-multilingual behaviour). Set
+  // MULTILINGUAL_EVIDENCE_TRANSLATE=true to enable foreign→English translation of
+  // evidence before terminology/BM25/scoring so CJK & other non-English corpora
+  // actually score. The legacy MULTILINGUAL_TRANSLATION_ENABLED kill-switch still
+  // applies inside translateDocumentsToEnglish.
   let workingTexts = documentTexts;
-  try {
-    const tr = await translateDocumentsToEnglish(documentTexts);
-    workingTexts = tr.texts;
-    if (tr.translatedCount > 0) {
-      console.log(`[${companyName}] Multilingual: translated ${tr.translatedCount}/${documentTexts.length} document(s) to English (${tr.charsTranslated} chars via DeepSeek)`);
+  if (MULTILINGUAL_EVIDENCE_TRANSLATE()) {
+    try {
+      const tr = await translateDocumentsToEnglish(documentTexts);
+      workingTexts = tr.texts;
+      if (tr.translatedCount > 0) {
+        console.log(`[${companyName}] Multilingual (W6): translated ${tr.translatedCount}/${documentTexts.length} document(s) to English (${tr.charsTranslated} chars via DeepSeek)`);
+      }
+    } catch (trErr: any) {
+      console.warn(`[${companyName}] Multilingual translation skipped: ${trErr?.message}`);
     }
-  } catch (trErr: any) {
-    console.warn(`[${companyName}] Multilingual translation skipped: ${trErr?.message}`);
   }
 
   // Stage: Terminology discovery

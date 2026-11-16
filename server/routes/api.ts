@@ -31,6 +31,9 @@ import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.j
 import { buildManifest, deriveResearchStatus, researchStatusCsvColumns } from "../../shared/research-state.js";
 import { buildEvidenceFunnel } from "../lib/evidence-funnel.js";
 import { runCompletenessValidator } from "../lib/framework-completeness.js";
+import { frameworkReadiness } from "../lib/framework-readiness.js";
+import { computeVarianceReport } from "../lib/variance-harness.js";
+import { FRAMEWORK_READINESS_GATE, STALLED_BATCH_REQUEUE, VARIANCE_HARNESS, FROZEN_CORPUS_DEV } from "../lib/robustness-flags.js";
 export const apiRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -570,7 +573,17 @@ apiRouter.get("/frameworks", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
     const frameworks = await storage.getFrameworks(workspaceId);
-    res.json(frameworks);
+    // W3: attach a lightweight readiness summary so the Frameworks list can badge
+    // under-configured frameworks before activation. Additive (non-breaking).
+    const withReadiness = frameworks.map((f: any) => {
+      try {
+        const r = frameworkReadiness(f);
+        return { ...f, readiness: { score: r.score, ready: r.ready, genericFallback: r.genericFallback } };
+      } catch {
+        return f;
+      }
+    });
+    res.json(withReadiness);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -613,8 +626,267 @@ apiRouter.post("/frameworks", async (req: Request, res: Response) => {
 apiRouter.post("/frameworks/:id/activate", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
-    await storage.setActiveFramework(parseInt(req.params.id), workspaceId);
+    const frameworkId = parseInt(req.params.id);
+    // W3: framework readiness gate. Block activation when the framework would fall
+    // to the generic 6-query discovery fallback, unless the caller explicitly
+    // overrides. Reversible via FRAMEWORK_READINESS_GATE=false.
+    if (FRAMEWORK_READINESS_GATE()) {
+      const override = req.body?.override === true || req.query?.override === "true";
+      const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+      if (framework) {
+        const readiness = frameworkReadiness(framework);
+        if (!readiness.ready && !override) {
+          return res.status(409).json({
+            error: "Framework is not ready to activate — it would run on the generic discovery fallback.",
+            code: "FRAMEWORK_NOT_READY",
+            readiness,
+          });
+        }
+      }
+    }
+    await storage.setActiveFramework(frameworkId, workspaceId);
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// W3: readiness report for a single framework (preflight / UI badge).
+apiRouter.get("/frameworks/:id/readiness", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const framework = await storage.getFrameworkById(parseInt(String(req.params.id), 10), workspaceId);
+    if (!framework) return res.status(404).json({ error: "Framework not found" });
+    res.json(frameworkReadiness(framework));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── W1: Frozen-corpus dev workflow ──────────────────────────────────────────
+// Lock a framework to a batch's corpus snapshot so every subsequent scoring run
+// replays the IDENTICAL corpus (discover-once → score-many). This isolates rubric
+// effects from corpus noise during framework development. Reversible via
+// FROZEN_CORPUS_DEV=false. Re-scoring against the frozen corpus reuses the
+// existing POST /analyze/replay primitive with the stored sourceBatchId.
+apiRouter.post("/frameworks/:id/freeze-corpus", async (req: Request, res: Response) => {
+  try {
+    if (!FROZEN_CORPUS_DEV()) {
+      return res.status(403).json({ error: "Frozen-corpus dev workflow is disabled (FROZEN_CORPUS_DEV=false)." });
+    }
+    const { workspaceId } = getSessionContext(req);
+    const frameworkId = parseInt(String(req.params.id), 10);
+    const sourceBatchId = Number(req.body?.sourceBatchId);
+    if (!sourceBatchId || Number.isNaN(sourceBatchId)) {
+      return res.status(400).json({ error: "sourceBatchId is required" });
+    }
+    const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+    if (!framework) return res.status(404).json({ error: "Framework not found" });
+
+    // Validate the source batch exists in this workspace.
+    const sourceBatch = await storage.getBatchRunById(sourceBatchId, workspaceId);
+    if (!sourceBatch) {
+      return res.status(404).json({ error: "Source batch not found in this workspace" });
+    }
+
+    // Compute corpus fingerprint + size from batch_corpus (same scheme as /analyze/replay).
+    const { db: dbLocal } = await import("../db.js");
+    const { sql: sqlLocal } = await import("drizzle-orm");
+    const corpusRows = await dbLocal.execute(sqlLocal`
+      SELECT DISTINCT company_id, document_id FROM batch_corpus
+      WHERE batch_id = ${sourceBatch.id}
+      ORDER BY company_id, document_id
+    `);
+    if (corpusRows.rows.length === 0) {
+      return res.status(409).json({ error: "Source batch has no corpus snapshot (batch_corpus is empty). Run a discovery batch first." });
+    }
+    const { createHash } = await import("crypto");
+    const corpusHash = createHash("sha256")
+      .update(corpusRows.rows.map((r: any) => `${r.company_id}:${r.document_id}`).join(","))
+      .digest("hex");
+    const companyCount = new Set(corpusRows.rows.map((r: any) => r.company_id)).size;
+
+    const frozenCorpus = {
+      sourceBatchId: sourceBatch.id,
+      corpusHash,
+      docCount: corpusRows.rows.length,
+      companyCount,
+      frozenAt: new Date().toISOString(),
+    };
+    await storage.updateFramework(frameworkId, { frozenCorpus });
+    res.json({ success: true, frozenCorpus });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Re-discover corpus: clear the frozen lock so the next run does a fresh live pull.
+apiRouter.delete("/frameworks/:id/freeze-corpus", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const frameworkId = parseInt(String(req.params.id), 10);
+    const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+    if (!framework) return res.status(404).json({ error: "Framework not found" });
+    await storage.updateFramework(frameworkId, { frozenCorpus: null });
+    res.json({ success: true, frozenCorpus: null });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Report the current frozen-corpus state (hash + doc/company count) for a framework.
+apiRouter.get("/frameworks/:id/freeze-corpus", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const framework = await storage.getFrameworkById(parseInt(String(req.params.id), 10), workspaceId);
+    if (!framework) return res.status(404).json({ error: "Framework not found" });
+    res.json({ frozenCorpus: (framework as any).frozenCorpus ?? null });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── W8: Variance harness ────────────────────────────────────────────────────
+// Launch K repeated scoring runs over the same list+framework to measure
+// robustness (flip rate / score stddev / corpus-size variance). Two modes:
+//   mode=frozen  — replay the framework's frozen corpus (W1) K times; isolates
+//                  rubric/grader determinism. Requires a frozen corpus.
+//   mode=live    — K live-discovery runs; measures real end-to-end variance.
+// Runs are created as diagnostic reliability batches (they do NOT trip the
+// interactive single-active-batch guard). Reversible via VARIANCE_HARNESS=false.
+apiRouter.post("/variance/launch", async (req: Request, res: Response) => {
+  try {
+    if (!VARIANCE_HARNESS()) {
+      return res.status(403).json({ error: "Variance harness is disabled (VARIANCE_HARNESS=false)." });
+    }
+    const { workspaceId } = getSessionContext(req);
+    const frameworkId = Number(req.body?.frameworkId);
+    const listId = req.body?.listId != null ? Number(req.body.listId) : null;
+    const mode: "frozen" | "live" = req.body?.mode === "live" ? "live" : "frozen";
+    const runs = Math.max(2, Math.min(10, Number(req.body?.runs ?? 3)));
+    if (!frameworkId || Number.isNaN(frameworkId)) {
+      return res.status(400).json({ error: "frameworkId is required" });
+    }
+    const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+    if (!framework) return res.status(404).json({ error: "Framework not found" });
+
+    // Resolve the company set.
+    let companies: any[] = [];
+    if (listId) {
+      const listCompanies = await storage.getListCompanies(listId);
+      companies = listCompanies.map((c: any) => c.company);
+    }
+    if (companies.length === 0) {
+      return res.status(400).json({ error: "A non-empty listId is required for a variance run" });
+    }
+
+    const frozen = (framework as any).frozenCorpus;
+    let sourceProvenance: any = undefined;
+    if (mode === "frozen") {
+      if (!frozen?.sourceBatchId) {
+        return res.status(409).json({ error: "Framework has no frozen corpus. Freeze a corpus first (POST /frameworks/:id/freeze-corpus) or use mode=live." });
+      }
+      sourceProvenance = {
+        sourceBatchId: frozen.sourceBatchId,
+        sourceRunKey: `batch-${frozen.sourceBatchId}`,
+        sourceCorpusFingerprint: frozen.corpusHash,
+      };
+    }
+
+    const commitSha = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || "unknown";
+    const harnessId = `variance-${frameworkId}-${Date.now()}`;
+    const createdBatchIds: number[] = [];
+    const { addBatchJobs: addJobs } = await import("../queue.js");
+
+    for (let k = 0; k < runs; k++) {
+      const batteryLabel = `${harnessId}-run${k + 1}`;
+      const reliability = await storage.createOrAdoptReliabilityRun({
+        workspaceId,
+        testCycleId: harnessId,
+        commitSha,
+        frameworkId,
+        listId: listId ?? null,
+        batteryLabel,
+        deploymentFingerprint: deploymentFingerprintFromEnvironment(),
+        diagnosticRun: true,
+      });
+      const batch = await storage.createBatchRun(
+        workspaceId,
+        frameworkId,
+        companies.length,
+        listId ?? undefined,
+        false,                       // offPeakOnly
+        mode === "frozen",           // scoreOnly: frozen replays never re-fetch
+        { runId: reliability.run.id, runKey: reliability.run.runKey, testCycleId: harnessId, batteryLabel, deploymentFingerprint: reliability.run.deploymentFingerprint as any },
+        sourceProvenance,
+      );
+      await storage.updateReliabilityRunLifecycle(reliability.run.id, "running", { lastHeartbeatAt: new Date(), lastProgressAt: new Date() });
+      const jobsData = companies.map((c) => ({ workspaceId, batchId: batch.id, companyId: c.id, companyName: c.name, frameworkId }));
+      await storage.createAnalysisJobs(jobsData);
+      const allJobs = await storage.getJobsForBatch(batch.id);
+      const queueJobs = allJobs.filter((j: any) => j.status === "pending").map((j: any) => ({
+        jobId: j.id, companyId: j.companyId, frameworkId: j.frameworkId, batchId: batch.id, workspaceId,
+        skipFetch: mode === "frozen",
+        ...(mode === "frozen" ? { sourceBatchId: frozen.sourceBatchId } : {}),
+      }));
+      await addJobs(queueJobs, workspaceId, batch.id);
+      createdBatchIds.push(batch.id);
+    }
+
+    res.json({ success: true, harnessId, mode, runs, frameworkId, listId, batchIds: createdBatchIds,
+      note: "Runs enqueued. When they complete, GET /variance/report?batchIds=<csv>&mode=" + mode + "&frameworkId=" + frameworkId + " to aggregate." });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Aggregate a variance report over a set of completed batches. Also persists the
+// report onto the framework (consumed by the W3 readiness gate) when ?persist=true.
+apiRouter.get("/variance/report", async (req: Request, res: Response) => {
+  try {
+    if (!VARIANCE_HARNESS()) {
+      return res.status(403).json({ error: "Variance harness is disabled (VARIANCE_HARNESS=false)." });
+    }
+    const { workspaceId } = getSessionContext(req);
+    const batchIds = String(req.query.batchIds ?? "")
+      .split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n > 0);
+    if (batchIds.length < 2) {
+      return res.status(400).json({ error: "Provide at least 2 batchIds (comma-separated) to compute variance." });
+    }
+    const mode: "frozen" | "live" | "mixed" = ["frozen", "live", "mixed"].includes(String(req.query.mode))
+      ? (String(req.query.mode) as any) : "mixed";
+    const report = await computeVarianceReport({ batchIds, mode });
+
+    const frameworkId = parseInt(String(req.query.frameworkId ?? ""), 10);
+    if ((req.query.persist === "true" || req.query.persist === "1") && Number.isInteger(frameworkId) && frameworkId > 0) {
+      const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+      if (framework) {
+        await storage.updateFramework(frameworkId, { varianceReport: report });
+      }
+    }
+
+    // Simple human-readable results view (markdown) for quick inspection.
+    if (String(req.query.format) === "md") {
+      const lines: string[] = [];
+      lines.push(`# Variance report (${report.mode})`);
+      lines.push("");
+      lines.push(`- Runs: **${report.runCount}** (batches ${report.batchIds.join(", ")})`);
+      lines.push(`- Companies: **${report.companyCount}** · Measures: **${report.measureCount}**`);
+      lines.push(`- Max No↔Yes flip rate: **${(report.maxFlipRate * 100).toFixed(1)}%** (threshold ${(report.thresholds.maxFlipRate * 100).toFixed(1)}%)`);
+      lines.push(`- Mean flip rate: **${(report.meanFlipRate * 100).toFixed(1)}%**`);
+      lines.push(`- Mean / max per-company score stddev: **${report.meanScoreStddev.toFixed(2)} / ${report.maxScoreStddev.toFixed(2)}** (threshold ${report.thresholds.maxScoreStddev.toFixed(2)})`);
+      lines.push(`- Mean corpus-size variance: **${report.meanCorpusSizeVariance.toFixed(2)}**`);
+      lines.push(`- **Acceptable: ${report.acceptable ? "YES ✅" : "NO ❌"}**`);
+      lines.push("");
+      lines.push("| Measure | Units | No↔Yes flips | Other flips | Flip rate |");
+      lines.push("|---|---:|---:|---:|---:|");
+      for (const m of report.perMeasure.slice(0, 100)) {
+        lines.push(`| ${m.measureId} | ${m.units} | ${m.flippedYesNo} | ${m.flippedOther} | ${(m.flipRate * 100).toFixed(1)}% |`);
+      }
+      res.type("text/markdown").send(lines.join("\n"));
+      return;
+    }
+    res.json(report);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

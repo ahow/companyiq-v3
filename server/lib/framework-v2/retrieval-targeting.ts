@@ -59,6 +59,46 @@ export function deriveRequiredDocTypes(measures: any[]): string[] {
   return Array.from(out);
 }
 
+/**
+ * W3 — Derive legacyQueryTemplates from the measures' declared disclosure
+ * vehicles plus the framework's topicTerm. The LLM drafter rarely authors
+ * `legacyQueryTemplates`, so without this the framework ships with an empty
+ * Layer-2 and discovery.buildGeneralQueries falls back to the 6-query generic
+ * fallback (FRAMEWORK_ROBUSTNESS_PLAN §1.4). These templates use the same
+ * placeholders discovery consumes: {company}, {currentYear}, {lastYear}.
+ *
+ * Deterministic and topic-agnostic: the only subject inputs are the framework's
+ * OWN declared vehicles and topicTerm. Returns [] when neither is available.
+ */
+export function deriveLegacyQueryTemplates(measures: any[], topicTerm: string | undefined | null): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (q: string) => {
+    const key = q.toLowerCase().trim();
+    if (key && !seen.has(key)) { seen.add(key); out.push(q); }
+  };
+
+  const t = (topicTerm || "").trim();
+  if (t) {
+    // Topic-anchored breadth queries (recency-constrained + PDF-forcing).
+    add(`"{company}" ${t} {currentYear}`);
+    add(`"{company}" ${t} report filetype:pdf`);
+    add(`"{company}" ${t} disclosure {lastYear} OR {currentYear}`);
+  }
+
+  // Vehicle-anchored queries from the canonical doc types derived from the
+  // measures' disclosure_vehicles. One recency query + one PDF query per vehicle.
+  const docTypes = deriveRequiredDocTypes(measures);
+  for (const dt of docTypes.slice(0, 8)) {
+    const v = String(dt).trim();
+    if (!v) continue;
+    add(`"{company}" "${v}" {currentYear} OR {lastYear}`);
+    add(`"{company}" "${v}" filetype:pdf`);
+  }
+
+  return out;
+}
+
 // ── (b) withdrawalPatterns — parameterised from the framework's topicTerm ────
 //
 // Withdrawal/discontinuation detection is structurally identical across topics:

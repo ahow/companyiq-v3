@@ -14,7 +14,7 @@ import { INTAKE_SYSTEM_PROMPT, DRAFTING_SYSTEM_PROMPT_HEAD, CHUNKED_SKELETON_SYS
 import { detectMultiProposalTurn, ONE_QUESTION_CORRECTIVE_SUFFIX } from "../lib/framework-v2/one-question-guard.js";
 import { resolveTargetCount } from "../lib/framework-v2/target-count.js";
 import { sanitizeSearchTemplates } from "../lib/framework-v2/query-template-hygiene.js";
-import { deriveRequiredDocTypes, deriveWithdrawalPatterns, deriveNegativeDomains, validateTargetingCoverage } from "../lib/framework-v2/retrieval-targeting.js";
+import { deriveRequiredDocTypes, deriveLegacyQueryTemplates, deriveWithdrawalPatterns, deriveNegativeDomains, validateTargetingCoverage } from "../lib/framework-v2/retrieval-targeting.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { buildFrameworkExport, buildFrameworkInserts, isFrameworkExportPayload } from "../lib/framework-v2/import-framework.js";
@@ -2585,7 +2585,19 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
     const derivedNegativeDomains = deriveNegativeDomains(adjacentNames);
     // LLM-authored query-template classes: run the SAME hygiene over all three
     // template families, not just searchTemplates (Issue 6b).
-    const cleanedLegacyQueryTemplates = sanitizeSearchTemplates((draft.framework as any)?.legacyQueryTemplates || (draft as any).legacyQueryTemplates || []).cleaned;
+    let cleanedLegacyQueryTemplates = sanitizeSearchTemplates((draft.framework as any)?.legacyQueryTemplates || (draft as any).legacyQueryTemplates || []).cleaned;
+    // W3: the LLM drafter rarely authors legacyQueryTemplates, which leaves Layer-2
+    // empty and drops discovery to the generic 6-query fallback. When no templates
+    // were authored, DERIVE them deterministically from the measures' declared
+    // disclosure vehicles + topicTerm (the inputs buildDisclosureVehicleQueries is
+    // built to consume), so a freshly-built framework is query-driven by construction.
+    if (cleanedLegacyQueryTemplates.length === 0) {
+      const derivedLegacy = deriveLegacyQueryTemplates(fwDraft.measures || [], fwDraft.topicTerm);
+      if (derivedLegacy.length > 0) {
+        cleanedLegacyQueryTemplates = derivedLegacy;
+        console.log(`[v2/save] W3: derived ${derivedLegacy.length} legacyQueryTemplates from disclosure vehicles + topicTerm (LLM authored none)`);
+      }
+    }
     const cleanedMultiDocQueryTemplates = sanitizeSearchTemplates((draft.framework as any)?.multiDocumentQueryTemplates || (draft as any).multiDocumentQueryTemplates || []).cleaned;
     const cleanedDataPatterns = Array.isArray((draft.framework as any)?.dataPatterns) ? (draft.framework as any).dataPatterns.filter((p: any) => typeof p === "string" && p.trim()) : [];
     // Fail-loud advisory: which operator-knowledge targeting fields are empty.

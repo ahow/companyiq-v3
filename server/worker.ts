@@ -19,6 +19,8 @@ import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
 import { routeFailedBatch } from "./lib/batch-completion-route.js";
 import { startReconciler } from "./reconciler.js";
 import { markBatchCompleteness } from "./lib/completeness-marker.js";
+import { detectStalledBatch } from "./lib/stalled-batch.js";
+import { STALLED_BATCH_REQUEUE } from "./lib/robustness-flags.js";
 import { isCreditAlertActive, isProxyCreditAlertActive, ProviderScoringError } from "./lib/credit-breaker.js";
 import { hasAnyLiveScoringProvider } from "./lib/ai-providers.js";
 import {
@@ -933,6 +935,58 @@ async function maybeHandleBatchCompletion(
         console.warn("[Worker] Could not raise batch_review alert: " + e.message);
       }
       return;
+    }
+
+    // ── W7: Stalled-batch detection & auto-requeue ──────────────────────────
+    // Before saving a normal multi-company list batch, check for the zero-
+    // retrieval stall signature (companies "completed" but no documents were
+    // retrieved for them — a transient discovery/infra failure, not a real
+    // "nothing disclosed" result). If detected, requeue the affected companies
+    // (forcing a fresh fetch) instead of persisting false zeros. Recovery/
+    // reliability batches already returned above, so this never loops on itself.
+    // Reversible via STALLED_BATCH_REQUEUE=false.
+    if (STALLED_BATCH_REQUEUE() && failed === 0 && listId && total > 1) {
+      try {
+        const report = await detectStalledBatch({ batchId });
+        if (report.stalled) {
+          console.warn(
+            `[Worker] Batch ${batchId} STALLED (${report.reason}) — requeueing ${report.zeroRetrievalCompanies.length} zero-retrieval compan${report.zeroRetrievalCompanies.length === 1 ? "y" : "ies"} instead of saving zeros`,
+          );
+          let requeued = 0;
+          for (const c of report.zeroRetrievalCompanies) {
+            try {
+              const r = await storage.enqueueReexamination({
+                companyId: c.companyId,
+                companyName: c.companyName,
+                frameworkId,
+                workspaceId,
+                recoveryReason: `W7 stalled-batch auto-requeue (batch ${batchId}: zero documents retrieved)`,
+              });
+              if (r) requeued++;
+            } catch (reqErr: any) {
+              console.warn(`[Worker] W7 requeue failed for company ${c.companyId} (non-fatal): ${reqErr?.message || reqErr}`);
+            }
+          }
+          // Mark the batch terminal WITHOUT saving a zeros snapshot, so the stall
+          // never pollutes the Results page. The requeued companies update their
+          // own scores live when their recovery runs complete.
+          await storage.completeBatchRun(batchId);
+          try {
+            await storage.setSystemAlert({
+              kind: "batch_review",
+              provider: String(batchId),
+              message:
+                `Batch #${batchId} stalled: ${report.zeroRetrievalCompanies.length}/${report.completedCompanies} companies retrieved zero documents. ` +
+                `Auto-requeued ${requeued} for a fresh pull (results NOT saved as zeros).`,
+            });
+          } catch (alertErr: any) {
+            console.warn(`[Worker] Could not raise stalled-batch alert: ${alertErr?.message || alertErr}`);
+          }
+          return;
+        }
+      } catch (stallErr: any) {
+        console.warn(`[Worker] W7 stalled-batch detection failed for batch ${batchId} (non-fatal, saving normally): ${stallErr?.message || stallErr}`);
+      }
     }
 
     // ── Finalise + save ──

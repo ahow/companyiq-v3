@@ -17,6 +17,7 @@ import {
 import { recordPaidCall } from "./paid-call-attribution.js";
 import { deriveTopicLexicon } from "./topic-lexicon.js";
 import { coerceRegistries } from "./framework-data-patterns.js";
+import { GATE_FAILOPEN, GATE_SPLIT_IDENTITY_TOPIC, DOCTYPE_AWARE_DISCOVERY } from "./robustness-flags.js";
 import { traceKeep, traceDrop, traceInfo, traceSessionHeader, traceMatches, TRACE_ENABLED, flushTraceBuffer } from "./discovery-tracer.js";
 import {
   computeRankSignals,
@@ -3445,10 +3446,71 @@ function calculatePriority(
     }
   }
 
+  // W5: doc-type-aware ranking boost. For frameworks that declare requiredDocTypes,
+  // a candidate whose title/URL matches a declared disclosure vehicle gets a strong
+  // priority boost (lower number = higher rank) so it survives the PRE_GATE_CAP and
+  // near-dup collapse. This is what moves diffuse-evidence disclosures (CDP/TCFD/
+  // 10-K Item 1A) into a slot even when an issuer floods the pool with generic PDFs.
+  if (DOCTYPE_AWARE_DISCOVERY() && matchesRequiredDocType({ title, url }, framework)) {
+    priority -= 30;
+  }
+
   return priority;
 }
 
 // ─── Relevance Gate ──────────────────────────────────────────────────────────
+
+/**
+ * W2/W5 — Strong required-doc-type title match.
+ *
+ * Returns true when a candidate's title/URL plausibly matches one of the
+ * framework's declared `requiredDocTypes` (disclosure vehicles). Such a
+ * candidate is treated as semi-protected by the relevance gate: it bypasses
+ * TOPIC-reject (the diffuse-evidence disclosures physical-climate scoring
+ * depends on live inside generically-titled vehicles) but remains subject to
+ * ENTITY-reject (wrong-company pollution is still dropped).
+ *
+ * Framework-agnostic: reads only `framework.requiredDocTypes`. Each declared
+ * vehicle phrase is split into clauses (same rule as buildDisclosureVehicleQueries)
+ * and we require a whole-token-ish containment so "10-K" / "annual report" /
+ * "CDP" / "TCFD" etc. match while short noise tokens do not.
+ */
+function matchesRequiredDocType(candidate: { title?: string; url?: string }, framework: Framework): boolean {
+  const docTypes = (framework as any).requiredDocTypes as string[] | null | undefined;
+  if (!docTypes || docTypes.length === 0) return false;
+  const hay = `${candidate.title || ""} ${candidate.url || ""}`.toLowerCase();
+  if (!hay.trim()) return false;
+  for (const dt of docTypes) {
+    if (!dt) continue;
+    // Split compound vehicle phrases ("10-K / 20-F Item 1A risk factors") into clauses.
+    const clauses = String(dt)
+      .split(/\s+(?:or|and|&)\s+|,\s+|\s*\/\s*/i)
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length >= 3);
+    const forms = Array.from(new Set([String(dt).trim().toLowerCase(), ...clauses]));
+    for (const f of forms) {
+      if (f.length < 3) continue;
+      // For multi-word clauses require the full phrase; for short/acronym clauses
+      // require a word-boundary-ish match to avoid accidental substring hits.
+      if (f.includes(" ")) {
+        if (hay.includes(f)) return true;
+      } else {
+        const re = new RegExp(`(^|[^a-z0-9])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i");
+        if (re.test(hay)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Stable per-call seed for the relevance-gate LLM call (within-input determinism). */
+function gateSeed(companyName: string, framework: Framework, batchIndex: number): number {
+  const h = createHash("sha256")
+    .update(`${companyName}|${framework.id}|${framework.version}|${batchIndex}`)
+    .digest("hex")
+    .slice(0, 8);
+  return parseInt(h, 16) >>> 0;
+}
 
 async function runRelevanceGate(
   candidates: DiscoveryCandidate[],
@@ -3470,18 +3532,36 @@ async function runRelevanceGate(
   if (companyContext?.domain) identityParts.push(`Official domain: ${companyContext.domain}`);
   const identityBlock = identityParts.length > 0 ? `\nCompany identity: ${identityParts.join(", ")}` : "";
 
-  for (let i = 0; i < candidates.length; i += batchSize) {
-    const batch = candidates.slice(i, i + batchSize);
-    const urlList = batch
-      .map((c, idx) => `${idx + 1}. URL: ${c.url}\n   Title: ${c.title}\n   Snippet: ${c.snippet}`)
-      .join("\n\n");
+  // W2 flags (read once per gate run so a single run is internally consistent).
+  const failOpen = GATE_FAILOPEN();
+  const splitIdentityTopic = GATE_SPLIT_IDENTITY_TOPIC();
 
-    // Retry up to 2 times on failure before rejecting the batch
-    let gateSuccess = false;
-    for (let attempt = 0; attempt < 2 && !gateSuccess; attempt++) {
-      try {
-        const { text } = await completeWithFallback(gateModel, {
-          system: `You are a strict document relevance classifier for corporate disclosure analysis. Given a list of URLs found for a specific company, classify each as "accept" or "reject".
+  // W2(2)/W2(4): precompute which candidates are strong required-doc-type title
+  // matches. These are semi-protected: entity-reject still drops them, but a
+  // topic-reject does NOT. Snippet-stage topicality is deferred to content-stage
+  // retrieval for exactly these declared disclosure vehicles.
+  const docTypeMatch = new Map<string, boolean>();
+  for (const c of candidates) docTypeMatch.set(c.url, matchesRequiredDocType(c, framework));
+
+  // W2(2): when the identity/topic split is enabled we ask the gate for TWO
+  // independent verdicts (entity + topic). When disabled we keep the legacy
+  // single accept/reject verdict and legacy strict instruction.
+  const systemPrompt = splitIdentityTopic
+    ? `You are a document relevance classifier for corporate disclosure analysis. For each candidate URL found for a specific company, return TWO independent judgments:
+
+1. "entity": is this document ABOUT THE EXACT TARGET COMPANY (same legal entity / group), as opposed to a different company that shares a name or acronym, a peer in the same industry, or an unrelated organisation?
+   - "match"    = clearly about the target company (its own domain, a filing naming it, a report whose primary subject is it)
+   - "mismatch" = clearly about a DIFFERENT company/entity, or a generic multi-company article not focused on the target
+   - "unknown"  = cannot tell from URL/title/snippet alone
+
+2. "topic": does the document plausibly relate to the ANALYSIS TOPIC below?
+   - "relevant"   = on-topic, OR a substantive corporate disclosure vehicle (annual report, 10-K/20-F, sustainability/TCFD/CDP report, policy) whose body plausibly contains topic evidence even if the snippet is generic
+   - "irrelevant" = clearly unrelated to the topic (careers page, product catalog, pure marketing with no disclosure content)
+
+ENTITY DISAMBIGUATION IS STRICT — be aggressive about "mismatch" for the wrong company. TOPIC is LENIENT — qualifying evidence for diffuse topics often lives inside generically-titled disclosures, so only mark "irrelevant" when the document is clearly off-topic, not merely generic.
+
+Pay close attention to the company identity (sector, country, domain) to distinguish similarly-named entities.`
+    : `You are a strict document relevance classifier for corporate disclosure analysis. Given a list of URLs found for a specific company, classify each as "accept" or "reject".
 
 ACCEPT ONLY:
 - Corporate reports, filings, policy documents, governance pages, sustainability reports, annual reports, and other substantive disclosures that are SPECIFICALLY ABOUT THIS EXACT COMPANY
@@ -3491,27 +3571,46 @@ ACCEPT ONLY:
 - The document must be plausibly relevant to the ANALYSIS TOPIC described below — not just any page about the company
 
 REJECT:
-- Documents about a DIFFERENT company, even if in the same industry (e.g., if searching for a specific bank, reject documents about a different bank or a different financial services company)
+- Documents about a DIFFERENT company, even if in the same industry
 - Generic industry articles that mention multiple companies without focusing on the target company
 - Documents about a DIFFERENT entity that happens to share a similar name or acronym
 - News articles, marketing content, job postings, product pages
 - YouTube videos, social media posts (unless they link to official disclosures)
 - Documents from unrelated organizations
 - Blog posts or thought-leadership articles from consulting firms unless they are a detailed case study of this specific company
-- Pages that are about the company but CLEARLY UNRELATED to the analysis topic (e.g., product catalogs, careers pages, investor relations boilerplate with no topic content)
+- Pages that are about the company but CLEARLY UNRELATED to the analysis topic
 
 CRITICAL RULES:
 1. If the URL domain belongs to ANOTHER company's corporate site, REJECT it unless it explicitly discusses the target company
 2. If the title mentions another company name prominently, REJECT it
 3. When in doubt, REJECT rather than accept — false positives are more harmful than false negatives
-4. Pay close attention to the company identity (sector, country, domain) to distinguish from similarly-named entities`,
-          prompt: `Company: ${companyName}${identityBlock}\nAnalysis topic: ${framework.topicDescription || framework.name}\n\nClassify each URL as relevant to THIS SPECIFIC COMPANY's disclosures:\n\n${urlList}\n\nReturn a JSON array of objects: [{"index": 1, "verdict": "accept"|"reject", "reason": "brief reason"}]`,
+4. Pay close attention to the company identity (sector, country, domain) to distinguish from similarly-named entities`;
+
+  for (let i = 0; i < candidates.length; i += batchSize) {
+    const batch = candidates.slice(i, i + batchSize);
+    const urlList = batch
+      .map((c, idx) => `${idx + 1}. URL: ${c.url}\n   Title: ${c.title}\n   Snippet: ${c.snippet}`)
+      .join("\n\n");
+
+    const userPrompt = splitIdentityTopic
+      ? `Company: ${companyName}${identityBlock}\nAnalysis topic: ${framework.topicDescription || framework.name}\n\nFor each candidate, judge entity and topic independently:\n\n${urlList}\n\nReturn a JSON array: [{"index": 1, "entity": "match"|"mismatch"|"unknown", "topic": "relevant"|"irrelevant", "reason": "brief"}]`
+      : `Company: ${companyName}${identityBlock}\nAnalysis topic: ${framework.topicDescription || framework.name}\n\nClassify each URL as relevant to THIS SPECIFIC COMPANY's disclosures:\n\n${urlList}\n\nReturn a JSON array of objects: [{"index": 1, "verdict": "accept"|"reject", "reason": "brief reason"}]`;
+
+    const seed = gateSeed(companyName, framework, Math.floor(i / batchSize));
+
+    // Retry up to 2 times on failure.
+    let gateSuccess = false;
+    for (let attempt = 0; attempt < 2 && !gateSuccess; attempt++) {
+      try {
+        const { text } = await completeWithFallback(gateModel, {
+          system: systemPrompt,
+          prompt: userPrompt,
           json: true,
+          seed, // W2(3): within-input determinism
           maxTokens: 2000,
         });
 
         const parsed = JSON.parse(text);
-        // Handle both raw arrays and wrapped objects (e.g., {"results": [...]})
         const verdicts = Array.isArray(parsed)
           ? parsed
           : Array.isArray(parsed.results) ? parsed.results
@@ -3520,10 +3619,22 @@ CRITICAL RULES:
           : Object.values(parsed).find(v => Array.isArray(v)) || [];
         for (const v of verdicts) {
           const idx = (v.index || v.idx) - 1;
-          if (idx >= 0 && idx < batch.length) {
-            if (v.verdict === "accept") {
-              accepted.push(batch[idx]);
-            }
+          if (idx < 0 || idx >= batch.length) continue;
+          const cand = batch[idx];
+          const isDocType = docTypeMatch.get(cand.url) === true;
+
+          if (splitIdentityTopic) {
+            // Entity-reject is binding (stops wrong-company pollution).
+            const entity = String(v.entity || v.entityMatch || "unknown").toLowerCase();
+            if (entity === "mismatch") continue;
+            const topic = String(v.topic || v.topicRelevance || "relevant").toLowerCase();
+            // W2(2)/W2(4): a declared-doc-type title match bypasses topic-reject;
+            // otherwise require topic !== irrelevant.
+            if (topic === "irrelevant" && !isDocType) continue;
+            accepted.push(cand);
+          } else {
+            // Legacy single-verdict path, with W2(4) docType semi-protection.
+            if (v.verdict === "accept" || isDocType) accepted.push(cand);
           }
         }
         gateSuccess = true;
@@ -3531,9 +3642,16 @@ CRITICAL RULES:
         if (attempt === 0) {
           console.warn(`[Discovery] Gate batch attempt ${attempt + 1} failed: ${error.message}, retrying...`);
           await new Promise(r => setTimeout(r, 2000));
+        } else if (failOpen) {
+          // W2(1): FAIL-OPEN. On persistent LLM error, KEEP the batch rather than
+          // silently dropping 20 real candidates. Topicality is then decided at
+          // the post-fetch content stage (aboutness / passage retrieval), which
+          // reads the real document body. This removes a large, invisible,
+          // run-varying recall loss. Entity pollution risk is bounded because
+          // entity-disambiguation also runs downstream on fetched content.
+          console.warn(`[Discovery] Gate batch KEPT (fail-open: all ${batch.length} candidates deferred to content stage) after 2 failed attempts: ${error.message}`);
+          for (const c of batch) accepted.push(c);
         } else {
-          // FAIL-CLOSED: On persistent failure, REJECT the entire batch
-          // This prevents unrelated documents from polluting the corpus
           console.warn(`[Discovery] Gate batch REJECTED (all ${batch.length} candidates) after 2 failed attempts: ${error.message}`);
         }
       }
@@ -5437,17 +5555,29 @@ async function searchCompanyDocumentsInner(opts: {
   // R5d reserved carve-out. Take up to POLICY_RESERVED_SLOTS policy-family
   // docs by priority order; the rest go into a fill-list from which we
   // consume the remaining pre-gate budget.
+  // W5: reserve pre-gate slots for declared requiredDocType vehicles so they are
+  // never trimmed by the cap. Taken off the top of the same budget (no growth),
+  // in priority order, ahead of the policy carve-out.
+  const DOCTYPE_RESERVED_SLOTS = 20;
+  const doctypeAware = DOCTYPE_AWARE_DISCOVERY();
+  const docTypeDocs: DiscoveryCandidate[] = [];
   const policyDocs: DiscoveryCandidate[] = [];
   const nonPolicyDocs: DiscoveryCandidate[] = [];
   for (const c of sortedUnprotected) {
-    if (isPolicyVehicle(c) && policyDocs.length < POLICY_RESERVED_SLOTS) {
+    if (doctypeAware && matchesRequiredDocType(c, framework) && docTypeDocs.length < DOCTYPE_RESERVED_SLOTS) {
+      docTypeDocs.push(c);
+    } else if (isPolicyVehicle(c) && policyDocs.length < POLICY_RESERVED_SLOTS) {
       policyDocs.push(c);
     } else {
       nonPolicyDocs.push(c);
     }
   }
-  const remainingSlots = Math.max(0, PRE_GATE_CAP - policyDocs.length);
-  const cappedUnprotected = [...policyDocs, ...nonPolicyDocs.slice(0, remainingSlots)];
+  const reservedCount = docTypeDocs.length + policyDocs.length;
+  const remainingSlots = Math.max(0, PRE_GATE_CAP - reservedCount);
+  const cappedUnprotected = [...docTypeDocs, ...policyDocs, ...nonPolicyDocs.slice(0, remainingSlots)];
+  if (docTypeDocs.length > 0) {
+    console.log(`[${companyName}] W5: reserved ${docTypeDocs.length}/${DOCTYPE_RESERVED_SLOTS} declared-doc-type slot(s) before pre-gate cap`);
+  }
   if (policyDocs.length > 0) {
     console.log(`[${companyName}] R5d: reserved ${policyDocs.length}/${POLICY_RESERVED_SLOTS} policy-family slot(s) before pre-gate cap (${remainingSlots} slots left for non-policy docs)`);
   }

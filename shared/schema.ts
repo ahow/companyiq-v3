@@ -203,6 +203,25 @@ export const frameworks = pgTable("frameworks", {
   // unresolved/removed). Nullable/additive; surfaced so the UI can show what
   // still needs deciding. Fail-loud but dismissible (never blocks finalisation).
   synonymGateReport: jsonb("synonym_gate_report").$type<any>(),
+  // W1 (Frozen-corpus dev workflow). Nullable/additive. When set, records the
+  // batch whose corpus snapshot (batch_corpus) this framework is "locked" to
+  // during rubric iteration, so every scoring run replays the IDENTICAL corpus
+  // and rubric edits show rubric effects with zero corpus noise. Shape:
+  // { sourceBatchId, corpusHash, docCount, companyCount, frozenAt }.
+  // Gated by FROZEN_CORPUS_DEV. Backward-compatible: existing rows read NULL.
+  frozenCorpus: jsonb("frozen_corpus").$type<{
+    sourceBatchId: number;
+    corpusHash: string;
+    docCount: number;
+    companyCount: number;
+    frozenAt: string;
+  } | null>(),
+  // W8 (Variance harness). Nullable/additive. The latest variance report for this
+  // framework — per-measure flip rate, score stddev, corpus-size variance across K
+  // repeated runs, and whether it is within acceptable thresholds. Consumed by the
+  // W3 readiness gate (a framework's variance should be known + acceptable before
+  // activation). Gated by VARIANCE_HARNESS. Existing rows read NULL.
+  varianceReport: jsonb("variance_report").$type<any>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

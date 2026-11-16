@@ -183,6 +183,10 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS production_ready BOOLEAN NOT NULL DEFAULT false`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS rules_active JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS intake_artefact JSONB`);
+    // W1 (Frozen-corpus dev workflow): locks a framework to a batch's corpus snapshot for deterministic rubric iteration.
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS frozen_corpus JSONB`);
+    // W8 (Variance harness): latest per-framework variance report (flip rate / score stddev / corpus-size variance).
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS variance_report JSONB`);
 
     // ─── Framework Measures ─────────────────────────────────────────────────
     await db.execute(sql`
