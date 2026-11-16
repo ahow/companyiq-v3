@@ -1079,6 +1079,17 @@ export async function finalizeBatchAndSave(
   const flipped = await storage.completeBatchRun(batchId);
   if (!flipped && !opts.adminRecoverTerminal) return;
   await saveAnalysisResultsForBatch(batchId, frameworkId, workspaceId, listId);
+  // Flip the snapshot flag so the "unsaved results" recoverable banner clears.
+  // Without this a terminal (e.g. cancelled) batch keeps snapshot_saved=false
+  // even after a successful save, so getLatestRecoverableBatch keeps returning
+  // it and the green "Save results to Results page" banner never clears after
+  // the user clicks it. The normal completion path already does this (see the
+  // maybeFinalize path above); the admin recover-results path missed it.
+  try {
+    await storage.markBatchSnapshotSaved(batchId);
+  } catch (err: any) {
+    console.error("[Worker] finalizeBatchAndSave: markBatchSnapshotSaved failed for batch " + batchId + ": " + err.message);
+  }
   try {
     await storage.clearSystemAlert("batch_review", String(batchId));
   } catch { /* non-fatal */ }
