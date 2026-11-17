@@ -398,6 +398,37 @@ function matchesDocType(haystack: string, docType: string): boolean {
   return matched >= Math.min(2, words.length);
 }
 
+// BUG 3: climate-disclosure doc types (TCFD, IFRS S2, physical-climate, scenario
+// analysis, transition plan) are very rarely published as a standalone document —
+// they are almost always a SECTION of a broader first-party report (Annual /
+// Integrated / Sustainability / ESG report) or a dedicated climate/TCFD report.
+// The generic token match above requires the literal doc-type words in the
+// title/URL, so these items showed "not found" for virtually every company even
+// when the disclosure was retrieved inside an annual/sustainability report. The
+// family test identifies such required doc types; the embedding test recognises a
+// report title/URL that commonly CONTAINS the disclosure, so a retrieved embedding
+// report satisfies the climate item too. Scope is deliberately narrow (only the
+// climate family is broadened — all other doc types keep exact token matching).
+const CLIMATE_DOCTYPE_FAMILY =
+  /(tcfd|ifrs\s*s2|\bifrs\b|\bs2\b|climate|physical\s*risk|scenario\s*analysis|transition\s*plan|cdp)/i;
+const CLIMATE_EMBEDDING_REPORT =
+  /(annual\s*report|annual\s*integrated|integrated\s*report|sustainability\s*report|esg\s*report|responsibility\s*report|corporate\s*responsibility|climate|tcfd|cdp|annualreport|sustainability|integrated|esg)/i;
+
+/** True when a required doc type belongs to the climate-disclosure family. */
+function isClimateFamilyDocType(docType: string): boolean {
+  return CLIMATE_DOCTYPE_FAMILY.test(docType || "");
+}
+
+/**
+ * True when a climate-family doc type is satisfied by an embedding report: the
+ * doc type is in the climate family AND the document's title/URL is an
+ * annual/integrated/sustainability/ESG/climate report that commonly embeds the
+ * disclosure. Returns false for non-climate doc types (exact matching preserved).
+ */
+function matchesClimateEmbedding(haystack: string, docType: string): boolean {
+  return isClimateFamilyDocType(docType) && CLIMATE_EMBEDDING_REPORT.test(haystack);
+}
+
 /**
  * Build the essential-document checklist from the framework's declared required
  * document types. Each entry is marked found / partial / not_found by matching
@@ -431,13 +462,17 @@ export function deriveEssentialDocChecklist(
     let conclusivelyAbsent = false;
     let matchedAny = false;
 
+    let foundViaEmbedding = false;
     for (const d of eligible) {
       const haystack = `${(d.url || "").toLowerCase()} ${(d.title || "").toLowerCase()}`;
-      if (!matchesDocType(haystack, docType)) continue;
+      const directMatch = matchesDocType(haystack, docType);
+      const embeddingMatch = !directMatch && matchesClimateEmbedding(haystack, docType);
+      if (!directMatch && !embeddingMatch) continue;
       matchedAny = true;
       const state = classifyDocument(d);
       if (state === "extracted_complete" || state === "retrieved") {
         found = true;
+        foundViaEmbedding = embeddingMatch;
         break;
       }
       if (state === "extracted_partial") partial = true;
@@ -449,7 +484,9 @@ export function deriveEssentialDocChecklist(
     let detail: string;
     if (found) {
       status = "found";
-      detail = "Essential document retrieved.";
+      detail = foundViaEmbedding
+        ? "Disclosure available within a retrieved annual/sustainability/integrated report (embedded)."
+        : "Essential document retrieved.";
     } else if (partial) {
       status = "partial";
       detail = "Only a partial/truncated extraction is available.";
@@ -624,4 +661,141 @@ export function researchStatusCsvColumns(rs?: ResearchStatus | null): Array<{ he
     { header: "Missing Essential Documents", value: rs ? (rs.essentialChecklist || []).filter((i) => i.status !== "found").map((i) => `${i.label} (${i.status === "not_found" ? "not found" : i.status})`).join("; ") : "" },
     { header: "Discovery Recall", value: rs ? rs.discoveryRecall.label : "" },
   ];
+}
+
+
+
+// ═══ BUG 2 — distinguish a CONFIDENT 0% from "insufficient evidence" ══════════
+// A 0% (or near-0%) company score is only trustworthy when we actually retrieved
+// the issuer's primary first-party disclosures and still found nothing. When the
+// essential disclosures were never obtained AND almost no measure carries any
+// first-party evidence, the 0% is an artefact of a retrieval gap, not a confident
+// finding — it should be surfaced as "insufficient evidence". This NEVER changes
+// the numeric score (totalScore is untouched); it only derives an advisory label
+// the read/export layer can show instead of a confident 0%.
+
+export interface EvidenceCompletenessInput {
+  /** Answered (non-abstained) measures. */
+  answeredCount: number;
+  /** Measures scored Yes/met. */
+  metCount: number;
+  /** Essential first-party doc-types marked "found" on the checklist. */
+  essentialFoundCount: number;
+  /** Total essential first-party doc-types on the checklist. */
+  essentialTotalCount: number;
+  /** Answered measures carrying >=1 first-party (non third-party-host) quote. */
+  measuresWithFirstPartyEvidence: number;
+}
+
+export interface EvidenceCompleteness {
+  /** True → the low score reflects a retrieval gap, not a confident 0%. */
+  insufficientEvidence: boolean;
+  /** Short advisory label for display ("" when evidence is sufficient). */
+  label: string;
+  reason: string;
+}
+
+/**
+ * Pure derivation. Flags "insufficient evidence" when ALL hold:
+ *  - there IS something to assess (answeredCount > 0),
+ *  - the score is effectively zero (metCount === 0),
+ *  - the framework declared essential first-party doc-types AND none were found,
+ *  - at most 20% of answered measures carry any first-party evidence.
+ * Conservative by design: a genuine 0% backed by retrieved primary disclosures
+ * (essentialFoundCount > 0) or with first-party evidence across measures stays a
+ * confident 0%.
+ */
+export function deriveEvidenceCompleteness(
+  input: EvidenceCompletenessInput,
+): EvidenceCompleteness {
+  const none: EvidenceCompleteness = {
+    insufficientEvidence: false,
+    label: "",
+    reason: "Score is backed by sufficient first-party evidence (or is not zero).",
+  };
+  const answered = Math.max(0, Math.floor(input?.answeredCount ?? 0));
+  const met = Math.max(0, Math.floor(input?.metCount ?? 0));
+  const essTotal = Math.max(0, Math.floor(input?.essentialTotalCount ?? 0));
+  const essFound = Math.max(0, Math.floor(input?.essentialFoundCount ?? 0));
+  const withFp = Math.max(0, Math.floor(input?.measuresWithFirstPartyEvidence ?? 0));
+  if (answered <= 0) return none;
+  if (met > 0) return none;
+  if (essTotal <= 0) return none; // no declared primary disclosures → cannot judge
+  if (essFound > 0) return none; // we DID retrieve a primary disclosure → confident
+  const fpShare = withFp / answered;
+  if (fpShare > 0.2) return none; // first-party evidence exists across measures
+  return {
+    insufficientEvidence: true,
+    label: "Insufficient evidence",
+    reason:
+      `Score is 0% but none of the ${essTotal} essential first-party disclosure(s) were retrieved ` +
+      `and only ${withFp}/${answered} measures carry any first-party evidence — the result reflects ` +
+      `a retrieval gap rather than a confident absence. Re-run discovery for the primary disclosures.`,
+  };
+}
+
+// ═══ BUG 4 — cross-measure quote-reuse advisory ══════════════════════════════
+// The same supporting passage copied verbatim across many measures is an audit
+// smell (one paragraph "proving" unrelated requirements). This is a cross-measure
+// signal, so it is derived at company-result assembly (a single measure's
+// eligibility flags cannot see it). Advisory only — never changes any score.
+
+export interface QuoteReuseResult {
+  /** Distinct quote texts that appear in >=2 measures. */
+  reusedQuoteCount: number;
+  /** Measure ids that share at least one reused quote. */
+  affectedMeasureIds: string[];
+  /** Per reused quote, the measures it appears in (text truncated for display). */
+  details: Array<{ quote: string; measureIds: string[] }>;
+}
+
+function normalizeQuoteText(s: string): string {
+  return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Pure derivation. Given per-measure quote texts, find quotes that appear in two
+ * or more DISTINCT measures. Short fragments (< 25 normalized chars) are ignored
+ * to avoid flagging boilerplate headers. Deterministic ordering.
+ */
+export function deriveQuoteReuse(
+  measures: Array<{ measureId: string; quoteTexts: Array<string | null | undefined> }> | null | undefined,
+): QuoteReuseResult {
+  const empty: QuoteReuseResult = { reusedQuoteCount: 0, affectedMeasureIds: [], details: [] };
+  if (!Array.isArray(measures) || measures.length === 0) return empty;
+  // quote text -> ordered set of measure ids containing it
+  const byQuote = new Map<string, { display: string; measures: Set<string> }>();
+  for (const m of measures) {
+    const mid = (m?.measureId ?? "").toString();
+    if (!mid) continue;
+    const seenInThisMeasure = new Set<string>();
+    for (const raw of m?.quoteTexts || []) {
+      const norm = normalizeQuoteText(raw as string);
+      if (norm.length < 25) continue; // ignore short fragments/boilerplate
+      if (seenInThisMeasure.has(norm)) continue; // dedupe within a measure
+      seenInThisMeasure.add(norm);
+      const entry = byQuote.get(norm) || { display: (raw as string).trim(), measures: new Set<string>() };
+      entry.measures.add(mid);
+      byQuote.set(norm, entry);
+    }
+  }
+  const details: Array<{ quote: string; measureIds: string[] }> = [];
+  const affected = new Set<string>();
+  for (const [, entry] of byQuote) {
+    if (entry.measures.size >= 2) {
+      const measureIds = Array.from(entry.measures);
+      details.push({
+        quote: entry.display.length > 160 ? entry.display.slice(0, 157) + "…" : entry.display,
+        measureIds,
+      });
+      for (const id of measureIds) affected.add(id);
+    }
+  }
+  // Deterministic: most-reused first, then alphabetical by quote.
+  details.sort((a, b) => b.measureIds.length - a.measureIds.length || a.quote.localeCompare(b.quote));
+  return {
+    reusedQuoteCount: details.length,
+    affectedMeasureIds: Array.from(affected).sort(),
+    details,
+  };
 }

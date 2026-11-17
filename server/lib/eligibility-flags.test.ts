@@ -11,6 +11,7 @@
 import {
   computeEligibilityFlags,
   isPositiveVerdict,
+  isThirdPartyHost,
   reviewQuoteAttribution,
   type EligibilityFlagId,
   type EligibilityFlagsInput,
@@ -31,14 +32,19 @@ function fired(input: EligibilityFlagsInput, id: EligibilityFlagId): boolean {
 // A generic, non-AI-governance company to prove topic-agnosticism.
 const ACME = { name: "Acme Beverages Corporation", ticker: "ABV", domain: "acme-bev.com", relatedDomains: ["acmebeverages.com"] };
 
-// ─── 0. Advisory invariant: always five flags, always advisoryOnly, dismissible ─
+// ─── 0. Advisory invariant: always seven flags, always advisoryOnly, dismissible ─
+// NOTE: flag count is now 7 (BUG 5 "source-label-mismatch" and BUG 6
+// "evidence-on-third-party-host" advisory flags were added). "quote-reuse" is a
+// cross-measure flag set at company-result assembly, NOT inside
+// computeEligibilityFlags (which only ever sees one measure), so it is not counted
+// here.
 {
   const r = computeEligibilityFlags({
     verdict: "Yes",
     quotes: [{ text: "Acme has established a board committee since 2024.", sourceUrl: "https://acme-bev.com/report" }],
     company: ACME,
   });
-  check("returns exactly five flags", r.flags.length === 5);
+  check("returns exactly seven flags", r.flags.length === 7);
   check("advisoryOnly invariant is true", r.advisoryOnly === true);
   check("every flag is advisory severity and dismissible", r.flags.every((f) => f.severity === "advisory" && f.dismissible === true));
   check("no flag exposes a verdict-mutation field", r.flags.every((f) => !("verdict" in (f as any)) && !("score" in (f as any)) && !("newVerdict" in (f as any))));
@@ -205,7 +211,7 @@ function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
 {
   for (const verdict of ["No", "Insufficient evidence", "Evidence absent", "Scoring error"]) {
     const r = computeEligibilityFlags({ verdict, quotes: [{ text: "Globex plans to establish something in 2010." }], company: ACME });
-    check(`non-positive verdict '${verdict}' → zero triggered flags`, r.triggeredCount === 0 && r.flags.length === 5);
+    check(`non-positive verdict '${verdict}' → zero triggered flags`, r.triggeredCount === 0 && r.flags.length === 7);
   }
   check("isPositiveVerdict recognises Yes/Partial only", isPositiveVerdict("Yes") && isPositiveVerdict("Partial") && !isPositiveVerdict("No") && !isPositiveVerdict("Insufficient evidence"));
 }
@@ -240,12 +246,12 @@ function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
   for (const b of bad) {
     try {
       const r = computeEligibilityFlags(b);
-      if (r.flags.length !== 5 || r.advisoryOnly !== true) threw = true;
+      if (r.flags.length !== 7 || r.advisoryOnly !== true) threw = true;
     } catch {
       threw = true;
     }
   }
-  check("never throws and always returns five advisory flags on bad input", !threw);
+  check("never throws and always returns seven advisory flags on bad input", !threw);
 }
 
 // ─── 9. reviewQuoteAttribution: per-quote consistency review ─────────────────────
@@ -314,6 +320,101 @@ function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
     { name: "GLOBAL HOLDINGS GROUP", ticker: "GHG" },
   );
   check("wholly-generic name: review still returns a verdict", generic.length === 1);
+}
+
+// ─── 10. BUG 1: own-brand sibling domain is recognised as first-party ────────────
+// Adani Enterprises: DB domain is "adani.com" (+ related connect.adani.com), but
+// its Annual Report is hosted on the SIBLING brand domain adanienterprises.com.
+// The exact own-domain rule misses that host; the brand-domain waiver must
+// recover it when the passage uses genuine first-party language ("our/we"), so
+// the entity-attribution gate no longer downgrades a real own-report Yes.
+{
+  const ADANI = { name: "ADANI ENTERPRISES LIMITED", ticker: "ADEL", domain: "adani.com", relatedDomains: ["connect.adani.com"] };
+  const ownReport = [
+    { text: "A few of our operations are situated in coastal areas exposed to rising sea levels.", sourceUrl: "https://www.adanienterprises.com/investors/annual-report" },
+    { text: "We have analysed physical climate risk across our primary business units.", sourceUrl: "https://www.adanienterprises.com/investors/annual-report" },
+  ];
+  const attr = reviewQuoteAttribution(ownReport, ADANI);
+  check("BUG1: own-brand sibling domain + 'our' → attributedToTarget=true", attr[0].attributedToTarget === true);
+  check("BUG1: own-brand sibling domain + 'we' → attributedToTarget=true", attr[1].attributedToTarget === true);
+
+  // The entity-attribution gate must NOT fire on this cell (so it is not downgraded).
+  const adaniCell: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: ownReport,
+    evidenceSummary: "Adani Enterprises discloses physical climate risk across its own operations.",
+    company: ADANI,
+  };
+  check("BUG1: entity-attribution does NOT fire on Adani own-report cell", !fired(adaniCell, "entity-attribution"));
+
+  // Negative guard: a passage on an own-brand host that is purely third-person
+  // ("the company ...") — no we/our — must NOT be waived by the brand path
+  // (prevents consultancy-style case studies on own marketing domains attributing).
+  const thirdPerson = reviewQuoteAttribution(
+    [{ text: "The company targeted efficiency gains across the sector this year.", sourceUrl: "https://www.adanienterprises.com/insights" }],
+    ADANI,
+  );
+  check("BUG1: own-brand host + generic 'the company' (no we/our) → NOT attributed", thirdPerson[0].attributedToTarget === false);
+}
+
+// ─── 11. BUG 6: third-party host is NEVER waived + advisory flag fires ────────────
+// PNC's "Yes" rested on a Morningstar report about a subsidiary. The brand-domain
+// waiver must never treat a known analyst/news host as the issuer's own domain,
+// even with first-party-sounding language → the entity gate still catches it.
+{
+  const PNC = { name: "The PNC Financial Services Group, Inc.", ticker: "PNC", domain: "pnc.com", relatedDomains: [] };
+  const morningstar = [
+    { text: "The company tests its business-continuity plans annually, we note.", sourceUrl: "https://www.morningstar.com/stocks/pnc-analysis" },
+  ];
+  const attr = reviewQuoteAttribution(morningstar, PNC);
+  check("BUG6: Morningstar host (third-party) is NOT attributed to target", attr[0].attributedToTarget === false);
+
+  const pncCell: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: morningstar,
+    company: PNC,
+  };
+  check("BUG6: entity-attribution FIRES on PNC Morningstar cell (still rejected)", fired(pncCell, "entity-attribution"));
+  check("BUG6: evidence-on-third-party-host advisory flag FIRES on Morningstar", fired(pncCell, "evidence-on-third-party-host"));
+
+  // isThirdPartyHost classification sanity.
+  check("BUG6: isThirdPartyHost true for morningstar.com", isThirdPartyHost("https://www.morningstar.com/x") === true);
+  check("BUG6: isThirdPartyHost false for an issuer own domain", isThirdPartyHost("https://www.adanienterprises.com/x") === false);
+
+  // Own-disclosure evidence should NOT raise the third-party-host flag.
+  const ownCell: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [{ text: "We maintain tested business-continuity plans.", sourceUrl: "https://www.pnc.com/about" }],
+    company: PNC,
+  };
+  check("BUG6: third-party-host flag does NOT fire on own-domain evidence", !fired(ownCell, "evidence-on-third-party-host"));
+}
+
+// ─── 12. BUG 5: source-label-mismatch advisory (quote year post-dates label) ─────
+{
+  const mismatch: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [{
+      text: "In 2024 the group completed its climate scenario analysis.",
+      sourceUrl: "https://acme-bev.com/ar",
+      source: "Acme Annual Report 2021",
+    }],
+    company: ACME,
+    window: { currentYear: 2026, yearsBack: 5 },
+  };
+  check("BUG5: source-label-mismatch FIRES when quote year (2024) > label year (2021)", fired(mismatch, "source-label-mismatch"));
+
+  const consistent: EligibilityFlagsInput = {
+    verdict: "Yes",
+    quotes: [{
+      text: "In 2021 the group completed its climate scenario analysis.",
+      sourceUrl: "https://acme-bev.com/ar",
+      source: "Acme Annual Report 2021",
+    }],
+    company: ACME,
+    window: { currentYear: 2026, yearsBack: 5 },
+  };
+  check("BUG5: source-label-mismatch CLEARS when quote year matches label year", !fired(consistent, "source-label-mismatch"));
 }
 
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"}`);

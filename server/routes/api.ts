@@ -28,7 +28,10 @@ import { runMeasureDesignDiagnostic } from "../lib/measure-design-diagnostic.js"
 import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.js";
 // WP02/A1 (additive): explicit research-state accounting. Pure derivation —
 // never affects scores/verdicts; attached to responses as metadata only.
-import { buildManifest, deriveResearchStatus, researchStatusCsvColumns } from "../../shared/research-state.js";
+import { buildManifest, deriveResearchStatus, researchStatusCsvColumns, deriveEvidenceCompleteness, deriveQuoteReuse } from "../../shared/research-state.js";
+// BUG 6 helper: reused to decide whether a measure carries first-party (non
+// third-party-host) evidence when deriving the BUG 2 insufficient-evidence label.
+import { isThirdPartyHost } from "../lib/eligibility-flags.js";
 import { buildEvidenceFunnel } from "../lib/evidence-funnel.js";
 import { runCompletenessValidator } from "../lib/framework-completeness.js";
 import { frameworkReadiness } from "../lib/framework-readiness.js";
@@ -199,7 +202,55 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
       /* funnel is additive/best-effort; never block the company read */
     }
 
-    res.json({ company: enrichedCompany, scores, documents, researchStatus, evidenceFunnel });
+    // BUG 2 (additive, display-only): distinguish a confident 0% from a retrieval
+    // gap ("insufficient evidence"). NEVER changes totalScore/verdicts. Counts a
+    // measure as carrying first-party evidence when it has >=1 real quote whose
+    // host is NOT a known third-party news/analyst/aggregator domain.
+    let evidenceCompleteness: any = null;
+    try {
+      const essentialChecklist = (researchStatus as any)?.essentialChecklist || [];
+      const essentialTotalCount = essentialChecklist.length;
+      const essentialFoundCount = essentialChecklist.filter((i: any) => i?.status === "found").length;
+      const DIAG_PREFIX = "diag://";
+      const hasFirstPartyEvidence = (s: any): boolean =>
+        (s?.quotes || []).some((q: any) => {
+          const text = (q?.text || "").trim();
+          const url = (q?.sourceUrl || "").trim();
+          if (!text || !url) return false;
+          if (url.toLowerCase().startsWith(DIAG_PREFIX)) return false;
+          return !isThirdPartyHost(url);
+        });
+      const measuresWithFirstPartyEvidence = answered.filter(hasFirstPartyEvidence).length;
+      evidenceCompleteness = deriveEvidenceCompleteness({
+        answeredCount: answered.length,
+        metCount: met.length,
+        essentialFoundCount,
+        essentialTotalCount,
+        measuresWithFirstPartyEvidence,
+      });
+    } catch {
+      /* additive/best-effort; never block the company read */
+    }
+
+    // BUG 4 (additive, display-only): cross-measure quote-reuse advisory over the
+    // POSITIVE (Yes/Partial) measures — the same passage "proving" several measures.
+    let quoteReuse: any = null;
+    try {
+      const DIAG_PREFIX = "diag://";
+      const positive = scores.filter((s: any) => isMet(s.verdict, s.score));
+      quoteReuse = deriveQuoteReuse(
+        positive.map((s: any) => ({
+          measureId: (s.measureId ?? "").toString(),
+          quoteTexts: (s?.quotes || [])
+            .filter((q: any) => (q?.sourceUrl || "").toLowerCase().indexOf(DIAG_PREFIX) !== 0)
+            .map((q: any) => q?.text),
+        })),
+      );
+    } catch {
+      /* additive/best-effort; never block the company read */
+    }
+
+    res.json({ company: enrichedCompany, scores, documents, researchStatus, evidenceFunnel, evidenceCompleteness, quoteReuse });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

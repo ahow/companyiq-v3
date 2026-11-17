@@ -30,6 +30,8 @@ import {
   summarizeEssentialChecklist,
   isLowScoreCompany,
   LOW_SCORE_ESSENTIAL_THRESHOLD,
+  deriveEvidenceCompleteness,
+  deriveQuoteReuse,
   type GapDocument,
   type ResearchScopeManifest,
 } from "../../shared/research-state.js";
@@ -364,6 +366,148 @@ test("I5.9 summarizeEssentialChecklist renders 'not found' label", () => {
   assert.match(summary, /Annual Report: found/);
   assert.match(summary, /Sustainability Report: not found/);
   assert.equal(summarizeEssentialChecklist([]), "");
+});
+
+// ═══ BUG 3 — climate-disclosure doc types are satisfied by embedding reports ═══
+// TCFD / IFRS S2 / physical-climate disclosures are rarely standalone documents;
+// they live inside the Annual / Integrated / Sustainability report. Previously the
+// checklist showed "not found" for every company because no title/URL literally
+// contained "tcfd"/"ifrs"/"s2". A retrieved first-party embedding report must now
+// satisfy the climate item, while non-climate items keep exact token matching.
+test("BUG3.1 a climate/TCFD doc type is found inside a retrieved annual report (embedded)", () => {
+  const docs: GapDocument[] = [
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report-2025.pdf" },
+  ];
+  const checklist = deriveEssentialDocChecklist(docs, ["TCFD Report", "IFRS S2 Climate Disclosure"]);
+  const byType = Object.fromEntries(checklist.map((i) => [i.docType, i]));
+  assert.equal(byType["TCFD Report"].status, "found", "TCFD satisfied by annual report");
+  assert.match(byType["TCFD Report"].detail, /embedded/);
+  assert.equal(byType["IFRS S2 Climate Disclosure"].status, "found", "IFRS S2 satisfied by annual report");
+});
+
+test("BUG3.2 climate doc type found via sustainability report; standalone climate report still direct-matches", () => {
+  const docs: GapDocument[] = [
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Sustainability Report 2025", url: "https://acme.example/sustainability.pdf" },
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Climate Report 2025 (TCFD)", url: "https://acme.example/climate-tcfd.pdf" },
+  ];
+  const checklist = deriveEssentialDocChecklist(docs, ["Physical Climate Risk Disclosure", "Climate Report"]);
+  const byType = Object.fromEntries(checklist.map((i) => [i.docType, i.status]));
+  assert.equal(byType["Physical Climate Risk Disclosure"], "found");
+  assert.equal(byType["Climate Report"], "found");
+});
+
+test("BUG3.3 broadening is scoped: a non-climate doc type is NOT satisfied by an unrelated annual report", () => {
+  const docs: GapDocument[] = [
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report.pdf" },
+  ];
+  // "Responsible AI Policy" is not a climate doc type → must stay not_found.
+  const checklist = deriveEssentialDocChecklist(docs, ["Responsible AI Policy"]);
+  assert.equal(checklist[0].status, "not_found", "non-climate doc type keeps exact matching");
+});
+
+test("BUG3.4 a climate doc type with no embedding report retrieved is still not_found", () => {
+  const docs: GapDocument[] = [
+    // Only an AI policy — nothing that embeds a climate disclosure.
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "Responsible AI Policy", url: "https://acme.example/ai-policy.pdf" },
+  ];
+  const checklist = deriveEssentialDocChecklist(docs, ["TCFD Report"]);
+  assert.equal(checklist[0].status, "not_found", "no embedding report → climate item not satisfied");
+});
+
+// ═══ BUG 2 — confident 0% vs "insufficient evidence" ═════════════════════════
+test("BUG2.1 0% with no essential docs found and no first-party evidence → insufficient", () => {
+  const r = deriveEvidenceCompleteness({
+    answeredCount: 36, metCount: 0,
+    essentialFoundCount: 0, essentialTotalCount: 3,
+    measuresWithFirstPartyEvidence: 2, // 2/36 ≈ 5.5% ≤ 20%
+  });
+  assert.equal(r.insufficientEvidence, true);
+  assert.equal(r.label, "Insufficient evidence");
+});
+
+test("BUG2.2 a confident 0% (essential disclosure retrieved) is NOT relabelled", () => {
+  const r = deriveEvidenceCompleteness({
+    answeredCount: 36, metCount: 0,
+    essentialFoundCount: 2, essentialTotalCount: 3, // we DID get primary disclosures
+    measuresWithFirstPartyEvidence: 1,
+  });
+  assert.equal(r.insufficientEvidence, false);
+});
+
+test("BUG2.3 a non-zero score is never relabelled", () => {
+  const r = deriveEvidenceCompleteness({
+    answeredCount: 36, metCount: 5,
+    essentialFoundCount: 0, essentialTotalCount: 3,
+    measuresWithFirstPartyEvidence: 0,
+  });
+  assert.equal(r.insufficientEvidence, false);
+});
+
+test("BUG2.4 0% with broad first-party evidence stays a confident 0%", () => {
+  const r = deriveEvidenceCompleteness({
+    answeredCount: 36, metCount: 0,
+    essentialFoundCount: 0, essentialTotalCount: 3,
+    measuresWithFirstPartyEvidence: 20, // 20/36 ≈ 56% > 20%
+  });
+  assert.equal(r.insufficientEvidence, false);
+});
+
+test("BUG2.5 no declared essential doc types → cannot judge (not relabelled)", () => {
+  const r = deriveEvidenceCompleteness({
+    answeredCount: 10, metCount: 0,
+    essentialFoundCount: 0, essentialTotalCount: 0,
+    measuresWithFirstPartyEvidence: 0,
+  });
+  assert.equal(r.insufficientEvidence, false);
+});
+
+test("BUG2.6 malformed/empty input never throws", () => {
+  assert.equal(deriveEvidenceCompleteness({} as any).insufficientEvidence, false);
+  assert.equal(deriveEvidenceCompleteness(null as any).insufficientEvidence, false);
+});
+
+// ═══ BUG 4 — cross-measure quote-reuse advisory ══════════════════════════════
+test("BUG4.1 a quote reused across two measures is detected", () => {
+  const shared = "The group tests its business-continuity plans annually across all sites.";
+  const r = deriveQuoteReuse([
+    { measureId: "U1", quoteTexts: [shared, "A unique U1 passage that is long enough to count here."] },
+    { measureId: "A2", quoteTexts: [shared] },
+    { measureId: "A11", quoteTexts: ["A distinct A11 passage that is also long enough to count."] },
+  ]);
+  assert.equal(r.reusedQuoteCount, 1);
+  assert.deepEqual(r.affectedMeasureIds, ["A2", "U1"]);
+  assert.equal(r.details[0].measureIds.length, 2);
+});
+
+test("BUG4.2 a quote within a single measure (not cross-measure) is NOT flagged", () => {
+  const shared = "The group tests its business-continuity plans annually across all sites.";
+  const r = deriveQuoteReuse([
+    { measureId: "U1", quoteTexts: [shared, shared] }, // same measure twice → not reuse
+    { measureId: "A2", quoteTexts: ["Something entirely different and sufficiently long here."] },
+  ]);
+  assert.equal(r.reusedQuoteCount, 0);
+  assert.deepEqual(r.affectedMeasureIds, []);
+});
+
+test("BUG4.3 short fragments are ignored; whitespace/case-insensitive match", () => {
+  const r = deriveQuoteReuse([
+    { measureId: "U1", quoteTexts: ["Yes.", "  The GROUP   tests its continuity plans every single year without fail. "] },
+    { measureId: "A2", quoteTexts: ["yes.", "the group tests its continuity plans every single year without fail."] },
+  ]);
+  // "Yes." is < 25 chars → ignored; the long passage matches across measures.
+  assert.equal(r.reusedQuoteCount, 1);
+  assert.deepEqual(r.affectedMeasureIds, ["A2", "U1"]);
+});
+
+test("BUG4.4 empty / malformed input never throws", () => {
+  assert.equal(deriveQuoteReuse([]).reusedQuoteCount, 0);
+  assert.equal(deriveQuoteReuse(null).reusedQuoteCount, 0);
+  assert.equal(deriveQuoteReuse([{ measureId: "", quoteTexts: [null, undefined] }] as any).reusedQuoteCount, 0);
 });
 
 // ─── Additive guarantee: derivation never mutates its inputs ──────────────────

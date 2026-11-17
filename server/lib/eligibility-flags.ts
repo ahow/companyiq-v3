@@ -14,7 +14,17 @@ export type EligibilityFlagId =
   | "date-window"
   | "planned-vs-live"
   | "author-vs-adopter"
-  | "claim-level-source-link";
+  | "claim-level-source-link"
+  // BUG 5 (advisory): a supporting quote references a year that post-dates the
+  // year asserted by its own source label (mislabelled / outdated source).
+  | "source-label-mismatch"
+  // BUG 6 (advisory): a supporting quote is hosted on a known third-party
+  // news/analyst/aggregator domain rather than the issuer's own disclosure.
+  | "evidence-on-third-party-host"
+  // BUG 4 (advisory): the same supporting quote is reused across multiple Yes
+  // measures for this company. Set at company-result assembly (cross-measure),
+  // never inside computeEligibilityFlags (which only sees one measure).
+  | "quote-reuse";
 
 export interface EligibilityFlag {
   id: EligibilityFlagId;
@@ -105,6 +115,16 @@ const PRONOUNS_REGEX = /\b(we|our|us|the company|the group|the firm|the bank|the
 // trusting third-party/case-study passages.
 const CJK_FIRST_PARTY_REGEX = /(本公司|本集团|本行|我司|我公司|我集团|公司|该公司|集团|当社|当グループ|当行|弊社|わが社|当グループ|당사|본사|회사|당행)/;
 const CASE_STUDY_NEGATIVES = /\b(for a client|assisted a partner|major retailer case study|customer case study|client case study|vendor to|partnered with)\b/i;
+// STRICT first-party cue (BUG 1): genuine possessive / subject references the
+// issuer makes about ITSELF ("we/our/us/ourselves"). Deliberately EXCLUDES the
+// generic third-person descriptors "the company/the group/the bank/..." that
+// PRONOUNS_REGEX allows, because an issuer's own-brand thought-leadership domain
+// (e.g. a consultancy) routinely says "the company" about a CLIENT in a case
+// study. The brand-domain waiver (which admits sibling-brand hosts beyond the
+// exact DB domain) therefore requires this stricter cue so it recognises a
+// genuine own-report passage (Adani's "a few of our operations ...") while NOT
+// attributing a generic "the company ..." sentence on an own-brand marketing host.
+const FIRST_PARTY_POSSESSIVE_REGEX = /\b(we|our|us|ours|ourselves)\b/i;
 const REPORTS_REGEX = /\b(Annual Report|Sustainability Report|ESG Report|ESG Fact|10-K|20-F|Integrated Report|Terms & Conditions|Consent Form|Proxy Statement|Notice of Meeting|Policy|Statement|Code of Conduct|Charter|Guidelines)\b/i;
 const COMMITMENT_VERBS = /\b(Establish|Implement|Ensure|Adopt|Maintain|Retain|Monitor|Protect|Secure|Disclose)\b/i;
 
@@ -181,6 +201,89 @@ function isOwnDomainSource(url: string | undefined, company: CompanyIdentity): b
     return false;
   }
   return false;
+}
+
+// Known third-party news / analyst / ratings / aggregator hosts. The brand-domain
+// waiver below must NEVER treat any of these as the issuer's own domain, even when
+// the passage uses first-party-sounding language ("the company …"). This is the
+// user's "Generic News" negative rule (gate_refinement_master_rules.md) and is
+// what keeps PNC's Morningstar-sourced evidence (about a subsidiary) correctly
+// rejected (BUG 6). It is consulted ONLY by the brand-domain path — it never
+// affects isTrustedSource / PRIMARY_DOMAINS behaviour.
+const THIRD_PARTY_HOST_SUFFIXES: string[] = [
+  "morningstar.com", "forbes.com", "reuters.com", "bloomberg.com", "ft.com",
+  "wsj.com", "cnbc.com", "marketwatch.com", "seekingalpha.com", "fool.com",
+  "barrons.com", "investing.com", "yahoo.com", "spglobal.com", "moodys.com",
+  "fitchratings.com", "msci.com", "sustainalytics.com", "refinitiv.com",
+  "statista.com", "globaldata.com", "businesswire.com", "prnewswire.com",
+  "globenewswire.com", "benzinga.com", "simplywall.st", "tipranks.com",
+  "zacks.com", "gurufocus.com", "wikipedia.org", "linkedin.com",
+  "crunchbase.com", "perplexity.ai", "nytimes.com", "theguardian.com",
+  "economist.com", "bbc.co.uk", "bbc.com", "spott.com", "spcapitaliq.com",
+];
+
+/** True when the host is a known third-party news/analyst/aggregator domain. */
+export function isThirdPartyHost(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    return THIRD_PARTY_HOST_SUFFIXES.some(
+      (d) => hostname === d || hostname.endsWith("." + d),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Brand tokens that identify the issuer, used to recognise own-brand domains that
+ * are NOT the exact DB `domain` — e.g. a sibling brand domain
+ * (adanienterprises.com when the DB row says adani.com) or a subdomain. Derived
+ * from (a) the company NAME via the shared alias deriver (legal + generic
+ * corporate-form words stripped) and (b) the registrable label of every known
+ * company domain (adani.com → "adani"). Only tokens of length ≥4 are kept so a
+ * host-substring match is high-precision (a 2–3 char ticker like "PNC" never
+ * admits unrelated hosts — it is handled only by exact-domain/identity-token
+ * matching, which keeps the Generic-News guard intact).
+ */
+function companyBrandTokens(company: CompanyIdentity): string[] {
+  const toks = new Set<string>();
+  try {
+    for (const a of deriveAliases(company?.name || "", company?.ticker ?? null)) {
+      const t = (a || "").toLowerCase().trim();
+      if (t.length >= 4) toks.add(t);
+    }
+  } catch { /* alias derivation is best-effort */ }
+  const domains = [company?.domain, ...((company?.relatedDomains) || [])].filter(nonEmpty);
+  for (const d of domains) {
+    const label = d.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0].split(".")[0];
+    if (label.length >= 4) toks.add(label);
+  }
+  return Array.from(toks);
+}
+
+// True when a quote's host is the issuer's OWN brand domain — a superset of
+// isOwnDomainSource that also recognises sibling brand domains and subdomains via
+// the company's brand tokens (so adanienterprises.com matches a company whose DB
+// `domain` is adani.com). Known third-party news/analyst/aggregator hosts are
+// excluded up front (Generic News negative rule, BUG 6). High-precision: a brand
+// token (≥4 chars) must appear in the host's registrable (second-level) label.
+function isOwnBrandDomainSource(url: string | undefined, company: CompanyIdentity): boolean {
+  if (!url) return false;
+  try {
+    // Negative guard FIRST — never waive a third-party host.
+    if (isThirdPartyHost(url)) return false;
+    // Exact / subdomain own-domain (existing high-precision path).
+    if (isOwnDomainSource(url, company)) return true;
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    const label = hostname.split(".")[0];
+    if (!label) return false;
+    const brandTokens = companyBrandTokens(company);
+    // host's second-level label equals / starts-with / contains a brand token ≥4.
+    return brandTokens.some((t) => t.length >= 4 && label.includes(t));
+  } catch {
+    return false;
+  }
 }
 
 function cleanCompanyName(name: string): string {
@@ -280,6 +383,25 @@ export function reviewQuoteAttribution(
       // trusted-source rules below. Case-study passages are already excluded above.
       if (isOwnDomainSource(q.sourceUrl, company) && text.trim().length >= 12) {
         return { index, attributedToTarget: true, reason: "Company Own Domain (First-Party)" };
+      }
+
+      // Rule 1 (brand-aware First-Party Domain Waiver — BUG 1 fix): the quote is
+      // hosted on the issuer's OWN brand domain that is NOT the exact DB `domain`
+      // — a sibling brand domain (adanienterprises.com for ADANI ENTERPRISES
+      // LIMITED, whose DB domain is adani.com) or a subdomain. On such an
+      // own-brand host, a passage using first-party language ("we/our/the
+      // company", or a CJK first-party reference) is the issuer describing its
+      // OWN practice → attribute. Known third-party news/analyst/aggregator hosts
+      // are excluded inside isOwnBrandDomainSource (Generic News negative rule),
+      // so this never over-attributes a Morningstar/Reuters passage. Case-study
+      // negatives were already excluded above. This also ensures the first-party
+      // PRONOUNS path triggers for own-brand-domain docs, not only
+      // PRIMARY_DOMAINS-trusted ones.
+      if (
+        isOwnBrandDomainSource(q.sourceUrl, company) &&
+        (FIRST_PARTY_POSSESSIVE_REGEX.test(text) || CJK_FIRST_PARTY_REGEX.test(text))
+      ) {
+        return { index, attributedToTarget: true, reason: "Own-Brand Domain + First-Party (Rule 1)" };
       }
 
       // Rule: Trusted Source + First-Party framing
@@ -382,6 +504,54 @@ function flagAuthorVsAdopter(input: EligibilityFlagsInput, text: string): Eligib
   return { ...base, triggered: false, reason: "Adopter language detected or no author framing found." };
 }
 
+// BUG 5 (advisory, no score change): catch a mislabelled / outdated source
+// WITHOUT a network fetch. The source label often asserts a document year
+// (e.g. "Annual Report 2021", "2024 10-K"); if the quote body references a LATER
+// year (a 20xx that post-dates the label year), the quote almost certainly comes
+// from a newer document than the label claims — a label/date mismatch worth an
+// auditor's eye. Pure text; triggers only when BOTH a label year and a strictly
+// greater in-quote year are present.
+function flagSourceLabelMismatch(input: EligibilityFlagsInput): EligibilityFlag {
+  const base = { id: "source-label-mismatch" as const, label: "Source label mismatch", severity: "advisory" as const, dismissible: true as const };
+  const currentYear = input.window?.currentYear ?? new Date().getUTCFullYear();
+  const yearOf = (s: string | undefined): number | null => {
+    const years = Array.from((s || "").matchAll(/\b(19\d{2}|20\d{2})\b/g))
+      .map((m) => parseInt(m[1], 10))
+      .filter((y) => y >= 1990 && y <= currentYear + 1);
+    return years.length ? Math.max(...years) : null;
+  };
+  for (const q of input.quotes || []) {
+    if (!nonEmpty(q?.text)) continue;
+    const labelYear = yearOf(q.source);
+    if (labelYear == null) continue;
+    const quoteYear = yearOf(q.text);
+    if (quoteYear != null && quoteYear > labelYear) {
+      return {
+        ...base,
+        triggered: true,
+        reason: `A supporting quote references ${quoteYear} but its source is labelled ${labelYear} (${(q.source || "").trim()}). The source may be mislabelled or outdated.`,
+      };
+    }
+  }
+  return { ...base, triggered: false, reason: "No source-label/quote-year mismatch detected." };
+}
+
+// BUG 6 (advisory, no score change): surface when a supporting quote is hosted on
+// a KNOWN third-party news/analyst/ratings/aggregator domain rather than on the
+// issuer's own disclosure. This never gates on its own (the entity-attribution
+// gate already catches genuinely wrong-entity evidence); it is an audit signal
+// that the Yes may rest on third-party commentary.
+function flagThirdPartyHost(input: EligibilityFlagsInput): EligibilityFlag {
+  const base = { id: "evidence-on-third-party-host" as const, label: "Evidence on third-party host", severity: "advisory" as const, dismissible: true as const };
+  const hit = (input.quotes || []).find((q) => nonEmpty(q?.text) && isThirdPartyHost(q?.sourceUrl));
+  if (hit) {
+    let host = "";
+    try { host = new URL(hit.sourceUrl as string).hostname.replace(/^www\./, ""); } catch { /* best-effort */ }
+    return { ...base, triggered: true, reason: `A supporting quote is hosted on a third-party news/analyst/aggregator domain${host ? ` (${host})` : ""} rather than the issuer's own disclosure.` };
+  }
+  return { ...base, triggered: false, reason: "No supporting quote is on a known third-party host." };
+}
+
 function flagClaimLevelSourceLink(input: EligibilityFlagsInput): EligibilityFlag {
   const base = { id: "claim-level-source-link" as const, label: "Claim-level source link", severity: "advisory" as const, dismissible: true as const };
   const hasLink = (input.quotes || []).some(q => nonEmpty(q?.text) && /^https?:\/\/\S+/i.test((q?.sourceUrl || "").trim()));
@@ -390,7 +560,7 @@ function flagClaimLevelSourceLink(input: EligibilityFlagsInput): EligibilityFlag
 
 export function computeEligibilityFlags(input: EligibilityFlagsInput): EligibilityFlagsResult {
   const makeUntriggered = (reason: string): EligibilityFlagsResult => ({
-    flags: (["entity-attribution", "date-window", "planned-vs-live", "author-vs-adopter", "claim-level-source-link"] as EligibilityFlagId[]).map(id => ({
+    flags: (["entity-attribution", "date-window", "planned-vs-live", "author-vs-adopter", "claim-level-source-link", "source-label-mismatch", "evidence-on-third-party-host"] as EligibilityFlagId[]).map(id => ({
       id, label: id, triggered: false, severity: "advisory", dismissible: true, reason
     })),
     triggeredCount: 0,
@@ -406,6 +576,8 @@ export function computeEligibilityFlags(input: EligibilityFlagsInput): Eligibili
       flagPlannedVsLive(input, text),
       flagAuthorVsAdopter(input, text),
       flagClaimLevelSourceLink(input),
+      flagSourceLabelMismatch(input),
+      flagThirdPartyHost(input),
     ];
     return { flags, triggeredCount: flags.filter(f => f.triggered).length, advisoryOnly: true };
   } catch {
