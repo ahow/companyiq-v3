@@ -368,12 +368,14 @@ test("I5.9 summarizeEssentialChecklist renders 'not found' label", () => {
   assert.equal(summarizeEssentialChecklist([]), "");
 });
 
-// ═══ BUG 3 — climate-disclosure doc types are satisfied by embedding reports ═══
-// TCFD / IFRS S2 / physical-climate disclosures are rarely standalone documents;
-// they live inside the Annual / Integrated / Sustainability report. Previously the
-// checklist showed "not found" for every company because no title/URL literally
-// contained "tcfd"/"ifrs"/"s2". A retrieved first-party embedding report must now
-// satisfy the climate item, while non-climate items keep exact token matching.
+// ═══ BUG 3 — thematic sub-disclosures are satisfied by umbrella reports ═══════
+// A thematic sub-disclosure (climate/TCFD, AI-governance, human-rights, cyber,
+// etc.) is rarely a standalone document; it lives inside the Annual / Integrated /
+// Sustainability / ESG report. Previously the checklist showed "not found" for
+// every company because no title/URL literally contained the disclosure name. A
+// retrieved first-party umbrella report must now satisfy ANY embeddable thematic
+// disclosure (topic-neutral), while standalone/statutory doc types (10-K, 20-F,
+// annual report itself) still require a direct match.
 test("BUG3.1 a climate/TCFD doc type is found inside a retrieved annual report (embedded)", () => {
   const docs: GapDocument[] = [
     { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
@@ -399,17 +401,40 @@ test("BUG3.2 climate doc type found via sustainability report; standalone climat
   assert.equal(byType["Climate Report"], "found");
 });
 
-test("BUG3.3 broadening is scoped: a non-climate doc type is NOT satisfied by an unrelated annual report", () => {
+test("BUG3.3 generalisation: a NON-climate narrative disclosure is ALSO satisfied by an umbrella report", () => {
   const docs: GapDocument[] = [
     { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
       title: "ACME Annual Report 2025", url: "https://acme.example/annual-report.pdf" },
   ];
-  // "Responsible AI Policy" is not a climate doc type → must stay not_found.
-  const checklist = deriveEssentialDocChecklist(docs, ["Responsible AI Policy"]);
-  assert.equal(checklist[0].status, "not_found", "non-climate doc type keeps exact matching");
+  // Topic-neutral by document NATURE: a non-climate narrative DISCLOSURE embedded in
+  // an annual report is recognised exactly like a climate disclosure (no topic
+  // hardcoding) ... while a governance POLICY must still be found directly.
+  const checklist = deriveEssentialDocChecklist(docs, [
+    "Human Rights Disclosure",        // narrative disclosure → embeddable
+    "Cyber Risk Disclosure",          // narrative disclosure → embeddable
+    "Responsible AI Policy",          // governance artefact → must be direct
+  ]);
+  const byType = Object.fromEntries(checklist.map((i) => [i.docType, i]));
+  assert.equal(byType["Human Rights Disclosure"].status, "found", "non-climate disclosure embeddable");
+  assert.match(byType["Human Rights Disclosure"].detail, /embedded/);
+  assert.equal(byType["Cyber Risk Disclosure"].status, "found", "another non-climate disclosure embeddable");
+  assert.equal(byType["Responsible AI Policy"].status, "not_found", "a policy is NOT embedded-satisfied");
 });
 
-test("BUG3.4 a climate doc type with no embedding report retrieved is still not_found", () => {
+test("BUG3.3b scope boundary: a standalone/statutory doc type is NOT satisfied by an umbrella report", () => {
+  const docs: GapDocument[] = [
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report.pdf" },
+  ];
+  // A required "10-K" / "20-F" must be matched directly — an annual report embedding
+  // must NOT satisfy it (prevents over-broadening of required standalone filings).
+  const checklist = deriveEssentialDocChecklist(docs, ["10-K", "20-F Annual Filing"]);
+  const byType = Object.fromEntries(checklist.map((i) => [i.docType, i.status]));
+  assert.equal(byType["10-K"], "not_found", "standalone 10-K not satisfied by embedding");
+  assert.equal(byType["20-F Annual Filing"], "not_found", "standalone 20-F not satisfied by embedding");
+});
+
+test("BUG3.4 an embeddable disclosure with no umbrella report retrieved is still not_found", () => {
   const docs: GapDocument[] = [
     // Only an AI policy — nothing that embeds a climate disclosure.
     { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",

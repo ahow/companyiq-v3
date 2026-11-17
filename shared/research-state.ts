@@ -398,35 +398,77 @@ function matchesDocType(haystack: string, docType: string): boolean {
   return matched >= Math.min(2, words.length);
 }
 
-// BUG 3: climate-disclosure doc types (TCFD, IFRS S2, physical-climate, scenario
-// analysis, transition plan) are very rarely published as a standalone document —
-// they are almost always a SECTION of a broader first-party report (Annual /
-// Integrated / Sustainability / ESG report) or a dedicated climate/TCFD report.
+// Embedded-disclosure reconciliation (topic-neutral). A thematic sub-disclosure
+// required by a framework is very rarely published as a standalone document — it
+// is usually a SECTION of a broader first-party umbrella report (Annual /
+// Integrated / Sustainability / ESG / responsibility report). This holds for any
+// topic (climate/TCFD disclosures, AI-governance policies, human-rights or
+// cyber-risk disclosures, etc.), not just one framework.
 // The generic token match above requires the literal doc-type words in the
-// title/URL, so these items showed "not found" for virtually every company even
-// when the disclosure was retrieved inside an annual/sustainability report. The
-// family test identifies such required doc types; the embedding test recognises a
-// report title/URL that commonly CONTAINS the disclosure, so a retrieved embedding
-// report satisfies the climate item too. Scope is deliberately narrow (only the
-// climate family is broadened — all other doc types keep exact token matching).
-const CLIMATE_DOCTYPE_FAMILY =
-  /(tcfd|ifrs\s*s2|\bifrs\b|\bs2\b|climate|physical\s*risk|scenario\s*analysis|transition\s*plan|cdp)/i;
-const CLIMATE_EMBEDDING_REPORT =
-  /(annual\s*report|annual\s*integrated|integrated\s*report|sustainability\s*report|esg\s*report|responsibility\s*report|corporate\s*responsibility|climate|tcfd|cdp|annualreport|sustainability|integrated|esg)/i;
+// title/URL, so a THEMATIC sub-disclosure (one whose literal name rarely appears
+// in a document title) showed "not found" for virtually every company even when
+// the disclosure was in fact published inside a broad corporate umbrella report
+// (annual / integrated / sustainability / ESG / responsibility report). This is a
+// topic-neutral pattern: for ANY framework/topic, a thematic disclosure (e.g. a
+// climate/TCFD disclosure, an AI-governance policy, a human-rights statement, a
+// cyber-risk disclosure) is commonly embedded in such an umbrella report rather
+// than published as a standalone document.
+//
+// Generalisation (no topic/framework hardcoding):
+//  - UMBRELLA_REPORT_REGEX recognises a RETRIEVED document that is a broad
+//    corporate report capable of embedding a thematic disclosure. These container
+//    report names are universal across corporate reporting topics.
+//  - STANDALONE_DOCTYPE_REGEX identifies a REQUIRED doc type that must be matched
+//    directly (the umbrella reports themselves + statutory filings). Such a type is
+//    NOT satisfied by embedding — e.g. a required "10-K" is not satisfied merely
+//    because an annual report was found.
+//  - A required doc type that NAMES narrative disclosure content (report /
+//    disclosure / statement / review / analysis / assessment) and is not an
+//    umbrella/standalone type is embeddable, so a retrieved umbrella report
+//    satisfies it. A governance artefact (policy / charter / code) must be found
+//    directly. This keys off document NATURE, not subject matter, so it applies to
+//    every topic equally; nothing here is specific to climate, a framework id, or a
+//    company.
+const UMBRELLA_REPORT_REGEX =
+  /(annual\s*report|annual\s*integrated|integrated\s*report|sustainability\s*report|esg\s*report|responsibility\s*report|corporate\s*responsibility|annualreport|sustainability|integrated\b|\besg\b)/i;
+// Umbrella/container reports (matched directly, not embeddable) + standalone
+// statutory filings. A required doc type matching this must be obtained as itself.
+const STANDALONE_DOCTYPE_REGEX =
+  /(annual\s*report|integrated\s*report|sustainability\s*report|esg\s*report|responsibility\s*report|corporate\s*responsibility|10-?k|20-?f|proxy|notice\s*of\s*meeting|form\s*\d)/i;
+// Narrative-disclosure nouns: a doc type naming NARRATIVE content (a report /
+// disclosure / statement / review / analysis / assessment of a theme) is the kind
+// of artefact typically published INSIDE a broader umbrella report. A governance
+// artefact (policy / charter / code / standard / procedure / framework / manual) is
+// typically a standalone document and must be obtained directly. This distinction is
+// topic-neutral — it keys off the NATURE of the document named, not the subject
+// matter — so it generalises to any framework/topic (a "Human Rights Disclosure"
+// or "Cyber Risk Disclosure" is embeddable exactly like a "Climate Disclosure",
+// while any "... Policy" must be found directly).
+const NARRATIVE_DISCLOSURE_REGEX =
+  /\b(report|disclosure|statement|review|analysis|assessment|scenario)\b/i;
 
-/** True when a required doc type belongs to the climate-disclosure family. */
-function isClimateFamilyDocType(docType: string): boolean {
-  return CLIMATE_DOCTYPE_FAMILY.test(docType || "");
+/**
+ * True when a required doc type is an embeddable thematic disclosure (topic-neutral):
+ * it names narrative disclosure content AND is not itself an umbrella/container report
+ * or a standalone statutory filing. Such disclosures are frequently published inside a
+ * broader report rather than standalone, for any topic or framework.
+ */
+function isEmbeddableDisclosureDocType(docType: string): boolean {
+  const d = docType || "";
+  if (!d.trim()) return false;
+  if (STANDALONE_DOCTYPE_REGEX.test(d)) return false;
+  return NARRATIVE_DISCLOSURE_REGEX.test(d);
 }
 
 /**
- * True when a climate-family doc type is satisfied by an embedding report: the
- * doc type is in the climate family AND the document's title/URL is an
- * annual/integrated/sustainability/ESG/climate report that commonly embeds the
- * disclosure. Returns false for non-climate doc types (exact matching preserved).
+ * True when an embeddable thematic disclosure doc type is satisfied by a retrieved
+ * umbrella report: the required doc type is embeddable AND the document's title/URL
+ * is a broad corporate umbrella report that commonly embeds such disclosures.
+ * Standalone/statutory doc types return false (exact matching preserved), so this
+ * never over-broadens a required standalone filing.
  */
-function matchesClimateEmbedding(haystack: string, docType: string): boolean {
-  return isClimateFamilyDocType(docType) && CLIMATE_EMBEDDING_REPORT.test(haystack);
+function matchesEmbeddingReport(haystack: string, docType: string): boolean {
+  return isEmbeddableDisclosureDocType(docType) && UMBRELLA_REPORT_REGEX.test(haystack);
 }
 
 /**
@@ -466,7 +508,7 @@ export function deriveEssentialDocChecklist(
     for (const d of eligible) {
       const haystack = `${(d.url || "").toLowerCase()} ${(d.title || "").toLowerCase()}`;
       const directMatch = matchesDocType(haystack, docType);
-      const embeddingMatch = !directMatch && matchesClimateEmbedding(haystack, docType);
+      const embeddingMatch = !directMatch && matchesEmbeddingReport(haystack, docType);
       if (!directMatch && !embeddingMatch) continue;
       matchedAny = true;
       const state = classifyDocument(d);
@@ -485,7 +527,7 @@ export function deriveEssentialDocChecklist(
     if (found) {
       status = "found";
       detail = foundViaEmbedding
-        ? "Disclosure available within a retrieved annual/sustainability/integrated report (embedded)."
+        ? "Disclosure available within a retrieved corporate umbrella report (annual/integrated/sustainability/ESG) — embedded."
         : "Essential document retrieved.";
     } else if (partial) {
       status = "partial";
