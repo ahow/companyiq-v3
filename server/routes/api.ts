@@ -3040,6 +3040,13 @@ type DiscoveryRow = {
   lowEvidence: boolean;
   critical: boolean;
   score: number | null;
+  // Distinguishes WHY a company is in the critical discoveryTooLow list:
+  //   "thin_corpus"     — too few documents were discovered in search (existing).
+  //   "missing_primary" — corpus-readiness found no genuine own-issuer fetched
+  //                       evidence (reason="primary_not_identified"); it may have
+  //                       discovered plenty of docs, so numeric fetch figures can
+  //                       be absent/irrelevant. The client guards numeric rendering.
+  reason?: "thin_corpus" | "missing_primary";
 };
 
 apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) => {
@@ -3070,8 +3077,43 @@ apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) 
     const lowRetrieval: DiscoveryRow[] = [];
 
     for (const c of companies) {
+      // Corpus-readiness: a company with no genuine own-issuer fetched evidence
+      // (reason="primary_not_identified") belongs in the critical discoveryTooLow
+      // list EVEN IF it discovered plenty of documents — the evidence base lacks
+      // a usable primary disclosure, which retrying fetches won't necessarily
+      // fix. This check WINS over the thin-corpus / low-retrieval classification
+      // so such a company is never double-counted.
+      const corpusReadiness = (c as any).discoveryDiagnostics?.corpusReadiness;
+      const missingPrimary = corpusReadiness && corpusReadiness.ready === false;
+
       const cov = (c as any).discoveryDiagnostics?.fetchCoverage;
-      if (!cov || typeof cov.fetchRatio !== "number") continue;
+      const hasCov = cov && typeof cov.fetchRatio === "number";
+
+      if (missingPrimary) {
+        // Emit a critical row with whatever fields are available. Fetch figures
+        // may be absent (corpus-readiness is independent of fetchCoverage); the
+        // client guards numeric rendering so no NaN is shown.
+        const documentsFetched = hasCov ? Number(cov.documentsFetched ?? 0) : 0;
+        const documentsDiscovered = hasCov ? Number(cov.documentsDiscovered ?? 0) : 0;
+        const fetchRatio = hasCov ? Number(cov.fetchRatio ?? 0) : 0;
+        discoveryTooLow.push({
+          id: c.id,
+          name: c.name,
+          sector: c.sector ?? null,
+          country: c.country ?? null,
+          documentsFetched,
+          documentsDiscovered,
+          fetchRatio,
+          budgetExceeded: hasCov ? cov.budgetExceeded === true : false,
+          lowEvidence: hasCov ? cov.lowEvidence === true : false,
+          critical: true,
+          score: typeof (c as any).totalScore === "number" ? (c as any).totalScore : null,
+          reason: "missing_primary",
+        });
+        continue; // prefer discoveryTooLow; never also count in lowRetrieval
+      }
+
+      if (!hasCov) continue;
       const documentsFetched = Number(cov.documentsFetched ?? 0);
       const documentsDiscovered = Number(cov.documentsDiscovered ?? 0);
       const fetchRatio = Number(cov.fetchRatio ?? 0);
@@ -3091,6 +3133,7 @@ apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) 
         // Company score (same totalScore shown across the dashboard/Results/CSV),
         // so the diagnostics tables stay consistent with the rest of the UI.
         score: typeof (c as any).totalScore === "number" ? (c as any).totalScore : null,
+        reason: "thin_corpus",
       };
       if (documentsDiscovered < CRITICAL_DISCOVERY_MIN_DOCS) {
         discoveryTooLow.push(row);

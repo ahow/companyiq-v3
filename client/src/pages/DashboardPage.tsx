@@ -34,12 +34,22 @@ function DiscoveryFlagCell({
   budgetExceeded,
   lowEvidence,
   critical,
+  missingPrimary,
 }: {
   budgetExceeded?: boolean;
   lowEvidence?: boolean;
   critical?: boolean;
+  missingPrimary?: boolean;
 }) {
   const flags: Array<{ label: string; title: string; cls: string }> = [];
+  if (missingPrimary) {
+    flags.push({
+      label: "primary not identified",
+      title:
+        "No genuine primary disclosure document from the company's own domain could be used as evidence. The company was still scored on whatever evidence was available, but the result rests on a weak base — re-run to try to recover a primary disclosure.",
+      cls: "bg-red-100 text-red-700",
+    });
+  }
   if (critical) {
     flags.push({
       label: "critical",
@@ -1198,11 +1208,21 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
                         </td>
                         <td className="p-1.5 text-gray-600">{r.sector || "—"}</td>
                         <td className="p-1.5 text-gray-600">{r.country || "—"}</td>
-                        <td className="p-1.5 text-right text-gray-700">{r.documentsFetched} / {r.documentsDiscovered}</td>
-                        <td className="p-1.5 text-right font-bold text-red-700">{Math.round((r.fetchRatio ?? 0) * 100)}%</td>
+                        {/* "missing_primary" rows are flagged on corpus-readiness, not fetch
+                            coverage — their fetch figures are not meaningful, so show "—". */}
+                        <td className="p-1.5 text-right text-gray-700">
+                          {r.reason === "missing_primary" && !r.documentsDiscovered
+                            ? "—"
+                            : `${r.documentsFetched ?? 0} / ${r.documentsDiscovered ?? 0}`}
+                        </td>
+                        <td className="p-1.5 text-right font-bold text-red-700">
+                          {r.reason === "missing_primary" && !r.documentsDiscovered
+                            ? "—"
+                            : `${Math.round((r.fetchRatio ?? 0) * 100)}%`}
+                        </td>
                         <td className={`p-1.5 text-right font-medium ${getScoreColor(r.score ?? null)}`}>{r.score != null ? `${Math.round(r.score)}%` : "—"}</td>
                         <td className="p-1.5 text-gray-500">
-                          <DiscoveryFlagCell budgetExceeded={r.budgetExceeded} lowEvidence={r.lowEvidence} />
+                          <DiscoveryFlagCell budgetExceeded={r.budgetExceeded} lowEvidence={r.lowEvidence} missingPrimary={r.reason === "missing_primary"} />
                         </td>
                         <td className="p-1.5 text-center">
                           <button

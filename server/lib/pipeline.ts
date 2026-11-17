@@ -137,6 +137,13 @@ function isCorpusReadinessBarrierEnabled(): boolean {
 }
 // Bound on the extra direct re-fetch attempts the barrier makes on dead primaries.
 const CORPUS_READINESS_REFETCH_MAX = parseInt(process.env.CORPUS_READINESS_REFETCH_MAX || "3", 10);
+// Minimum number of genuine own-issuer documents that must have been fetched OK
+// for the corpus to be considered READY to score. Readiness is defined on
+// having real own-issuer evidence (docs hosted on the issuer's own/related
+// domains), NOT on whether a title-regex "primary" was recognised. Default 1:
+// at least one genuine own-issuer fetched document means there is real evidence
+// to score on.
+const CORPUS_READINESS_MIN_OWN_ISSUER_DOCS = parseInt(process.env.CORPUS_READINESS_MIN_OWN_ISSUER_DOCS || "1", 10);
 
 // Auto-rerun — bounded zero-corpus re-run (replaces any static R5 floor).
 function isZeroCorpusRerunEnabled(): boolean {
@@ -406,7 +413,7 @@ async function runFetchPhase(opts: {
   batchFetchState?: BatchFetchState; // 42-F
   skipDiscovery?: boolean; // Resume-not-restart retry: reuse persisted accepted docs, no fresh search
   recheck?: boolean; // Re-examine / re-run job: use the longer FETCH_PHASE_BUDGET_RECHECK_MS
-}): Promise<{ fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } }> {
+}): Promise<{ fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; ownIssuerFetched: number; refetchAttempts: number } }> {
   const { company, framework, workspaceId, batchId, cancelCheck, skipDiscovery, recheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
@@ -2367,27 +2374,42 @@ async function runFetchPhase(opts: {
   }
 
   // ─── R1: Corpus-readiness barrier + bounded primary re-fetch ───────────────
-  // Before freezing the snapshot, require the PRIMARY tier of gate-accepted docs
-  // to have actually fetched. The required-doc mechanism upstream only ranks and
-  // labels; nothing blocks scoring when the primaries are absent (3i a1: 18
-  // gate-accepted annual reports dead/inaccessible → scored 29 confident zeros
-  // on the secondary remnant). This barrier detects that state, attempts a small
-  // bounded re-fetch of the dead primaries, and — if they are STILL absent —
-  // records `corpusReadiness.ready=false` so runAnalysisPipeline can refuse to
-  // score the remnant. Generic: primaries are identified structurally
-  // (PRIMARY_DOC_RE over url+title), never by company/framework name; the gate
-  // keys ONLY on fetch completeness of already-gate-accepted docs, never on a
-  // score. Default-ON; CORPUS_READINESS_BARRIER="false" makes this a clean no-op.
-  let corpusReadiness: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } | undefined;
+  // Readiness reflects HAVING ENOUGH GENUINE OWN-ISSUER FETCHED EVIDENCE TO
+  // SCORE — docs hosted on the issuer's own/related domains that fetched OK —
+  // NOT whether a title-regex "primary" (PRIMARY_DOC_RE over url+title) was
+  // recognised. The old rule refused companies whose only regex-matched
+  // "primary" was a dead false-positive even when dozens of real own-issuer
+  // disclosures fetched fine (e.g. a Korean issuer's statutory Business Report
+  // from its own domain). The barrier still runs the same bounded re-fetch of
+  // dead regex-primaries (cheap, can only help), then recomputes readiness on
+  // own-issuer fetched evidence. When no own-issuer evidence is present the
+  // company is STILL scored (never refused) but flagged for the dashboard
+  // low-document-count table via the persisted corpusReadiness.ready=false.
+  // Generic: own-issuer hosts are matched structurally against the issuer's own
+  // and related domains, never by company/framework name. Default-ON;
+  // CORPUS_READINESS_BARRIER="false" makes this a clean no-op.
+  let corpusReadiness: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; ownIssuerFetched: number; refetchAttempts: number } | undefined;
   if (isCorpusReadinessBarrierEnabled()) {
     try {
       const isPrimary = (d: any) => PRIMARY_DOC_RE.test(((d.url || "") + " " + (d.title || "")).toLowerCase());
+      // Own-issuer host test — identical rule to the isIssuerHost block at the
+      // top of the fetch loop (~L1295). Reuses companyDomainLower /
+      // relatedDomainsLower derived earlier in this same function scope.
+      const isOwnIssuerDoc = (d: any): boolean => {
+        let host = "";
+        try { host = new URL(d.url || "").host.toLowerCase(); } catch { return false; }
+        if (!host) return false;
+        const h = host.replace(/^www\./, "");
+        return h === companyDomainLower ||
+          (!!companyDomainLower && h.endsWith("." + companyDomainLower)) ||
+          relatedDomainsLower.some((rd: string) => rd && (h === rd || h.endsWith("." + rd)));
+      };
       let primaryDocs = finalDocs.filter(isPrimary);
       let primariesFetched = primaryDocs.filter(d => d.fetchStatus === "ok").length;
       let refetchAttempts = 0;
-      // Only act when primaries were gate-accepted but NONE fetched. If no
-      // primary was ever discovered, we cannot demand one — the barrier stays
-      // inert (gate on completeness of what was accepted, not on wishful docs).
+      // Keep the existing bounded re-fetch of dead regex-primaries. If primaries
+      // were gate-accepted but NONE fetched, try a small bounded re-fetch — this
+      // can only recover evidence; it never gates scoring on its own anymore.
       if (primaryDocs.length > 0 && primariesFetched === 0) {
         console.warn(`[${companyName}] CORPUS-READINESS: ${primaryDocs.length} primary-tier doc(s) gate-accepted but 0 fetched — attempting bounded re-fetch (max ${CORPUS_READINESS_REFETCH_MAX})`);
         // Bounded, cheap re-fetch of the dead primaries via the fork-free direct
@@ -2413,20 +2435,33 @@ async function runFetchPhase(opts: {
         } catch (refErr: any) {
           console.warn(`[${companyName}] CORPUS-READINESS: bounded re-fetch primitive unavailable (${refErr?.message || refErr})`);
         }
-        // Recompute after the bounded re-fetch.
+        // Recompute primaries after the bounded re-fetch.
         const refreshed = await storage.getAcceptedDocuments(companyId);
         primaryDocs = refreshed.filter(isPrimary);
         primariesFetched = primaryDocs.filter(d => d.fetchStatus === "ok").length;
       }
-      const ready = !(primaryDocs.length > 0 && primariesFetched === 0);
+      // Compute own-issuer fetched evidence over the FINAL accepted-docs set
+      // (recomputed after any re-fetch, same as primaries above).
+      const finalAccepted = (refetchAttempts > 0)
+        ? await storage.getAcceptedDocuments(companyId)
+        : finalDocs;
+      const ownIssuerFetched = finalAccepted.filter(d => d.fetchStatus === "ok" && isOwnIssuerDoc(d)).length;
+      // READY when there is at least the minimum of genuine own-issuer fetched
+      // evidence. This REPLACES the old "primaries recognised but none fetched"
+      // rule entirely.
+      const ready = ownIssuerFetched >= CORPUS_READINESS_MIN_OWN_ISSUER_DOCS;
       corpusReadiness = {
         ready,
-        reason: ready ? undefined : "primaries_missing",
+        reason: ready ? undefined : "primary_not_identified",
         primariesDiscovered: primaryDocs.length,
         primariesFetched,
+        ownIssuerFetched,
         refetchAttempts,
       };
-      // Persist the recorded reason/state (feeds R4 + auto-rerun + UI/export).
+      // Persist the recorded reason/state (feeds auto-rerun + UI/export + the
+      // dashboard low-document-count flag table). This record must survive to
+      // the end of a successful scored run — the analyze phase merges (never
+      // overwrites) discoveryDiagnostics, so no re-assert is needed.
       try {
         const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
         priorDiag.corpusReadiness = corpusReadiness;
@@ -2435,7 +2470,7 @@ async function runFetchPhase(opts: {
         console.warn(`[${companyName}] CORPUS-READINESS: failed to persist state (non-fatal): ${persErr.message}`);
       }
       if (!ready) {
-        console.warn(`[${companyName}] CORPUS-READINESS BARRIER: primaries still missing after ${refetchAttempts} re-fetch attempt(s) (${primariesFetched}/${primaryDocs.length} primary docs fetched) — scoring will be REFUSED (Insufficient corpus, primaries missing)`);
+        console.warn(`[${companyName}] CORPUS-READINESS: no genuine own-issuer fetched evidence (${ownIssuerFetched}/${CORPUS_READINESS_MIN_OWN_ISSUER_DOCS} required; ${primariesFetched}/${primaryDocs.length} regex-primary docs fetched after ${refetchAttempts} re-fetch attempt(s)) — company will still be SCORED and flagged "primary not identified" for review`);
       }
     } catch (barErr: any) {
       console.warn(`[${companyName}] CORPUS-READINESS: barrier check failed (non-fatal, treated as ready): ${barErr.message}`);
@@ -3875,7 +3910,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // Phase 1: Fetch (unless skipping to reuse cached docs)
       // PR 1 · Change 1c: type widened to carry the optional issuerProfile returned
       // by runFetchPhase; used to thread the profile into the analyze phase.
-      let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; refetchAttempts: number } } = { fetchedCount: 0, totalAccepted: 0 };
+      let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; ownIssuerFetched: number; refetchAttempts: number } } = { fetchedCount: 0, totalAccepted: 0 };
       if (!skipFetch) {
         setDiagStage("fetch");
         fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck: effectiveCancel, batchFetchState: opts.batchFetchState, skipDiscovery, recheck });
@@ -3915,31 +3950,17 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
           };
         }
 
-        // R1 — Corpus-readiness barrier: if the PRIMARY tier was gate-accepted
-        // but could not be fetched (even after the bounded re-fetch inside
-        // runFetchPhase), REFUSE to score the secondary remnant rather than
-        // emitting confident zeros (3i a1). Gate keys ONLY on fetch completeness
-        // of gate-accepted docs, never a score. The recorded reason lives in
-        // discoveryDiagnostics.corpusReadiness (persisted in runFetchPhase). The
-        // refusal is a non-retriable "Insufficient corpus" outcome (worker keeps
-        // it from looping) — a bounded re-fetch already ran; scoring the remnant
-        // would only reproduce the confident-zero failure.
+        // R1 — Corpus-readiness: when no genuine own-issuer fetched evidence was
+        // found, the company is NO LONGER refused. It continues into the normal
+        // analyze/score phase so a score is produced and saved, and is FLAGGED
+        // for the dashboard low-document-count table via the persisted
+        // discoveryDiagnostics.corpusReadiness (ready=false,
+        // reason="primary_not_identified", written in runFetchPhase). The
+        // analyze phase merges (never overwrites) discoveryDiagnostics, so the
+        // flag survives to the end of the scored run — no re-assert needed here.
         if (isCorpusReadinessBarrierEnabled() && fetchResult.corpusReadiness && fetchResult.corpusReadiness.ready === false) {
           const cr = fetchResult.corpusReadiness;
-          console.error(`[${companyName}] SCORING REFUSED — Insufficient corpus (primaries missing): ${cr.primariesFetched}/${cr.primariesDiscovered} primary-tier docs fetched after ${cr.refetchAttempts} bounded re-fetch attempt(s)`);
-          await storage.updateCompany(companyId, workspaceId, {
-            analysisStatus: "completed",
-            totalScore: 0,
-            summary: `Insufficient corpus (primaries missing): ${cr.primariesDiscovered} primary disclosure document(s) were gate-accepted but could not be fetched; measure scoring was refused rather than scoring an incomplete corpus.`,
-          });
-          return {
-            success: false,
-            error: "Insufficient corpus (primaries missing)",
-            documentsProcessed: fetchResult.fetchedCount,
-            documentsFresh: fetchResult.totalAccepted,
-            documentsCached: 0,
-            failureType: "scoring_error" as const,
-          };
+          console.warn(`[${companyName}] CORPUS-READINESS: proceeding to score despite no own-issuer evidence (ownIssuerFetched=${cr.ownIssuerFetched}, ${cr.primariesFetched}/${cr.primariesDiscovered} regex-primary docs fetched) — company flagged "primary not identified" for review`);
         }
       } else {
         console.log(`[${companyName}] Skipping fetch phase (reusing cached documents)`);
