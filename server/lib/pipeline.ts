@@ -537,10 +537,22 @@ async function runFetchPhase(opts: {
       null,
       currentYear,
     );
+    // Issuer's own verified domains — lets the verifier trust first-party
+    // foreign-language / generic-labelled statutory filings (e.g. a Korean
+    // issuer's "Business Report" on its own host) and bypass the English-centric
+    // tier gate for own-host documents.
+    const issuerDomains = [
+      company.domain,
+      discoveryResult.effectiveDomain,
+      ...((company as any).relatedDomains || (company as any).related_domains || []),
+    ]
+      .filter(Boolean)
+      .map((d: string) => d.replace(/^www\./, "").toLowerCase());
     const check = verifyLatestPrimaryDisclosure(
       discoveryResult.documents,
       requirements,
       companyName,
+      issuerDomains,
     );
 
     if (check.missing.length > 0) {

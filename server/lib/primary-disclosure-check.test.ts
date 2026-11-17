@@ -199,5 +199,89 @@ ok(
   "unknown requirement id → fallback doc-type",
 );
 
+// ─── Option A: foreign-language + own-host generic vocabulary ────────────────
+
+section("verify — APAC own-host generic 'Business Report' (issuer host) is PRESENT");
+const apacReqs = getRequirementsForJurisdiction("KR", null, CY);
+const apacAnnual = apacReqs.find(r => r.id === "apac-annual-current")!;
+// Korean issuer's statutory annual filing labelled "Business Report" in English,
+// FY 2025, published on the issuer's OWN host → satisfies via ownHostTitleRegex,
+// bypassing the English-centric tier gate (would classify tier 3 off-host).
+const corpusKrBusinessReport: DiscoveryCandidate[] = [
+  mkDoc(
+    `https://www.glovis.net/ir/disclosure/fy2025-business-report.pdf`,
+    `Hyundai Glovis FY 2025 Business Report`,
+  ),
+];
+ok(
+  verifyLatestPrimaryDisclosure(corpusKrBusinessReport, [apacAnnual], "Hyundai Glovis", ["glovis.net"])
+    .present.some(r => r.id === "apac-annual-current"),
+  "own-host 'Business Report' FY2025 satisfies apac-annual-current with issuerDomains",
+);
+
+section("verify — generic 'Business Report' on THIRD-PARTY host is MISSING");
+// Same title on a third-party host must NOT satisfy — generic terms are
+// first-party-only, so no own-host match and the tier gate (tier 3) rejects it.
+const corpusThirdPartyBusinessReport: DiscoveryCandidate[] = [
+  mkDoc(
+    `https://www.reuters.com/markets/hyundai-glovis-fy-2025-business-report`,
+    `Hyundai Glovis FY 2025 Business Report`,
+  ),
+];
+ok(
+  verifyLatestPrimaryDisclosure(corpusThirdPartyBusinessReport, [apacAnnual], "Hyundai Glovis", ["glovis.net"])
+    .missing.some(r => r.id === "apac-annual-current"),
+  "off-host 'Business Report' does NOT satisfy apac-annual-current",
+);
+
+section("verify — generic 'Business Report' with NO issuerDomains is MISSING (back-compat)");
+ok(
+  verifyLatestPrimaryDisclosure(corpusKrBusinessReport, [apacAnnual], "Hyundai Glovis")
+    .missing.some(r => r.id === "apac-annual-current"),
+  "own-host generic term never matches when issuerDomains omitted",
+);
+
+section("verify — distinctive foreign term '영업보고서' on own host is PRESENT");
+// Distinctive statutory term matches anywhere; own-host also bypasses tier gate.
+const corpusKrDistinctive: DiscoveryCandidate[] = [
+  mkDoc(
+    `https://www.glovis.net/ir/disclosure/2025-report.pdf`,
+    `현대글로비스 2025 영업보고서`,
+  ),
+];
+ok(
+  verifyLatestPrimaryDisclosure(corpusKrDistinctive, [apacAnnual], "Hyundai Glovis", ["glovis.net"])
+    .present.some(r => r.id === "apac-annual-current"),
+  "distinctive '영업보고서' 2025 satisfies apac-annual-current on own host",
+);
+
+section("verify — EU distinctive 'Geschäftsbericht' on own host is PRESENT");
+const euReqs2 = getRequirementsForJurisdiction("DE", null, CY);
+const euAnnual = euReqs2.find(r => r.id === "eu-annual-current")!;
+const corpusDeDistinctive: DiscoveryCandidate[] = [
+  mkDoc(
+    `https://www.example-de.de/investor-relations/geschaeftsbericht-2025.pdf`,
+    `Example AG Geschäftsbericht 2025`,
+  ),
+];
+ok(
+  verifyLatestPrimaryDisclosure(corpusDeDistinctive, [euAnnual], "Example AG", ["example-de.de"])
+    .present.some(r => r.id === "eu-annual-current"),
+  "distinctive 'Geschäftsbericht' 2025 satisfies eu-annual-current on own host",
+);
+
+section("verify — plain English 'annual report' still works with NO issuerDomains (back-compat)");
+const corpusPlainAnnual: DiscoveryCandidate[] = [
+  mkDoc(
+    `https://www.asx.com.au/asxpdf/example-annual-report-2025.pdf`,
+    `Example Ltd Annual Report 2025`,
+  ),
+];
+ok(
+  verifyLatestPrimaryDisclosure(corpusPlainAnnual, [apacAnnual], "Example Ltd")
+    .present.some(r => r.id === "apac-annual-current"),
+  "plain 'annual report' on tier-1 host still PRESENT without issuerDomains",
+);
+
 console.log(`\n────────────────────────────\nPASSED: ${passed}   FAILED: ${failed}`);
 if (failed > 0) process.exit(1);

@@ -30,6 +30,16 @@ export interface PrimaryDisclosureRequirement {
   label: string;
   /** ANY match against title OR url satisfies the title-match test. */
   titleRegex: RegExp[];
+  /**
+   * GENERIC-term regexes that only satisfy the requirement when the document
+   * is hosted on the ISSUER'S OWN domain (verified first-party). These cover
+   * low-distinctiveness labels such as the English "Business Report" that
+   * foreign issuers (e.g. Korean filers) use for their statutory annual
+   * filing, but which would false-match third-party write-ups or quarterly
+   * decks if accepted off-host. Only consulted when issuerDomains are supplied
+   * to verifyLatestPrimaryDisclosure; absent/empty → these never match.
+   */
+  ownHostTitleRegex?: RegExp[];
   /** Documents with detected year < minYear do NOT satisfy the requirement. */
   minYear: number;
   /**
@@ -60,6 +70,46 @@ const APAC_COUNTRIES = new Set([
 
 const US_EXCHANGE_RX = /\b(NYSE|NASDAQ|AMEX)\b/i;
 const EU_UK_EXCHANGE_RX = /\b(LSE|Euronext|XETRA|SIX)\b/i;
+
+/**
+ * HIGH-DISTINCTIVENESS foreign-language statutory primary-filing names.
+ *
+ * These are language-specific terms for the statutory annual / securities
+ * report that are the jurisdictional equivalent of a "10-K" or "annual
+ * report". They are distinctive enough (non-English scripts, or multi-word
+ * legal phrases) that they cannot plausibly false-match an unrelated English
+ * document title, so they are matched ANYWHERE (title or url), exactly like
+ * "annual report". Rationale: the English/US-centric vocabulary left every
+ * non-Anglo issuer whose primary is published under its local name invisible
+ * to the primary-disclosure verification lane (Hyundai Glovis → "영업보고서" /
+ * "FY2025 Business Report" were never recognised as primaries), causing wasted
+ * repair searches and incorrect "primary missing" telemetry.
+ *
+ * Generic (non-distinctive) labels like the bare English "Business Report" are
+ * deliberately NOT here — they live in OWN_HOST_GENERIC_PRIMARY_RX and only
+ * count on the issuer's own verified host.
+ */
+const FOREIGN_PRIMARY_TITLE_RX: RegExp[] = [
+  /有価証券報告書/,                              // JP — statutory securities report
+  /事業報告(?:書)?/,                             // JP — statutory business report (AGM attachment)
+  /영업보고서/,                                  // KR — statutory business/operating report
+  /년차보고서/,                                  // KR — annual report
+  /年度報告|年報/,                               // CN / HK / TW — annual report
+  /geschäftsbericht|geschaeftsbericht/i,         // DE — annual report
+  /document d['’]?enregistrement universel/i,    // FR — universal registration document (URD)
+];
+
+/**
+ * LOW-DISTINCTIVENESS generic primary labels. These satisfy a requirement ONLY
+ * when the document is on the issuer's own verified host (see
+ * PrimaryDisclosureRequirement.ownHostTitleRegex). "Business report" is used by
+ * Korean (and some other) issuers as the English label for the statutory annual
+ * filing, but is also a common phrase for quarterly results, investor decks and
+ * third-party write-ups — so it is only trusted first-party.
+ */
+const OWN_HOST_GENERIC_PRIMARY_RX: RegExp[] = [
+  /\bbusiness report\b/i,
+];
 
 /**
  * Determine the primary-disclosure requirements for a company based on
@@ -122,7 +172,8 @@ export function getRequirementsForJurisdiction(
       {
         id: "eu-annual-current",
         label: "Latest annual or integrated report (EU+UK)",
-        titleRegex: [/annual report/i, /integrated report/i, /universal registration document/i],
+        titleRegex: [/annual report/i, /integrated report/i, /universal registration document/i, ...FOREIGN_PRIMARY_TITLE_RX],
+        ownHostTitleRegex: OWN_HOST_GENERIC_PRIMARY_RX,
         minYear: currentYear - 1,
         tierRequired: 1,
       },
@@ -134,7 +185,8 @@ export function getRequirementsForJurisdiction(
       {
         id: "apac-annual-current",
         label: "Latest annual or integrated report (APAC)",
-        titleRegex: [/annual report/i, /integrated report/i],
+        titleRegex: [/annual report/i, /integrated report/i, ...FOREIGN_PRIMARY_TITLE_RX],
+        ownHostTitleRegex: OWN_HOST_GENERIC_PRIMARY_RX,
         minYear: currentYear - 1,
         tierRequired: 1,
       },
@@ -153,7 +205,8 @@ export function getRequirementsForJurisdiction(
     {
       id: "default-annual-current",
       label: "Latest annual report",
-      titleRegex: [/annual report/i],
+      titleRegex: [/annual report/i, ...FOREIGN_PRIMARY_TITLE_RX],
+      ownHostTitleRegex: OWN_HOST_GENERIC_PRIMARY_RX,
       minYear: currentYear - 1,
       tierRequired: 1,
     },
@@ -170,12 +223,35 @@ export function getRequirementsForJurisdiction(
 // ─── Corpus check ───────────────────────────────────────────────────────────
 
 /**
+ * Normalize a host for own-issuer comparison: lower-case, strip a leading
+ * "www.". Returns "" if the url cannot be parsed.
+ */
+function normalizeHost(u: string): string {
+  try {
+    return new URL(u).host.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Check whether the discovered corpus already contains each required
  * primary disclosure. A requirement is satisfied when at least one
  * document matches ALL of:
- *   - any regex in requirement.titleRegex matches title OR url
+ *   - any regex in requirement.titleRegex matches title OR url, OR (when the
+ *     document is on the issuer's own verified host) any regex in
+ *     requirement.ownHostTitleRegex matches
  *   - detectFilingYear(url, title) is not null AND ≥ requirement.minYear
- *   - if tierRequired is set, classifyDocumentTier(url, title) ≤ tierRequired
+ *   - if tierRequired is set, classifyDocumentTier(url, title) ≤ tierRequired —
+ *     EXCEPT a document on the issuer's own verified host bypasses the tier gate
+ *     (first-party authority: a foreign-language statutory filing published on
+ *     the issuer's own domain classifies tier 3 by the English-centric tier
+ *     patterns, yet is unambiguously a primary source).
+ *
+ * `issuerDomains` are the issuer's own verified domains (company domain,
+ * discovery effective domain, related domains). When absent/empty, no document
+ * is treated as own-host, so ownHostTitleRegex never matches and the tier gate
+ * is never bypassed — fully backward-compatible with callers that omit it.
  *
  * Returns present/missing lists plus one Sonar-ready targeted query per
  * missing requirement, in the same order as `missing`.
@@ -184,9 +260,21 @@ export function verifyLatestPrimaryDisclosure(
   documents: DiscoveryCandidate[],
   requirements: PrimaryDisclosureRequirement[],
   companyName: string,
+  issuerDomains?: string[],
 ): PrimaryDisclosureCheckResult {
   const present: PrimaryDisclosureRequirement[] = [];
   const missing: PrimaryDisclosureRequirement[] = [];
+
+  const ownDomains = (issuerDomains ?? [])
+    .filter(Boolean)
+    .map((d) => d.replace(/^www\./, "").toLowerCase());
+
+  const isOwnHost = (url: string): boolean => {
+    if (ownDomains.length === 0) return false;
+    const h = normalizeHost(url);
+    if (!h) return false;
+    return ownDomains.some((d) => h === d || h.endsWith(`.${d}`));
+  };
 
   for (const req of requirements) {
     let satisfied = false;
@@ -195,17 +283,22 @@ export function verifyLatestPrimaryDisclosure(
       const title = doc.title || "";
       const url = doc.url || "";
       const haystack = `${title} ${url}`;
+      const ownHost = isOwnHost(url);
 
-      // 1) Title/URL regex match (ANY hit is enough).
-      const titleMatch = req.titleRegex.some((rx) => rx.test(haystack));
+      // 1) Title/URL regex match. Distinctive terms match anywhere; generic
+      //    own-host terms only when the doc is on the issuer's own host.
+      const titleMatch =
+        req.titleRegex.some((rx) => rx.test(haystack)) ||
+        (ownHost && (req.ownHostTitleRegex ?? []).some((rx) => rx.test(haystack)));
       if (!titleMatch) continue;
 
       // 2) Year gate.
       const year = detectFilingYear(url, title);
       if (year === null || year < req.minYear) continue;
 
-      // 3) Tier gate (if set) — lower tier number = higher authority.
-      if (req.tierRequired !== undefined) {
+      // 3) Tier gate (if set) — lower tier number = higher authority. Own-host
+      //    documents bypass the tier gate (first-party authority).
+      if (req.tierRequired !== undefined && !ownHost) {
         const tier = classifyDocumentTier(url, title);
         if (tier > req.tierRequired) continue;
       }
