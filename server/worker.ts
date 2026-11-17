@@ -51,6 +51,7 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
+import { computeCompanyScore } from "../shared/verdict.js";
 // A9 / WP15 (truthful publication). Build the canonical per-cell publication
 // record for each company and store it in the snapshot metadata so every reader
 // surface (API/UI/CSV/Word/PDF) derives verdict/evidence/research-status from
@@ -1228,17 +1229,16 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         analysisStatus: (company as any).analysisStatus ?? undefined,
       };
 
-      // Compute coverage-adjusted score: exclude backfilled (not_assessed) measures
+      // Compute the coverage-adjusted score via the SINGLE canonical aggregator
+      // (shared/verdict.ts) so the saved score matches the screen and CSV export.
+      // Binary only — no 0.5 partial credit — and "answered" excludes backfilled
+      // (not_assessed) AND abstained/insufficient-evidence measures.
       const fullMeasureScores = buildFullMeasureScores(allMeasures, scores);
-      const assessedMeasures = fullMeasureScores.filter(m => !m.backfilled);
-      const assessedCount = assessedMeasures.length;
-      const metCount = assessedMeasures.filter(m => m.score === 1).length;
-      const partialCount = assessedMeasures.filter(m => m.score === 0.5).length;
-      const coveragePct = measureCount > 0 ? Math.round((assessedCount / measureCount) * 100) : 100;
-      // Score computed over assessed measures only (no downward bias from back-fill)
-      const adjustedScore = assessedCount > 0
-        ? Math.round(((metCount + partialCount * 0.5) / assessedCount) * 100)
-        : (company.totalScore || 0);
+      const cs = computeCompanyScore(fullMeasureScores, measureCount);
+      const assessedCount = cs.assessedCount;
+      const metCount = cs.measuresMet;
+      const coveragePct = cs.coveragePct;
+      const adjustedScore = cs.answeredCount > 0 ? cs.totalScorePct : (company.totalScore || 0);
 
       // Fix 2 (instrumentation): surface diagnostics so CI/harness can measure
       // corpus validity precision, determinism, and dead-fetch composition.
@@ -1662,6 +1662,9 @@ function buildFullMeasureScores(allMeasures: any[], scores: any[]): any[] {
         category: s.category || m.category || "",
         score: s.score,
         verdict: s.verdict || undefined,
+        // Surface abstained so the canonical aggregator (computeCompanyScore)
+        // can exclude abstained/insufficient-evidence measures from "answered".
+        abstained: s.abstained === true,
         confidence: s.confidence || "Low",
         evidenceSummary: s.evidenceSummary || undefined,
         quotes: s.quotes || [],

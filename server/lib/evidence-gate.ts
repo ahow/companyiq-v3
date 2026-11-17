@@ -128,6 +128,9 @@ export interface ResearchRecord {
   criteria: string;
   repairedSource: string;
   repairedQuote: string;
+  // Overlap score (# of distinct criteria tokens the rescue passage shared) so a
+  // carried-over rescue's strength is visible in telemetry/audit.
+  overlap?: number;
 }
 
 export interface QuoteInput {
@@ -601,10 +604,18 @@ export function researchBestPassage(
   criteria: string[],
   segments: DocumentSegment[],
   packText: string,
-): { text: string; source: string } | null {
+): { text: string; source: string; overlap: number } | null {
   const terms = new Set<string>();
   for (const c of criteria || []) for (const t of researchTokens(policy, c)) terms.add(t);
   if (terms.size === 0) return null;
+
+  // A rescue passage must share a MEANINGFUL amount of the measure's criteria
+  // vocabulary, not just one keyword. Require >= MIN_TOKENS distinct criteria
+  // tokens AND >= MIN_RATIO coverage of the criteria terms (capped so very large
+  // criteria vocabularies don't make a rescue impossible).
+  const MIN_TOKENS = Math.max(1, parseInt(process.env.REPAIR_MIN_OVERLAP_TOKENS || "2", 10) || 2);
+  const MIN_RATIO = Number(process.env.REPAIR_MIN_OVERLAP_RATIO ?? "0.34") || 0.34;
+  const requiredOverlap = Math.max(MIN_TOKENS, Math.ceil(MIN_RATIO * Math.min(terms.size, 6)));
 
   const searchSegs: DocumentSegment[] =
     segments && segments.length > 0 ? segments : [{ id: "pack", text: packText || "" }];
@@ -628,7 +639,12 @@ export function researchBestPassage(
       }
     }
   }
-  return bestScore > 0 ? best : null;
+  // Integrity fix: a single shared keyword (bestScore === 1 with the old
+  // `bestScore > 0` test) used to be enough to supply a replacement passage that
+  // KEPT an invented-quote Yes. Require meaningful overlap instead. NOTE: this is
+  // text-overlap tightening only — a full LLM re-grade of the replacement passage
+  // is a deliberate non-goal here.
+  return bestScore >= requiredOverlap && best ? { ...best, overlap: bestScore } : null;
 }
 
 /**
@@ -762,6 +778,7 @@ export function gateEvidenceWithRepair<Q extends QuoteInput>(
         criteria: researchCriteria.join(" | "),
         repairedSource: found.source,
         repairedQuote: found.text,
+        overlap: found.overlap,
       });
       if (strictStrip) {
         // Replace the stripped (unprovenanced) quotes with the repaired one.

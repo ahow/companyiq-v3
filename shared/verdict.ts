@@ -50,3 +50,51 @@ export function isMet(verdict?: string | null, score?: number | null): boolean {
 export function normalizedScore(verdict?: string | null, score?: number | null): number {
   return isMet(verdict, score) ? 1 : 0;
 }
+
+export interface MeasureScoreLike {
+  verdict?: string | null;
+  score?: number | null;
+  abstained?: boolean | null;
+  backfilled?: boolean | null;
+}
+
+export interface CompanyScore {
+  totalScorePct: number;   // HEADLINE: met / answered  (coverage-aware)
+  measuresMet: number;     // # met (binary isMet)
+  answeredCount: number;   // assessed AND not abstained
+  assessedCount: number;   // not backfilled
+  measureCount: number;    // all measures in the framework
+  coveragePct: number;     // assessed / measureCount
+  strictScorePct: number;  // met / measureCount  (Yes across ALL measures)
+}
+
+/**
+ * The SINGLE source of truth for a company's aggregate score. Binary only
+ * (Partial already collapses to No via isMet). The headline Total Score is
+ * met / answered, where "answered" = measures that were assessed (not
+ * backfilled) AND the model gave a real verdict (not abstained/insufficient).
+ * Also returns coverage and the strict (Yes / all measures) figure so callers
+ * can surface all three numbers. Use everywhere a company score is computed.
+ */
+export function computeCompanyScore(
+  measures: MeasureScoreLike[],
+  measureCount?: number,
+): CompanyScore {
+  const all = measures || [];
+  const total = typeof measureCount === "number" && measureCount > 0 ? measureCount : all.length;
+  const assessed = all.filter((m) => m.backfilled !== true);
+  const answered = assessed.filter((m) => m.abstained !== true);
+  const met = answered.filter((m) => isMet(m.verdict, m.score));
+  const totalScorePct = answered.length > 0 ? Math.round((met.length / answered.length) * 100) : 0;
+  const coveragePct = total > 0 ? Math.round((assessed.length / total) * 100) : 100;
+  const strictScorePct = total > 0 ? Math.round((met.length / total) * 100) : 0;
+  return {
+    totalScorePct,
+    measuresMet: met.length,
+    answeredCount: answered.length,
+    assessedCount: assessed.length,
+    measureCount: total,
+    coveragePct,
+    strictScorePct,
+  };
+}

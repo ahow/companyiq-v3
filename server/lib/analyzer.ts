@@ -634,24 +634,6 @@ export function buildV2GuidanceBlock(measure: FrameworkMeasure, framework: Frame
   return { guidanceBlock: v2Block, quoteContextInstr };
 }
 
-// U2: Base-rate prior injection. The framework author sets expected_yes_rate
-// per measure (validated by C9). Injecting it as a scoring-prompt calibration
-// line reduces systematic under-scoring on high-disclosure topics and over-
-// scoring on sparse ones. Sprint 9 v3→v4 measured this at fw3 recall +0.029 /
-// F1 +0.019 with zero marginal inference cost. Guarded because the prior
-// nudges Yes upward — recall/correlation gains, some precision cost.
-function buildBaseRatePriorBlock(measure: FrameworkMeasure): string {
-  if (process.env.SCORING_BASE_RATE_PRIOR !== "true") return "";
-  const rate = (measure as any).expectedYesRate;
-  if (typeof rate !== "number" || rate <= 0 || rate >= 1) return "";
-  const pct = Math.round(rate * 100);
-  // Framing avoids telling the LLM to change its verdict. It tells the LLM
-  // what the disclosure landscape looks like so "present evidence" and "absent
-  // evidence" get the same standard of proof regardless of base rate.
-  return `\n\nCALIBRATION — DISCLOSURE BASE RATE:
-Across the universe of large-cap listed companies to which this framework applies, approximately ${pct}% would score Yes on this measure. This reflects current disclosure practice on the topic, not an aspiration. Use it to calibrate the evidentiary bar: apply the same evidentiary standard whether disclosure on this topic is common (higher base rate) or rare (lower). Do not default to No when concrete evidence is present just because you expect the answer to usually be No; do not lower the bar for evidence quality just because you expect the answer to usually be Yes.`;
-}
-
 // Change C: in-completion bidirectional self-check. Emitted INSIDE the same
 // scoring completion — NO extra live LLM call. Framework/measure-agnostic.
 const SELF_CHECK_INSTRUCTION = `SELF-CHECK BEFORE RETURNING (do this within this single response — do not make another call):
@@ -715,11 +697,9 @@ This company uses the following specific terms for this topic. Treat these as eq
 Do not penalise evidence for using these terms instead of the framework's language.\n`;
   }
 
-  const baseRateBlock = buildBaseRatePriorBlock(measure);
-
   const system = `${buildScoringPersona(framework)}
 
-Topic: ${topicDescription}${baseRateBlock}
+Topic: ${topicDescription}
 
 SCORING RULES (Binary Mode — Yes/No ONLY):
 - Score 1 (Yes): The company provides clear, specific evidence that directly addresses this measure. At least one verbatim quote from the source documents must support the score.
@@ -871,11 +851,9 @@ This company uses the following specific terms for this topic. Treat these as eq
 Do not penalise evidence for using these terms instead of the framework's language.\n`;
   }
 
-  const baseRateBlock = buildBaseRatePriorBlock(measure);
-
   const system = `${buildScoringPersona(framework)}
 
-Topic: ${topicDescription}${baseRateBlock}
+Topic: ${topicDescription}
 
 SCORING RULES (Binary Mode — Yes/No ONLY):
 - Score 1 (Yes): The company provides clear, specific evidence that FULLY addresses this measure. At least one verbatim quote from the source documents must support the score.

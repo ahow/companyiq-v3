@@ -25,7 +25,7 @@ import { assertProductionFingerprint, computeRecoveryLabels, deploymentFingerpri
 import { analyzeCompanyMeasures } from "../lib/analyzer.js";
 import { loadPriceTable, lookupPrice, computeCost } from "../lib/llm-usage.js";
 import { runMeasureDesignDiagnostic } from "../lib/measure-design-diagnostic.js";
-import { normalizeVerdict, isMet, normalizedScore } from "../../shared/verdict.js";
+import { normalizeVerdict, isMet, normalizedScore, computeCompanyScore } from "../../shared/verdict.js";
 // WP02/A1 (additive): explicit research-state accounting. Pure derivation —
 // never affects scores/verdicts; attached to responses as metadata only.
 import { buildManifest, deriveResearchStatus, researchStatusCsvColumns, deriveEvidenceCompleteness, deriveQuoteReuse } from "../../shared/research-state.js";
@@ -162,17 +162,20 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
       };
     });
 
-    // Recompute aggregates over answered (non-abstained) measures from normalized
-    // values so EXISTING data reflects binary scoring immediately.
+    // Recompute aggregates via the SINGLE canonical aggregator (shared/verdict.ts)
+    // so the screen, the saved score, and the CSV export all agree. Binary only;
+    // "answered" excludes backfilled AND abstained/insufficient-evidence measures.
+    const cs = computeCompanyScore(scores);
+    // Kept for downstream evidence-completeness derivation (same semantics).
     const answered = scores.filter((s: any) => !s.abstained);
     const met = answered.filter((s: any) => isMet(s.verdict, s.score));
     const enrichedCompany = {
       ...company,
-      totalScore:
-        answered.length > 0
-          ? Math.round((met.length / answered.length) * 100)
-          : company.totalScore,
-      measuresMetCount: met.length,
+      totalScore: cs.answeredCount > 0 ? cs.totalScorePct : company.totalScore,
+      measuresMetCount: cs.measuresMet,
+      // Additive API fields so callers can surface all three numbers.
+      coveragePct: cs.coveragePct,
+      strictScorePct: cs.strictScorePct,
     };
 
     // WP02/A1 (additive): derive explicit research status at read time from the
@@ -2134,15 +2137,11 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
     res.write(headers.map(escapeCSV).join(","));
 
     for (const r of rows) {
-      // BINARY SCORING recompute (Partial=0; denominator = assessed/non-backfilled).
-      const assessedMeasures = (r.measureScores || []).filter((m: any) => !m.backfilled);
-      const metMeasures = assessedMeasures.filter((m: any) => isMet(m.verdict, m.score));
-      const binaryTotalScore =
-        assessedMeasures.length > 0
-          ? Math.round((metMeasures.length / assessedMeasures.length) * 100)
-          : (r.totalScore ?? 0);
-      const binaryMeasuresMet =
-        assessedMeasures.length > 0 ? metMeasures.length : (r.measuresMetCount ?? "");
+      // BINARY SCORING via the SINGLE canonical aggregator (shared/verdict.ts) so
+      // the CSV denominator matches the screen: excludes abstained AND backfilled.
+      const cs = computeCompanyScore(r.measureScores || []);
+      const binaryTotalScore = cs.answeredCount > 0 ? cs.totalScorePct : (r.totalScore ?? 0);
+      const binaryMeasuresMet = cs.answeredCount > 0 ? cs.measuresMet : (r.measuresMetCount ?? "");
 
       const baseValues = [
         r.companyName || "",
