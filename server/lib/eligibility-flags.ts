@@ -374,15 +374,29 @@ export function reviewQuoteAttribution(
         return { index, attributedToTarget: true };
       }
 
-      // Rule: Company's OWN domain = first-party by construction. A substantive
-      // passage published on the company's own website/domain describes the
-      // company's own practice, regardless of language (handles non-English
-      // filings where the Latin identity tokens never appear in the body) or of
-      // first-party phrasing. Shared regulator/aggregator domains (cninfo, sina,
-      // hkexnews) are explicitly NOT own-domain and fall through to the stricter
-      // trusted-source rules below. Case-study passages are already excluded above.
-      if (isOwnDomainSource(q.sourceUrl, company) && text.trim().length >= 12) {
-        return { index, attributedToTarget: true, reason: "Company Own Domain (First-Party)" };
+      // Rule 1 (First-Party Domain Waiver): the company's OWN domain is a strong
+      // first-party signal, but HOSTING ALONE does not make a passage first-party.
+      // A company's own thought-leadership / marketing / insights pages routinely
+      // describe OTHER entities (clients, case-study subjects) — the "Accenture
+      // bug", where a consultancy's own report credits a CLIENT's outcome to the
+      // client. The master-rules spec (Rule 1) accepts a reflexive/first-party
+      // reference on a verified own domain, NOT arbitrary text. So attribute an
+      // own-domain quote only when it also carries a first-party cue — a
+      // we/our/us or "the company/the group/the bank/..." reference (PRONOUNS_REGEX,
+      // the standard self-reference in an issuer's own filing), or a CJK
+      // first-party reference for non-English filings where the Latin identity
+      // tokens never appear in the body. Shared regulator/aggregator domains
+      // (cninfo, sina, hkexnews) are explicitly NOT own-domain and fall through to
+      // the stricter trusted-source rules below. Case-study negatives were already
+      // excluded above. A passage that names a DIFFERENT entity with no first-party
+      // language falls through (attributedToTarget=false) so the entity gate still
+      // catches the client/case-study self-attribution pattern.
+      if (
+        isOwnDomainSource(q.sourceUrl, company) &&
+        text.trim().length >= 12 &&
+        (PRONOUNS_REGEX.test(text) || CJK_FIRST_PARTY_REGEX.test(text))
+      ) {
+        return { index, attributedToTarget: true, reason: "Company Own Domain + First-Party" };
       }
 
       // Rule 1 (brand-aware First-Party Domain Waiver — BUG 1 fix): the quote is
