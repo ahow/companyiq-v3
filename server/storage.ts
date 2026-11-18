@@ -545,6 +545,102 @@ export async function getAcceptedDocContentMap(
   return map;
 }
 
+// ─── P1.1/P1.2 — framework-scoped frozen-corpus snapshot ─────────────────────
+// An immutable evidence set per (company_id, framework_id), frozen on the first
+// successful assessment of that pair and reused byte-for-byte on every later run.
+// This is the single biggest consistency lever (plan §3): the global
+// getAcceptedDocuments(companyId) reuse set drifts as other runs touch the same
+// company under other frameworks; this snapshot does not.
+//
+// OOM-SAFE: these rows reference content by document_id and carry only lightweight
+// provenance (url, a content-identity hash, gate metadata). They NEVER hold body
+// text — callers load bodies lazily from document_content by id, capped, exactly
+// as getAcceptedDocContentMap does. See the frozen_corpus_snapshot DDL in db.ts.
+
+export interface FrozenCorpusRow {
+  documentId: number;
+  url: string | null;
+  contentHash: string | null;
+  gateVerdict: string | null;
+  sourceType: string | null;
+}
+
+/** Return the frozen snapshot rows for a (company, framework) pair, or [] when
+ *  no snapshot exists yet (a genuine first assessment of that pair). Deterministic
+ *  ORDER BY document_id so a corpus hash built from this is stable. */
+export async function getFrozenCorpus(
+  companyId: number,
+  frameworkId: number,
+): Promise<FrozenCorpusRow[]> {
+  const rows = await db.execute(sql`
+    SELECT document_id, url, content_hash, gate_verdict, source_type
+    FROM frozen_corpus_snapshot
+    WHERE company_id = ${companyId} AND framework_id = ${frameworkId}
+    ORDER BY document_id ASC
+  `);
+  return (rows.rows as any[]).map((r) => ({
+    documentId: Number(r.document_id),
+    url: r.url ?? null,
+    contentHash: r.content_hash ?? null,
+    gateVerdict: r.gate_verdict ?? null,
+    sourceType: r.source_type ?? null,
+  }));
+}
+
+/** Freeze the current gate-accepted document set for a (company, framework) pair.
+ *  IDEMPOTENT, FIRST-WINS: if a snapshot already exists for the pair it is left
+ *  untouched (snapshot immutability — mirrors the batch_corpus freeze semantics in
+ *  pipeline.ts), so concurrent runs on the same company under other frameworks can
+ *  never alter it. OOM-safe: it SELECTs only id/url/url_hash/gate/source columns
+ *  from documents+document_content — never body text. Returns the number of rows
+ *  written (0 when the snapshot was already present). */
+export async function writeFrozenCorpus(
+  companyId: number,
+  frameworkId: number,
+): Promise<number> {
+  const existing = await db.execute(sql`
+    SELECT 1 FROM frozen_corpus_snapshot
+    WHERE company_id = ${companyId} AND framework_id = ${frameworkId}
+    LIMIT 1
+  `);
+  if (existing.rows.length > 0) return 0; // already frozen — immutable, do not touch
+  const res = await db.execute(sql`
+    INSERT INTO frozen_corpus_snapshot
+      (company_id, framework_id, document_id, url, content_hash, gate_verdict, source_type)
+    SELECT ${companyId}, ${frameworkId}, d.id, d.url, dc.url_hash, d.gate_verdict, d.source_type
+    FROM documents d
+    LEFT JOIN document_content dc ON dc.id = d.content_id
+    WHERE d.company_id = ${companyId}
+      AND d.gate_verdict = 'accept'
+    ON CONFLICT (company_id, framework_id, document_id) DO NOTHING
+  `);
+  return (res as any).rowCount ?? 0;
+}
+
+/** Purge the frozen snapshot for a (company, framework) pair (P1.4 operator
+ *  "refresh corpus" action) so the next run re-discovers cleanly and re-freezes.
+ *  When frameworkId is omitted, purges every framework snapshot for the company. */
+export async function purgeFrozenCorpus(
+  companyId: number,
+  frameworkId?: number,
+): Promise<number> {
+  const res = frameworkId == null
+    ? await db.execute(sql`DELETE FROM frozen_corpus_snapshot WHERE company_id = ${companyId}`)
+    : await db.execute(sql`DELETE FROM frozen_corpus_snapshot WHERE company_id = ${companyId} AND framework_id = ${frameworkId}`);
+  return (res as any).rowCount ?? 0;
+}
+
+/** Purge EVERY company's frozen snapshot for one framework (P1.4 operator
+ *  "refresh corpus" action at framework scope). Next run of each affected pair
+ *  re-discovers cleanly and re-freezes. Returns the number of snapshot rows
+ *  deleted. */
+export async function purgeFrozenCorpusForFramework(
+  frameworkId: number,
+): Promise<number> {
+  const res = await db.execute(sql`DELETE FROM frozen_corpus_snapshot WHERE framework_id = ${frameworkId}`);
+  return (res as any).rowCount ?? 0;
+}
+
 /**
  * Evidence funnel (display-only): return ALL document rows for a company with
  * the provenance / gate / fetch columns needed to build the per-stage funnel

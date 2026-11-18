@@ -13,6 +13,7 @@ import {
   p2OwnDocBeforeSubsidiaryEnabled,
   p2Rc5EntityListScopedEnabled,
   p2ThirdPartyHostAttributionGateEnabled,
+  z3FundEntityDisambiguationEnabled,
 } from "./scoring-fix-flags.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -70,6 +71,18 @@ export interface CompanyIdentity {
   // and lower-cased on use; absent → RC5 keeps its geographic/subsidiary-noun
   // triggers only. Keys on the workspace entity list, never a hardcoded name.
   peerEntities?: string[] | null;
+  // Z3 (fund/product entity disambiguation) — a per-company list of NAMED
+  // funds/products that are DISTINCT reporting entities from this company (e.g. an
+  // asset manager's individual funds whose disclosures are the fund's, not the
+  // manager's). When present AND ENTITY_FUND_DISAMBIGUATION is on, a quote whose
+  // text names one of these fund/product entities is treated as belonging to that
+  // distinct entity, not the manager, and so does not attribute to the target.
+  // GENERALISED PLUMBING ONLY: this list is NEVER populated with hardcoded or
+  // invented fund names. Absent/empty → a pure no-op (legacy behaviour unchanged).
+  // TODO(Z3 data input): feed a real per-company fund/product-name source into
+  // this field (the fund-name list does not exist yet) — see DEFERRED note in
+  // scoring-fix-flags.ts. Until that source exists, this stays empty in production.
+  fundEntities?: string[] | null;
 }
 
 export interface EligibilityFlagsInput {
@@ -552,6 +565,35 @@ function attributeOwnDocument(
   return null;
 }
 
+/**
+ * Z3 — fund/product entity disambiguation (pure, testable).
+ *
+ * Returns the matched fund/product name when the quote text names one of the
+ * company's declared DISTINCT fund/product entities (company.fundEntities) that is
+ * not the company itself, else null. GENERALISED: it reads only the per-company
+ * alias list — it hardcodes and invents NO fund names, and with no fundEntities it
+ * always returns null (a pure no-op). A match means the passage is about the fund,
+ * a distinct reporting entity, not the manager.
+ */
+export function namesDistinctFundEntity(
+  text: string,
+  company: CompanyIdentity,
+): string | null {
+  const funds = company.fundEntities;
+  if (!Array.isArray(funds) || funds.length === 0) return null;
+  if (!nonEmpty(text)) return null;
+  const lowerText = text.toLowerCase();
+  const fullName = (company.name || "").toLowerCase().trim();
+  for (const f of funds) {
+    const fl = (f || "").toLowerCase().trim();
+    if (fl.length < 4) continue; // too generic to disambiguate safely
+    // Never treat the company's own name as a distinct fund entity.
+    if (fullName && (fl === fullName || fl.includes(fullName) || fullName.includes(fl))) continue;
+    if (lowerText.includes(fl)) return f;
+  }
+  return null;
+}
+
 export function reviewQuoteAttribution(
   quotes: QuoteLike[] | null | undefined,
   company: CompanyIdentity,
@@ -625,6 +667,26 @@ export function reviewQuoteAttribution(
             index,
             attributedToTarget: false,
             reason: `Names a distinct subsidiary/affiliate reporting entity (${specific})`,
+          };
+        }
+      }
+
+      // Z3 (fund/product entity disambiguation): when a per-company fund/product
+      // alias list is threaded (company.fundEntities) and the quote names one of
+      // those DISTINCT reporting entities, the passage is the fund's disclosure, not
+      // the manager's, so it does not attribute to the target. Runs before the bare
+      // identity-token match so a manager token inside a fund name does not wrongly
+      // attribute fund evidence to the manager. GENERALISED PLUMBING: no-op unless
+      // real fund-name data is present (none is in production yet — see TODO on
+      // CompanyIdentity.fundEntities). Exception preserved: an explicit first-party
+      // possessive keeps attribution (the manager genuinely speaking for itself).
+      if (z3FundEntityDisambiguationEnabled()) {
+        const fund = namesDistinctFundEntity(text, company);
+        if (fund && !FIRST_PARTY_POSSESSIVE_REGEX.test(text)) {
+          return {
+            index,
+            attributedToTarget: false,
+            reason: `Names a distinct fund/product reporting entity (${fund})`,
           };
         }
       }

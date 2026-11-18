@@ -13,6 +13,7 @@ import {
   computeSourcingCoverage,
   reconcileOneQuotePerMeasure,
   aggregateCrossRunMajority,
+  verdictCacheKey,
   type MeasureResult,
 } from "./analyzer.js";
 import { shouldReuseCorpusForRerun } from "./scoring-fix-flags.js";
@@ -250,4 +251,38 @@ test("RC7-L2: unanimous Yes stays Yes; unanimous No stays No", () => {
   const no = aggregateCrossRunMajority([run("No"), run("No"), run("No")]);
   assert.equal(no.results[0].verdict, "No");
   assert.equal(no.demotedMeasureIds.length, 0); // nothing was Yes to demote
+});
+
+// ─── P1.5 — verdict cache keyed so a LOCKED corpus reproduces verdicts ────────
+// Read-only verification (no schema/key change): the verdict cache key folds in an
+// evidenceHash (SHA-256 of the evidence text). A frozen-corpus snapshot (P1.1/P1.2)
+// reproduces byte-identical evidence text for a (company, framework, measure), so
+// the SAME evidence yields the SAME key → the SAME cached verdict. Conversely, any
+// change in evidence (a corpus drift) changes the key, so a stale verdict is never
+// reused. No company/framework/measure names are hardcoded.
+test("P1.5: identical evidence → identical verdict cache key (locked corpus reproduces)", () => {
+  const ev = "Scope 1 and Scope 2 emissions fell 30% vs the 2020 baseline, independently assured.";
+  const k1 = verdictCacheKey("m-emissions", ev, "providerA", "binary", "salt-v1", 42);
+  const k2 = verdictCacheKey("m-emissions", ev, "providerA", "binary", "salt-v1", 42);
+  assert.equal(k1, k2, "same inputs must produce a stable key");
+});
+
+test("P1.5: any evidence drift changes the key (stale verdict never reused)", () => {
+  const base = verdictCacheKey("m-emissions", "evidence text A", "providerA", "binary", "salt-v1", 42);
+  // Different evidence text (corpus changed) → different key.
+  assert.notEqual(base, verdictCacheKey("m-emissions", "evidence text B", "providerA", "binary", "salt-v1", 42));
+  // Different company / measure / provider / mode / prompt-salt each also change the key.
+  assert.notEqual(base, verdictCacheKey("m-emissions", "evidence text A", "providerA", "binary", "salt-v1", 99));
+  assert.notEqual(base, verdictCacheKey("m-other",     "evidence text A", "providerA", "binary", "salt-v1", 42));
+  assert.notEqual(base, verdictCacheKey("m-emissions", "evidence text A", "providerB", "binary", "salt-v1", 42));
+  assert.notEqual(base, verdictCacheKey("m-emissions", "evidence text A", "providerA", "partial", "salt-v1", 42));
+  assert.notEqual(base, verdictCacheKey("m-emissions", "evidence text A", "providerA", "binary", "salt-v2", 42));
+});
+
+test("P1.5: cross-company isolation — same evidence, different company → different key", () => {
+  const ev = "identical disclosure text";
+  assert.notEqual(
+    verdictCacheKey("m1", ev, "providerA", "binary", "salt", 1),
+    verdictCacheKey("m1", ev, "providerA", "binary", "salt", 2),
+  );
 });

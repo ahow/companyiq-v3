@@ -132,14 +132,80 @@ export function shouldReuseCorpusForRerun(opts: {
   return opts.hasFrozenCorpus;
 }
 
+// ── P1.1/P1.2 — framework-scoped frozen-corpus snapshot ──────────────────────
+/** Default ON: the corpus-reuse decision keys the frozen set on
+ *  (company_id, framework_id) via the frozen_corpus_snapshot table instead of the
+ *  GLOBAL per-company accepted-document set (storage.getAcceptedDocuments, which is
+ *  not framework-filtered and drifts as other runs touch the same company). The
+ *  first successful assessment of a (company, framework) pair discovers normally
+ *  and WRITES the snapshot; every later run of that pair reuses it byte-for-byte,
+ *  which is the single biggest run-to-run consistency lever (plan §3). When OFF the
+ *  legacy global reuse set is used. OOM-safe: the snapshot references content by
+ *  document_id and never stores body text (see storage.writeFrozenCorpus). */
+export function p1FrameworkScopedCorpusEnabled(): boolean {
+  return envOnDefaultTrue("CORPUS_FRAMEWORK_SCOPED_SNAPSHOT");
+}
+
 // ── P1.3 — recheck re-scores against the frozen corpus (does not re-discover) ──
-/** Default OFF (documented): when ON, the "Re-examine Failures" / recheck path
- *  reuses the frozen corpus and only re-scores, instead of forcing a fresh
- *  discovery. Kept OFF until the framework-scoped frozen-corpus snapshot (P1.1/
- *  P1.2) lands, because today's reuse set is the global per-company accepted set;
- *  an explicit `forceRediscover` is always honoured either way. */
+/** Default ON (flipped once P1.1/P1.2 framework-scoped snapshot landed): the
+ *  "Re-examine Failures" / recheck path reuses the frozen corpus and only
+ *  re-scores, instead of forcing a fresh discovery that gave the re-examined
+ *  companies a DIFFERENT document set (a consistency regression). An explicit
+ *  `forceRefresh` / `forceRediscover` (the P1.4 operator refresh action) always
+ *  re-discovers regardless. Safe to default ON now because the reuse set is the
+ *  framework-scoped snapshot, not the drifting global accepted set. */
 export function p1RecheckReusesCorpusEnabled(): boolean {
-  return envOnDefaultFalse("CORPUS_REUSE_ON_RECHECK");
+  return envOnDefaultTrue("CORPUS_REUSE_ON_RECHECK");
+}
+
+// ── P1.4 — operator "refresh corpus" endpoint ────────────────────────────────
+/** Default ON: enables the POST /api/corpus/refresh effect that purges the
+ *  framework-scoped frozen snapshot for a (company, framework) pair — or a whole
+ *  framework — so the next run re-discovers cleanly and re-freezes. The route is
+ *  additive (always mounted); this flag only gates whether the purge is performed,
+ *  so it can be switched OFF in Railway to lock out refreshes without a redeploy.
+ *  Deleting snapshot rows never touches documents, scores or results. */
+export function p1CorpusRefreshEndpointEnabled(): boolean {
+  return envOnDefaultTrue("CORPUS_REFRESH_ENDPOINT");
+}
+
+// ── Z1 — within-document passage-retrieval re-weighting ──────────────────────
+/** Default ON: during passage retrieval, boost chunks drawn from the SECTION of
+ *  an umbrella document whose text matches the framework's OWN thematic vocabulary
+ *  (derived from framework_measures.evidenceKeywords / the framework definition —
+ *  never a company list) and down-weight boilerplate governance/ethics/terms-of-use
+ *  chunks WHEN a thematically-matching chunk exists in the same document. This only
+ *  reorders which passages are selected (the Michelin "climate chapter loses to the
+ *  Code of Ethics" case, plan §6 Z1); it NEVER forces or changes a score and keeps
+ *  binary scoring intact. Generic per-measure lever — helps any issuer whose
+ *  relevant disclosure is buried in a large registration document. */
+export function z1WithinDocReweightEnabled(): boolean {
+  return envOnDefaultTrue("PASSAGE_WITHIN_DOC_REWEIGHT");
+}
+/** Multiplicative boost applied to a passage from a thematically-matching section
+ *  of an umbrella document (Z1). >1 lifts on-theme chunks. */
+export function z1ThematicBoost(): number {
+  return envFloat("PASSAGE_THEMATIC_BOOST", 1.5);
+}
+/** Multiplicative penalty applied to a boilerplate governance/ethics/terms chunk
+ *  (Z1) WHEN an on-theme chunk exists in the SAME document. <1 pushes boilerplate
+ *  down. Never zeroes a chunk out (so it can still be selected if nothing else
+ *  exists), it only reorders. */
+export function z1BoilerplatePenalty(): number {
+  return envFloat("PASSAGE_BOILERPLATE_PENALTY", 0.6);
+}
+
+// ── Z3 — fund/product entity disambiguation plumbing ─────────────────────────
+/** Default ON: when a per-company fund/product alias list is PRESENT (threaded
+ *  via company.peerEntities / aliases — see the entity-attribution path), a named
+ *  fund/product is treated as a DISTINCT reporting entity from its manager during
+ *  entity attribution (plan §6 Z3 — the T. Rowe Price fund-document case). This is
+ *  GENERALISED plumbing only: it invents NO fund names and hardcodes nothing; with
+ *  no alias data present it is a pure no-op. The fund-name data source is still
+ *  required (see the TODO in entity-attribution / RC5) before this changes any
+ *  real verdict. */
+export function z3FundEntityDisambiguationEnabled(): boolean {
+  return envOnDefaultTrue("ENTITY_FUND_DISAMBIGUATION");
 }
 
 // ── P2.1 — own-document provenance wins over subsidiary/cross-entity rejects ──
@@ -208,31 +274,43 @@ export function r2SuspectExpectedSourcingEnabled(): boolean {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DEFERRED WORKSTREAMS (SCORING_REMEDIATION_PLAN_20261118.md) — NOT shipped here.
-// Documented so the next implementer has the full map; each requires the plan §7
-// preview-batch verification that cannot be run safely from a code-only change.
+// SHIPPED in this workstream (SCORING_REMEDIATION_PLAN_20261118.md §3/§6) — each
+// behind its own env flag above; all default ON per the user's "push so I can
+// retest" instruction and independently disablable in Railway:
 //
-//  • P1.1 / P1.2 — framework-scoped frozen-corpus snapshot. Today's reuse set is
-//    the GLOBAL per-company accepted-document set (storage.getAcceptedDocuments is
-//    not framework-filtered), so a true "lock the corpus per framework run" needs a
-//    new snapshot table + write path at run start and a reader that prefers it.
-//    P1.3 (recheckReusesCorpus) is wired and ships OFF (CORPUS_REUSE_ON_RECHECK)
-//    precisely because it should only flip ON once this framework-scoped snapshot
-//    exists — otherwise a recheck would re-score against the wrong (global) set.
-//  • P1.4 — operator "refresh corpus" endpoint that rebuilds the frozen snapshot
-//    on demand (the forceRefresh path already re-discovers; this is the explicit
-//    UI/endpoint surface for it).
-//  • Z1 — within-document passage-retrieval re-weighting: boost chunks from the
-//    section of an umbrella document matching the framework's own thematic
-//    vocabulary and down-weight boilerplate governance/ethics/terms chunks when a
-//    thematically-matching chunk exists in the same document. A per-measure
-//    retrieval lever that must be A/B'd against keystone recall before shipping.
-//  • Z2 / Z3 — do NOT force non-zero scores; genuinely unassessable companies
-//    already surface as suspect/low-coverage via the coverage flag (now always
-//    carrying a reason, R2). The fund-entity item (e.g. asset managers whose
-//    disclosures live under individual fund names) needs a DATA input — the fund
-//    name list — which is NOT built here. TODO: thread a per-company fund-entity
-//    alias list into CompanyIdentity.peerEntities / aliases when that data source
-//    exists; until then those companies correctly read as low-coverage, not a
-//    confident 0%.
+//  • P1.1 / P1.2 — framework-scoped immutable frozen-corpus snapshot. New table
+//    frozen_corpus_snapshot (db.ts), storage.getFrozenCorpus / writeFrozenCorpus /
+//    purgeFrozenCorpus(ForFramework), worker.ts reuse decision now keys on
+//    (company, framework) and freezes after first success, pipeline.ts reuse loads
+//    EXACTLY the snapshot document ids. OOM-safe: references content by id, never
+//    copies body text. Flag CORPUS_FRAMEWORK_SCOPED_SNAPSHOT (p1FrameworkScopedCorpusEnabled).
+//  • P1.3 — CORPUS_REUSE_ON_RECHECK flipped DEFAULT ON (now that the framework-
+//    scoped snapshot exists): "Re-examine Failures" / recheck re-SCORES against the
+//    frozen set instead of re-discovering. forceRefresh / forceRediscover still
+//    always re-discovers.
+//  • P1.4 — operator "refresh corpus" action: POST /api/corpus/refresh purges the
+//    snapshot for a (company, framework) pair or a whole framework and forces clean
+//    re-discovery on the next run. Flag CORPUS_REFRESH_ENDPOINT (p1CorpusRefreshEndpointEnabled).
+//  • P1.5 — verified (read-only + unit test): the verdict cache key embeds
+//    evidenceHash (SHA-256 of the evidence pack text), which is corpus-derived, so
+//    a locked corpus → identical evidence → identical verdict. No schema change
+//    needed; see analyzer verdict-cache key test.
+//  • Z1 — within-document passage-retrieval re-weighting (passage-retrieval.ts),
+//    flag PASSAGE_WITHIN_DOC_REWEIGHT (z1WithinDocReweightEnabled). Reorders
+//    passages only; never forces a score.
+//  • Z3 — fund/product entity disambiguation PLUMBING threaded through the
+//    entity-attribution path, flag ENTITY_FUND_DISAMBIGUATION
+//    (z3FundEntityDisambiguationEnabled). Generalised: no-op unless a per-company
+//    fund/product alias list is present.
+//
+// STILL DEFERRED / requires a data input (NOT code):
+//  • Z2 — do NOT force non-zero scores; genuinely unassessable companies already
+//    surface as suspect/low-coverage via the coverage flag (always carries a
+//    reason, R2). No code change — confirmed, nothing to ship.
+//  • Z3 DATA INPUT — the actual per-company fund/product-name list does NOT exist
+//    yet. The plumbing above consumes it when present (company.peerEntities /
+//    aliases), but NO fund names are invented or hardcoded. TODO: feed a real
+//    fund-name data source into the alias path; until then asset managers whose
+//    disclosures live under individual fund names correctly read as low-coverage,
+//    not a confident 0%. See the TODO in entity-attribution.
 // ─────────────────────────────────────────────────────────────────────────────

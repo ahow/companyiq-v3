@@ -30,7 +30,7 @@ import { normalizeVerdict, isMet, normalizedScore, computeCompanyScore } from ".
 // never affects scores/verdicts; attached to responses as metadata only.
 import { buildManifest, deriveResearchStatus, researchStatusCsvColumns, deriveEvidenceCompleteness, deriveQuoteReuse } from "../../shared/research-state.js";
 // RC1: checklist embedding content check flags (central scoring-fix flags module).
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars } from "../lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, p1CorpusRefreshEndpointEnabled } from "../lib/scoring-fix-flags.js";
 // BUG 6 helper: reused to decide whether a measure carries first-party (non
 // third-party-host) evidence when deriving the BUG 2 insufficient-evidence label.
 import { isThirdPartyHost } from "../lib/eligibility-flags.js";
@@ -1798,6 +1798,46 @@ apiRouter.post("/batch/review/reexamine", async (req: Request, res: Response) =>
     try { await storage.clearSystemAlert("batch_review", String(batch.id)); } catch { /* non-fatal */ }
 
     res.json({ success: true, reexamined: jobs.length, batchId: batch.id });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── P1.4 — operator "refresh corpus" action ─────────────────────────────────
+// Purges the immutable framework-scoped frozen-corpus snapshot so the NEXT run of
+// the affected (company, framework) pair(s) re-discovers cleanly and re-freezes a
+// new locked set. Default is "locked" (P1.1/P1.2); this is the deliberate escape
+// hatch. Requires an explicit frameworkId; companyId is optional (omit to refresh
+// every company's snapshot for that framework). Additive endpoint; the purge
+// EFFECT is gated by CORPUS_REFRESH_ENDPOINT (default ON) so it can be disabled in
+// Railway without a redeploy. This only deletes snapshot rows — it never touches
+// documents, scores or results; a subsequent normal re-run rebuilds the lock.
+apiRouter.post("/corpus/refresh", async (req: Request, res: Response) => {
+  try {
+    getSessionContext(req); // auth / workspace scoping (throws if unauthenticated)
+    if (!p1CorpusRefreshEndpointEnabled()) {
+      return res.status(403).json({ error: "Corpus refresh is disabled (CORPUS_REFRESH_ENDPOINT=false)." });
+    }
+    const frameworkId = Number((req.body ?? {}).frameworkId);
+    const companyIdRaw = (req.body ?? {}).companyId;
+    if (!Number.isFinite(frameworkId) || frameworkId <= 0) {
+      return res.status(400).json({ error: "frameworkId (positive integer) is required." });
+    }
+    let purged: number;
+    let scope: string;
+    if (companyIdRaw != null && companyIdRaw !== "") {
+      const companyId = Number(companyIdRaw);
+      if (!Number.isFinite(companyId) || companyId <= 0) {
+        return res.status(400).json({ error: "companyId, when supplied, must be a positive integer." });
+      }
+      purged = await storage.purgeFrozenCorpus(companyId, frameworkId);
+      scope = `company ${companyId} / framework ${frameworkId}`;
+    } else {
+      purged = await storage.purgeFrozenCorpusForFramework(frameworkId);
+      scope = `all companies / framework ${frameworkId}`;
+    }
+    console.log(`[P1.4] Corpus refresh: purged ${purged} frozen-snapshot row(s) for ${scope}; next run re-discovers.`);
+    res.json({ success: true, purged, scope, note: "Snapshot purged; the next analysis run re-discovers and re-freezes." });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

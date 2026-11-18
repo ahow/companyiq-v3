@@ -6,6 +6,7 @@ import { flattenTerms } from "./terminology-discovery.js";
 import type { IssuerProfile } from "./issuer-profile.js";
 import { scoreEntityMatch } from "./issuer-profile.js";
 import { isPrepComputeCacheEnabled } from "./prep-compute-cache.js";
+import { z1WithinDocReweightEnabled, z1ThematicBoost, z1BoilerplatePenalty } from "./scoring-fix-flags.js";
 
 /**
  * CHANGE 2 flag — chunk-gate fail-open safety net + preserveIfOnlySource.
@@ -503,6 +504,92 @@ export function countTopicHits(text: string, topicTerms: string[]): number {
   const re = buildTopicRegex(topicTerms);
   const m = text.match(re);
   return m ? m.length : 0;
+}
+
+// ─── Z1 — within-document passage re-weighting ───────────────────────────────
+// GENERIC boilerplate markers for governance/ethics/terms-of-use sections of an
+// umbrella document (e.g. a Universal Registration Document). These are standard
+// English disclosure boilerplate headings — NOT framework-, company-, sector- or
+// measure-specific. The Z1 lever only DOWN-weights a chunk that matches these AND
+// is off-theme AND sits in a document that ALSO holds a thematically-matching
+// chunk — so a governance chunk that is itself on-theme (matches the framework's
+// own vocabulary) is never penalised. It reorders passage selection; it never
+// forces, blocks or changes a score.
+const Z1_BOILERPLATE_RE = new RegExp(
+  [
+    "code of (?:ethics|conduct|business conduct)",
+    "terms of (?:use|service)",
+    "general terms and conditions",
+    "privacy (?:policy|notice)",
+    "cookie policy",
+    "anti[- ]?bribery",
+    "anti[- ]?corruption",
+    "whistle[- ]?blow",
+    "legal (?:notice|disclaimer)",
+    "terms and conditions",
+  ].join("|"),
+  "i",
+);
+
+/** True when a chunk reads as generic governance/ethics/terms-of-use boilerplate. */
+export function looksLikeBoilerplateChunk(text: string): boolean {
+  if (!text) return false;
+  return Z1_BOILERPLATE_RE.test(text);
+}
+
+/** A scorable passage shape for Z1 re-weighting (structurally compatible with the
+ *  per-chunk scored objects built in buildEvidencePackForMeasure). */
+export interface Z1Scorable {
+  docIndex: number;
+  score: number;
+  text: string;
+  topicHits?: number;
+}
+
+/**
+ * Z1 — within-document passage-retrieval re-weighting (pure, testable).
+ *
+ * For each source document independently:
+ *   • a chunk that matches the framework's OWN thematic vocabulary (topicTerms,
+ *     derived from framework_measures.evidenceKeywords / the framework definition —
+ *     NEVER a company list) is BOOSTED by `boost` (>1), and
+ *   • a chunk that reads as generic governance/ethics/terms boilerplate and is
+ *     OFF-theme is DOWN-weighted by `penalty` (<1) ONLY WHEN that same document
+ *     also contains at least one on-theme chunk.
+ *
+ * This reorders which passages win the per-document budget (the Michelin "climate
+ * chapter loses to the Code of Ethics in the same URD" case). It mutates only the
+ * numeric `score`; it never drops a chunk, never forces a verdict, and is a no-op
+ * when topicTerms is empty or no document mixes on-theme + boilerplate chunks.
+ */
+export function applyWithinDocReweight<T extends Z1Scorable>(
+  items: T[],
+  topicTerms: string[],
+  opts?: { boost?: number; penalty?: number },
+): T[] {
+  if (!items.length || !topicTerms.length) return items;
+  const boost = opts?.boost ?? z1ThematicBoost();
+  const penalty = opts?.penalty ?? z1BoilerplatePenalty();
+
+  // Classify each item once (reuse provided topicHits when present).
+  const onTheme = items.map((it) =>
+    (it.topicHits ?? countTopicHits(it.text, topicTerms)) > 0,
+  );
+  // Which documents hold at least one on-theme chunk?
+  const docHasOnTheme = new Set<number>();
+  for (let i = 0; i < items.length; i++) {
+    if (onTheme[i]) docHasOnTheme.add(items[i].docIndex);
+  }
+
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (onTheme[i]) {
+      it.score = it.score * boost;
+    } else if (docHasOnTheme.has(it.docIndex) && looksLikeBoilerplateChunk(it.text)) {
+      it.score = it.score * penalty;
+    }
+  }
+  return items;
 }
 
 // ─── Document-Aware Text Chunking (Layer C) ──────────────────────────────────
@@ -1427,6 +1514,16 @@ export function buildEvidencePackForMeasure(opts: {
       text: chunk.text,
     };
   });
+
+  // Z1 — within-document passage re-weighting. Boosts on-theme chunks and
+  // down-weights off-theme governance/ethics/terms boilerplate that shares a
+  // document with an on-theme chunk, so a buried climate chapter beats the Code of
+  // Ethics in the SAME umbrella document. Pure reorder of `score`; never forces a
+  // verdict. topicTerms is the framework's own thematic vocabulary (not a company
+  // list). Gated by PASSAGE_WITHIN_DOC_REWEIGHT (default ON).
+  if (z1WithinDocReweightEnabled()) {
+    applyWithinDocReweight(scored, topicTerms);
+  }
 
   // Primary ranking by blended score (desc), with deterministic tie-breaking by a
   // STABLE content key (documentUrl, documentIndex, sequenceInDoc, idx) so equal-score

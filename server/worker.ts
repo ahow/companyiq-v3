@@ -51,7 +51,7 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, r1ChecklistContentFallbackEnabled } from "./lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, r1ChecklistContentFallbackEnabled } from "./lib/scoring-fix-flags.js";
 import { computeCompanyScore } from "../shared/verdict.js";
 // A9 / WP15 (truthful publication). Build the canonical per-cell publication
 // record for each company and store it in the snapshot metadata so every reader
@@ -506,23 +506,41 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   let effectiveSkipDiscovery = skipDiscovery;
   try {
     if (!skipDiscovery) {
-      const frozen = await storage.getAcceptedDocuments(companyId);
-      const hasFrozenCorpus = !!(frozen && frozen.length > 0);
+      // P1.1/P1.2 — key the "has frozen corpus?" test on (company, framework) via
+      // the immutable snapshot table when CORPUS_FRAMEWORK_SCOPED_SNAPSHOT is ON,
+      // instead of the GLOBAL per-company accepted-document set (which is not
+      // framework-filtered and drifts as other runs touch the same company under
+      // other frameworks — the plan §2.2 consistency defect). A genuine first
+      // assessment of the pair has no snapshot → discovers normally, then writes
+      // one after success (see the writeFrozenCorpus call in the success path).
+      let hasFrozenCorpus: boolean;
+      let frozenCount: number;
+      let frozenSource: string;
+      if (p1FrameworkScopedCorpusEnabled()) {
+        const snapshot = await storage.getFrozenCorpus(companyId, frameworkId);
+        frozenCount = snapshot.length;
+        hasFrozenCorpus = frozenCount > 0;
+        frozenSource = "framework-scoped snapshot";
+      } else {
+        const frozen = await storage.getAcceptedDocuments(companyId);
+        frozenCount = frozen?.length ?? 0;
+        hasFrozenCorpus = frozenCount > 0;
+        frozenSource = "global accepted set";
+      }
       effectiveSkipDiscovery = shouldReuseCorpusForRerun({
         reuseEnabled: rc7CorpusReuseAcrossRunsEnabled(),
         hasFrozenCorpus,
         alreadySkippingDiscovery: !!skipDiscovery,
         forceRefresh,
         recheck,
-        // P1.3 — when CORPUS_REUSE_ON_RECHECK is ON, a plain recheck re-SCORES
-        // against the frozen corpus instead of forcing a fresh discovery (which
-        // historically gave the re-examined companies a DIFFERENT document set).
-        // An explicit forceRefresh still always re-discovers. Default OFF until the
-        // framework-scoped frozen-corpus snapshot (P1.1/P1.2) lands.
+        // P1.3 — when CORPUS_REUSE_ON_RECHECK is ON (now default), a plain recheck
+        // re-SCORES against the frozen corpus instead of forcing a fresh discovery
+        // (which historically gave the re-examined companies a DIFFERENT document
+        // set). An explicit forceRefresh still always re-discovers.
         recheckReusesCorpus: p1RecheckReusesCorpusEnabled(),
       });
       if (effectiveSkipDiscovery && !skipDiscovery) {
-        console.log("[Worker][RC7] Reusing frozen corpus for job " + jobId + " (company=" + companyId + ", " + frozen!.length + " accepted docs) — skipping re-discovery for verdict reproducibility");
+        console.log("[Worker][RC7/P1] Reusing frozen corpus for job " + jobId + " (company=" + companyId + ", fw=" + frameworkId + ", " + frozenCount + " docs via " + frozenSource + ") — skipping re-discovery for verdict reproducibility");
       }
     }
   } catch (e: any) {
@@ -603,6 +621,24 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       const _jt = await storage.completeJob(jobId, ownership);
       jobCompletionTransitioned = _jt.transitioned;
       console.log("[Worker] Job " + jobId + " completed successfully (attempt " + currentAttempt + ")");
+
+      // P1.1/P1.2 — freeze the framework-scoped corpus snapshot after a successful
+      // assessment so every later run of this (company, framework) pair reuses the
+      // exact same evidence set. IDEMPOTENT / first-wins: if a snapshot already
+      // exists for the pair it is left untouched (snapshot immutability), so this is
+      // a no-op on reused-corpus re-runs and only writes on the first assessment
+      // that built the set. OOM-safe (references content by id; no body text).
+      // Never fatal — a snapshot write failure must not fail a scored job.
+      if (p1FrameworkScopedCorpusEnabled()) {
+        try {
+          const wrote = await storage.writeFrozenCorpus(companyId, frameworkId);
+          if (wrote > 0) {
+            console.log("[Worker][P1] Froze framework-scoped corpus snapshot for company=" + companyId + ", fw=" + frameworkId + " (" + wrote + " accepted docs)");
+          }
+        } catch (snapErr: any) {
+          console.warn("[Worker][P1] frozen-corpus snapshot write failed (non-fatal) for company=" + companyId + ", fw=" + frameworkId + ": " + snapErr.message);
+        }
+      }
 
       // Fix B: Update priorBestScore if this run's total exceeds the stored value.
       // This enables the below-prior-best diagnostics path (Instruction 8).

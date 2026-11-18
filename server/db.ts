@@ -943,6 +943,34 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // P1.1/P1.2 — framework-scoped immutable frozen-corpus snapshot. Unlike
+    // batch_corpus (keyed per BATCH) this is keyed per (company_id, framework_id):
+    // the evidence set is frozen on the FIRST successful assessment of that pair
+    // and reused byte-for-byte on every later run of the same pair, so run-to-run
+    // swings caused by a drifting document set disappear. Gated by
+    // CORPUS_FRAMEWORK_SCOPED_SNAPSHOT (see scoring-fix-flags.ts).
+    //
+    // OOM-SAFE BY DESIGN: this table only REFERENCES content by document_id and
+    // stores lightweight provenance fields (url, a content identity hash, gate
+    // metadata). It NEVER duplicates document body text — readers load bodies
+    // lazily from document_content by id, capped (see getAcceptedDocContentMap).
+    // A prior 502 OOM came from loading full bodies for 1700+ companies at once;
+    // this snapshot deliberately avoids that.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS frozen_corpus_snapshot (
+        company_id INTEGER NOT NULL,
+        framework_id INTEGER NOT NULL,
+        document_id INTEGER NOT NULL,
+        url TEXT,
+        content_hash TEXT,
+        gate_verdict TEXT,
+        source_type TEXT,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        PRIMARY KEY (company_id, framework_id, document_id)
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS frozen_corpus_snapshot_pair_idx ON frozen_corpus_snapshot(company_id, framework_id)`);
+
 
     // P2d: Framework-declared required document types and data patterns
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS required_doc_types JSONB`);

@@ -423,9 +423,12 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════════════
   {
     const { PIPELINE_VERSION } = await import("./pipeline-version.js");
-    assert.ok(PIPELINE_VERSION.startsWith("v48"), `pipeline version must be v48+ (got: ${PIPELINE_VERSION})`);
     // Verify version string is non-empty and follows convention
     assert.match(PIPELINE_VERSION, /^v\d+-/, "pipeline version must follow vNN-slug convention");
+    // Floor check — robust to future bumps: parse the numeric and assert >= 48
+    // (previously a brittle startsWith("v48") that broke on every version bump).
+    const vNum = parseInt(PIPELINE_VERSION.replace(/^v/, ""), 10);
+    assert.ok(vNum >= 48, `pipeline version must be v48+ (got: ${PIPELINE_VERSION})`);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

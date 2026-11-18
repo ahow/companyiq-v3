@@ -4063,7 +4063,13 @@ const verdictCache = new Map<string, { result: MeasureResult; ts: number }>();
 
 // I45: Include companyId in verdict cache key to prevent cross-company cache
 // contamination when the same measureId+evidence hash collides across companies.
-function verdictCacheKey(measureId: string, evidenceText: string, provider: string, scoringMode: string, promptText?: string, companyId?: number): string {
+// P1.5: exported for the corpus-reproducibility test. The key folds in an
+// evidenceHash (SHA-256 of the evidence text), so a LOCKED corpus — which
+// reproduces byte-identical evidence text for a (company, framework, measure) —
+// reproduces the same cache key and therefore the same verdict. No schema or
+// key change is needed for corpus reproducibility; the evidence text is the
+// reproducibility lever and the frozen-corpus snapshot (P1.1/P1.2) controls it.
+export function verdictCacheKey(measureId: string, evidenceText: string, provider: string, scoringMode: string, promptText?: string, companyId?: number): string {
   const evidenceHash = createHash("sha256").update(evidenceText).digest("hex").slice(0, 16);
   // 36-B.2: Include prompt hash so cache auto-invalidates on prompt template changes
   const promptHash = promptText ? createHash("sha256").update(promptText).digest("hex").slice(0, 8) : "noprompt";

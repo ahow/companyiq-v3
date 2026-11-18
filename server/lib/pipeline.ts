@@ -40,7 +40,7 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled } from "./scoring-fix-flags.js";
 import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
 import { buildDecisionTrace, computeFrameworkContentHash } from "./framework-v2/reliability/decision-trace.js"; // WS-B: per-decision traceability
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
@@ -495,7 +495,31 @@ async function runFetchPhase(opts: {
   if (skipDiscovery) {
     // Resume-not-restart: no fresh network search. Operate on the accepted docs
     // persisted by the previous attempt; the fetch loop reads them from the DB.
-    const accepted = await storage.getAcceptedDocuments(companyId);
+    let accepted = await storage.getAcceptedDocuments(companyId);
+    // P1.1/P1.2 — when a framework-scoped frozen snapshot exists for THIS
+    // (company, framework), restrict reuse to EXACTLY the document IDs that were
+    // locked on the first successful assessment, rather than the drifting GLOBAL
+    // per-company accepted set (which other frameworks' runs mutate). OOM-safe:
+    // this only filters the already-loaded id list, it does not load body text.
+    // If the snapshot references ids no longer present in the accepted set we fall
+    // back to the full accepted set so the job can still score (defensive).
+    if (p1FrameworkScopedCorpusEnabled()) {
+      try {
+        const snap = await storage.getFrozenCorpus(companyId, framework.id);
+        if (snap.length > 0) {
+          const allow = new Set(snap.map((s) => s.documentId));
+          const filtered = accepted.filter((d: any) => allow.has(d.id));
+          if (filtered.length > 0) {
+            console.log(`[${companyName}] P1 frozen snapshot (fw=${framework.id}): reusing exactly ${filtered.length}/${accepted.length} locked accepted documents`);
+            accepted = filtered;
+          } else {
+            console.warn(`[${companyName}] P1 frozen snapshot (fw=${framework.id}) referenced ${snap.length} docs but none are in the current accepted set — falling back to full accepted set`);
+          }
+        }
+      } catch (snapErr: any) {
+        console.warn(`[${companyName}] P1 frozen-snapshot reuse-load failed (non-fatal), using full accepted set: ${snapErr?.message}`);
+      }
+    }
     console.log(`[${companyName}] Skipping discovery (RESUME): operating on ${accepted.length} persisted accepted documents`);
     discoveryResult = { documents: accepted, diagnostics: {}, issuerProfile: undefined } as any;
   } else discoveryResult = await searchCompanyDocuments({

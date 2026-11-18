@@ -14,6 +14,7 @@ import {
   isThirdPartyHost,
   isLowValuePageSource,
   reviewQuoteAttribution,
+  namesDistinctFundEntity,
   type EligibilityFlagId,
   type EligibilityFlagsInput,
 } from "./eligibility-flags.js";
@@ -540,6 +541,58 @@ function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
     { text: "Acme Beverages said we expanded our renewable-energy sourcing this year.", sourceUrl: "https://acme-bev.com/news" },
   ], ACME);
   check("P2.4: same passage on the issuer's own domain still attributes (first-party)", ownNamed[0].attributedToTarget === true);
+}
+
+// ─── 18. Z3 — fund/product entity disambiguation (generalised plumbing) ───────
+// namesDistinctFundEntity reads ONLY the per-company fundEntities alias list; it
+// invents/hardcodes no fund names and is a pure no-op without data. When the list
+// is present, a quote naming a distinct fund is treated as the fund's disclosure,
+// not the manager's. No company/framework/fund names are hardcoded here — all
+// behaviour is driven by the per-company alias list on the fixture.
+{
+  const FUNDY = { ...ACME, fundEntities: ["Acme Horizon Growth Fund", "Acme Shield Income Fund"] };
+
+  // No-op guarantees: without the alias list, always null.
+  check("Z3: no fundEntities → null (pure no-op, invents nothing)",
+    namesDistinctFundEntity("Any text mentioning Acme Horizon Growth Fund", ACME) === null);
+  check("Z3: empty fundEntities → null",
+    namesDistinctFundEntity("Acme Horizon Growth Fund did X", { ...ACME, fundEntities: [] }) === null);
+
+  // Positive: quote names a declared distinct fund → returns that fund's name.
+  check("Z3: text naming a declared distinct fund returns the fund name",
+    namesDistinctFundEntity("The Acme Horizon Growth Fund reported net-zero targets.", FUNDY) === "Acme Horizon Growth Fund");
+  // Negative: text about the manager itself (no fund named) → null.
+  check("Z3: text about the manager (no fund named) → null",
+    namesDistinctFundEntity("Acme Beverages Corporation set a group emissions target.", FUNDY) === null);
+  // Guard: the company's OWN name is never treated as a distinct fund entity.
+  check("Z3: company's own name is never a distinct fund",
+    namesDistinctFundEntity("Acme Beverages Corporation", { ...ACME, fundEntities: ["Acme Beverages Corporation"] }) === null);
+
+  // Wiring: reviewQuoteAttribution de-attributes a quote that names a distinct fund.
+  const fundQuote = reviewQuoteAttribution(
+    [{ text: "The Acme Horizon Growth Fund disclosed its climate strategy.", sourceUrl: "https://third-party.example.com/x" }],
+    FUNDY,
+  );
+  check("Z3: a quote naming a distinct fund is NOT attributed to the manager", fundQuote[0].attributedToTarget === false);
+
+  // Control A: same fixture, a FIRST-PARTY possessive keeps attribution (manager speaking for itself).
+  const firstParty = reviewQuoteAttribution(
+    [{ text: "We, Acme Beverages Corporation, publish our group climate strategy.", sourceUrl: "https://acme-bev.com/news" }],
+    FUNDY,
+  );
+  check("Z3: first-party possessive still attributes despite fund list present", firstParty[0].attributedToTarget === true);
+
+  // Control B: with NO fund data, the same fund-naming quote is unaffected by Z3
+  // (falls through to the normal identity-token logic) — proves the no-op guarantee end-to-end.
+  const noData = reviewQuoteAttribution(
+    [{ text: "The Acme Horizon Growth Fund disclosed its climate strategy.", sourceUrl: "https://third-party.example.com/x" }],
+    ACME,
+  );
+  check("Z3: without fund data the quote is not de-attributed BY Z3 (plumbing is inert)",
+    // It may still be handled by other rules; the point is Z3 did not fire. With a
+    // third-party host and no first-party token, normal logic leaves it unattributed,
+    // but the REASON must not be the Z3 fund reason.
+    (noData[0].reason || "").includes("fund/product reporting entity") === false);
 }
 
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"}`);

@@ -15,7 +15,13 @@
 //     when NOT called, cannot modify chunks — matched by analyzer.ts's
 //     `if (retrievalV2 && issuerProfile)` guard).
 
-import { applyChunkSanityGate, type Chunk } from "./passage-retrieval.js";
+import {
+  applyChunkSanityGate,
+  applyWithinDocReweight,
+  looksLikeBoilerplateChunk,
+  type Chunk,
+  type Z1Scorable,
+} from "./passage-retrieval.js";
 import type { IssuerProfile } from "./issuer-profile.js";
 
 let passed = 0;
@@ -217,6 +223,61 @@ section("Interaction: entity failure dominates vintage");
   ok(r.rejected.length === 1, `priority: 1 rejection (got ${r.rejected.length})`);
   ok(r.rejected[0].reason === "no-entity" || r.rejected[0].reason === "weak-entity",
     `priority: entity reason wins over vintage (got "${r.rejected[0]?.reason}")`);
+}
+
+// ─── Z1 — within-document passage re-weighting ───────────────────────────────
+// Pure, generic reorder: on-theme chunks (matching the framework's OWN thematic
+// terms) are boosted; off-theme governance/ethics/terms boilerplate is down-weighted
+// ONLY when the same document also holds an on-theme chunk. No company/framework
+// names are hardcoded — topicTerms are passed in (derived in prod from the
+// framework's evidence_keywords). It only mutates `score`; it never drops a chunk
+// or changes a verdict.
+section("Z1: looksLikeBoilerplateChunk detects generic governance/terms boilerplate");
+{
+  ok(looksLikeBoilerplateChunk("This Code of Ethics applies to all employees."), "code of ethics → boilerplate");
+  ok(looksLikeBoilerplateChunk("Our anti-bribery and anti-corruption policy..."), "anti-bribery → boilerplate");
+  ok(looksLikeBoilerplateChunk("Please review the Terms of Use before continuing."), "terms of use → boilerplate");
+  ok(looksLikeBoilerplateChunk("Whistleblowing channel is available to staff."), "whistleblowing → boilerplate");
+  ok(!looksLikeBoilerplateChunk("We reduced Scope 1 and Scope 2 emissions by 30%."), "emissions text → NOT boilerplate");
+  ok(!looksLikeBoilerplateChunk(""), "empty → NOT boilerplate");
+}
+
+section("Z1: applyWithinDocReweight boosts on-theme and down-weights same-doc boilerplate");
+{
+  const terms = ["emissions", "climate", "renewable"];
+  // Doc 0 (umbrella URD): a boilerplate ethics chunk that currently outranks a
+  // buried climate chunk. Doc 1: a standalone boilerplate chunk (no on-theme sibling).
+  const items: Z1Scorable[] = [
+    { docIndex: 0, score: 10, text: "Code of Ethics: all employees must comply." },      // 0: boilerplate, off-theme, doc has on-theme → penalised
+    { docIndex: 0, score: 4,  text: "Our climate strategy cut Scope 1 emissions." },     // 1: on-theme → boosted
+    { docIndex: 1, score: 7,  text: "Terms of Use and privacy policy for the website." }, // 2: boilerplate but NO on-theme sibling → untouched
+  ];
+  const before = items.map((i) => i.score);
+  const out = applyWithinDocReweight(items, terms, { boost: 1.5, penalty: 0.6 });
+
+  ok(out === items, "mutates and returns same array reference");
+  ok(Math.abs(out[1].score - 4 * 1.5) < 1e-9, `on-theme chunk boosted 4→${out[1].score} (expect 6)`);
+  ok(Math.abs(out[0].score - 10 * 0.6) < 1e-9, `same-doc off-theme boilerplate penalised 10→${out[0].score} (expect 6)`);
+  ok(out[2].score === before[2], `boilerplate with no on-theme sibling untouched (${out[2].score})`);
+  // Reorder effect: the climate chunk (6) now ties/outranks the ethics chunk (6);
+  // critically the ethics chunk no longer dominates (10 → 6).
+  ok(out[1].score >= out[0].score, "after reweight the on-theme chunk is no longer out-ranked by the ethics chunk");
+}
+
+section("Z1: no-op guarantees (never forces a change)");
+{
+  const terms: string[] = [];
+  const items: Z1Scorable[] = [{ docIndex: 0, score: 5, text: "Code of Ethics." }];
+  const out = applyWithinDocReweight(items, terms, { boost: 1.5, penalty: 0.6 });
+  ok(out[0].score === 5, "empty topicTerms → no change");
+
+  const empty: Z1Scorable[] = [];
+  ok(applyWithinDocReweight(empty, ["x"]).length === 0, "empty items → no change");
+
+  // A boilerplate chunk in a doc with NO on-theme sibling is never penalised.
+  const solo: Z1Scorable[] = [{ docIndex: 2, score: 9, text: "Privacy policy and cookie policy." }];
+  applyWithinDocReweight(solo, ["emissions"], { boost: 1.5, penalty: 0.6 });
+  ok(solo[0].score === 9, "lone boilerplate (no on-theme sibling) not down-weighted");
 }
 
 console.log(`\n────────────────────────────\nPASSED: ${passed}   FAILED: ${failed}`);
