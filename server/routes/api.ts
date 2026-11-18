@@ -29,6 +29,8 @@ import { normalizeVerdict, isMet, normalizedScore, computeCompanyScore } from ".
 // WP02/A1 (additive): explicit research-state accounting. Pure derivation —
 // never affects scores/verdicts; attached to responses as metadata only.
 import { buildManifest, deriveResearchStatus, researchStatusCsvColumns, deriveEvidenceCompleteness, deriveQuoteReuse } from "../../shared/research-state.js";
+// RC1: checklist embedding content check flags (central scoring-fix flags module).
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars } from "../lib/scoring-fix-flags.js";
 // BUG 6 helper: reused to decide whether a measure carries first-party (non
 // third-party-host) evidence when deriving the BUG 2 insufficient-evidence label.
 import { isThirdPartyHost } from "../lib/eligibility-flags.js";
@@ -182,12 +184,30 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
     // same documents already loaded. Pure derivation — never reads/changes any
     // score/verdict. Returned as an additive field so the UI renders the SAME
     // status as CSV/export/share (CV07).
+    // RC1: thread capped umbrella body content so the checklist can confirm an
+    // embeddable disclosure is actually PRESENT inside a retrieved umbrella report
+    // (never a bare "found" by title alone). Best-effort: if the content read
+    // fails, the checklist falls back to not_found for unconfirmed embeddings.
+    const rc1ContentCheck = rc1EmbeddingContentCheckEnabled();
+    let documentsForChecklist: any[] = documents as any;
+    if (rc1ContentCheck) {
+      try {
+        const contentMap = await storage.getAcceptedDocContentMap(company.id, rc1ChecklistContentFetchChars());
+        documentsForChecklist = (documents as any[]).map((d) => ({
+          ...d,
+          content: contentMap.get(Number(d.id)) ?? null,
+        }));
+      } catch {
+        /* content read is best-effort; checklist degrades to not_found safely */
+      }
+    }
     const researchStatus = deriveResearchStatus({
-      documents: documents as any,
+      documents: documentsForChecklist as any,
       manifest: buildManifest({
         entityBoundary: company.name,
         requiredDocTypes: requiredDocTypesSet.size > 0 ? Array.from(requiredDocTypesSet) : undefined,
       }),
+      checklistOptions: { embeddingContentCheck: rc1ContentCheck },
     });
 
     // Evidence funnel (§3, additive/display-only): per-stage counts + the
@@ -213,7 +233,9 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
     try {
       const essentialChecklist = (researchStatus as any)?.essentialChecklist || [];
       const essentialTotalCount = essentialChecklist.length;
-      const essentialFoundCount = essentialChecklist.filter((i: any) => i?.status === "found").length;
+      // RC1: an `embedded` disclosure (confirmed inside an umbrella report body)
+      // counts as present, exactly like a standalone `found` document.
+      const essentialFoundCount = essentialChecklist.filter((i: any) => i?.status === "found" || i?.status === "embedded").length;
       const DIAG_PREFIX = "diag://";
       const hasFirstPartyEvidence = (s: any): boolean =>
         (s?.quotes || []).some((q: any) => {

@@ -514,6 +514,38 @@ export async function getAcceptedDocuments(companyId: number) {
 }
 
 /**
+ * RC1: capped body content for a company's gate-accepted first-party documents,
+ * keyed by document id. Used ONLY to confirm an embeddable thematic disclosure is
+ * actually present inside an umbrella report (the checklist content check). The
+ * per-document character cap bounds memory (the whole point of this read is a
+ * token membership test, not full-text processing). Reads the same
+ * COALESCE(dc.content, d.content) source the rest of the pipeline uses.
+ */
+export async function getAcceptedDocContentMap(
+  companyId: number,
+  capChars: number,
+): Promise<Map<number, string>> {
+  const cap = Number.isFinite(capChars) && capChars > 0 ? Math.floor(capChars) : 500_000;
+  const rows = await db.execute(sql`
+    SELECT d.id AS id,
+           LEFT(COALESCE(dc.content, d.content), ${cap}) AS content
+    FROM documents d
+    LEFT JOIN document_content dc ON dc.id = d.content_id
+    WHERE d.company_id = ${companyId}
+      AND d.gate_verdict = 'accept'
+      AND d.source_type = 'first_party'
+      AND COALESCE(dc.content_length, length(d.content)) > 50
+  `);
+  const map = new Map<number, string>();
+  for (const r of rows.rows as any[]) {
+    if (r && r.id != null && typeof r.content === "string") {
+      map.set(Number(r.id), r.content);
+    }
+  }
+  return map;
+}
+
+/**
  * Evidence funnel (display-only): return ALL document rows for a company with
  * the provenance / gate / fetch columns needed to build the per-stage funnel
  * and the same-domain-third-party provenance-health signal. Additive, read-only

@@ -376,49 +376,77 @@ test("I5.9 summarizeEssentialChecklist renders 'not found' label", () => {
 // retrieved first-party umbrella report must now satisfy ANY embeddable thematic
 // disclosure (topic-neutral), while standalone/statutory doc types (10-K, 20-F,
 // annual report itself) still require a direct match.
-test("BUG3.1 a climate/TCFD doc type is found inside a retrieved annual report (embedded)", () => {
+test("BUG3.1/RC1 a climate/TCFD doc type is embedded ONLY when the annual report BODY contains its terms", () => {
   const docs: GapDocument[] = [
     { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
-      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report-2025.pdf" },
+      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report-2025.pdf",
+      // Body genuinely contains the TCFD / IFRS S2 climate disclosure.
+      content: "Our TCFD report section follows the IFRS S2 climate disclosure recommendations on governance and scenario analysis." },
   ];
   const checklist = deriveEssentialDocChecklist(docs, ["TCFD Report", "IFRS S2 Climate Disclosure"]);
   const byType = Object.fromEntries(checklist.map((i) => [i.docType, i]));
-  assert.equal(byType["TCFD Report"].status, "found", "TCFD satisfied by annual report");
-  assert.match(byType["TCFD Report"].detail, /embedded/);
-  assert.equal(byType["IFRS S2 Climate Disclosure"].status, "found", "IFRS S2 satisfied by annual report");
+  assert.equal(byType["TCFD Report"].status, "embedded", "TCFD confirmed in annual report body");
+  assert.match(byType["TCFD Report"].detail, /inside a retrieved corporate umbrella report/);
+  assert.equal(byType["IFRS S2 Climate Disclosure"].status, "embedded", "IFRS S2 confirmed in annual report body");
 });
 
-test("BUG3.2 climate doc type found via sustainability report; standalone climate report still direct-matches", () => {
+test("BUG3.1b/RC1 an annual report WITHOUT the thematic terms in its body is NOT found (the Hanmi/MAA case)", () => {
   const docs: GapDocument[] = [
     { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
-      title: "ACME Sustainability Report 2025", url: "https://acme.example/sustainability.pdf" },
+      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report-2025.pdf",
+      // Generic financial annual report with no climate/TCFD disclosure in the body.
+      content: "This annual report presents our revenue, operating profit, dividends and board composition for the year." },
+  ];
+  const checklist = deriveEssentialDocChecklist(docs, ["TCFD Report", "IFRS S2 Climate Disclosure"]);
+  const byType = Object.fromEntries(checklist.map((i) => [i.docType, i]));
+  assert.equal(byType["TCFD Report"].status, "not_found", "no TCFD content in the umbrella body → not found");
+  assert.match(byType["TCFD Report"].detail, /content does not contain/i);
+  assert.equal(byType["IFRS S2 Climate Disclosure"].status, "not_found");
+});
+
+test("BUG3.2/RC1 standalone report of the type direct-matches (found); content-embedded disclosure is embedded", () => {
+  const docs: GapDocument[] = [
     { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
-      title: "ACME Climate Report 2025 (TCFD)", url: "https://acme.example/climate-tcfd.pdf" },
+      title: "ACME Sustainability Report 2025", url: "https://acme.example/sustainability.pdf",
+      content: "The physical climate risk disclosure in this report covers flood, heat and water-stress exposure across our sites." },
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Climate Report 2025 (TCFD)", url: "https://acme.example/climate-tcfd.pdf",
+      content: "Standalone climate report." },
   ];
   const checklist = deriveEssentialDocChecklist(docs, ["Physical Climate Risk Disclosure", "Climate Report"]);
   const byType = Object.fromEntries(checklist.map((i) => [i.docType, i.status]));
-  assert.equal(byType["Physical Climate Risk Disclosure"], "found");
-  assert.equal(byType["Climate Report"], "found");
+  assert.equal(byType["Physical Climate Risk Disclosure"], "embedded", "confirmed inside the sustainability report body");
+  assert.equal(byType["Climate Report"], "found", "standalone climate report direct-matches");
 });
 
-test("BUG3.3 generalisation: a NON-climate narrative disclosure is ALSO satisfied by an umbrella report", () => {
+test("BUG3.3/RC1 generalisation: a NON-climate narrative disclosure is embedded only with body evidence; a policy must be direct", () => {
   const docs: GapDocument[] = [
     { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
-      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report.pdf" },
+      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report.pdf",
+      content: "Our human rights disclosure and cyber risk disclosure describe due diligence and incident-response controls." },
   ];
-  // Topic-neutral by document NATURE: a non-climate narrative DISCLOSURE embedded in
-  // an annual report is recognised exactly like a climate disclosure (no topic
+  // Topic-neutral by document NATURE: a non-climate narrative DISCLOSURE present in
+  // the annual report body is recognised exactly like a climate disclosure (no topic
   // hardcoding) ... while a governance POLICY must still be found directly.
   const checklist = deriveEssentialDocChecklist(docs, [
-    "Human Rights Disclosure",        // narrative disclosure → embeddable
-    "Cyber Risk Disclosure",          // narrative disclosure → embeddable
+    "Human Rights Disclosure",        // narrative disclosure → embeddable (body has it)
+    "Cyber Risk Disclosure",          // narrative disclosure → embeddable (body has it)
     "Responsible AI Policy",          // governance artefact → must be direct
   ]);
   const byType = Object.fromEntries(checklist.map((i) => [i.docType, i]));
-  assert.equal(byType["Human Rights Disclosure"].status, "found", "non-climate disclosure embeddable");
-  assert.match(byType["Human Rights Disclosure"].detail, /embedded/);
-  assert.equal(byType["Cyber Risk Disclosure"].status, "found", "another non-climate disclosure embeddable");
+  assert.equal(byType["Human Rights Disclosure"].status, "embedded", "non-climate disclosure embeddable with body evidence");
+  assert.match(byType["Human Rights Disclosure"].detail, /inside a retrieved corporate umbrella report/);
+  assert.equal(byType["Cyber Risk Disclosure"].status, "embedded", "another non-climate disclosure embeddable");
   assert.equal(byType["Responsible AI Policy"].status, "not_found", "a policy is NOT embedded-satisfied");
+});
+
+test("BUG3.3c/RC1 legacy behaviour: with embeddingContentCheck disabled, title match alone embeds", () => {
+  const docs: GapDocument[] = [
+    { sourceType: "first_party", gateVerdict: "accept", fetchStatus: "ok", extractionState: "complete",
+      title: "ACME Annual Report 2025", url: "https://acme.example/annual-report.pdf" }, // no content
+  ];
+  const checklist = deriveEssentialDocChecklist(docs, ["TCFD Report"], { embeddingContentCheck: false });
+  assert.equal(checklist[0].status, "embedded", "legacy: umbrella title alone satisfies embedding when check is off");
 });
 
 test("BUG3.3b scope boundary: a standalone/statutory doc type is NOT satisfied by an umbrella report", () => {

@@ -54,6 +54,9 @@ export interface ClassifiableDocument {
   superseded?: boolean | null;
   url?: string | null;           // document URL (used only for generic doc-type matching)
   title?: string | null;         // document title (used only for generic doc-type matching)
+  content?: string | null;       // RC1: extracted body text (used only to confirm an embeddable
+                                 // thematic disclosure is actually PRESENT inside an umbrella report).
+                                 // Optional/forgiving — absent for legacy/title-only callers.
 }
 
 // failure_reason values that mean "we never got a conclusive look at the
@@ -380,10 +383,30 @@ export interface EssentialDocChecklistItem {
   docType: string;
   /** Human label (same as docType). */
   label: string;
-  /** found: retrieved usable content. partial: only a truncated extraction.
+  /** found: a standalone/direct document of the type was retrieved.
+   *  embedded: the disclosure is present INSIDE a retrieved umbrella report whose
+   *            body content actually contains the required type's own terms (RC1).
+   *  partial: only a truncated extraction.
    *  not_found: no usable copy obtained (absent, or only retryable attempts). */
-  status: "found" | "partial" | "not_found";
+  status: "found" | "embedded" | "partial" | "not_found";
   detail: string;
+}
+
+/** True for a checklist status that means the disclosure IS present (standalone
+ *  or embedded inside an umbrella report). Readers that counted only "found"
+ *  must treat "embedded" the same way (RC1). */
+export function isChecklistSatisfied(status: EssentialDocChecklistItem["status"]): boolean {
+  return status === "found" || status === "embedded";
+}
+
+/** RC1 options for checklist derivation. Passed explicitly by server callers so
+ *  this shared module never reads process.env (it is also bundled into the client). */
+export interface ChecklistOptions {
+  /** When true (default), an embeddable thematic disclosure is marked `embedded`
+   *  ONLY when a retrieved first-party umbrella report's extracted CONTENT contains
+   *  the required type's own terms. When false, the legacy title/URL-only embedding
+   *  match is used (a bare "found" via any umbrella title). */
+  embeddingContentCheck?: boolean;
 }
 
 /**
@@ -471,6 +494,27 @@ function matchesEmbeddingReport(haystack: string, docType: string): boolean {
   return isEmbeddableDisclosureDocType(docType) && UMBRELLA_REPORT_REGEX.test(haystack);
 }
 
+// RC1: defensive cap on how much umbrella body text the content check scans, to
+// bound memory/CPU regardless of how large a caller's threaded content is.
+const EMBEDDING_CONTENT_SCAN_CHARS = 2_000_000;
+
+/**
+ * RC1 — positive content evidence for embedding. An embeddable thematic
+ * disclosure is only genuinely present inside an umbrella report when the
+ * umbrella's extracted BODY actually contains the required type's own terms.
+ * Reuses the same generic token test used for direct title/URL matches, run
+ * against the document content. Topic/framework-agnostic.
+ */
+function umbrellaBodyContainsDocType(content: string | null | undefined, docType: string): boolean {
+  const body = typeof content === "string" ? content : "";
+  if (!body.trim()) return false;
+  const scan = (body.length > EMBEDDING_CONTENT_SCAN_CHARS
+    ? body.slice(0, EMBEDDING_CONTENT_SCAN_CHARS)
+    : body
+  ).toLowerCase();
+  return matchesDocType(scan, docType);
+}
+
 /**
  * Build the essential-document checklist from the framework's declared required
  * document types. Each entry is marked found / partial / not_found by matching
@@ -480,7 +524,10 @@ function matchesEmbeddingReport(haystack: string, docType: string): boolean {
 export function deriveEssentialDocChecklist(
   documents: ClassifiableDocument[],
   requiredDocTypes: string[] | null | undefined,
+  options?: ChecklistOptions,
 ): EssentialDocChecklistItem[] {
+  // RC1: content check is ON unless the caller explicitly disables it.
+  const embeddingContentCheck = options?.embeddingContentCheck !== false;
   const docTypes = (requiredDocTypes || [])
     .map((d) => (typeof d === "string" ? d.trim() : ""))
     .filter((d) => d.length > 0);
@@ -498,13 +545,18 @@ export function deriveEssentialDocChecklist(
     if (seen.has(key)) continue; // dedupe case-insensitively, preserve first spelling
     seen.add(key);
 
-    let found = false;
+    // Direct (standalone) match outcomes.
+    let found = false;             // a standalone doc of the type was retrieved
     let partial = false;
     let retryableAttempt = false;
     let conclusivelyAbsent = false;
-    let matchedAny = false;
+    let matchedAny = false;        // any doc matched the type by title/URL (direct or umbrella)
 
-    let foundViaEmbedding = false;
+    // RC1: embedding outcomes tracked separately so we never report a bare
+    // "found" implying a dedicated report. `embedded` requires positive content
+    // evidence (umbrella body contains the type's own terms) when the check is on.
+    let embedded = false;
+    let embeddingCandidateSeen = false;   // an umbrella report was retrieved but body lacked the terms
     for (const d of eligible) {
       const haystack = `${(d.url || "").toLowerCase()} ${(d.title || "").toLowerCase()}`;
       const directMatch = matchesDocType(haystack, docType);
@@ -512,32 +564,60 @@ export function deriveEssentialDocChecklist(
       if (!directMatch && !embeddingMatch) continue;
       matchedAny = true;
       const state = classifyDocument(d);
-      if (state === "extracted_complete" || state === "retrieved") {
-        found = true;
-        foundViaEmbedding = embeddingMatch;
-        break;
+      if (directMatch) {
+        if (state === "extracted_complete" || state === "retrieved") {
+          found = true;
+          break; // a retrieved standalone document is the strongest outcome
+        }
+        if (state === "extracted_partial") partial = true;
+        else if (isRetryable(state)) retryableAttempt = true;
+        else if (isConclusiveAbsence(state)) conclusivelyAbsent = true;
+        continue;
       }
-      if (state === "extracted_partial") partial = true;
-      else if (isRetryable(state)) retryableAttempt = true;
-      else if (isConclusiveAbsence(state)) conclusivelyAbsent = true;
+      // Embedding candidate (umbrella report that could embed the disclosure).
+      if (state === "extracted_complete" || state === "retrieved") {
+        embeddingCandidateSeen = true;
+        // Require positive content evidence that the disclosure is actually
+        // present in the umbrella body (unless the operator disabled the check).
+        if (!embeddingContentCheck || umbrellaBodyContainsDocType(d.content, docType)) {
+          embedded = true;
+          // keep scanning: a later direct standalone match still wins (found).
+        }
+      } else if (state === "extracted_partial") {
+        partial = true;
+      } else if (isRetryable(state)) {
+        retryableAttempt = true;
+      } else if (isConclusiveAbsence(state)) {
+        conclusivelyAbsent = true;
+      }
     }
 
     let status: EssentialDocChecklistItem["status"];
     let detail: string;
     if (found) {
       status = "found";
-      detail = foundViaEmbedding
-        ? "Disclosure available within a retrieved corporate umbrella report (annual/integrated/sustainability/ESG) — embedded."
-        : "Essential document retrieved.";
+      detail = "Essential document retrieved.";
+    } else if (embedded) {
+      status = "embedded";
+      detail = "Disclosure present inside a retrieved corporate umbrella report (annual/integrated/sustainability/ESG) — confirmed in the report body.";
     } else if (partial) {
       status = "partial";
       detail = "Only a partial/truncated extraction is available.";
     } else {
       status = "not_found";
-      if (!matchedAny) detail = "No document of this type was found.";
-      else if (retryableAttempt) detail = "Attempted but not yet obtained (retryable).";
-      else if (conclusivelyAbsent) detail = "Looked and found nothing (conclusively absent).";
-      else detail = "No usable copy obtained.";
+      if (embeddingCandidateSeen && embeddingContentCheck) {
+        // An umbrella report was retrieved but its body did not contain the
+        // disclosure's own terms — honest "not found" (RC1 core correction).
+        detail = "An umbrella report was retrieved but its content does not contain this disclosure.";
+      } else if (!matchedAny) {
+        detail = "No document of this type was found.";
+      } else if (retryableAttempt) {
+        detail = "Attempted but not yet obtained (retryable).";
+      } else if (conclusivelyAbsent) {
+        detail = "Looked and found nothing (conclusively absent).";
+      } else {
+        detail = "No usable copy obtained.";
+      }
     }
 
     items.push({ docType, label: docType, status, detail });
@@ -613,6 +693,8 @@ export interface ResearchStatus {
 export function deriveResearchStatus(input: {
   documents: GapDocument[];
   manifest: ResearchScopeManifest;
+  /** RC1: forwarded to the checklist builder (embedding content check). */
+  checklistOptions?: ChecklistOptions;
 }): ResearchStatus {
   const documents = input.documents || [];
   const manifest = input.manifest;
@@ -672,7 +754,7 @@ export function deriveResearchStatus(input: {
     unresolvedEssentialGaps,
     retryableGaps,
     stateCounts,
-    essentialChecklist: deriveEssentialDocChecklist(documents, manifest.requiredDocTypes),
+    essentialChecklist: deriveEssentialDocChecklist(documents, manifest.requiredDocTypes, input.checklistOptions),
   };
 }
 
@@ -700,7 +782,7 @@ export function researchStatusCsvColumns(rs?: ResearchStatus | null): Array<{ he
     { header: "Excluded (policy/gate)", value: rs ? String(rs.coverage.excluded) : "" },
     { header: "Unresolved Essential Gaps", value: rs ? rs.unresolvedEssentialGaps.map((g) => g.label).join("; ") : "" },
     { header: "Essential Document Checklist", value: rs ? summarizeEssentialChecklist(rs.essentialChecklist) : "" },
-    { header: "Missing Essential Documents", value: rs ? (rs.essentialChecklist || []).filter((i) => i.status !== "found").map((i) => `${i.label} (${i.status === "not_found" ? "not found" : i.status})`).join("; ") : "" },
+    { header: "Missing Essential Documents", value: rs ? (rs.essentialChecklist || []).filter((i) => !isChecklistSatisfied(i.status)).map((i) => `${i.label} (${i.status === "not_found" ? "not found" : i.status})`).join("; ") : "" },
     { header: "Discovery Recall", value: rs ? rs.discoveryRecall.label : "" },
   ];
 }
