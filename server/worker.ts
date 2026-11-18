@@ -51,6 +51,7 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun } from "./lib/scoring-fix-flags.js";
 import { computeCompanyScore } from "../shared/verdict.js";
 // A9 / WP15 (truthful publication). Build the canonical per-cell publication
 // record for each company and store it in the snapshot metadata so every reader
@@ -127,6 +128,7 @@ export interface AnalysisJobData {
   skipDiscovery?: boolean; // Resume-not-restart retry: reuse persisted corpus, skip discovery search
   sourceBatchId?: number; // Corpus replay: read corpus from this source batch
   recheck?: boolean; // Re-examine / re-run job: use the longer fetch-phase budget
+  forceRefresh?: boolean; // RC7: explicitly force fresh discovery, bypassing corpus-reuse
 }
 
 export interface ReliabilityFinalizerData {
@@ -271,7 +273,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   if (job.data.kind === "reliability_finalizer") {
     return finalizeReliabilityCycle(job.data);
   }
-  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, skipDiscovery, sourceBatchId, recheck } = job.data;
+  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, skipDiscovery, sourceBatchId, recheck, forceRefresh } = job.data;
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
 
@@ -494,6 +496,34 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     parseInt(process.env.OWNERSHIP_WATCH_MS || "30000", 10),
   );
 
+  // RC7 (layer 1) — corpus reuse across runs. A re-analysis of a company that
+  // already has a frozen accepted-document corpus reuses that corpus (skip
+  // discovery) by default so the deterministic seed + verdict cache reproduce
+  // prior verdicts, eliminating run-to-run verdict drift. A genuine first
+  // analysis (no frozen corpus) still discovers normally, and an explicit
+  // refresh (forceRefresh / recheck) still re-discovers. Flag:
+  // CORPUS_REUSE_ACROSS_RUNS (default ON).
+  let effectiveSkipDiscovery = skipDiscovery;
+  try {
+    if (!skipDiscovery) {
+      const frozen = await storage.getAcceptedDocuments(companyId);
+      const hasFrozenCorpus = !!(frozen && frozen.length > 0);
+      effectiveSkipDiscovery = shouldReuseCorpusForRerun({
+        reuseEnabled: rc7CorpusReuseAcrossRunsEnabled(),
+        hasFrozenCorpus,
+        alreadySkippingDiscovery: !!skipDiscovery,
+        forceRefresh,
+        recheck,
+      });
+      if (effectiveSkipDiscovery && !skipDiscovery) {
+        console.log("[Worker][RC7] Reusing frozen corpus for job " + jobId + " (company=" + companyId + ", " + frozen!.length + " accepted docs) — skipping re-discovery for verdict reproducibility");
+      }
+    }
+  } catch (e: any) {
+    console.warn("[Worker][RC7] corpus-reuse check failed, proceeding with discovery: " + e.message);
+    effectiveSkipDiscovery = skipDiscovery;
+  }
+
   try {
     // Hard watchdog: the analysis pipeline can occasionally hang on a network
     // fetch/discovery step that has no inner socket timeout. The heartbeat above
@@ -517,7 +547,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
             batchId,
             cancelCheck,
             skipFetch,
-            skipDiscovery,
+            skipDiscovery: effectiveSkipDiscovery, // RC7: reuse frozen corpus on re-runs
             sourceBatchId,
             recheck,
             attemptId, // DIAGNOSTIC-ONLY: log correlation / score provenance
@@ -1294,9 +1324,26 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
         // essential-document checklist generically (no hardcoded strings).
         requiredDocTypes: ((framework as any)?.requiredDocTypes as string[] | null) || undefined,
       });
+      // RC1: thread capped umbrella body content so the persisted checklist only
+      // marks an embeddable disclosure `embedded` when the umbrella report's body
+      // actually contains the disclosure's own terms (never a bare title match).
+      const rc1ContentCheck = rc1EmbeddingContentCheckEnabled();
+      let docsForChecklist: any[] = allAccepted as any;
+      if (rc1ContentCheck) {
+        try {
+          const contentMap = await storage.getAcceptedDocContentMap(company.id, rc1ChecklistContentFetchChars());
+          docsForChecklist = (allAccepted as any[]).map((d) => ({
+            ...d,
+            content: contentMap.get(Number(d.id)) ?? null,
+          }));
+        } catch {
+          /* best-effort; checklist degrades to not_found for unconfirmed embeddings */
+        }
+      }
       const researchStatus = deriveResearchStatus({
-        documents: allAccepted as any,
+        documents: docsForChecklist as any,
         manifest: researchManifest,
+        checklistOptions: { embeddingContentCheck: rc1ContentCheck },
       });
 
       // A9 / WP15: build the canonical publication record for every measure cell
