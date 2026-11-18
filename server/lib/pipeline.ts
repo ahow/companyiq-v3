@@ -39,7 +39,8 @@ import {
 import { processDocument, inferDocumentType, PermanentFetchError, TransientFetchError, getExtractionCompleteness, type ExtractionCompleteness } from "./processor.js";
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
-import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, type AnalysisResult } from "./analyzer.js";
+import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
+import { rc2CoverageSuspectMinSourcedRatio } from "./scoring-fix-flags.js";
 import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
 import { buildDecisionTrace, computeFrameworkContentHash } from "./framework-v2/reliability/decision-trace.js"; // WS-B: per-decision traceability
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
@@ -3434,6 +3435,54 @@ async function runAnalyzePhase(opts: {
   });
 
   console.log(`[${companyName}] Analysis complete: ${analysis.scorePercentage}% (${measuresMet} met / ${answeredCount} answered; ${abstainedCount} abstained of ${measures.length} total)`);
+
+  // ─── RC2: COVERAGE SUSPECT FROM PER-MEASURE SOURCING ───────────────────────────
+  // Coverage must reflect the actual scoring outcome, not just document counts. A
+  // company with a healthy, keyword-matching corpus can still leave many individual
+  // measures with no usable source (the Grupo Aeroportuario "full despite 8
+  // unsourced" case). Compute the share of ANSWERED measures that ended with ≥1
+  // ELIGIBLE supporting source (a quote that is not disqualified and not a
+  // diagnostic sidecar); when it falls below COVERAGE_SUSPECT_MIN_SOURCED_RATIO
+  // (default 0.8), downgrade coverage to "suspect" — independent of, and OR-ed with,
+  // the keyword-based corpus-validity trigger above. Surfaced in
+  // discoveryDiagnostics.coverage so the dashboard shows "N of M measures have no
+  // eligible source". Keys only off per-measure sourcing outcome; no company or
+  // framework special-casing.
+  try {
+    const threshold = rc2CoverageSuspectMinSourcedRatio();
+    const sc = computeSourcingCoverage(allMeasureResults as any, threshold);
+    if (sc.answeredMeasureCount > 0) {
+      const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
+      const existingCoverage = priorDiag.coverage || {};
+      const coverageDowngradeNote =
+        `${sc.unsourcedMeasureCount} of ${sc.answeredMeasureCount} measures have no eligible source ` +
+        `(sourced ratio ${sc.sourcedMeasureRatio.toFixed(2)} < ${threshold}).`;
+      // OR with any pre-existing suspect state — never upgrade away a suspect flag.
+      const alreadySuspect = existingCoverage.coverageLevel === "suspect" || priorDiag.coverageLevelOverride === "suspect";
+      const nextCoverage: any = {
+        ...existingCoverage,
+        sourcedMeasureRatio: sc.sourcedMeasureRatio,
+        unsourcedMeasureCount: sc.unsourcedMeasureCount,
+        answeredMeasureCount: sc.answeredMeasureCount,
+      };
+      if (sc.suspect || alreadySuspect) {
+        nextCoverage.coverageLevel = "suspect";
+        nextCoverage.sourcingSuspectReason = sc.suspect ? coverageDowngradeNote : existingCoverage.sourcingSuspectReason;
+      }
+      await storage.updateCompany(companyId, workspaceId, {
+        discoveryDiagnostics: {
+          ...priorDiag,
+          ...(sc.suspect ? { coverageLevelOverride: "suspect" } : {}),
+          coverage: nextCoverage,
+        } as any,
+      });
+      if (sc.suspect) {
+        console.warn(`[${companyName}] RC2 coverage suspect: ${coverageDowngradeNote}`);
+      }
+    }
+  } catch (rc2Err: any) {
+    console.warn(`[${companyName}] RC2 coverage-from-sourcing check skipped (non-fatal): ${rc2Err?.message}`);
+  }
 
   // ─── I51-B: PERSIST PASSAGE-RETRIEVAL SUMMARY (diagnostic-only) ─────────────
   // Compact per-measure telemetry showing what BM25 selected. Written to the

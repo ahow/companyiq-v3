@@ -40,6 +40,7 @@ import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scorin
 import { buildCanonicalRuleTrace, buildCanonicalRule, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
 import { PASSAGE_LEVEL_EQUIVALENCE_CLAUSE } from "./framework-v2/structured-guidance.js";
 import { computeEligibilityFlags, isPositiveVerdict, reviewQuoteAttribution, type EligibilityFlag } from "./eligibility-flags.js";
+import { rc3OneQuotePerMeasureEnabled } from "./scoring-fix-flags.js";
 // A3 / WP04: end-to-end entity/provenance/temporal eligibility composition guardrail.
 // Attached per measure in SHADOW mode by default (observability only); verdict-
 // mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
@@ -216,6 +217,262 @@ export interface MeasureResult {
   // never change the verdict unless ELIGIBILITY_ENFORCE=on. Back-compat optional.
   eligibilityDecisions?: EligibilityDecision[] | null;
   eligibilityCellStatus?: EligibilityStatus | null;
+}
+
+// ─── RC3 — one quote → one measure reconciliation ────────────────────────────
+/** Normalise a quote's text for cross-measure fingerprinting: lowercase, collapse
+ *  all non-alphanumeric runs to single spaces, trim. Topic/framework-agnostic. */
+function rc3QuoteFingerprint(text: string | null | undefined): string {
+  return (typeof text === "string" ? text : "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** A quote counts as live supporting evidence when it has text, is not already
+ *  disqualified, and is not a diagnostic sidecar. */
+function rc3IsLiveSupportingQuote(q: MeasureResult["quotes"][number]): boolean {
+  if (!q || typeof q.text !== "string" || q.text.trim().length === 0) return false;
+  if ((q as any).disqualified === true) return false;
+  if (String((q as any)?.sourceUrl ?? "").startsWith("diag://")) return false;
+  return true;
+}
+
+/** Best retrieval-relevance proxy for a (measure) = the max passage chunk score
+ *  recorded in passageDiagnostics (0 when none). Used to pick the best-fit measure
+ *  for a quote shared across measures. */
+function rc3MeasureRelevance(r: MeasureResult): number {
+  const chunks = r.passageDiagnostics?.topChunks;
+  if (!Array.isArray(chunks) || chunks.length === 0) return 0;
+  let best = 0;
+  for (const c of chunks) {
+    const s = typeof c?.score === "number" && Number.isFinite(c.score) ? c.score : 0;
+    if (s > best) best = s;
+  }
+  return best;
+}
+
+export interface OneQuotePerMeasureOutcome {
+  reassignments: number; // quotes stripped from a non-best-fit measure
+  demotions: number;     // Yes measures demoted for lack of a distinct quote
+}
+
+/**
+ * RC3 — deterministic post-scoring reconciliation so one supporting quote backs at
+ * most one measure. When the SAME fingerprint supports a "Yes" on more than one
+ * measure, keep it on the single best-fit measure (highest passage-retrieval
+ * relevance, deterministic tiebreak on measureId) and mark it disqualified on the
+ * others. Any "Yes" measure left with no live distinct supporting quote is demoted
+ * to "No" (score 0). Mutates results in place; purely structural (fingerprint +
+ * relevance ranking) so it generalises across frameworks. Logs each reassignment.
+ */
+export function reconcileOneQuotePerMeasure(
+  results: MeasureResult[],
+  companyName = "",
+): OneQuotePerMeasureOutcome {
+  const outcome: OneQuotePerMeasureOutcome = { reassignments: 0, demotions: 0 };
+  if (!Array.isArray(results) || results.length === 0) return outcome;
+
+  const yesResults = results.filter((r) => r && r.verdict === "Yes" && Array.isArray(r.quotes));
+
+  // Measures that had ≥1 live supporting quote BEFORE reconciliation. Only these
+  // can be demoted by RC3 (a Yes with no live quote to begin with is a pre-existing
+  // state handled by the attribution/abstain paths, not reused-quote control).
+  const hadLiveBefore = new Set<string>();
+  for (const r of yesResults) {
+    if (r.quotes.some((q) => rc3IsLiveSupportingQuote(q))) hadLiveBefore.add(r.measureId);
+  }
+
+  // Map fingerprint → list of { measure, quoteIndexes } across all Yes measures.
+  const byFingerprint = new Map<string, Array<{ r: MeasureResult; idxs: number[] }>>();
+  for (const r of yesResults) {
+    const seenInThisMeasure = new Map<string, number[]>();
+    r.quotes.forEach((q, i) => {
+      if (!rc3IsLiveSupportingQuote(q)) return;
+      const fp = rc3QuoteFingerprint(q.text);
+      if (fp.length < 25) return; // ignore trivially short quotes to avoid collisions
+      const arr = seenInThisMeasure.get(fp) || [];
+      arr.push(i);
+      seenInThisMeasure.set(fp, arr);
+    });
+    for (const [fp, idxs] of seenInThisMeasure) {
+      const entry = byFingerprint.get(fp) || [];
+      entry.push({ r, idxs });
+      byFingerprint.set(fp, entry);
+    }
+  }
+
+  // For each fingerprint shared across >1 measure, keep on the best-fit measure.
+  for (const [fp, entries] of byFingerprint) {
+    if (entries.length < 2) continue;
+    const ranked = [...entries].sort((a, b) => {
+      const ra = rc3MeasureRelevance(a.r);
+      const rb = rc3MeasureRelevance(b.r);
+      if (rb !== ra) return rb - ra; // higher relevance first
+      return String(a.r.measureId).localeCompare(String(b.r.measureId)); // deterministic
+    });
+    const keep = ranked[0];
+    for (const losing of ranked.slice(1)) {
+      for (const i of losing.idxs) {
+        const q = losing.r.quotes[i];
+        if (q && (q as any).disqualified !== true) {
+          (q as any).disqualified = true;
+          (q as any).disqualReason =
+            `Reused quote — reassigned to best-fit measure ${keep.r.measureId} (RC3: one quote supports one measure).`;
+          outcome.reassignments++;
+        }
+      }
+      if (companyName) {
+        console.log(`[${companyName}] RC3 one-quote-per-measure: reused quote reassigned from ${losing.r.measureId} to ${keep.r.measureId} (fp len ${fp.length})`);
+      }
+    }
+  }
+
+  // Demote any Yes measure that HAD live support but lost all of it to reassignment.
+  for (const r of yesResults) {
+    if (!hadLiveBefore.has(r.measureId)) continue;
+    const hasLive = r.quotes.some((q) => rc3IsLiveSupportingQuote(q));
+    if (!hasLive) {
+      r.verdict = "No";
+      r.score = 0;
+      r.verdictNuance = (r.verdictNuance ? r.verdictNuance + " " : "") +
+        "Demoted from Yes: its only supporting evidence was a quote reused by another measure, leaving no distinct source (RC3).";
+      outcome.demotions++;
+      if (companyName) {
+        console.log(`[${companyName}] RC3 one-quote-per-measure: demoted ${r.measureId} Yes→No (no distinct supporting quote after reassignment)`);
+      }
+    }
+  }
+
+  return outcome;
+}
+
+// ─── RC2 — coverage suspect from per-measure sourcing ─────────────────────────
+/** A quote counts as an ELIGIBLE source when it has text, is not disqualified, and
+ *  is not a diagnostic sidecar. Shared by RC2 coverage and RC3 reconciliation. */
+export function isEligibleSupportingQuote(q: { text?: unknown; disqualified?: unknown; sourceUrl?: unknown } | null | undefined): boolean {
+  if (!q || typeof q.text !== "string" || q.text.trim().length === 0) return false;
+  if ((q as any).disqualified === true) return false;
+  if (String((q as any)?.sourceUrl ?? "").startsWith("diag://")) return false;
+  return true;
+}
+
+export interface SourcingCoverageOutcome {
+  answeredMeasureCount: number;
+  sourcedMeasureCount: number;
+  unsourcedMeasureCount: number;
+  sourcedMeasureRatio: number;
+  suspect: boolean;
+}
+
+/**
+ * RC2 — compute coverage from the per-measure sourcing outcome. Over ANSWERED
+ * (non-abstained) measures, the share with ≥1 eligible supporting source; coverage
+ * is suspect when that ratio falls below `threshold`. Pure and deterministic so it
+ * is unit-testable without a DB. Returns suspect=false when there are no answered
+ * measures (nothing to judge). Keys only off sourcing outcome.
+ */
+export function computeSourcingCoverage(
+  measures: Array<Pick<MeasureResult, "abstained" | "quotes">>,
+  threshold: number,
+): SourcingCoverageOutcome {
+  const answered = (measures || []).filter((m) => m && !m.abstained);
+  const answeredMeasureCount = answered.length;
+  if (answeredMeasureCount === 0) {
+    return { answeredMeasureCount: 0, sourcedMeasureCount: 0, unsourcedMeasureCount: 0, sourcedMeasureRatio: 1, suspect: false };
+  }
+  const sourcedMeasureCount = answered.filter(
+    (m) => Array.isArray(m.quotes) && m.quotes.some((q) => isEligibleSupportingQuote(q)),
+  ).length;
+  const unsourcedMeasureCount = answeredMeasureCount - sourcedMeasureCount;
+  const sourcedMeasureRatio = sourcedMeasureCount / answeredMeasureCount;
+  return {
+    answeredMeasureCount,
+    sourcedMeasureCount,
+    unsourcedMeasureCount,
+    sourcedMeasureRatio,
+    suspect: sourcedMeasureRatio < threshold,
+  };
+}
+
+// ─── RC7 (layer 2) — cross-run majority aggregation ──────────────────────────
+export interface CrossRunMajorityOutcome {
+  /** One aggregated result per measureId, binary Yes only at ≥majority agreement. */
+  results: MeasureResult[];
+  /** measureIds whose aggregated verdict was demoted away from Yes for lack of agreement. */
+  demotedMeasureIds: string[];
+  /** measureIds whose aggregated verdict is Yes (met the agreement threshold). */
+  agreedYesMeasureIds: string[];
+  runCount: number;
+  /** Number of agreeing runs required for a Yes (ceil(runCount/2), min 2 for ≥2/3 on 3 runs). */
+  requiredAgreement: number;
+}
+
+/**
+ * RC7 layer 2 (OPTIONAL — gated by SCORING_CROSS_RUN_MAJORITY, default OFF).
+ *
+ * Given the per-measure results of N independent runs of the SAME company, score
+ * a measure Yes only when at least a majority of runs independently reached Yes
+ * (binary; Partial/Insufficient/No all count as not-Yes). Pure and deterministic
+ * so it is unit-testable without any orchestration. The representative result for
+ * a measure is taken from a run that agreed with the majority verdict (preserving
+ * its quotes/evidence); when demoted away from Yes, the score is forced to 0 and
+ * the verdict to "No" with a nuance noting the lack of cross-run agreement.
+ *
+ * This implements the aggregation only; it does NOT trigger the 3× execution.
+ * Keying is purely on per-measure verdict outcomes across runs — no company,
+ * framework, or measure is special-cased.
+ */
+export function aggregateCrossRunMajority(runs: MeasureResult[][]): CrossRunMajorityOutcome {
+  const validRuns = (runs || []).filter((r) => Array.isArray(r));
+  const runCount = validRuns.length;
+  // ≥ majority: ceil(n/2) runs must agree, but never fewer than 2 (a single run
+  // can never establish cross-run agreement). For 3 runs this is 2 (i.e. ≥2/3).
+  const requiredAgreement = Math.max(2, Math.ceil(runCount / 2));
+
+  // Collect every measure's result across runs, keyed by measureId.
+  const byMeasure = new Map<string, MeasureResult[]>();
+  const order: string[] = [];
+  for (const run of validRuns) {
+    for (const m of run) {
+      if (!m || typeof m.measureId !== "string") continue;
+      if (!byMeasure.has(m.measureId)) { byMeasure.set(m.measureId, []); order.push(m.measureId); }
+      byMeasure.get(m.measureId)!.push(m);
+    }
+  }
+
+  const results: MeasureResult[] = [];
+  const demotedMeasureIds: string[] = [];
+  const agreedYesMeasureIds: string[] = [];
+
+  for (const measureId of order) {
+    const variants = byMeasure.get(measureId)!;
+    const yesCount = variants.filter((m) => m.verdict === "Yes").length;
+    const meetsAgreement = runCount >= 2 && yesCount >= requiredAgreement;
+
+    if (meetsAgreement) {
+      // Representative = a run that voted Yes (keeps its supporting evidence).
+      const rep = variants.find((m) => m.verdict === "Yes") || variants[0];
+      results.push({ ...rep });
+      agreedYesMeasureIds.push(measureId);
+    } else {
+      // Not enough agreement for Yes → binary No. Prefer a non-Yes variant as the
+      // representative so its (non-positive) rationale/quotes are retained.
+      const rep = variants.find((m) => m.verdict !== "Yes") || variants[0];
+      const wasYes = rep.verdict === "Yes";
+      results.push({
+        ...rep,
+        score: 0,
+        verdict: "No",
+        verdictNuance: wasYes || yesCount > 0
+          ? `Cross-run majority: only ${yesCount}/${runCount} run(s) reached Yes (needed ${requiredAgreement}).`
+          : rep.verdictNuance,
+      });
+      if (yesCount > 0) demotedMeasureIds.push(measureId);
+    }
+  }
+
+  return { results, demotedMeasureIds, agreedYesMeasureIds, runCount, requiredAgreement };
 }
 
 export interface AnalysisResult {
@@ -3612,6 +3869,23 @@ export async function analyzeCompanyMeasures(opts: {
             }
       );
       allResults.push(...normalizedBatch);
+    }
+  }
+
+  // ─── RC3: one quote → one measure reconciliation ────────────────────────────
+  // Deterministic post-scoring pass: a supporting quote reused across multiple Yes
+  // measures is kept on the single best-fit measure and stripped (marked
+  // disqualified) from the others; any Yes that loses all distinct support is
+  // demoted to No. Runs before the rollup so totalScore / measuresMet reflect the
+  // corrected verdicts. Flag SCORING_ONE_QUOTE_PER_MEASURE (default on).
+  if (rc3OneQuotePerMeasureEnabled()) {
+    try {
+      const rc3 = reconcileOneQuotePerMeasure(allResults, companyName);
+      if (rc3.reassignments > 0 || rc3.demotions > 0) {
+        console.log(`[${companyName}] RC3 one-quote-per-measure: ${rc3.reassignments} quote reassignment(s), ${rc3.demotions} Yes→No demotion(s)`);
+      }
+    } catch (e) {
+      console.warn(`[${companyName}] RC3 one-quote-per-measure: skipped (${(e as Error)?.message ?? "error"}) — verdicts unchanged`);
     }
   }
 
