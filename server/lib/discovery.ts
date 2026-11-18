@@ -3764,6 +3764,29 @@ const DISCOVERY_TIMEOUT_MS = Math.max(
   parseInt(process.env.DISCOVERY_TIMEOUT_MS || String(20 * 60 * 1000), 10) || 20 * 60 * 1000,
 );
 
+// First-run completeness knob (2026-11). Many discovery lanes historically
+// hard-clamped per-query result volume at a literal 10 via
+// `Math.min(searchDepth, 10)` — which meant raising `search_depth` in settings
+// could NOT widen those lanes (locale, CJK, universal, sector, subsidiary,
+// evidence-expansion, R6a–f). For the "as complete as possible the first time"
+// goal, that ceiling is now operator-tunable. The default 10 preserves the
+// exact prior behaviour; raising it (together with a higher search_depth) lets
+// every capped lane return more results per query at once. Fully framework /
+// company / sector-agnostic — it changes only the per-query result ceiling.
+// Floored at 10 so it can never silently narrow existing coverage.
+const DISCOVERY_PER_QUERY_RESULT_CAP = Math.max(
+  10,
+  parseInt(process.env.DISCOVERY_PER_QUERY_RESULT_CAP || "10", 10) || 10,
+);
+/**
+ * Per-query result count for the capped discovery lanes. Equivalent to the old
+ * inline `Math.min(searchDepth, 10)`, but with the ceiling operator-tunable via
+ * DISCOVERY_PER_QUERY_RESULT_CAP (default 10 → unchanged behaviour).
+ */
+function perQueryNum(searchDepth: number): number {
+  return Math.min(searchDepth, DISCOVERY_PER_QUERY_RESULT_CAP);
+}
+
 /**
  * PR 1 · Change 1a: run a single targeted web-search query for a company
  * (used by pipeline.ts to close latest-primary-disclosure gaps identified by
@@ -4912,7 +4935,7 @@ async function searchCompanyDocumentsInner(opts: {
   console.log(`[${companyName}] Running multi-document sourcing expansion lane`);
   const multiDocQueries = buildMultiDocumentQueries(companyName, framework);
   for (const query of multiDocQueries) {
-    const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+    const results = await webSearch(query, { num: perQueryNum(searchDepth) });
     for (const r of results) addCandidate(r, "multi-doc");
   }
 
@@ -4922,7 +4945,7 @@ async function searchCompanyDocumentsInner(opts: {
   console.log(`[${companyName}] Running SEC/regulatory filing search lane`);
   const filingQueries = buildRegulatoryFilingQueries(companyName, framework, topicPhrases);
   for (const query of filingQueries) {
-    const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+    const results = await webSearch(query, { num: perQueryNum(searchDepth) });
     for (const r of results) addCandidate(r, "regulatory");
   }
 
@@ -4970,7 +4993,7 @@ async function searchCompanyDocumentsInner(opts: {
       topicPhrases,
     );
     for (const query of aShareQueries) {
-      const results = await webSearch(query, { num: Math.min(searchDepth, 10), gl: "cn", hl: "zh-cn" });
+      const results = await webSearch(query, { num: perQueryNum(searchDepth), gl: "cn", hl: "zh-cn" });
       for (const r of results) addCandidate(r, "a-share-filing");
     }
     // ROBUST full-PDF resolution: pull the genuine annual-report PDFs straight
@@ -5005,7 +5028,7 @@ async function searchCompanyDocumentsInner(opts: {
   console.log(`[${companyName}] Running investor relations search lane`);
   const irQueries = buildInvestorRelationsQueries(companyName, effectiveDomain, framework, topicPhrases);
   for (const query of irQueries) {
-    const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+    const results = await webSearch(query, { num: perQueryNum(searchDepth) });
     for (const r of results) addCandidate(r, "investor-relations");
   }
 
@@ -5015,7 +5038,7 @@ async function searchCompanyDocumentsInner(opts: {
   console.log(`[${companyName}] Running universal disclosure search lane`);
   const universalQueries = buildUniversalDisclosureQueries(companyName, framework);
   for (const query of universalQueries) {
-    const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+    const results = await webSearch(query, { num: perQueryNum(searchDepth) });
     for (const r of results) addCandidate(r, "universal-disclosure");
   }
 
@@ -5026,7 +5049,7 @@ async function searchCompanyDocumentsInner(opts: {
     console.log(`[${companyName}] Running sector-specific search lane (sector: ${opts.sector})`);
     const sectorQueries = buildSectorSpecificQueries(companyName, opts.sector, framework, topicPhrases);
     for (const query of sectorQueries) {
-      const results = await webSearch(query, { num: Math.min(searchDepth, 10) });
+      const results = await webSearch(query, { num: perQueryNum(searchDepth) });
       for (const r of results) addCandidate(r, "sector-specific");
     }
   }
@@ -5071,7 +5094,7 @@ async function searchCompanyDocumentsInner(opts: {
     console.log(`[${companyName}] Running evidence-keyword expansion lane (${queryExpansionResult.queries.length} queries)`);
     for (const eq of queryExpansionResult.queries) {
       try {
-        const results = await webSearch(eq.query, { num: Math.min(searchDepth, 10) });
+        const results = await webSearch(eq.query, { num: perQueryNum(searchDepth) });
         for (const r of results) addCandidate(r, "evidence-expansion");
       } catch { /* best-effort */ }
     }
@@ -5101,7 +5124,7 @@ async function searchCompanyDocumentsInner(opts: {
       const _irQueries = irQueries.slice(0, 12);
       const _irResults = await webSearchBatch(
         _irQueries,
-        { num: Math.min(searchDepth, 10) },
+        { num: perQueryNum(searchDepth) },
         { canonicalFor: () => true, bestEffort: true },
       );
       for (const results of _irResults) {
@@ -5185,7 +5208,7 @@ async function searchCompanyDocumentsInner(opts: {
         try {
           const gl = localeProfile?.gl;
           const hl = localeProfile?.hl;
-          const results = await webSearch(q, { num: Math.min(searchDepth, 10), ...(gl ? { gl } : {}), ...(hl ? { hl } : {}) });
+          const results = await webSearch(q, { num: perQueryNum(searchDepth), ...(gl ? { gl } : {}), ...(hl ? { hl } : {}) });
           for (const r of results) addCandidate(r, "r6b-locale-topic");
         } catch { /* best-effort */ }
       }
@@ -5247,7 +5270,7 @@ async function searchCompanyDocumentsInner(opts: {
       console.log(`[${companyName}] R6d Running jurisdiction doc-type lane (${jurQueries.length} queries)`);
       for (const q of jurQueries.slice(0, 10)) {
         try {
-          const results = await webSearch(q, { num: Math.min(searchDepth, 10) });
+          const results = await webSearch(q, { num: perQueryNum(searchDepth) });
           for (const r of results) addCandidate(r, "r6d-jurisdiction-doctype");
         } catch { /* best-effort */ }
       }
@@ -5309,7 +5332,7 @@ async function searchCompanyDocumentsInner(opts: {
         console.log(`[${companyName}] R6f Sub-page enumeration for ${lc.url} (${enumQueries.length} queries)`);
         for (const q of enumQueries.slice(0, 4)) {
           try {
-            const results = await webSearch(q, { num: Math.min(searchDepth, 10) });
+            const results = await webSearch(q, { num: perQueryNum(searchDepth) });
             for (const r of results) addCandidate(r, "r6f-subpage-enum");
           } catch { /* best-effort */ }
         }
