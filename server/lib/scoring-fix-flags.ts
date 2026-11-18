@@ -49,6 +49,49 @@ export function rc6CorpusReadinessRetryEnabled(): boolean {
 export function rc6CorpusReadinessRetryBudget(): number {
   return envInt("CORPUS_READINESS_RETRY_BUDGET", 6);
 }
+/** D — concurrency cap for the RC6 readiness re-fetch worker pool. Default 1 =
+ *  strictly serial, so the readiness re-fetch behaves byte-for-byte as before.
+ *  When set >1, up to that many dead-primary re-fetches run concurrently via a
+ *  bounded worker pool (never unbounded). Floored at 1. */
+export function rc6CorpusReadinessRetryConcurrency(): number {
+  return Math.max(1, envInt("CORPUS_READINESS_RETRY_CONCURRENCY", 1));
+}
+// ── E — deep second discovery pass (opt-in, concurrency-capped) ──────────────
+/** When ON (default OFF — doubles discovery cost), after the first discovery
+ *  pass + gating a second pass runs aimed only at framework-required doc types
+ *  still missing. */
+export function eDeepSecondPassEnabled(): boolean {
+  return envOnDefaultFalse("DISCOVERY_DEEP_SECOND_PASS");
+}
+/** Concurrency cap for the E second pass. Default small (2), floored at 1 —
+ *  never unbounded parallelism (peak-load guard for the 502/OOM class). */
+export function eDeepSecondPassConcurrency(): number {
+  return Math.max(1, envInt("DISCOVERY_DEEP_SECOND_PASS_CONCURRENCY", 2));
+}
+
+// ── G — mandatory completeness re-search before scoring (opt-in) ─────────────
+/** When ON (default OFF), each framework-required doc type still missing after
+ *  discovery/fetch forces a targeted re-search before scoring proceeds. */
+export function gMandatoryCompletenessResearchEnabled(): boolean {
+  return envOnDefaultFalse("COMPLETENESS_MANDATORY_RESEARCH");
+}
+/** Concurrency cap for the G mandatory re-search. Default small (2), floored at
+ *  1 — bounded worker pool, never unbounded parallelism. */
+export function gMandatoryCompletenessResearchConcurrency(): number {
+  return Math.max(1, envInt("COMPLETENESS_MANDATORY_RESEARCH_CONCURRENCY", 2));
+}
+
+// ── F — PROTOTYPE: admission-gate loosening paired with attribution tightening ─
+/** When ON (default OFF), a self-contained prototype that does BOTH together in
+ *  reviewQuoteAttribution: (1) LOOSENS admission — the blunt case-study
+ *  pre-rejection no longer gates a quote out before attribution; AND (2) TIGHTENS
+ *  attribution — a bare identity-token (name-mention) alone no longer attributes;
+ *  a stronger co-signal (own-document provenance OR a first-party possessive) is
+ *  additionally required. When OFF, attribution behaviour is exactly as today. */
+export function fAdmissionGatePrototypeEnabled(): boolean {
+  return envOnDefaultFalse("ADMISSION_GATE_PROTOTYPE");
+}
+
 /** When on (default), non-substantive pages (terms-of-use, cookie/privacy, login
  *  walls, 404/empty) are excluded from backing a verdict via a generic
  *  page-nature filter. */

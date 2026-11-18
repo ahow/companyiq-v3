@@ -3799,7 +3799,7 @@ function perQueryNum(searchDepth: number): number {
 // inline literal (byte-for-byte unchanged behaviour) and is floored at that
 // default, so it can only ever WIDEN coverage, never silently narrow it. All are
 // fully framework / company / sector-agnostic — they change only ceilings.
-function discoveryCap(envName: string, def: number): number {
+export function discoveryCap(envName: string, def: number): number {
   return Math.max(def, parseInt(process.env[envName] || String(def), 10) || def);
 }
 // Breadth of the framework evidence/qualifyingInstance/topic-lexicon query
@@ -3823,6 +3823,16 @@ const DISCOVERY_JURISDICTION_MAX_QUERIES = discoveryCap("DISCOVERY_JURISDICTION_
 // R6f sub-page enumeration lane: max queries per landing candidate. Default 4
 // (unchanged).
 const DISCOVERY_SUBPAGE_ENUM_MAX_QUERIES = discoveryCap("DISCOVERY_SUBPAGE_ENUM_MAX_QUERIES", 4);
+// C — own-issuer site-walk / enumeration depth. These cap how deeply the
+// own-issuer corporate-site crawl walks (landing-page probe, link-farm, and
+// sitemap sub-path enumeration). Floored at the default, so setting them can
+// only widen own-issuer coverage, never narrow it. Defaults unchanged.
+// R7d landing-page probe: max distinct ESG landing URLs HEAD-probed per issuer.
+const DISCOVERY_SITEWALK_LANDING_MAX_HITS = discoveryCap("DISCOVERY_SITEWALK_LANDING_MAX_HITS", 5);
+// R6e link-farm: max ESG landing pages fetched+link-walked per company.
+const DISCOVERY_SITEWALK_LINKFARM_MAX = discoveryCap("DISCOVERY_SITEWALK_LINKFARM_MAX", 3);
+// R6f sitemap: max sub-paths enumerated from a single issuer sitemap.
+const DISCOVERY_SITEWALK_SITEMAP_SUBS_MAX = discoveryCap("DISCOVERY_SITEWALK_SITEMAP_SUBS_MAX", 60);
 
 /**
  * PR 1 · Change 1a: run a single targeted web-search query for a company
@@ -5219,7 +5229,7 @@ async function searchCompanyDocumentsInner(opts: {
       const hits = await probeLandingPages({
         effectiveDomain,
         fetchTimeoutMs: 3000,
-        maxHits: 5,
+        maxHits: DISCOVERY_SITEWALK_LANDING_MAX_HITS,
       });
       if (hits.length > 0) {
         console.log(`[${companyName}] R7d landing-page seeding found ${hits.length} landing pages on ${effectiveDomain}`);
@@ -5323,7 +5333,7 @@ async function searchCompanyDocumentsInner(opts: {
   try {
     const landingCandidates = allCandidates
       .filter(c => isEsgLandingPage(c.url))
-      .slice(0, 3);
+      .slice(0, DISCOVERY_SITEWALK_LINKFARM_MAX);
     if (landingCandidates.length > 0) {
       console.log(`[${companyName}] R6e Link-farming ${landingCandidates.length} ESG landing pages`);
       const R6E_TIMEOUT_MS = 5000;
@@ -5414,7 +5424,7 @@ async function searchCompanyDocumentsInner(opts: {
             if (!xml || xml.length < 50) continue;
             const subs = parseSitemapForSubpaths(xml, parentPath);
             if (subs.length > 0) {
-              extracted = subs.slice(0, 60);  // cap per issuer
+              extracted = subs.slice(0, DISCOVERY_SITEWALK_SITEMAP_SUBS_MAX);  // cap per issuer
               break;  // first successful sitemap wins
             }
           } catch { /* try next sitemap URL */ }

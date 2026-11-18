@@ -14,6 +14,7 @@ import {
   p2Rc5EntityListScopedEnabled,
   p2ThirdPartyHostAttributionGateEnabled,
   z3FundEntityDisambiguationEnabled,
+  fAdmissionGatePrototypeEnabled,
 } from "./scoring-fix-flags.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -604,6 +605,10 @@ export function reviewQuoteAttribution(
     const rationaleTokens = getDistinctiveTokens(evidenceSummary);
     const ownDocFirst = p2OwnDocBeforeSubsidiaryEnabled();
     const thirdPartyGate = p2ThirdPartyHostAttributionGateEnabled();
+    // F (PROTOTYPE) — admission-gate loosening paired with attribution tightening.
+    // Default OFF (ADMISSION_GATE_PROTOTYPE), so when unset every path below is
+    // byte-for-byte as today.
+    const fPrototype = fAdmissionGatePrototypeEnabled();
 
     return (quotes || []).map((q, index) => {
       if (!q || !nonEmpty(q.text)) return { index, attributedToTarget: false };
@@ -620,7 +625,12 @@ export function reviewQuoteAttribution(
       }
 
       // Safeguard: Case Study Penalty (Negative Rule)
-      if (CASE_STUDY_NEGATIVES.test(text)) {
+      // F (LOOSEN): when the prototype flag is ON, the blunt case-study
+      // pre-rejection no longer gates a quote out before attribution is even
+      // considered — admission is loosened so the quote reaches the (now
+      // stricter) attribution paths below. When the flag is OFF this rejection
+      // runs exactly as today.
+      if (!fPrototype && CASE_STUDY_NEGATIVES.test(text)) {
         // If a very strong identity match is present, we might still trust it, 
         // but the Master List says "Disqualify if...".
         // We check if the company name appears in a way that suggests OWN activity 
@@ -693,6 +703,21 @@ export function reviewQuoteAttribution(
 
       // Rule: Direct identity token match
       if (toks.some(t => lowerText.includes(t))) {
+        // F (TIGHTEN): when the prototype flag is ON, a bare identity-token
+        // (name-mention) alone no longer attributes the quote to the target. A
+        // stronger co-signal is additionally required: own-document provenance
+        // (own-domain / own-filing / own-brand, via attributeOwnDocument) OR a
+        // first-party possessive construction ("we/our/us…"). This is the
+        // tightening paired with the admission loosening above. When the flag is
+        // OFF, the bare name-mention attributes exactly as today.
+        if (fPrototype) {
+          const own = attributeOwnDocument(q, text, company, toks);
+          if (own) return { index, ...own };
+          if (FIRST_PARTY_POSSESSIVE_REGEX.test(text)) {
+            return { index, attributedToTarget: true, reason: "Identity token + first-party possessive (F prototype)" };
+          }
+          return { index, attributedToTarget: false, reason: "Bare name-mention without own-doc provenance or first-party possessive (F prototype)" };
+        }
         return { index, attributedToTarget: true };
       }
 

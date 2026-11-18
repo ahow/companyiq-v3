@@ -40,7 +40,9 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency } from "./scoring-fix-flags.js";
+import { runBoundedPool } from "./bounded-pool.js";
+import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
 import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
 import { buildDecisionTrace, computeFrameworkContentHash } from "./framework-v2/reliability/decision-trace.js"; // WS-B: per-decision traceability
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
@@ -613,6 +615,80 @@ async function runFetchPhase(opts: {
           queriesFired,
         },
       };
+    }
+  }
+
+  // ─── E / G: completeness-driven re-search of framework-required doc types ──
+  // Both are OPT-IN (default OFF) and default-preserving: when neither flag is
+  // set, no extra searches run and behaviour is byte-for-byte unchanged. The
+  // required doc types come EXCLUSIVELY from the framework definition
+  // (framework.requiredDocTypes) — never hardcoded. Candidates are merged into
+  // discoveryResult.documents so they flow through the SAME gate + fetch
+  // machinery as the rest of discovery. Each lane runs through a BOUNDED worker
+  // pool (never unbounded Promise.all) so peak concurrent load stays capped.
+  //
+  // Coordination (E → G → D): a single per-run `researchedDocTypes` set tracks
+  // every doc type already searched this turn. G subtracts it (so it never
+  // repeats a type E already researched). D (RC6 readiness retry) re-fetches
+  // already-discovered DEAD primaries, whereas E/G research types with NO
+  // candidate at all — disjoint by construction; when RC6 is enabled the
+  // readiness-retry lane is additionally recorded as covering those gaps so G
+  // will not double-fetch them.
+  if (!skipDiscovery && (eDeepSecondPassEnabled() || gMandatoryCompletenessResearchEnabled())) {
+    const requiredDocTypes = ((framework as any).requiredDocTypes as string[] | null) || [];
+    const researchedDocTypes = new Set<string>();
+    // When RC6 readiness retry is on, it will cover its own (dead-primary) gaps;
+    // record nothing extra here beyond the shared set, but the flag makes the
+    // coordination explicit and keeps G from re-searching what D handles.
+    const rc6Active = rc6CorpusReadinessRetryEnabled();
+
+    // Runs one completeness-research lane: compute still-missing required types,
+    // subtract what was already researched this turn, then fire bounded targeted
+    // searches and merge the hits back into the corpus.
+    const runResearchLane = async (lane: "E" | "G", concurrency: number): Promise<number> => {
+      const missing = computeMissingRequiredDocTypes(requiredDocTypes, discoveryResult.documents);
+      const toResearch = planCompletenessResearch({ missing, alreadyResearched: researchedDocTypes });
+      if (toResearch.length === 0) return 0;
+      console.log(`[${companyName}] ${lane} completeness re-search: ${toResearch.length} missing required doc type(s)${lane === "G" && rc6Active ? " (RC6 active — dead-primary gaps handled by readiness retry)" : ""}`);
+      let merged = 0;
+      await runBoundedPool(toResearch, concurrency, async (docType) => {
+        researchedDocTypes.add(docType.trim().toLowerCase());
+        try {
+          const q = buildDocTypeResearchQuery(companyName, docType);
+          const extra = await runTargetedDisclosureQuery(q, companyName);
+          if (extra.length > 0) {
+            discoveryResult.documents.push(...extra);
+            merged += extra.length;
+          }
+        } catch (e: any) {
+          console.warn(`[${companyName}] ${lane} completeness re-search failed for "${docType}": ${e?.message}`);
+        }
+      });
+      return merged;
+    };
+
+    try {
+      let eMerged = 0;
+      let gMerged = 0;
+      // E first — deep second pass aimed at gaps still visible after the first
+      // pass. G second — mandatory sweep over whatever is STILL missing.
+      if (eDeepSecondPassEnabled()) {
+        eMerged = await runResearchLane("E", eDeepSecondPassConcurrency());
+      }
+      if (gMandatoryCompletenessResearchEnabled()) {
+        gMerged = await runResearchLane("G", gMandatoryCompletenessResearchConcurrency());
+      }
+      discoveryResult.diagnostics = {
+        ...discoveryResult.diagnostics,
+        completenessResearch: {
+          requiredDocTypeCount: requiredDocTypes.length,
+          researchedDocTypes: Array.from(researchedDocTypes),
+          eMergedCandidates: eMerged,
+          gMergedCandidates: gMerged,
+        },
+      } as any;
+    } catch (e: any) {
+      console.warn(`[${companyName}] completeness re-search lane error (non-fatal): ${e?.message}`);
     }
   }
 
@@ -2492,8 +2568,10 @@ async function runFetchPhase(opts: {
           const { fetchPdfDirectRetry } = await import("./processor.js") as any;
           const getOrigin = (u: string) => { try { const p = new URL(u); return p.protocol + "//" + p.host; } catch { return ""; } };
           const deadPrimaries = primaryDocs.filter(d => d.fetchStatus !== "ok");
-          for (const doc of deadPrimaries.slice(0, CORPUS_READINESS_REFETCH_MAX)) {
-            refetchAttempts++;
+          const refetchTargets = deadPrimaries.slice(0, CORPUS_READINESS_REFETCH_MAX);
+          // D — re-fetch one dead primary. Non-throwing; shared by the serial
+          // and the bounded-pool paths so both behave identically per URL.
+          const refetchOne = async (doc: any): Promise<void> => {
             try {
               let text: string | null = null;
               if (typeof fetchPdfDirectRetry === "function") {
@@ -2504,7 +2582,14 @@ async function runFetchPhase(opts: {
                 console.log(`[${companyName}] CORPUS-READINESS: re-fetch recovered ${text.length} chars from ${doc.url.slice(0, 80)}`);
               }
             } catch { /* per-URL non-fatal */ }
-          }
+          };
+          // D — concurrency cap. Default 1 ⇒ strictly serial (byte-for-byte as
+          // before). When >1, run a BOUNDED worker pool (never Promise.all over
+          // the whole set) so peak concurrent load stays capped.
+          refetchAttempts += refetchTargets.length;
+          await runBoundedPool(refetchTargets, rc6CorpusReadinessRetryConcurrency(), async (doc) => {
+            await refetchOne(doc);
+          });
         } catch (refErr: any) {
           console.warn(`[${companyName}] CORPUS-READINESS: bounded re-fetch primitive unavailable (${refErr?.message || refErr})`);
         }
