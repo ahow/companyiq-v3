@@ -122,6 +122,38 @@ export function scoreAboutness(
   return { density, dominanceRatio, anchored, targetHits, topOther, topOtherHits, decision };
 }
 
+// ─── P2.3 — competitor-dominance hard reject at admission ────────────────────
+// The scoreAboutness "reject" decision is deliberately LENIENT (lenient floor:
+// at most one target mention AND an 8× dominating other). That keeps keystone
+// documents, but it also lets a shared-CDN PDF dominated by a LISTED workspace
+// peer slip through at admission and be linked to the wrong issuer (the
+// Vodafone-in-Iberdrola bug). This stricter, admission-only test hard-rejects a
+// document when its dominating "other" entity is a KNOWN listed workspace peer,
+// the target is not anchored in the opening, and the peer out-mentions the target
+// by at least `minRatio`×. Conservative on purpose: it fires ONLY when the
+// dominator is a listed peer (not any org-shaped string), so it cannot reject a
+// legitimately target-owned document that merely name-drops competitors.
+// Pure function — keys off the AboutnessResult + the workspace peer list only.
+export function isCompetitorDominated(
+  r: AboutnessResult,
+  peerCompanyNames: string[] = [],
+  minRatio: number = 4,
+): boolean {
+  if (!r || r.anchored) return false;
+  const top = (r.topOther || "").toLowerCase().trim();
+  if (top.length < 4) return false;
+  // The dominating other must be a LISTED workspace peer (equality or substring,
+  // peer names are already lower-cased by the pipeline before being passed in).
+  const dominatorIsPeer = peerCompanyNames.some((p) => {
+    const pl = (p || "").toLowerCase().trim();
+    if (pl.length < 4) return false;
+    return top === pl || top.includes(pl) || pl.includes(top);
+  });
+  if (!dominatorIsPeer) return false;
+  const ratio = r.topOtherHits / Math.max(1, r.targetHits);
+  return ratio >= minRatio;
+}
+
 // ─── Per-company document weight registry (in-process) ──────────────────────
 // The analyze phase registers a weight per document URL for the company it is
 // assembling; passage retrieval multiplies each chunk's blended score by it.

@@ -10,6 +10,9 @@ import {
   rc4FilingProvenanceEnabled,
   rc5SubsidiaryDisambiguationEnabled,
   rc6LowValuePageFilterEnabled,
+  p2OwnDocBeforeSubsidiaryEnabled,
+  p2Rc5EntityListScopedEnabled,
+  p2ThirdPartyHostAttributionGateEnabled,
 } from "./scoring-fix-flags.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -61,6 +64,12 @@ export interface CompanyIdentity {
   relatedDomains?: string[] | null;
   fmp_company_name?: string | null;
   fmp_symbol?: string | null;
+  // P2.2 — other entity names in the same workspace company list. When present,
+  // RC5 subsidiary disambiguation additionally fires when "target-core + adjacent
+  // qualifier" matches one of these distinct listed reporting entities. Optional
+  // and lower-cased on use; absent → RC5 keeps its geographic/subsidiary-noun
+  // triggers only. Keys on the workspace entity list, never a hardcoded name.
+  peerEntities?: string[] | null;
 }
 
 export interface EligibilityFlagsInput {
@@ -417,7 +426,32 @@ function namesMoreSpecificEntity(text: string, company: CompanyIdentity): string
       if (!next || next.length < 2) continue;
       const isGeo = GEO_QUALIFIER_WORDS.has(next);
       const isSubNoun = SUBSIDIARY_NOUN_REGEX.test(next);
-      if (!isGeo && !isSubNoun) continue;
+      // P2.2 (additive): when enabled and a workspace peer list is threaded, the
+      // "target-core + adjacent qualifier" phrase ALSO fires RC5 when it names a
+      // DISTINCT listed reporting entity (e.g. target "Acme Corp", phrase "Acme
+      // Capital" is another company in the same workspace list) — catching a
+      // genuinely separate listed entity that carries no geographic/subsidiary
+      // qualifier. Keys off the workspace entity list, never a hardcoded name, and
+      // is purely additive: it never removes the geographic/subsidiary triggers, so
+      // it cannot introduce own-doc false rejects beyond those paths.
+      let isPeerEntity = false;
+      if (
+        !isGeo && !isSubNoun &&
+        p2Rc5EntityListScopedEnabled() &&
+        Array.isArray(company.peerEntities) && company.peerEntities.length > 0
+      ) {
+        const phrase = `${coreTok} ${next}`;
+        isPeerEntity = company.peerEntities.some((p) => {
+          const pl = (p || "").toLowerCase().trim();
+          if (pl.length < 4) return false;
+          if (fullName && (fullName.includes(pl) || pl.includes(fullName))) return false; // not the target itself
+          // The distinct peer's name begins with the shared core token and the
+          // passage phrase is (a prefix of) that peer name → the passage names the
+          // peer, not the target.
+          return pl.startsWith(coreTok + " ") && (pl === phrase || pl.startsWith(phrase + " "));
+        });
+      }
+      if (!isGeo && !isSubNoun && !isPeerEntity) continue;
       // Skip when the qualifier is part of the target's own legal name
       // (e.g. "Bank of America" — "america" belongs to the name itself).
       if (fullName.includes(`${coreTok} ${next}`) || fullName.includes(next)) continue;
@@ -451,6 +485,73 @@ export function isLowValuePageSource(title?: string | null, url?: string | null)
   return false;
 }
 
+// P2.1 — own-document provenance acceptance, extracted so it can run EITHER
+// before the RC5 subsidiary reject (own-doc-first, the regression fix) or in its
+// legacy position after the identity-token match (flag off → exact original
+// ordering). Returns an attribution ({attributedToTarget:true, reason}) when the
+// quote is established as the issuer's own disclosure by provenance, else null.
+// Pure: keys only off document class, host (own domain / own brand), and first-
+// party language — never a hardcoded company name. Case-study negatives, the
+// low-value-page filter and (when enabled) the third-party-host gate are applied
+// by the caller BEFORE this runs.
+function attributeOwnDocument(
+  q: QuoteLike,
+  text: string,
+  company: CompanyIdentity,
+  toks: string[],
+): { attributedToTarget: true; reason: string } | null {
+  // RC4 (Filing-class provenance): a verified primary/statutory filing or
+  // registration document is, by its nature, the issuer's own disclosure about
+  // itself. On a first-party host, provenance alone establishes attribution —
+  // no in-span pronoun required. For the issuer's OWN domain, provenance is
+  // sufficient; for a trusted filing repository (sec.gov, hkexnews, ...) the
+  // title must also name the target so a repo hosting many issuers cannot
+  // over-attribute.
+  if (rc4FilingProvenanceEnabled() && isFilingClassSource(q)) {
+    if (isOwnDomainSource(q.sourceUrl, company)) {
+      return { attributedToTarget: true, reason: "Primary filing on own domain (RC4)" };
+    }
+    const titleNamesTarget = toks.some(t => t.length >= 3 && (q.source || "").toLowerCase().includes(t));
+    if (isTrustedSource(q.sourceUrl, company) && titleNamesTarget) {
+      return { attributedToTarget: true, reason: "Primary filing in trusted repository (RC4)" };
+    }
+  }
+
+  // Rule 1 (First-Party Domain Waiver): the company's OWN domain is a strong
+  // first-party signal, but HOSTING ALONE does not make a passage first-party.
+  // A company's own thought-leadership / marketing / insights pages routinely
+  // describe OTHER entities (clients, case-study subjects). So attribute an
+  // own-domain quote only when it also carries a first-party cue — a we/our/us
+  // or "the company/the group/..." reference (PRONOUNS_REGEX), or a CJK
+  // first-party reference for non-English filings where the Latin identity
+  // tokens never appear in the body. Shared regulator/aggregator domains
+  // (cninfo, sina, hkexnews) are explicitly NOT own-domain.
+  if (
+    isOwnDomainSource(q.sourceUrl, company) &&
+    text.trim().length >= 12 &&
+    (PRONOUNS_REGEX.test(text) || CJK_FIRST_PARTY_REGEX.test(text))
+  ) {
+    return { attributedToTarget: true, reason: "Company Own Domain + First-Party" };
+  }
+
+  // Rule 1 (brand-aware First-Party Domain Waiver — BUG 1 fix): the quote is
+  // hosted on the issuer's OWN brand domain that is NOT the exact DB `domain`
+  // — a sibling brand domain or a subdomain. On such an own-brand host, a
+  // passage using first-party language ("we/our/ours", or a CJK first-party
+  // reference) is the issuer describing its OWN practice → attribute. Known
+  // third-party news/analyst/aggregator hosts are excluded inside
+  // isOwnBrandDomainSource (Generic News negative rule), so this never
+  // over-attributes a Morningstar/Reuters passage.
+  if (
+    isOwnBrandDomainSource(q.sourceUrl, company) &&
+    (FIRST_PARTY_POSSESSIVE_REGEX.test(text) || CJK_FIRST_PARTY_REGEX.test(text))
+  ) {
+    return { attributedToTarget: true, reason: "Own-Brand Domain + First-Party (Rule 1)" };
+  }
+
+  return null;
+}
+
 export function reviewQuoteAttribution(
   quotes: QuoteLike[] | null | undefined,
   company: CompanyIdentity,
@@ -459,7 +560,9 @@ export function reviewQuoteAttribution(
   try {
     const toks = identityTokens(company);
     const rationaleTokens = getDistinctiveTokens(evidenceSummary);
-    
+    const ownDocFirst = p2OwnDocBeforeSubsidiaryEnabled();
+    const thirdPartyGate = p2ThirdPartyHostAttributionGateEnabled();
+
     return (quotes || []).map((q, index) => {
       if (!q || !nonEmpty(q.text)) return { index, attributedToTarget: false };
       
@@ -482,6 +585,29 @@ export function reviewQuoteAttribution(
         // despite the case study keywords (e.g. "We partnered with X to...").
         // But Rule 1-8 are primarily about RECOVERING false negatives.
         return { index, attributedToTarget: false, reason: "Case Study Pattern (Negative Rule)" };
+      }
+
+      // P2.4 (Third-party host attribution gate): a quote whose host is a known
+      // third-party analyst/news/ratings domain (morningstar, reuters, …) is NOT
+      // the issuer's own disclosure, EVEN WHEN it mentions the target — so a
+      // Morningstar report about a subsidiary cannot establish first-party
+      // attribution via the identity-token or rationale paths below. Keys on host
+      // nature only; the issuer's own domain and trusted filing repositories
+      // (sec.gov, q4cdn, …) are never third-party hosts, so legitimate filings are
+      // unaffected. Runs before every acceptance path.
+      if (thirdPartyGate && isThirdPartyHost(q.sourceUrl)) {
+        return { index, attributedToTarget: false, reason: "Third-party analyst/news/ratings host — not first-party disclosure" };
+      }
+
+      // P2.1 — own-document provenance wins. When enabled, the own-domain /
+      // own-filing / own-brand provenance acceptance runs BEFORE the RC5 subsidiary
+      // reject, so a quote lifted from the issuer's own domain or a verified
+      // statutory filing is never knocked out by a third-person regional phrase
+      // (fixes MAA / ING / Smiths / Gerdau own-doc false rejects). RC5 then only
+      // applies to quotes NOT already established as own-document.
+      if (ownDocFirst) {
+        const own = attributeOwnDocument(q, text, company, toks);
+        if (own) return { index, ...own };
       }
 
       // RC5 (Negative precision rule): the passage names a MORE-SPECIFIC reporting
@@ -508,66 +634,13 @@ export function reviewQuoteAttribution(
         return { index, attributedToTarget: true };
       }
 
-      // RC4 (Filing-class provenance): a verified primary/statutory filing or
-      // registration document is, by its nature, the issuer's own disclosure about
-      // itself. On a first-party host, provenance alone establishes attribution —
-      // no in-span pronoun required (fixes own-filing downgrades on measure 22). For
-      // the issuer's OWN domain, provenance is sufficient; for a trusted filing
-      // repository (sec.gov, hkexnews, …) the title must also name the target so a
-      // repo hosting many issuers cannot over-attribute. Case-study negatives and
-      // the RC5 subsidiary rule were already applied above.
-      if (rc4FilingProvenanceEnabled() && isFilingClassSource(q)) {
-        if (isOwnDomainSource(q.sourceUrl, company)) {
-          return { index, attributedToTarget: true, reason: "Primary filing on own domain (RC4)" };
-        }
-        const titleNamesTarget = toks.some(t => t.length >= 3 && (q.source || "").toLowerCase().includes(t));
-        if (isTrustedSource(q.sourceUrl, company) && titleNamesTarget) {
-          return { index, attributedToTarget: true, reason: "Primary filing in trusted repository (RC4)" };
-        }
-      }
-
-      // Rule 1 (First-Party Domain Waiver): the company's OWN domain is a strong
-      // first-party signal, but HOSTING ALONE does not make a passage first-party.
-      // A company's own thought-leadership / marketing / insights pages routinely
-      // describe OTHER entities (clients, case-study subjects) — the "Accenture
-      // bug", where a consultancy's own report credits a CLIENT's outcome to the
-      // client. The master-rules spec (Rule 1) accepts a reflexive/first-party
-      // reference on a verified own domain, NOT arbitrary text. So attribute an
-      // own-domain quote only when it also carries a first-party cue — a
-      // we/our/us or "the company/the group/the bank/..." reference (PRONOUNS_REGEX,
-      // the standard self-reference in an issuer's own filing), or a CJK
-      // first-party reference for non-English filings where the Latin identity
-      // tokens never appear in the body. Shared regulator/aggregator domains
-      // (cninfo, sina, hkexnews) are explicitly NOT own-domain and fall through to
-      // the stricter trusted-source rules below. Case-study negatives were already
-      // excluded above. A passage that names a DIFFERENT entity with no first-party
-      // language falls through (attributedToTarget=false) so the entity gate still
-      // catches the client/case-study self-attribution pattern.
-      if (
-        isOwnDomainSource(q.sourceUrl, company) &&
-        text.trim().length >= 12 &&
-        (PRONOUNS_REGEX.test(text) || CJK_FIRST_PARTY_REGEX.test(text))
-      ) {
-        return { index, attributedToTarget: true, reason: "Company Own Domain + First-Party" };
-      }
-
-      // Rule 1 (brand-aware First-Party Domain Waiver — BUG 1 fix): the quote is
-      // hosted on the issuer's OWN brand domain that is NOT the exact DB `domain`
-      // — a sibling brand domain (adanienterprises.com for ADANI ENTERPRISES
-      // LIMITED, whose DB domain is adani.com) or a subdomain. On such an
-      // own-brand host, a passage using first-party language ("we/our/the
-      // company", or a CJK first-party reference) is the issuer describing its
-      // OWN practice → attribute. Known third-party news/analyst/aggregator hosts
-      // are excluded inside isOwnBrandDomainSource (Generic News negative rule),
-      // so this never over-attributes a Morningstar/Reuters passage. Case-study
-      // negatives were already excluded above. This also ensures the first-party
-      // PRONOUNS path triggers for own-brand-domain docs, not only
-      // PRIMARY_DOMAINS-trusted ones.
-      if (
-        isOwnBrandDomainSource(q.sourceUrl, company) &&
-        (FIRST_PARTY_POSSESSIVE_REGEX.test(text) || CJK_FIRST_PARTY_REGEX.test(text))
-      ) {
-        return { index, attributedToTarget: true, reason: "Own-Brand Domain + First-Party (Rule 1)" };
+      // P2.1 (legacy ordering): when own-doc-first is DISABLED, the own-domain /
+      // own-filing / own-brand provenance acceptance runs here, after the
+      // identity-token match (the pre-P2.1 behaviour), so toggling the flag off
+      // restores the exact original ordering.
+      if (!ownDocFirst) {
+        const own = attributeOwnDocument(q, text, company, toks);
+        if (own) return { index, ...own };
       }
 
       // Rule: Trusted Source + First-Party framing

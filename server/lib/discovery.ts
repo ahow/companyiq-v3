@@ -755,6 +755,14 @@ export interface CoverageMetric {
   coverageLevel: "full" | "adequate" | "low" | "minimal";
   missingTier1Types: string[];
   /**
+   * R2 — human-readable gap reason set whenever coverage is reduced
+   * (low/minimal), derived generically from the missing mandatory source types.
+   * Carried onto discoveryDiagnostics.coverage so the dashboard never shows a
+   * blank gaps field for a reduced-coverage company. Framework-driven, no
+   * company/sector special-casing.
+   */
+  sourcingSuspectReason?: string;
+  /**
    * Issuer-type-aware checklist (2026-11): which jurisdiction family was used
    * for the required-docs checklist. "us" demands Proxy/DEF 14A; "non-us"
    * accepts analogous governance disclosure (governance report, AGM circular,
@@ -870,11 +878,24 @@ export function computeCoverageMetric(
     coverageLevel = "minimal";
   }
 
+  // R2: whenever coverage is reduced, carry a generic gap reason so the dashboard
+  // never shows a blank gaps field. Derived from the framework-driven missing
+  // mandatory source types (and tier counts as a fallback). No hardcoded names.
+  let sourcingSuspectReason: string | undefined;
+  if (coverageLevel === "minimal" || coverageLevel === "low") {
+    const gap = missingTier1Types.length > 0
+      ? `missing ${missingTier1Types.join(", ")}`
+      : "few qualifying primary documents found";
+    sourcingSuspectReason =
+      `Discovery coverage ${coverageLevel}: ${gap} (tier1=${tier1Count}, tier2=${tier2Count}).`;
+  }
+
   return {
     tier1Count, tier2Count, tier3Count, tier4Count,
     has10KOrAnnualReport, hasProxyOrDEF14A, hasInvestorPresentation,
     hasGovernancePage, requiredDocsFound,
     coverageLevel, missingTier1Types,
+    sourcingSuspectReason,
     issuerDocFamily: isUsIssuer ? "us" : "non-us",
   };
 }

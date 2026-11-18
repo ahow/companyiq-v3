@@ -478,5 +478,69 @@ function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
   check("RC6: a terms-of-use page is NOT attributed even with own-domain + first-party text", termsCite[0].attributedToTarget === false);
 }
 
+// ─── 16. P2.1 — own-document provenance wins over the RC5 subsidiary reject ───
+// The run-4 regression: a quote lifted from the issuer's OWN domain / own filing
+// was knocked out by RC5 whenever its body contained a third-person regional
+// phrase (MAA / ING / Smiths / Gerdau false rejects). With own-doc-first (default
+// ON) the own-filing provenance path runs BEFORE RC5, so an own-domain primary
+// filing attributes even though its text names a subsidiary — whereas the SAME
+// text on a third-party news host is still (correctly) rejected by RC5.
+{
+  // Own-domain primary filing whose body names a subsidiary ("Acme Australia").
+  const ownFilingSub = reviewQuoteAttribution([
+    { text: "Acme Australia reported strong results for the year.", source: "Acme Annual Report 2023", sourceUrl: "https://acme-bev.com/reports/ar2023.pdf" },
+  ], ACME);
+  check("P2.1: own-domain filing attributes even though body names a subsidiary (own-doc before RC5)", ownFilingSub[0].attributedToTarget === true);
+
+  // Control: the SAME subsidiary phrase on a third-party NEWS host is still rejected by RC5.
+  const newsSub = reviewQuoteAttribution([
+    { text: "Acme Australia reported strong results for the year.", source: "News Wire", sourceUrl: "https://example.com/news" },
+  ], ACME);
+  check("P2.1: same subsidiary phrase on a news host is still RC5-rejected (own-doc path does not apply)", newsSub[0].attributedToTarget === false);
+}
+
+// ─── 17. P2.2 — RC5 narrowed to the workspace entity list (peerEntities) ──────
+// When a DISTINCT listed reporting entity shares the target's core token but
+// carries NO geographic/subsidiary qualifier ("Acme Capital" vs "Acme Beverages
+// Corporation"), RC5 could not catch it from geo/subnoun rules alone, so the
+// identity-token match wrongly attributed it. P2.2 additionally fires RC5 when the
+// "core + adjacent" phrase names another workspace company — keyed off the entity
+// list, never a hardcoded name. Additive: with no peerEntities it is a no-op.
+{
+  const quote = [{ text: "Acme Capital reported strong quarterly earnings this year.", sourceUrl: "https://example.com/news", source: "Market News" }];
+
+  // Without a peer list threaded → legacy behaviour: "acme" token matches → attributed (the leak).
+  const noPeers = reviewQuoteAttribution(quote, ACME);
+  check("P2.2: without peerEntities, a same-core peer name still attributes (legacy, unchanged)", noPeers[0].attributedToTarget === true);
+
+  // With the peer list threaded → RC5 fires on the distinct listed entity → NOT attributed.
+  const withPeers = reviewQuoteAttribution(quote, { ...ACME, peerEntities: ["acme capital"] });
+  check("P2.2: with peerEntities listing 'Acme Capital', the distinct entity is RC5-rejected", withPeers[0].attributedToTarget === false);
+
+  // The target's own name is never self-rejected by the peer rule.
+  const ownName = reviewQuoteAttribution(
+    [{ text: "Acme Beverages has operated an internal ethics committee since 2023.", sourceUrl: "https://acme-bev.com/x" }],
+    { ...ACME, peerEntities: ["acme capital"] },
+  );
+  check("P2.2: the target's own name is not knocked out by the peer rule", ownName[0].attributedToTarget === true);
+}
+
+// ─── 18. P2.4 — third-party host gate rejects even when the target is named ────
+// A quote whose host is a known analyst/news/ratings domain is NOT the issuer's
+// own disclosure, EVEN WHEN it names the target and uses first-party-sounding
+// language — closing the PNC/Morningstar leakage generically (host nature only).
+{
+  const reutersNamed = reviewQuoteAttribution([
+    { text: "Acme Beverages said we expanded our renewable-energy sourcing this year.", sourceUrl: "https://www.reuters.com/business/acme" },
+  ], ACME);
+  check("P2.4: third-party host (reuters) is NOT attributed even though it names the target", reutersNamed[0].attributedToTarget === false);
+
+  // Control: the SAME passage on the issuer's own domain IS attributed (first-party).
+  const ownNamed = reviewQuoteAttribution([
+    { text: "Acme Beverages said we expanded our renewable-energy sourcing this year.", sourceUrl: "https://acme-bev.com/news" },
+  ], ACME);
+  check("P2.4: same passage on the issuer's own domain still attributes (first-party)", ownNamed[0].attributedToTarget === true);
+}
+
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -366,22 +366,36 @@ export interface SourcingCoverageOutcome {
 }
 
 /**
- * RC2 — compute coverage from the per-measure sourcing outcome. Over ANSWERED
- * (non-abstained) measures, the share with ≥1 eligible supporting source; coverage
- * is suspect when that ratio falls below `threshold`. Pure and deterministic so it
- * is unit-testable without a DB. Returns suspect=false when there are no answered
- * measures (nothing to judge). Keys only off sourcing outcome.
+ * RC2 — compute coverage from the per-measure sourcing outcome. Over the measures
+ * in scope, the share with ≥1 eligible supporting source; coverage is suspect when
+ * that ratio falls below `threshold`. Pure and deterministic so it is unit-testable
+ * without a DB. Returns suspect=false when there are no measures in scope (nothing
+ * to judge). Keys only off sourcing outcome.
+ *
+ * R2 — `opts.expectedSourcingOnly` (default false → exact legacy behaviour):
+ * narrow the denominator to measures where a source was EXPECTED — positive
+ * verdicts (Yes/Partial) that scored > 0 — instead of every answered
+ * (non-abstained) measure. A correct "No" with no disclosure carries no supporting
+ * quote by design, so counting it as "unsourced" wrongly swept solid, mostly-"No"
+ * companies into the suspect bucket. In expected-sourcing mode such "No"s are
+ * excluded, so suspect now means "something we judged present is unsourced".
  */
 export function computeSourcingCoverage(
-  measures: Array<Pick<MeasureResult, "abstained" | "quotes">>,
+  measures: Array<Pick<MeasureResult, "abstained" | "quotes" | "verdict" | "score">>,
   threshold: number,
+  opts?: { expectedSourcingOnly?: boolean },
 ): SourcingCoverageOutcome {
   const answered = (measures || []).filter((m) => m && !m.abstained);
-  const answeredMeasureCount = answered.length;
+  const inScope = opts?.expectedSourcingOnly
+    ? answered.filter(
+        (m) => isPositiveVerdict(String((m as any).verdict ?? "")) && Number((m as any).score ?? 0) > 0,
+      )
+    : answered;
+  const answeredMeasureCount = inScope.length;
   if (answeredMeasureCount === 0) {
     return { answeredMeasureCount: 0, sourcedMeasureCount: 0, unsourcedMeasureCount: 0, sourcedMeasureRatio: 1, suspect: false };
   }
-  const sourcedMeasureCount = answered.filter(
+  const sourcedMeasureCount = inScope.filter(
     (m) => Array.isArray(m.quotes) && m.quotes.some((q) => isEligibleSupportingQuote(q)),
   ).length;
   const unsourcedMeasureCount = answeredMeasureCount - sourcedMeasureCount;

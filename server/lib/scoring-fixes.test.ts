@@ -93,6 +93,67 @@ test("RC2: a disqualified quote does not count as an eligible source", () => {
   assert.equal(out.suspect, true);
 });
 
+// ─── R2 — computeSourcingCoverage with expectedSourcingOnly ───────────────────
+test("R2: expectedSourcingOnly narrows the denominator to positive-verdict measures", () => {
+  // 2 positive (Yes/Partial) measures: one sourced, one not → ratio 0.5 < 0.8 → suspect.
+  // 3 correct "No" measures (no quotes) must be EXCLUDED, not treated as unsourced.
+  const measures = [
+    mr({ measureId: "m1", verdict: "Yes", score: 1, quotes: [liveQuote("We completed a double materiality assessment this year, publicly disclosed.")] }),
+    mr({ measureId: "m2", verdict: "Partial", score: 1, quotes: [] }),
+    mr({ measureId: "m3", verdict: "No", score: 0, quotes: [] }),
+    mr({ measureId: "m4", verdict: "No", score: 0, quotes: [] }),
+    mr({ measureId: "m5", verdict: "No", score: 0, quotes: [] }),
+  ];
+  const out = computeSourcingCoverage(measures, 0.8, { expectedSourcingOnly: true });
+  assert.equal(out.answeredMeasureCount, 2); // only the two positive-verdict measures are in scope
+  assert.equal(out.sourcedMeasureCount, 1);
+  assert.equal(out.unsourcedMeasureCount, 1);
+  assert.ok(Math.abs(out.sourcedMeasureRatio - 0.5) < 1e-9);
+  assert.equal(out.suspect, true);
+});
+
+test("R2: a company of only correct, sourced-or-absent 'No's is NOT suspect in expected mode", () => {
+  // All "No" (score 0) → nothing was judged present → nothing was expected to be sourced.
+  const measures = [
+    mr({ measureId: "m1", verdict: "No", score: 0, quotes: [] }),
+    mr({ measureId: "m2", verdict: "No", score: 0, quotes: [] }),
+    mr({ measureId: "m3", verdict: "No", score: 0, quotes: [] }),
+  ];
+  const out = computeSourcingCoverage(measures, 0.8, { expectedSourcingOnly: true });
+  assert.equal(out.answeredMeasureCount, 0); // zero positive-verdict measures in scope
+  assert.equal(out.suspect, false);
+  assert.equal(out.sourcedMeasureRatio, 1);
+});
+
+test("R2: all positive verdicts sourced → not suspect in expected mode", () => {
+  const measures = [
+    mr({ measureId: "m1", verdict: "Yes", score: 1, quotes: [liveQuote("We completed a double materiality assessment this year, publicly disclosed.")] }),
+    mr({ measureId: "m2", verdict: "Yes", score: 1, quotes: [liveQuote("Our board oversees climate-related risks under a formal charter adopted.")] }),
+    mr({ measureId: "m3", verdict: "No", score: 0, quotes: [] }),
+  ];
+  const out = computeSourcingCoverage(measures, 0.8, { expectedSourcingOnly: true });
+  assert.equal(out.answeredMeasureCount, 2);
+  assert.equal(out.sourcedMeasureCount, 2);
+  assert.equal(out.suspect, false);
+});
+
+test("R2: default (legacy) mode still counts every answered measure — backward compatible", () => {
+  // Same mix as above: in legacy mode the three unsourced "No"s DO count → ratio 1/3 → suspect.
+  const measures = [
+    mr({ measureId: "m1", verdict: "Yes", score: 1, quotes: [liveQuote("We completed a double materiality assessment this year, publicly disclosed.")] }),
+    mr({ measureId: "m2", verdict: "No", score: 0, quotes: [] }),
+    mr({ measureId: "m3", verdict: "No", score: 0, quotes: [] }),
+  ];
+  const legacy = computeSourcingCoverage(measures, 0.8); // no opts → legacy behaviour
+  assert.equal(legacy.answeredMeasureCount, 3);
+  assert.equal(legacy.sourcedMeasureCount, 1);
+  assert.equal(legacy.suspect, true);
+  // Same measures in expected mode: only m1 (positive) is in scope and it is sourced → not suspect.
+  const expected = computeSourcingCoverage(measures, 0.8, { expectedSourcingOnly: true });
+  assert.equal(expected.answeredMeasureCount, 1);
+  assert.equal(expected.suspect, false);
+});
+
 // ─── RC3 — reconcileOneQuotePerMeasure ───────────────────────────────────────
 test("RC3: one quote backing three Yes measures is kept on the best-fit measure; the other two are demoted", () => {
   const shared = "Our board of directors maintains formal oversight of climate-related risks and opportunities across the group.";
@@ -142,6 +203,23 @@ test("RC7-L1: reuse decision truth table", () => {
   assert.equal(shouldReuseCorpusForRerun({ ...base, reuseEnabled: false }), false);
   // Already skipping discovery (retry resume) → stays skipped regardless.
   assert.equal(shouldReuseCorpusForRerun({ ...base, alreadySkippingDiscovery: true, reuseEnabled: false, hasFrozenCorpus: false }), true);
+});
+
+// ─── P1.3 — recheck re-scores against the frozen corpus when configured ───────
+test("P1.3: recheckReusesCorpus / forceRediscover truth table", () => {
+  const base = { reuseEnabled: true, hasFrozenCorpus: true, alreadySkippingDiscovery: false, forceRefresh: false, recheck: false };
+  // Legacy default: a plain recheck re-discovers (recheckReusesCorpus undefined/false).
+  assert.equal(shouldReuseCorpusForRerun({ ...base, recheck: true }), false);
+  assert.equal(shouldReuseCorpusForRerun({ ...base, recheck: true, recheckReusesCorpus: false }), false);
+  // P1.3 ON: a plain recheck now REUSES the frozen corpus (re-scores, no re-discovery).
+  assert.equal(shouldReuseCorpusForRerun({ ...base, recheck: true, recheckReusesCorpus: true }), true);
+  // But an explicit forceRefresh always re-discovers, even with recheckReusesCorpus ON.
+  assert.equal(shouldReuseCorpusForRerun({ ...base, recheck: true, recheckReusesCorpus: true, forceRefresh: true }), false);
+  // forceRediscover also always re-discovers, independent of recheck mode.
+  assert.equal(shouldReuseCorpusForRerun({ ...base, forceRediscover: true }), false);
+  assert.equal(shouldReuseCorpusForRerun({ ...base, recheck: true, recheckReusesCorpus: true, forceRediscover: true }), false);
+  // recheckReusesCorpus ON but no frozen corpus (genuine first analysis) → still discovers.
+  assert.equal(shouldReuseCorpusForRerun({ ...base, recheck: true, recheckReusesCorpus: true, hasFrozenCorpus: false }), false);
 });
 
 // ─── RC7 layer 2 — aggregateCrossRunMajority ─────────────────────────────────

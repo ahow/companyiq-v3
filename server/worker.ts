@@ -51,7 +51,7 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun } from "./lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, r1ChecklistContentFallbackEnabled } from "./lib/scoring-fix-flags.js";
 import { computeCompanyScore } from "../shared/verdict.js";
 // A9 / WP15 (truthful publication). Build the canonical per-cell publication
 // record for each company and store it in the snapshot metadata so every reader
@@ -514,6 +514,12 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
         alreadySkippingDiscovery: !!skipDiscovery,
         forceRefresh,
         recheck,
+        // P1.3 — when CORPUS_REUSE_ON_RECHECK is ON, a plain recheck re-SCORES
+        // against the frozen corpus instead of forcing a fresh discovery (which
+        // historically gave the re-examined companies a DIFFERENT document set).
+        // An explicit forceRefresh still always re-discovers. Default OFF until the
+        // framework-scoped frozen-corpus snapshot (P1.1/P1.2) lands.
+        recheckReusesCorpus: p1RecheckReusesCorpusEnabled(),
       });
       if (effectiveSkipDiscovery && !skipDiscovery) {
         console.log("[Worker][RC7] Reusing frozen corpus for job " + jobId + " (company=" + companyId + ", " + frozen!.length + " accepted docs) — skipping re-discovery for verdict reproducibility");
@@ -1329,21 +1335,52 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
       // actually contains the disclosure's own terms (never a bare title match).
       const rc1ContentCheck = rc1EmbeddingContentCheckEnabled();
       let docsForChecklist: any[] = allAccepted as any;
+      // R1: the embedding content check only STAYS on for this run if the content
+      // map is usable. When it comes back empty for EVERY accepted document (the
+      // systematic all-or-nothing JOIN failure that flipped "report found" ~50/50 →
+      // 0/50 across a whole run), the strict check would mark every embeddable
+      // disclosure not_found. Instead fall back to the title/type checklist signal
+      // for this run so a report whose TITLE identifies it is still recognised.
+      let effectiveEmbeddingCheck = rc1ContentCheck;
       if (rc1ContentCheck) {
+        const acceptedArr = allAccepted as any[];
         try {
           const contentMap = await storage.getAcceptedDocContentMap(company.id, rc1ChecklistContentFetchChars());
-          docsForChecklist = (allAccepted as any[]).map((d) => ({
-            ...d,
-            content: contentMap.get(Number(d.id)) ?? null,
-          }));
-        } catch {
-          /* best-effort; checklist degrades to not_found for unconfirmed embeddings */
+          const withContent = acceptedArr.filter((d) => {
+            const c = contentMap.get(Number(d.id));
+            return typeof c === "string" && c.length > 0;
+          }).length;
+          if (r1ChecklistContentFallbackEnabled() && acceptedArr.length > 0 && withContent === 0) {
+            // Systematic failure — no document has content. Fall back to title/type.
+            effectiveEmbeddingCheck = false;
+            docsForChecklist = acceptedArr;
+            console.warn(`[Worker][R1] checklist content map EMPTY for all ${acceptedArr.length} accepted docs (company=${company.id}); falling back to title/type checklist for this run`);
+          } else {
+            const degraded = acceptedArr.length - withContent;
+            if (degraded > 0) {
+              console.warn(`[Worker][R1] checklist content map degraded for ${degraded}/${acceptedArr.length} accepted docs (company=${company.id}); those entries fall to not_found`);
+            }
+            docsForChecklist = acceptedArr.map((d) => ({
+              ...d,
+              content: contentMap.get(Number(d.id)) ?? null,
+            }));
+          }
+        } catch (cmErr: any) {
+          // The whole fetch threw — the same all-or-nothing failure mode. Prefer the
+          // title/type fallback over silently degrading every embedding to not_found.
+          if (r1ChecklistContentFallbackEnabled()) {
+            effectiveEmbeddingCheck = false;
+            docsForChecklist = acceptedArr;
+            console.warn(`[Worker][R1] checklist content map fetch failed (company=${company.id}: ${cmErr?.message}); falling back to title/type checklist for this run`);
+          } else {
+            /* best-effort; checklist degrades to not_found for unconfirmed embeddings */
+          }
         }
       }
       const researchStatus = deriveResearchStatus({
         documents: docsForChecklist as any,
         manifest: researchManifest,
-        checklistOptions: { embeddingContentCheck: rc1ContentCheck },
+        checklistOptions: { embeddingContentCheck: effectiveEmbeddingCheck },
       });
 
       // A9 / WP15: build the canonical publication record for every measure cell

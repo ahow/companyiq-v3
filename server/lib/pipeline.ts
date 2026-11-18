@@ -40,7 +40,7 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio } from "./scoring-fix-flags.js";
 import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
 import { buildDecisionTrace, computeFrameworkContentHash } from "./framework-v2/reliability/decision-trace.js"; // WS-B: per-decision traceability
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
@@ -49,7 +49,7 @@ import { classifyProvenance, provenanceToSourceType, isProvenanceRobustnessEnabl
 import { deriveFmpAnchors } from "./fmp-resolver.js";
 import { traceKeep, traceDrop, traceInfo, traceMatches, TRACE_ENABLED } from "./discovery-tracer.js";
 import { deriveAliases } from "./issuer-resolver.js";
-import { ABOUTNESS_ENABLED, ABOUTNESS_DEPRIORITIZE_WEIGHT, scoreAboutness, setAboutnessDocWeights, type AboutnessResult } from "./aboutness.js";
+import { ABOUTNESS_ENABLED, ABOUTNESS_DEPRIORITIZE_WEIGHT, scoreAboutness, setAboutnessDocWeights, isCompetitorDominated, type AboutnessResult } from "./aboutness.js";
 import type { Company, Framework, FrameworkMeasure } from "../../shared/schema.js";
 
 /**
@@ -866,6 +866,24 @@ async function runFetchPhase(opts: {
         reuseRejected++;
         continue;
       }
+      // P2.3 (competitor-dominance admission hard reject): a cache-linked document
+      // whose body is dominated by a KNOWN LISTED workspace peer (peer mentions ≫
+      // target, target not anchored in the opening) is almost certainly the peer's
+      // own disclosure shared on a common CDN — it must never be silently linked to
+      // this issuer (the Vodafone-in-Iberdrola bug). Stricter than the lenient
+      // aboutness floor above, but conservative: it fires only when the dominator is
+      // a listed peer, so it cannot reject a target-owned doc that merely name-drops
+      // competitors. Behind ADMISSION_COMPETITOR_DOMINANCE (default ON).
+      if (
+        reuseAbout &&
+        p2CompetitorDominanceAdmissionEnabled() &&
+        isCompetitorDominated(reuseAbout, peerCompanyNames, p2CompetitorDominanceMinRatio())
+      ) {
+        console.warn(`[${companyName}] REUSE COMPETITOR-DOMINANCE reject (peer=${reuseAbout.topOther}×${reuseAbout.topOtherHits}, target×${reuseAbout.targetHits}): ${d.url.slice(0, 80)}`);
+        await storage.recordVerificationReject(companyId, d.url, `competitor_dominance_reject — about ${reuseAbout.topOther}`, batchId);
+        reuseRejected++;
+        continue;
+      }
       if (!shouldVerifyDocument({ url: d.url, verifiedDomain: company.domain, platformHosts })) {
         await storage.markLinkedDocumentVerified(companyId, d.url);
         reuseKept++;
@@ -1087,7 +1105,14 @@ async function runFetchPhase(opts: {
           ...priorDiag2,
           corpusValidityWarning,
           coverageLevelOverride: "suspect",
-          coverage: { ...existingCoverage, coverageLevel: "suspect" },
+          // R2: always carry a reason on the coverage object so a suspect company
+          // never shows a blank gaps field in the dashboard. The corpus-validity
+          // warning IS the reason here; preserve any pre-existing sourcing reason.
+          coverage: {
+            ...existingCoverage,
+            coverageLevel: "suspect",
+            sourcingSuspectReason: corpusValidityWarning || existingCoverage.sourcingSuspectReason,
+          },
         } as any,
       });
     } else if (priorDiag2.corpusValidityWarning) {
@@ -1476,6 +1501,17 @@ async function runFetchPhase(opts: {
           if (about?.decision === "reject") {
             console.warn(`[${companyName}] ABOUTNESS reject (top=${about.topOther}×${about.topOtherHits}, target×${about.targetHits}, dom=${about.dominanceRatio.toFixed(2)}): ${doc.url.slice(0, 80)}`);
             await storage.recordFetchFailure(companyId, doc.url, "aboutness_reject");
+          } else if (
+            about &&
+            p2CompetitorDominanceAdmissionEnabled() &&
+            isCompetitorDominated(about, peerCompanyNames, p2CompetitorDominanceMinRatio())
+          ) {
+            // P2.3 (competitor-dominance admission hard reject) — same generic guard
+            // as the cache-reuse path: a freshly-fetched doc dominated by a KNOWN
+            // LISTED peer (target not anchored) is the peer's disclosure, not this
+            // issuer's. Behind ADMISSION_COMPETITOR_DOMINANCE (default ON).
+            console.warn(`[${companyName}] COMPETITOR-DOMINANCE reject (peer=${about.topOther}×${about.topOtherHits}, target×${about.targetHits}): ${doc.url.slice(0, 80)}`);
+            await storage.recordFetchFailure(companyId, doc.url, "competitor_dominance_reject");
           } else if (!needsVerify) {
             // On the company's own verified domain — accept without LLM cost.
             await storage.recordFetchSuccess(companyId, doc.url, content, getExtractionCompleteness(doc.url));
@@ -3450,12 +3486,17 @@ async function runAnalyzePhase(opts: {
   // framework special-casing.
   try {
     const threshold = rc2CoverageSuspectMinSourcedRatio();
-    const sc = computeSourcingCoverage(allMeasureResults as any, threshold);
+    const expectedSourcingOnly = r2SuspectExpectedSourcingEnabled();
+    const sc = computeSourcingCoverage(allMeasureResults as any, threshold, { expectedSourcingOnly });
     if (sc.answeredMeasureCount > 0) {
       const priorDiag = (await storage.getCompanyById(companyId, workspaceId))?.discoveryDiagnostics as any || {};
       const existingCoverage = priorDiag.coverage || {};
+      // R2: in expected-sourcing mode the denominator is positive-verdict measures
+      // (a source was expected), so word the reason accordingly; otherwise keep the
+      // legacy "answered measures" wording.
+      const scopeNoun = expectedSourcingOnly ? "assessed-present measures" : "measures";
       const coverageDowngradeNote =
-        `${sc.unsourcedMeasureCount} of ${sc.answeredMeasureCount} measures have no eligible source ` +
+        `${sc.unsourcedMeasureCount} of ${sc.answeredMeasureCount} ${scopeNoun} have no eligible source ` +
         `(sourced ratio ${sc.sourcedMeasureRatio.toFixed(2)} < ${threshold}).`;
       // OR with any pre-existing suspect state — never upgrade away a suspect flag.
       const alreadySuspect = existingCoverage.coverageLevel === "suspect" || priorDiag.coverageLevelOverride === "suspect";
