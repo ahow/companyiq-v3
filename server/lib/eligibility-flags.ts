@@ -6,6 +6,11 @@
  */
 
 import { deriveAliases } from "./issuer-resolver.js";
+import {
+  rc4FilingProvenanceEnabled,
+  rc5SubsidiaryDisambiguationEnabled,
+  rc6LowValuePageFilterEnabled,
+} from "./scoring-fix-flags.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -344,6 +349,108 @@ function identityTokens(company: CompanyIdentity): string[] {
   return filtered.length > 0 ? filtered : Array.from(toks);
 }
 
+// ─── RC4 — filing-class provenance ───────────────────────────────────────────
+// A document whose TITLE/URL names a primary / statutory filing or registration
+// document (annual / integrated / sustainability / ESG report, 10-K / 20-F,
+// Universal Registration Document, proxy, "Form N", business report). This mirrors
+// the STANDALONE_DOCTYPE_REGEX family in shared/research-state.ts (document NATURE,
+// not subject matter) plus the registration-document vocabulary. By its nature such
+// a document is the issuer's own disclosure about itself, so on a first-party host
+// (own domain, or a trusted filing repository whose title names the issuer)
+// provenance alone establishes first-party attribution — no in-span pronoun needed.
+const FILING_DOCTYPE_REGEX =
+  /\b(annual\s*report|integrated\s*report|sustainability\s*report|esg\s*report|responsibility\s*report|corporate\s*responsibility|universal\s*registration\s*document|registration\s*document|reference\s*document|business\s*report|10-?k|20-?f|40-?f|6-?k|8-?k|proxy\s*statement|proxy|notice\s*of\s*meeting|form\s*\d|URD)\b/i;
+
+/** True when a quote's source (title) or URL identifies a primary/statutory filing
+ *  or registration document (RC4). Keys off document nature only. */
+function isFilingClassSource(q: QuoteLike): boolean {
+  const title = (q.source || "");
+  const url = (q.sourceUrl || "");
+  return FILING_DOCTYPE_REGEX.test(title) || FILING_DOCTYPE_REGEX.test(url);
+}
+
+// ─── RC5 — subsidiary / affiliate disambiguation ─────────────────────────────
+// Geographic qualifiers and subsidiary/affiliate nouns that, when adjacent to the
+// target's core name, denote a MORE-SPECIFIC reporting entity than the target
+// (e.g. "ING Australia", "Manulife Philippines", "<Parent> subsidiary"). Keys off
+// reporting-entity identity structure, not any specific company name.
+const GEO_QUALIFIER_WORDS = new Set<string>([
+  "australia", "philippines", "indonesia", "malaysia", "singapore", "thailand",
+  "vietnam", "india", "china", "japan", "korea", "taiwan", "canada", "mexico",
+  "brazil", "argentina", "chile", "colombia", "peru", "germany", "france", "spain",
+  "italy", "portugal", "netherlands", "belgium", "poland", "sweden", "norway",
+  "denmark", "finland", "ireland", "switzerland", "austria", "greece", "turkey",
+  "russia", "ukraine", "romania", "hungary", "czech", "slovakia", "croatia",
+  "usa", "america", "uk", "britain", "england", "scotland", "wales",
+  "africa", "nigeria", "kenya", "egypt", "morocco", "ghana",
+  "asia", "europe", "pacific", "americas", "international", "global", "worldwide",
+  "hong", "kong", "macau", "qatar", "dubai", "emirates", "saudi", "israel",
+  "zealand", "bangladesh", "pakistan", "srilanka", "lanka", "myanmar", "cambodia",
+]);
+const SUBSIDIARY_NOUN_REGEX =
+  /\b(subsidiary|subsidiaries|affiliate|affiliates|affiliated|unit|units|branch|branches|division|divisions|joint\s*venture|associate)\b/i;
+
+/**
+ * RC5 — detect when a passage names a MORE-SPECIFIC reporting entity than the
+ * target: the target's core name immediately followed by a distinguishing
+ * qualifier (a geographic token, or a subsidiary/affiliate/unit/branch noun) that
+ * is NOT part of the target's own legal name. Conservative: the qualifier must be
+ * adjacent to the core name. Returns the matched qualifier for logging, else null.
+ */
+function namesMoreSpecificEntity(text: string, company: CompanyIdentity): string | null {
+  const core = cleanCompanyName(company.name || "").toLowerCase().trim();
+  if (core.length < 3) return null;
+  const lowerText = (text || "").toLowerCase();
+  const fullName = (company.name || "").toLowerCase();
+  // Candidate core tokens: the cleaned core name's distinctive words (≥3 chars,
+  // not generic corporate-form words) plus the first word of the cleaned core.
+  const coreWords = core.split(/\s+/).filter((w) => w.length >= 3 && !GENERIC_NAME_WORDS.has(w));
+  const candidates = new Set<string>(coreWords);
+  if (coreWords.length > 0) candidates.add(coreWords[0]);
+  for (const coreTok of candidates) {
+    const esc = coreTok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // core token + one adjacent word.
+    const re = new RegExp(`\\b${esc}\\b[\\s'’-]+([a-z\\u00c0-\\u024f]+)`, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(lowerText)) !== null) {
+      const next = (m[1] || "").toLowerCase();
+      if (!next || next.length < 2) continue;
+      const isGeo = GEO_QUALIFIER_WORDS.has(next);
+      const isSubNoun = SUBSIDIARY_NOUN_REGEX.test(next);
+      if (!isGeo && !isSubNoun) continue;
+      // Skip when the qualifier is part of the target's own legal name
+      // (e.g. "Bank of America" — "america" belongs to the name itself).
+      if (fullName.includes(`${coreTok} ${next}`) || fullName.includes(next)) continue;
+      return `${coreTok} ${next}`;
+    }
+  }
+  return null;
+}
+
+// ─── RC6 — generic low-value-page filter ─────────────────────────────────────
+// Non-substantive pages that must never back a verdict, keyed on PAGE NATURE
+// (title / URL), not on any specific site. Terms-of-use, cookie/privacy notices,
+// login/registration walls, and 404/error/empty pages carry no first-party
+// disclosure content, yet a thin corpus can leave them as the only "evidence" (the
+// Michelin "Website Terms of Use" citation). This is topic/company/framework
+// agnostic.
+const LOW_VALUE_PAGE_REGEX =
+  /\b(terms\s*(?:of\s*(?:use|service)|&?\s*conditions)|terms\s*&\s*conditions|cookie\s*(?:policy|notice|settings|preferences)|privacy\s*(?:policy|notice|statement)|legal\s*notice|disclaimer|sign\s*in|log\s*in|login|register|create\s*(?:an\s*)?account|page\s*not\s*found|404\s*(?:error|not\s*found)?|error\s*404|access\s*denied|403\s*forbidden|site\s*map|sitemap)\b/i;
+
+/** True when a quote's source title or URL identifies a non-substantive
+ *  low-value page that must not back a verdict (RC6). Keys off page nature only. */
+export function isLowValuePageSource(title?: string | null, url?: string | null): boolean {
+  const t = title || "";
+  const u = url || "";
+  if (LOW_VALUE_PAGE_REGEX.test(t)) return true;
+  // URL path hints (hyphen/slug forms): /terms-of-use, /cookie-policy, /privacy, /login.
+  const uLow = u.toLowerCase();
+  if (/\/(terms(?:-of-(?:use|service))?|terms-and-conditions|cookie-policy|cookies?|privacy(?:-policy)?|legal|disclaimer|login|signin|sign-in|register|404|not-found|sitemap)(?:[/?#.]|$)/.test(uLow)) {
+    return true;
+  }
+  return false;
+}
+
 export function reviewQuoteAttribution(
   quotes: QuoteLike[] | null | undefined,
   company: CompanyIdentity,
@@ -359,6 +466,14 @@ export function reviewQuoteAttribution(
       const text = q.text;
       const lowerText = text.toLowerCase();
 
+      // RC6 (Negative rule): a non-substantive low-value page (terms-of-use,
+      // cookie/privacy, login wall, 404/error) carries no disclosure and must never
+      // back a verdict, regardless of host. Checked first so a thin corpus cannot
+      // let such a page support a score.
+      if (rc6LowValuePageFilterEnabled() && isLowValuePageSource(q.source, q.sourceUrl)) {
+        return { index, attributedToTarget: false, reason: "Low-value page (terms/cookie/login/error) — not substantive evidence" };
+      }
+
       // Safeguard: Case Study Penalty (Negative Rule)
       if (CASE_STUDY_NEGATIVES.test(text)) {
         // If a very strong identity match is present, we might still trust it, 
@@ -368,10 +483,47 @@ export function reviewQuoteAttribution(
         // But Rule 1-8 are primarily about RECOVERING false negatives.
         return { index, attributedToTarget: false, reason: "Case Study Pattern (Negative Rule)" };
       }
-      
+
+      // RC5 (Negative precision rule): the passage names a MORE-SPECIFIC reporting
+      // entity than the target (target core name + adjacent geographic/subsidiary
+      // qualifier, e.g. "ING Australia", "Manulife Philippines"). Runs BEFORE the
+      // bare identity-token acceptance so a parent token inside a subsidiary's name
+      // does not wrongly attribute subsidiary evidence to the parent. Exception:
+      // when the passage ALSO establishes the target itself as the actor
+      // (first-party we/our/us), the parent is genuinely speaking about its own
+      // group, so attribution is not blocked.
+      if (rc5SubsidiaryDisambiguationEnabled()) {
+        const specific = namesMoreSpecificEntity(text, company);
+        if (specific && !FIRST_PARTY_POSSESSIVE_REGEX.test(text)) {
+          return {
+            index,
+            attributedToTarget: false,
+            reason: `Names a distinct subsidiary/affiliate reporting entity (${specific})`,
+          };
+        }
+      }
+
       // Rule: Direct identity token match
       if (toks.some(t => lowerText.includes(t))) {
         return { index, attributedToTarget: true };
+      }
+
+      // RC4 (Filing-class provenance): a verified primary/statutory filing or
+      // registration document is, by its nature, the issuer's own disclosure about
+      // itself. On a first-party host, provenance alone establishes attribution —
+      // no in-span pronoun required (fixes own-filing downgrades on measure 22). For
+      // the issuer's OWN domain, provenance is sufficient; for a trusted filing
+      // repository (sec.gov, hkexnews, …) the title must also name the target so a
+      // repo hosting many issuers cannot over-attribute. Case-study negatives and
+      // the RC5 subsidiary rule were already applied above.
+      if (rc4FilingProvenanceEnabled() && isFilingClassSource(q)) {
+        if (isOwnDomainSource(q.sourceUrl, company)) {
+          return { index, attributedToTarget: true, reason: "Primary filing on own domain (RC4)" };
+        }
+        const titleNamesTarget = toks.some(t => t.length >= 3 && (q.source || "").toLowerCase().includes(t));
+        if (isTrustedSource(q.sourceUrl, company) && titleNamesTarget) {
+          return { index, attributedToTarget: true, reason: "Primary filing in trusted repository (RC4)" };
+        }
       }
 
       // Rule 1 (First-Party Domain Waiver): the company's OWN domain is a strong

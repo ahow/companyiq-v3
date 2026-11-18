@@ -12,6 +12,7 @@ import {
   computeEligibilityFlags,
   isPositiveVerdict,
   isThirdPartyHost,
+  isLowValuePageSource,
   reviewQuoteAttribution,
   type EligibilityFlagId,
   type EligibilityFlagsInput,
@@ -415,6 +416,66 @@ function entityGateDowngrades(input: EligibilityFlagsInput): boolean {
     window: { currentYear: 2026, yearsBack: 5 },
   };
   check("BUG5: source-label-mismatch CLEARS when quote year matches label year", !fired(consistent, "source-label-mismatch"));
+}
+
+// ─── 13. RC4 — filing-class provenance attribution ───────────────────────────
+// A primary/statutory filing is, by its nature, the issuer's own disclosure about
+// itself. On a first-party host provenance alone attributes (no in-span pronoun),
+// but a non-filing own-domain page with no first-party cue must NOT attribute.
+{
+  const att = (quotes: any[], company: any) => reviewQuoteAttribution(quotes, company);
+
+  // Own-domain filing, no pronoun, no identity token in the span → attributed via RC4.
+  const ownFiling = att([
+    { text: "A double materiality assessment was completed in 2024.", source: "Acme Annual Report 2023", sourceUrl: "https://acme-bev.com/reports/ar2023.pdf" },
+  ], ACME);
+  check("RC4: own-domain primary filing attributes without an in-span pronoun", ownFiling[0].attributedToTarget === true);
+
+  // Own-domain NON-filing page, no pronoun, no identity token → NOT attributed.
+  const ownBlog = att([
+    { text: "A double materiality assessment was completed in 2024.", source: "Insights Blog", sourceUrl: "https://acme-bev.com/insights/blog" },
+  ], ACME);
+  check("RC4: own-domain non-filing page with no first-party cue does NOT attribute", ownBlog[0].attributedToTarget === false);
+
+  // Trusted filing repository whose TITLE names the target → attributed via RC4.
+  const repoFiling = att([
+    { text: "A double materiality assessment was completed.", source: "Acme Beverages Corporation Annual Report (Form 20-F)", sourceUrl: "https://www.sec.gov/Archives/edgar/data/0001/acme-20f.htm" },
+  ], ACME);
+  check("RC4: trusted-repo filing whose title names the target attributes", repoFiling[0].attributedToTarget === true);
+}
+
+// ─── 14. RC5 — subsidiary / affiliate disambiguation ─────────────────────────
+// A passage naming a more-specific reporting entity (target core name + adjacent
+// geographic/subsidiary qualifier) must NOT be attributed to the parent — unless
+// the passage also establishes the target itself as a first-party actor.
+{
+  const att = (quotes: any[], company: any) => reviewQuoteAttribution(quotes, company);
+
+  // "Acme Australia" names a distinct subsidiary → blocked even though "acme" is an identity token.
+  const subsidiary = att([
+    { text: "Acme Australia reported strong results for the year.", source: "News Wire", sourceUrl: "https://example.com/news" },
+  ], ACME);
+  check("RC5: a subsidiary-qualified entity (Acme Australia) is NOT attributed to the parent", subsidiary[0].attributedToTarget === false);
+
+  // Same qualifier BUT with a first-party cue → parent is speaking about its own group → attributed.
+  const firstPartyGroup = att([
+    { text: "In Acme Australia, we completed our climate review this year.", source: "Acme Annual Report", sourceUrl: "https://acme-bev.com/ar" },
+  ], ACME);
+  check("RC5: subsidiary name WITH a first-party cue still attributes to the target", firstPartyGroup[0].attributedToTarget === true);
+}
+
+// ─── 15. RC6 — low-value-page filter ─────────────────────────────────────────
+// A non-substantive page (terms/cookie/login/404) must never back a verdict, even
+// on the issuer's own domain and with first-party language present.
+{
+  check("RC6: isLowValuePageSource true for a terms-of-use title", isLowValuePageSource("Website Terms of Use", "https://acme-bev.com/terms") === true);
+  check("RC6: isLowValuePageSource true for a /privacy-policy URL", isLowValuePageSource("Acme", "https://acme-bev.com/privacy-policy") === true);
+  check("RC6: isLowValuePageSource false for a substantive report", isLowValuePageSource("Acme Sustainability Report 2023", "https://acme-bev.com/sustainability") === false);
+
+  const termsCite = reviewQuoteAttribution([
+    { text: "We respect our users' privacy and security on this website.", source: "Website Terms of Use", sourceUrl: "https://acme-bev.com/terms-of-use" },
+  ], ACME);
+  check("RC6: a terms-of-use page is NOT attributed even with own-domain + first-party text", termsCite[0].attributedToTarget === false);
 }
 
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"}`);
