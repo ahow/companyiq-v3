@@ -3787,6 +3787,43 @@ function perQueryNum(searchDepth: number): number {
   return Math.min(searchDepth, DISCOVERY_PER_QUERY_RESULT_CAP);
 }
 
+// First-run completeness knobs — B (2026-11). Companion to
+// DISCOVERY_PER_QUERY_RESULT_CAP above. Several discovery lanes historically
+// hard-clamped the NUMBER OF QUERIES issued per lane (and the breadth of the
+// framework-derived query-expansion) at inline literals. Those literals bound
+// how many of a framework's own per-topic terms (topic lexicon, evidence
+// keywords, qualifyingInstances — all defined in the framework and expanded per
+// topic) actually get turned into searches. Raising them lets more of the
+// framework's own vocabulary be used on the first run, which is exactly the
+// "strengthen the per-topic query terms" goal. Every knob defaults to its prior
+// inline literal (byte-for-byte unchanged behaviour) and is floored at that
+// default, so it can only ever WIDEN coverage, never silently narrow it. All are
+// fully framework / company / sector-agnostic — they change only ceilings.
+function discoveryCap(envName: string, def: number): number {
+  return Math.max(def, parseInt(process.env[envName] || String(def), 10) || def);
+}
+// Breadth of the framework evidence/qualifyingInstance/topic-lexicon query
+// expansion (expandQueries maxTotal). More terms → more framework-defined
+// per-topic queries. Default 20 (unchanged).
+const DISCOVERY_EXPANSION_MAX_TOTAL = discoveryCap("DISCOVERY_EXPANSION_MAX_TOTAL", 20);
+// Trusted-source lane: max queries per company. Default 15 (unchanged).
+const DISCOVERY_TRUSTED_SOURCE_MAX_QUERIES = discoveryCap("DISCOVERY_TRUSTED_SOURCE_MAX_QUERIES", 15);
+// Corporate-doc CDN lane: results per query. Default 5 (unchanged).
+const DISCOVERY_CDN_RESULTS = discoveryCap("DISCOVERY_CDN_RESULTS", 5);
+// Subsidiary/parent lane: topic phrases folded into the probe + results per
+// query. Defaults 2 / 5 (unchanged).
+const DISCOVERY_SUBSIDIARY_TOPIC_PHRASES = discoveryCap("DISCOVERY_SUBSIDIARY_TOPIC_PHRASES", 2);
+const DISCOVERY_SUBSIDIARY_RESULTS = discoveryCap("DISCOVERY_SUBSIDIARY_RESULTS", 5);
+// R6a IR-platform tenant lane: max queries. Default 12 (unchanged).
+const DISCOVERY_IR_PLATFORM_MAX_QUERIES = discoveryCap("DISCOVERY_IR_PLATFORM_MAX_QUERIES", 12);
+// R6b locale-topic lane: max queries. Default 10 (unchanged).
+const DISCOVERY_LOCALE_MAX_QUERIES = discoveryCap("DISCOVERY_LOCALE_MAX_QUERIES", 10);
+// R6d jurisdiction doc-type lane: max queries. Default 10 (unchanged).
+const DISCOVERY_JURISDICTION_MAX_QUERIES = discoveryCap("DISCOVERY_JURISDICTION_MAX_QUERIES", 10);
+// R6f sub-page enumeration lane: max queries per landing candidate. Default 4
+// (unchanged).
+const DISCOVERY_SUBPAGE_ENUM_MAX_QUERIES = discoveryCap("DISCOVERY_SUBPAGE_ENUM_MAX_QUERIES", 4);
+
 /**
  * PR 1 · Change 1a: run a single targeted web-search query for a company
  * (used by pipeline.ts to close latest-primary-disclosure gaps identified by
@@ -4042,7 +4079,7 @@ async function searchCompanyDocumentsInner(opts: {
         // B4: UNION qualifyingInstance-derived queries with the generic set. Empty
         // for prose-only frameworks → generic-only (backward compatible).
         qualifyingInstances: opts.qualifyingInstances || [],
-        maxTotal: 20,
+        maxTotal: DISCOVERY_EXPANSION_MAX_TOTAL,
       });
       diagBuilder.setQueryExpansion(queryExpansionResult);
       console.log(`[${companyName}] Query expansion: ${queryExpansionResult.diagnostics.totalGenerated} queries generated (evKw=${queryExpansionResult.diagnostics.evidenceKeywordQueries}, reportType=${queryExpansionResult.diagnostics.reportTypeQueries}, qualInst=${queryExpansionResult.diagnostics.qualifyingInstanceQueries})`);
@@ -4854,8 +4891,9 @@ async function searchCompanyDocumentsInner(opts: {
   if (effectiveSources.length > 0) {
     console.log(`[${companyName}] Running trusted source search lane (${effectiveSources.length} sources)`);
     const tsQueries = buildTrustedSourceQueries(companyName, effectiveSources);
-    // Allow up to 15 trusted source queries per company (increased from 5)
-    for (const query of tsQueries.slice(0, 15)) {
+    // Allow up to DISCOVERY_TRUSTED_SOURCE_MAX_QUERIES trusted source queries per
+    // company (default 15; was historically raised from 5).
+    for (const query of tsQueries.slice(0, DISCOVERY_TRUSTED_SOURCE_MAX_QUERIES)) {
       const results = await webSearch(query, { num: Math.max(5, searchDepth) });
       for (const r of results) addCandidate(r, "trusted");
     }
@@ -5069,7 +5107,7 @@ async function searchCompanyDocumentsInner(opts: {
       for (const cdn of CORPORATE_DOC_CDNS) {
         const query = `site:${cdn} "${companyName}" ${topicKeywords} filetype:pdf`;
         try {
-          const results = await webSearch(query, { num: 5 });
+          const results = await webSearch(query, { num: DISCOVERY_CDN_RESULTS });
           for (const r of results) addCandidate(r, "cdn-pdf");
         } catch { /* best-effort */ }
       }
@@ -5079,9 +5117,9 @@ async function searchCompanyDocumentsInner(opts: {
     // Common patterns: "Group" → search without "Group"; multi-word → search abbreviation
     const parentName = companyName.replace(/\s+(Group|Holdings|Inc\.?|Corp\.?|Ltd\.?|PLC|SE|AG|SA|NV)\s*$/i, "").trim();
     if (parentName !== companyName && parentName.length >= 3) {
-      const subQuery = `"${parentName}" ${topicPhrases.slice(0, 2).join(" ")} filetype:pdf`;
+      const subQuery = `"${parentName}" ${topicPhrases.slice(0, DISCOVERY_SUBSIDIARY_TOPIC_PHRASES).join(" ")} filetype:pdf`;
       try {
-        const results = await webSearch(subQuery, { num: 5 });
+        const results = await webSearch(subQuery, { num: DISCOVERY_SUBSIDIARY_RESULTS });
         for (const r of results) addCandidate(r, "subsidiary");
       } catch { /* best-effort */ }
     }
@@ -5121,7 +5159,7 @@ async function searchCompanyDocumentsInner(opts: {
       // B3/WP11: batched behind DISCOVERY_PARALLEL_POLICY (serial default = in-order
       // loop; on/shadow = dedupe + bounded parallel). IR-platform site: queries
       // target canonical issuer tenants, so they are flagged canonical-first.
-      const _irQueries = irQueries.slice(0, 12);
+      const _irQueries = irQueries.slice(0, DISCOVERY_IR_PLATFORM_MAX_QUERIES);
       const _irResults = await webSearchBatch(
         _irQueries,
         { num: perQueryNum(searchDepth) },
@@ -5204,7 +5242,7 @@ async function searchCompanyDocumentsInner(opts: {
     const localeQueries = buildLocaleTopicQueries(companyName, opts.country, effectiveDomain);
     if (localeQueries.length > 0) {
       console.log(`[${companyName}] R6b Running locale-topic lane (${localeQueries.length} queries)`);
-      for (const q of localeQueries.slice(0, 10)) {
+      for (const q of localeQueries.slice(0, DISCOVERY_LOCALE_MAX_QUERIES)) {
         try {
           const gl = localeProfile?.gl;
           const hl = localeProfile?.hl;
@@ -5268,7 +5306,7 @@ async function searchCompanyDocumentsInner(opts: {
     });
     if (jurQueries.length > 0) {
       console.log(`[${companyName}] R6d Running jurisdiction doc-type lane (${jurQueries.length} queries)`);
-      for (const q of jurQueries.slice(0, 10)) {
+      for (const q of jurQueries.slice(0, DISCOVERY_JURISDICTION_MAX_QUERIES)) {
         try {
           const results = await webSearch(q, { num: perQueryNum(searchDepth) });
           for (const r of results) addCandidate(r, "r6d-jurisdiction-doctype");
@@ -5330,7 +5368,7 @@ async function searchCompanyDocumentsInner(opts: {
       const enumQueries = buildSubpageEnumerationQueries(lc.url, topicPhrases);
       if (enumQueries.length > 0) {
         console.log(`[${companyName}] R6f Sub-page enumeration for ${lc.url} (${enumQueries.length} queries)`);
-        for (const q of enumQueries.slice(0, 4)) {
+        for (const q of enumQueries.slice(0, DISCOVERY_SUBPAGE_ENUM_MAX_QUERIES)) {
           try {
             const results = await webSearch(q, { num: perQueryNum(searchDepth) });
             for (const r of results) addCandidate(r, "r6f-subpage-enum");
