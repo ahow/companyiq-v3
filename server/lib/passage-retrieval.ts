@@ -6,7 +6,12 @@ import { flattenTerms } from "./terminology-discovery.js";
 import type { IssuerProfile } from "./issuer-profile.js";
 import { scoreEntityMatch } from "./issuer-profile.js";
 import { isPrepComputeCacheEnabled } from "./prep-compute-cache.js";
-import { z1WithinDocReweightEnabled, z1ThematicBoost, z1BoilerplatePenalty } from "./scoring-fix-flags.js";
+import { z1WithinDocReweightEnabled, z1ThematicBoost, z1BoilerplatePenalty,
+  reportingPeriodEnforced, entityScopeEnforced, evidenceQuoteSingleUse,
+  evidenceAdjacentPassageSpan, evidenceAdjacentPassageMaxGap } from "./scoring-fix-flags.js";
+import { evidenceWithinReportingPeriod, documentInEntityScope,
+  type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
+import { QuoteLedger, passagesAreAdjacent, type PassageSpan } from "./retrieval-funnel.js";
 
 /**
  * CHANGE 2 flag — chunk-gate fail-open safety net + preserveIfOnlySource.
@@ -1429,6 +1434,21 @@ export function buildEvidencePackForMeasure(opts: {
   // promotion). Used to force-include per-doc top chunks into every measure's
   // pack — analogous to Item 1A reserve for SEC filings but framework-driven.
   topicPrimaryDocIndexes?: Set<number>;
+  // 2.3 REPORTING_PERIOD_ENFORCED — framework-level recency window. When set AND
+  // the flag is on, chunks whose source document falls outside the window are
+  // dropped from this measure's candidate pool so they cannot carry a Yes.
+  reportingPeriod?: ReportingPeriod | null;
+  // 2.4 ENTITY_SCOPE_ENFORCED — group/subsidiary scope context. When set AND the
+  // flag is on, chunks from out-of-scope (subsidiary/other-entity) documents are
+  // dropped unless the document is a consolidated/group-level disclosure.
+  entityScope?: EntityScopeContext | null;
+  // 3.3a EVIDENCE_QUOTE_SINGLE_USE — shared ledger across the measures of one
+  // category run. When provided AND the flag is on, a passage already claimed by
+  // another measure is not selected into this pack unless this measure allows
+  // sharing. Instantiated once per category so ownership is cross-measure.
+  quoteLedger?: QuoteLedger;
+  // Per-measure override: this measure explicitly permits a shared quote.
+  allowQuoteSharing?: boolean;
 }): EvidencePack {
   const {
     measure,
@@ -1443,6 +1463,10 @@ export function buildEvidencePackForMeasure(opts: {
     frameworkId,
     preferredAnnualUrl,
     topicPrimaryDocIndexes,
+    reportingPeriod,
+    entityScope,
+    quoteLedger,
+    allowQuoteSharing,
   } = opts;
 
   // Lever 2: effective total char budget (base + BM25 reserve headroom).
@@ -1515,6 +1539,48 @@ export function buildEvidencePackForMeasure(opts: {
     };
   });
 
+  // ─── 2.3 / 2.4 — framework-driven candidate-pool filtering ───────────────────
+  // Drop chunks whose SOURCE DOCUMENT is out of the framework reporting-period
+  // window (2.3) or outside the group/parent entity scope (2.4) BEFORE ranking and
+  // selection, so such a document cannot carry a Yes for this measure. Both are
+  // strictly OPT-IN: each fires only when its flag is on AND the caller supplied
+  // the corresponding framework context, so with flags off / no context the
+  // `scored` array is byte-for-byte identical to today's. Filtering `scored` (which
+  // carries the original chunk `idx`) keeps the bm25Index alignment intact because
+  // every BM25 score was already computed in the map above.
+  const applyRecency = reportingPeriodEnforced() && !!reportingPeriod;
+  const applyScope = entityScopeEnforced() && !!entityScope;
+  if (applyRecency || applyScope) {
+    const currentYear = new Date().getUTCFullYear();
+    const kept = scored.filter((s) => {
+      const ch = chunks[s.idx];
+      if (applyRecency) {
+        // Derive the evidence date from the document URL/title year (the same
+        // provenance signal the vintage gate uses). Use end-of-year so a borderline
+        // in-window document is never excluded on a conservative date guess.
+        const yr = extractDocYear(ch.docUrl, ch.docTitle, currentYear);
+        const iso = yr ? `${yr}-12-31` : null;
+        if (!evidenceWithinReportingPeriod(reportingPeriod!, iso)) return false;
+      }
+      if (applyScope) {
+        const { inScope } = documentInEntityScope(entityScope!, {
+          url: ch.docUrl,
+          docTitle: ch.docTitle,
+        } as any);
+        if (!inScope) return false;
+      }
+      return true;
+    });
+    if (kept.length !== scored.length) {
+      console.log(
+        `[evidence-scope] ${measure.measureId}: candidate chunks ${scored.length}→${kept.length} ` +
+        `(recency=${applyRecency} scope=${applyScope})`,
+      );
+      scored.length = 0;
+      scored.push(...kept);
+    }
+  }
+
   // Z1 — within-document passage re-weighting. Boosts on-theme chunks and
   // down-weights off-theme governance/ethics/terms boilerplate that shares a
   // document with an on-theme chunk, so a buried climate chapter beats the Code of
@@ -1581,12 +1647,25 @@ export function buildEvidencePackForMeasure(opts: {
       ? Math.max(maxChunksPerDoc, PRIMARY_MAX_CHUNKS_PER_DOC)
       : maxChunksPerDoc;
 
+  // 3.3a EVIDENCE_QUOTE_SINGLE_USE — whether this measure may still claim `text`.
+  // When the ledger is supplied AND the flag is on, a passage already owned by a
+  // DIFFERENT measure is refused here (unless this measure allows sharing), so a
+  // single quote can carry only one measure's Yes. Flag off / no ledger → always
+  // true → selection is unchanged. The ledger is shared across the category's
+  // measures, so first-come ownership is deterministic in measure-array order.
+  const singleUseActive = evidenceQuoteSingleUse() && !!quoteLedger;
+  const mayClaimQuote = (text: string): boolean => {
+    if (!singleUseActive) return true;
+    return quoteLedger!.claim(text, String(measure.measureId), !!allowQuoteSharing);
+  };
+
   const tryAdd = (item: (typeof scored)[number]): boolean => {
     if (selected.includes(item)) return false;
     if (selected.length >= topK) return false;
     if (evidenceLen + item.text.length > totalBudget) return false;
     const used = perDocCount.get(item.docIndex) || 0;
     if (used >= capForDoc(item.docIndex)) return false;
+    if (!mayClaimQuote(item.text)) return false;
     selected.push(item);
     perDocCount.set(item.docIndex, used + 1);
     evidenceLen += item.text.length + 2;
@@ -2271,6 +2350,69 @@ export function buildEvidencePackForMeasure(opts: {
     }
   }
 
+  // ─── 3.3b EVIDENCE_ADJACENT_PASSAGE_SPAN ─────────────────────────────────────
+  // So a measure's condition can be satisfied across TWO adjacent passages of the
+  // SAME document (not only within a single chunk), pull in each selected chunk's
+  // immediate same-document neighbour when the two are adjacent within
+  // EVIDENCE_ADJACENT_PASSAGE_MAX_GAP characters. Strictly RELAXING and bounded:
+  // at most the two neighbours of each already-selected chunk, each still subject
+  // to topK, the char budget, the per-doc cap and (when active) the single-use
+  // ledger — so it can neither loop nor inflate cost. Neighbours are only eligible
+  // if they survived the 2.3/2.4 candidate filter and dedup (`scored`), so this
+  // never re-admits an out-of-window / out-of-scope passage. Flag off → no-op.
+  if (evidenceAdjacentPassageSpan() && selected.length > 0) {
+    const maxGap = evidenceAdjacentPassageMaxGap();
+    // Synthetic per-document char offsets from seqInDoc order (chunks carry no
+    // absolute offsets): consecutive chunks get gap 0, farther ones accumulate the
+    // intervening lengths, so `maxGap` meaningfully bounds how far "adjacent" reaches.
+    const byDoc = new Map<number, Array<{ idx: number; seq: number }>>();
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i];
+      const arr = byDoc.get(c.docIndex) || [];
+      arr.push({ idx: i, seq: c.seqInDoc ?? i });
+      byDoc.set(c.docIndex, arr);
+    }
+    const spanByIdx = new Map<number, PassageSpan>();
+    for (const [di, arr] of byDoc) {
+      arr.sort((a, b) => a.seq - b.seq);
+      let off = 0;
+      for (const e of arr) {
+        const t = chunks[e.idx].text || "";
+        spanByIdx.set(e.idx, { docId: di, start: off, end: off + t.length, text: t });
+        off += t.length;
+      }
+    }
+    const scoredByIdx = new Map(scored.map((s) => [s.idx, s] as const));
+    const selectedIdx = new Set(selected.map((s) => s.idx));
+    let adjacentAdded = 0;
+    for (const sel of [...selected]) {
+      const arr = byDoc.get(sel.docIndex);
+      if (!arr) continue;
+      const pos = arr.findIndex((e) => e.idx === sel.idx);
+      if (pos < 0) continue;
+      for (const nb of [arr[pos - 1], arr[pos + 1]]) {
+        if (!nb || selectedIdx.has(nb.idx)) continue;
+        const cand = scoredByIdx.get(nb.idx);
+        if (!cand) continue; // dropped by 2.3/2.4 filter or dedup — do not re-admit
+        const a = spanByIdx.get(sel.idx), b = spanByIdx.get(nb.idx);
+        if (!a || !b || !passagesAreAdjacent(a, b, maxGap)) continue;
+        if (selected.length >= topK) break;
+        if (evidenceLen + cand.text.length > totalBudget) continue;
+        const used = perDocCount.get(cand.docIndex) || 0;
+        if (used >= capForDoc(cand.docIndex)) continue;
+        if (!mayClaimQuote(cand.text)) continue;
+        selected.push(cand);
+        selectedIdx.add(nb.idx);
+        perDocCount.set(cand.docIndex, used + 1);
+        evidenceLen += cand.text.length + 2;
+        adjacentAdded++;
+      }
+    }
+    if (adjacentAdded > 0) {
+      console.log(`[adjacent-span] ${measure.measureId}: +${adjacentAdded} adjacent neighbour passage(s) (maxGap=${maxGap})`);
+    }
+  }
+
   // Preserve document order in the final text for readability.
   selected.sort((a, b) => (a.docIndex - b.docIndex) || (a.idx - b.idx));
 
@@ -2394,8 +2536,18 @@ export function buildEvidencePacksForCategory(opts: {
   // alongside SEC Item 1A / DEF 14A force-includes. Framework-agnostic — the
   // classification is driven entirely by framework-authored data.
   topicPrimaryDocUrls?: string[];
+  // 2.3 / 2.4 framework context, forwarded to each measure's pack build. Null/absent
+  // (today's state) → no recency/scope enforcement regardless of flag state.
+  reportingPeriod?: ReportingPeriod | null;
+  entityScope?: EntityScopeContext | null;
 }): EvidencePack[] {
-  const { measures, combinedText, terminology, topicTerms = DEFAULT_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl, topicPrimaryDocUrls } = opts;
+  const { measures, combinedText, terminology, topicTerms = DEFAULT_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl, topicPrimaryDocUrls, reportingPeriod, entityScope } = opts;
+
+  // 3.3a EVIDENCE_QUOTE_SINGLE_USE — ONE ledger shared across all of this category's
+  // measures so a passage claimed by the first measure (in array order) cannot also
+  // carry a later measure's Yes. Only constructed when the flag is on; otherwise the
+  // undefined ledger makes each pack build a no-op for single-use (unchanged).
+  const quoteLedger = evidenceQuoteSingleUse() ? new QuoteLedger() : undefined;
 
   const chunks = chunkDocuments(combinedText);
   if (chunks.length === 0) {
@@ -2486,6 +2638,12 @@ export function buildEvidencePacksForCategory(opts: {
       frameworkId,
       preferredAnnualUrl,
       topicPrimaryDocIndexes,
+      // 2.3 / 2.4 / 3.3a — framework context + shared ledger (all no-ops unless the
+      // respective flag is on AND the context is present).
+      reportingPeriod,
+      entityScope,
+      quoteLedger,
+      allowQuoteSharing: !!(measure as any).allowQuoteSharing,
     })
   );
 }

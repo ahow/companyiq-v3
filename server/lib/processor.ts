@@ -13,6 +13,8 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { capDocumentText } from "./doc-size-guard";
+import { extractionRetryFallback, extractionRetryBudget } from "./scoring-fix-flags.js";
+import { mayRetryExtraction } from "./retrieval-funnel.js";
 import {
   isCreditExhaustionError,
   recordCreditExhaustion,
@@ -2941,6 +2943,27 @@ export function __setProcessDocumentWorkerForTest(fn: ProcessDocumentWorker | nu
   __processDocumentWorkerForTest = fn;
 }
 
+// 3.4b — label a document's extraction "vehicle" so a retry is scoped to the
+// dominant RECOVERABLE failure modes only (chiefly PDFs referenced by link). No
+// company/framework names: purely URL/type shape.
+function classifyExtractionVehicle(url: string, type: "pdf" | "html"): string {
+  const u = (url || "").toLowerCase();
+  if (type === "pdf" || u.endsWith(".pdf") || u.includes(".pdf")) return "pdf-behind-link";
+  return "html-render";
+}
+
+// 3.4b — the recoverable-vehicle set. Defaults to the dominant failure vehicle
+// (PDF-behind-link); extendable via EXTRACTION_RECOVERABLE_VEHICLES (comma-sep) so
+// the bounded retry can cover more vehicles without a code change. Never empty by
+// default; an explicit empty env value disables retry (equivalent to flag off).
+function resolveRecoverableVehicles(): string[] {
+  const raw = process.env.EXTRACTION_RECOVERABLE_VEHICLES;
+  if (typeof raw === "string") {
+    return raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  }
+  return ["pdf-behind-link"];
+}
+
 export async function processDocument(
   url: string,
   type: "pdf" | "html",
@@ -2968,7 +2991,47 @@ export async function processDocument(
     return Promise.race([existing.promise, callerScope.whenAborted("coalesced_wait")]);
   }
   const runUncached = __processDocumentWorkerForTest ?? processDocumentUncached;
-  const work = runUncached(url, type, opts);
+
+  // 3.4b EXTRACTION_RETRY_FALLBACK — bounded, vehicle-scoped extraction retry.
+  // Off (default) → EXACTLY one attempt (today's behaviour, byte-for-byte). On →
+  // a failed extraction for a RECOVERABLE vehicle (PDF-behind-link and any vehicle
+  // listed in EXTRACTION_RECOVERABLE_VEHICLES) may be retried, STRICTLY bounded by
+  // EXTRACTION_RETRY_BUDGET via mayRetryExtraction. It can neither loop (attempts
+  // only increments and the budget is a hard ceiling) nor inflate cost on
+  // unrecoverable vehicles, permanent failures, or cancellations (never retried).
+  const work = extractionRetryFallback()
+    ? (async (): Promise<string> => {
+        const budget = extractionRetryBudget();
+        const recoverable = resolveRecoverableVehicles();
+        const vehicle = classifyExtractionVehicle(url, type);
+        let attempts = 0;
+        // Loop is bounded: each pass increments `attempts`, and mayRetryExtraction
+        // returns false once attempts >= budget, so at most `budget` retries occur.
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          try {
+            const text = await runUncached(url, type, opts);
+            const usable = !!text && text.trim().length > 50;
+            if (usable) return text;
+            if (mayRetryExtraction(vehicle, attempts, budget, recoverable)) {
+              attempts++;
+              console.log(`[Processor] 3.4b retry ${attempts}/${budget} (empty extraction, vehicle=${vehicle}): ${url.slice(0, 80)}`);
+              continue;
+            }
+            return text;
+          } catch (e: any) {
+            // Never retry a cancellation or a definitively permanent failure.
+            if (isOperationAbortedError(e) || e instanceof PermanentFetchError) throw e;
+            if (mayRetryExtraction(vehicle, attempts, budget, recoverable)) {
+              attempts++;
+              console.log(`[Processor] 3.4b retry ${attempts}/${budget} (error "${e?.message || e}", vehicle=${vehicle}): ${url.slice(0, 80)}`);
+              continue;
+            }
+            throw e;
+          }
+        }
+      })()
+    : runUncached(url, type, opts);
   inFlightDocs.set(url, { promise: work, scope: opts?.scope });
   try {
     return await work;

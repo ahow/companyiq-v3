@@ -48,8 +48,9 @@ import {
   applicabilityRulesExecuted,
   coverageRulesExecuted,
   retrievalVehicleAgnostic,
+  extractionRetryFallback,
 } from "./scoring-fix-flags.js";
-import { evaluateApplicability, evaluateCoverage } from "./framework-rules.js";
+import { evaluateApplicability, evaluateCoverage, type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { requiredSourceTypesBlocking } from "./retrieval-funnel.js";
 import { recordVerdictOverride } from "./verdict-override.js";
 import { readjudicateMeasure, type ReadjudicationTrace } from "./readjudication.js";
@@ -1827,12 +1828,26 @@ async function summarizeDocumentsCompute(opts: {
   // Raise the regulatory cap so a single primary annual filing is never truncated;
   // proxy similarly raised. Sustainability stays small so one long ESG PDF cannot
   // crowd out the filings.
-  const CAP_BY_CLASS: Record<DocClass, number> = {
-    regulatory: 480000,
-    proxy: 360000,
-    "topic-primary": 160000,
-    other: 120000,
-  };
+  // 3.4b EXTRACTION_RETRY_FALLBACK (part c) — "all available text is extracted AND
+  // scored", not merely stored. The per-document class caps below silently TRUNCATE
+  // a successfully-extracted document's tail before it ever reaches the BM25 pool
+  // (e.g. a sustainability PDF over 120k chars loses everything past 120k), so
+  // on-topic physical-climate content buried deep in a long report never reaches the
+  // grader. When the flag is on we lift the per-document truncation so every extracted
+  // document's full body is ELIGIBLE for selection; the downstream 560k BM25 pool
+  // (RETRIEVAL_CORPUS_MAX_CHARS) still bounds what reaches the scorer — that is
+  // ranked retrieval selection, not a silent pre-grade drop. Flag off → today's caps
+  // exactly. No loop, no extra fetch: this only changes how much of already-fetched
+  // text is kept.
+  const NO_TRUNCATE = Number.MAX_SAFE_INTEGER;
+  const CAP_BY_CLASS: Record<DocClass, number> = extractionRetryFallback()
+    ? { regulatory: NO_TRUNCATE, proxy: NO_TRUNCATE, "topic-primary": NO_TRUNCATE, other: NO_TRUNCATE }
+    : {
+        regulatory: 480000,
+        proxy: 360000,
+        "topic-primary": 160000,
+        other: 120000,
+      };
 
   // 38: uncapped reserve for high-precision documents.
   // Documents with >= HIGH_PRECISION_THRESHOLD dataPattern hits are materially about
@@ -2577,6 +2592,45 @@ export async function analyzeCompanyMeasures(opts: {
     )
     .map((s: any) => s.domain.trim());
 
+  // 2.3 REPORTING_PERIOD_ENFORCED — resolve the framework's qualifying-evidence
+  // window from config (no dates hardcoded). Accepts either a structured object
+  // {start?,end?,maxAgeMonths?} or a bare month count via evidenceRecencyLimit /
+  // reportingPeriodMonths. Null today, so with the flag on but no config the
+  // downstream evaluator still fails open (no window → every date qualifies).
+  const frameworkReportingPeriod: ReportingPeriod | null = (() => {
+    const fw: any = framework;
+    const rp = fw?.reportingPeriod;
+    if (rp && typeof rp === "object") {
+      return {
+        start: rp.start ?? null,
+        end: rp.end ?? null,
+        maxAgeMonths: typeof rp.maxAgeMonths === "number" ? rp.maxAgeMonths : null,
+      };
+    }
+    const months = Number(fw?.reportingPeriodMonths ?? fw?.evidenceRecencyLimit);
+    if (Number.isFinite(months) && months > 0) return { maxAgeMonths: months };
+    return null;
+  })();
+
+  // 2.4 ENTITY_SCOPE_ENFORCED — build the parent/subsidiary scope context from
+  // framework config, reusing the 1.3 trusted-source domains as the parent/group
+  // trusted set. entityType/universe are config-driven (null today → fail-open).
+  const frameworkEntityScope: EntityScopeContext | null = (() => {
+    const fw: any = framework;
+    const entityType = fw?.entityType ?? null;
+    const universe = fw?.universe ?? null;
+    const subsidiaryDomains: string[] = Array.isArray(fw?.subsidiaryDomains)
+      ? fw.subsidiaryDomains.filter((d: any) => typeof d === "string" && d.trim()).map((d: string) => d.trim())
+      : [];
+    if (!entityType && subsidiaryDomains.length === 0) return null;
+    return {
+      entityType,
+      universe,
+      trustedDomains: frameworkTrustedDomains,
+      subsidiaryDomains,
+    };
+  })();
+
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
 
@@ -2915,6 +2969,10 @@ export async function analyzeCompanyMeasures(opts: {
         // Per-measure retrieval force-includes chunks from these docs so the LLM
         // sees framework-authoritative content instead of only bulk filings.
         topicPrimaryDocUrls,
+        // 2.3 / 2.4 — framework recency window + entity scope (both no-ops unless
+        // the respective flag is on AND the framework config populates them).
+        reportingPeriod: frameworkReportingPeriod,
+        entityScope: frameworkEntityScope,
       });
 
       // I69: Optional LLM passage rescoring layered on top of BM25. Env-gated.
@@ -3598,6 +3656,10 @@ export async function analyzeCompanyMeasures(opts: {
               // canonical EDGAR annual filing as the category pass.
               // v3j-r12 FIX (NVIDIA): prefer the upstream-reserved URL when available.
               preferredAnnualUrl: reservedAnnualUrl || computePreferredAnnualUrl(deepChunks),
+              // 2.3 / 2.4 — keep the deep-read pass under the same recency/scope
+              // enforcement as the category pass (no-ops unless flag + config).
+              reportingPeriod: frameworkReportingPeriod,
+              entityScope: frameworkEntityScope,
             });
             // Only re-score if the deep pass actually surfaced more topic evidence
             // than the original pack (otherwise re-scoring adds cost for no gain).
