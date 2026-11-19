@@ -51,7 +51,8 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, frozenCorpusOrphanGuardEnabled, r1ChecklistContentFallbackEnabled } from "./lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, frozenCorpusOrphanGuardEnabled, frozenCorpusContentHashReuse, r1ChecklistContentFallbackEnabled } from "./lib/scoring-fix-flags.js";
+import { resolveFrozenCorpus } from "./lib/retrieval-funnel.js";
 import { computeCompanyScore } from "../shared/verdict.js";
 // A9 / WP15 (truthful publication). Build the canonical per-cell publication
 // record for each company and store it in the snapshot metadata so every reader
@@ -534,11 +535,34 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
         if (hasFrozenCorpus && frozenCorpusOrphanGuardEnabled()) {
           try {
             const accepted = await storage.getAcceptedDocuments(companyId);
-            const acceptedIds = new Set(accepted.map((d: any) => d.id));
-            const resolvable = snapshot.reduce(
-              (n, s) => (acceptedIds.has(s.documentId) ? n + 1 : n),
-              0,
+            const acceptedIds = new Set<number>(accepted.map((d: any) => Number(d.id)));
+            // 3.1 — when FROZEN_CORPUS_CONTENT_HASH_REUSE is ON, re-resolve snapshot
+            // rows whose document_id is gone (after a documents-table reset) by
+            // content_hash/url against the live accepted set + document_content, so a
+            // snapshot survives a reset and is rebuilt WITHOUT a fresh discovery pass.
+            // Off → id-only resolution, byte-identical to the previous orphan check.
+            const useContentReuse = frozenCorpusContentHashReuse();
+            const byUrl = new Map<string, number>();
+            for (const d of accepted as any[]) {
+              const k = (d.url ?? "").toString().trim().replace(/\/+$/, "").toLowerCase();
+              if (k && !byUrl.has(k)) byUrl.set(k, Number(d.id));
+            }
+            const byContentHash = useContentReuse
+              ? await storage.getAcceptedContentHashMap(companyId)
+              : null;
+            const resolution = resolveFrozenCorpus(
+              snapshot.map((s) => ({ documentId: s.documentId, url: s.url, contentHash: s.contentHash })),
+              { acceptedIds, byUrl, byContentHash },
+              useContentReuse,
             );
+            const resolvable = resolution.resolvedIds.length;
+            if (useContentReuse && resolution.resolvedByContent > 0) {
+              console.log(
+                "[Worker][3.1] Frozen snapshot for company=" + companyId + ", fw=" +
+                frameworkId + " re-resolved " + resolution.resolvedByContent +
+                " row(s) by content_hash/url (ids reset) — reusing corpus without re-discovery",
+              );
+            }
             if (resolvable === 0) {
               const purged = await storage.purgeFrozenCorpus(companyId, frameworkId);
               console.warn(

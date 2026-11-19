@@ -9,7 +9,55 @@ import {
   spanSatisfies,
   RetrievalFunnel,
   mayRetryExtraction,
+  resolveFrozenCorpus,
 } from "./retrieval-funnel.ts";
+
+// ── 3.1 frozen-corpus content-hash/url reuse ─────────────────────────────────
+test("3.1 flag OFF: resolves by document_id only (byte-identical to prior)", () => {
+  const snapshot = [
+    { documentId: 1, url: "https://x.com/a", contentHash: "h1" },
+    { documentId: 2, url: "https://x.com/b", contentHash: "h2" },
+  ];
+  // id 2 has been reset away; content index could resolve it but flag is OFF.
+  const live = {
+    acceptedIds: new Set<number>([1]),
+    byUrl: new Map<string, number>([["https://x.com/b", 99]]),
+    byContentHash: new Map<string, number>([["h2", 99]]),
+  };
+  const r = resolveFrozenCorpus(snapshot, live, false);
+  assert.deepEqual(r.resolvedIds, [1]);
+  assert.equal(r.resolvedById, 1);
+  assert.equal(r.resolvedByContent, 0);
+  assert.equal(r.orphanedCount, 1); // id 2 stays orphaned when flag off
+});
+
+test("3.1 flag ON: orphaned id re-resolves by content_hash then url (survives reset)", () => {
+  const snapshot = [
+    { documentId: 1, url: "https://x.com/a", contentHash: "h1" },
+    { documentId: 2, url: "https://x.com/b", contentHash: "h2" }, // id gone, hash present
+    { documentId: 3, url: "https://x.com/c/", contentHash: null }, // id gone, url only
+  ];
+  const live = {
+    acceptedIds: new Set<number>([1]),
+    byContentHash: new Map<string, number>([["h2", 42]]),
+    byUrl: new Map<string, number>([["https://x.com/c", 43]]),
+  };
+  const r = resolveFrozenCorpus(snapshot, live, true);
+  assert.deepEqual(r.resolvedIds.sort((a, b) => a - b), [1, 42, 43]);
+  assert.equal(r.resolvedById, 1);
+  assert.equal(r.resolvedByContent, 2);
+  assert.equal(r.orphanedCount, 0); // content-hash reuse rebuilds corpus w/o re-discovery
+});
+
+test("3.1 fully-orphaned snapshot with no content match stays orphaned (purge+rediscover)", () => {
+  const snapshot = [
+    { documentId: 7, url: "https://x.com/z", contentHash: "hz" },
+  ];
+  const live = { acceptedIds: new Set<number>(), byContentHash: new Map(), byUrl: new Map() };
+  const r = resolveFrozenCorpus(snapshot, live, true);
+  assert.deepEqual(r.resolvedIds, []);
+  assert.equal(r.orphanedCount, 1); // simulated purge: nothing resolvable → orphan guard fires
+});
 
 // ── 3.2a seed ────────────────────────────────────────────────────────────────
 test("3.2a merges + dedupes framework-supplied URLs, existing first", () => {

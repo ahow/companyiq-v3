@@ -15,6 +15,101 @@
  *   3.4a funnel instrumentation   — RetrievalFunnel
  */
 
+// ── 3.1 Frozen-corpus content-hash / url reuse ───────────────────────────────
+
+export interface FrozenSnapshotRef {
+  documentId: number;
+  url?: string | null;
+  /** identity hash stored in the snapshot (writeFrozenCorpus stores url_hash). */
+  contentHash?: string | null;
+}
+
+/**
+ * Index of the CURRENTLY-LIVE accepted corpus for a (company, framework),
+ * supplied by the caller (built from the DB). All three are optional so the
+ * resolver degrades gracefully; `acceptedIds` alone reproduces the pre-3.1
+ * id-only resolution exactly.
+ */
+export interface LiveCorpusIndex {
+  /** document ids currently in the live accepted set. */
+  acceptedIds: Set<number>;
+  /** content/url identity hash → live accepted document id (document_content). */
+  byContentHash?: Map<string, number> | null;
+  /** normalised url → live accepted document id. */
+  byUrl?: Map<string, number> | null;
+}
+
+export interface FrozenResolution {
+  /** live document ids to reuse (de-duplicated, order-stable). */
+  resolvedIds: number[];
+  /** snapshot rows resolved directly by document_id (pre-3.1 path). */
+  resolvedById: number;
+  /** snapshot rows re-resolved by content_hash/url (3.1 path). */
+  resolvedByContent: number;
+  /** snapshot rows that could not be resolved at all (true orphans). */
+  orphanedCount: number;
+}
+
+/** Normalise a url to the same key seedKnownDisclosureUrls uses. */
+export function normalizeUrlKey(u?: string | null): string {
+  return typeof u === "string" ? u.trim().replace(/\/+$/, "").toLowerCase() : "";
+}
+
+/**
+ * Resolve a frozen snapshot to the live accepted document ids that back it.
+ *
+ * Pre-3.1 behaviour is a row resolving ONLY when its document_id is still in the
+ * live accepted set. When `useContentHashReuse` is true (3.1 flag ON), a row
+ * whose id is gone is re-resolved by its content_hash (against document_content)
+ * and then by its url — so a snapshot survives a documents-table reset that
+ * re-ingested the same content under NEW ids, and the corpus is rebuilt from the
+ * snapshot WITHOUT a fresh discovery pass. With the flag OFF this collapses to
+ * exactly the id-only count the orphan guard used before (fail-open).
+ */
+export function resolveFrozenCorpus(
+  snapshot: FrozenSnapshotRef[] | null | undefined,
+  live: LiveCorpusIndex,
+  useContentHashReuse: boolean,
+): FrozenResolution {
+  const rows = snapshot || [];
+  const resolved = new Set<number>();
+  let byId = 0;
+  let byContent = 0;
+  let orphaned = 0;
+  const byHash = live.byContentHash || null;
+  const byUrl = live.byUrl || null;
+
+  for (const r of rows) {
+    if (live.acceptedIds.has(r.documentId)) {
+      resolved.add(r.documentId);
+      byId++;
+      continue;
+    }
+    if (useContentHashReuse) {
+      let hit: number | undefined;
+      const h = typeof r.contentHash === "string" ? r.contentHash.trim() : "";
+      if (h && byHash) hit = byHash.get(h);
+      if (hit == null && byUrl) {
+        const k = normalizeUrlKey(r.url);
+        if (k) hit = byUrl.get(k);
+      }
+      if (hit != null) {
+        resolved.add(hit);
+        byContent++;
+        continue;
+      }
+    }
+    orphaned++;
+  }
+
+  return {
+    resolvedIds: Array.from(resolved),
+    resolvedById: byId,
+    resolvedByContent: byContent,
+    orphanedCount: orphaned,
+  };
+}
+
 // ── 3.2a Seed known disclosure URLs ──────────────────────────────────────────
 
 export interface CompanySeed {

@@ -40,7 +40,8 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation } from "./scoring-fix-flags.js";
+import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
 import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: parse structured guidance for qualifyingInstance aggregation
@@ -509,10 +510,31 @@ async function runFetchPhase(opts: {
       try {
         const snap = await storage.getFrozenCorpus(companyId, framework.id);
         if (snap.length > 0) {
-          const allow = new Set(snap.map((s) => s.documentId));
-          const filtered = accepted.filter((d: any) => allow.has(d.id));
+          // 3.1 — when FROZEN_CORPUS_CONTENT_HASH_REUSE is ON, allow snapshot rows
+          // whose document_id is gone (ids reset) to re-resolve to the live accepted
+          // doc carrying the same content_hash/url, so the locked corpus survives a
+          // reset. Off → the allow-set is exactly the snapshot document_ids (prior).
+          const useContentReuse = frozenCorpusContentHashReuse();
+          const acceptedIds = new Set<number>(accepted.map((d: any) => Number(d.id)));
+          const byUrl = new Map<string, number>();
+          for (const d of accepted as any[]) {
+            const k = (d.url ?? "").toString().trim().replace(/\/+$/, "").toLowerCase();
+            if (k && !byUrl.has(k)) byUrl.set(k, Number(d.id));
+          }
+          const byContentHash = useContentReuse
+            ? await storage.getAcceptedContentHashMap(companyId)
+            : null;
+          const resolution = resolveFrozenCorpus(
+            snap.map((s) => ({ documentId: s.documentId, url: s.url, contentHash: s.contentHash })),
+            { acceptedIds, byUrl, byContentHash },
+            useContentReuse,
+          );
+          const allow = new Set<number>(resolution.resolvedIds);
+          const filtered = accepted.filter((d: any) => allow.has(Number(d.id)));
           if (filtered.length > 0) {
-            console.log(`[${companyName}] P1 frozen snapshot (fw=${framework.id}): reusing exactly ${filtered.length}/${accepted.length} locked accepted documents`);
+            const via = useContentReuse && resolution.resolvedByContent > 0
+              ? ` (${resolution.resolvedByContent} re-resolved by content_hash/url)` : "";
+            console.log(`[${companyName}] P1 frozen snapshot (fw=${framework.id}): reusing exactly ${filtered.length}/${accepted.length} locked accepted documents${via}`);
             accepted = filtered;
           } else {
             console.warn(`[${companyName}] P1 frozen snapshot (fw=${framework.id}) referenced ${snap.length} docs but none are in the current accepted set — falling back to full accepted set`);
@@ -2413,6 +2435,33 @@ async function runFetchPhase(opts: {
 
   console.log(`[${companyName}] Fetch phase complete: ${totalFetched} fetched, ${newFetchCount} new this run (${Math.round((Date.now() - fetchPhaseStart) / 1000)}s elapsed${fetchBudgetExceeded ? ', BUDGET EXCEEDED' : ''})`);
 
+  // 3.4a — RETRIEVAL FUNNEL INSTRUMENTATION (default-off
+  // RETRIEVAL_FUNNEL_INSTRUMENTATION). ADDITIVE/behaviour-preserving: pure
+  // accumulation of discovered → fetched → extracted counts (plus per-vehicle
+  // fetch failures) emitted to the run log. Never alters a verdict or the corpus.
+  // Flag off → not even computed, so byte-for-byte today's behaviour.
+  if (retrievalFunnelInstrumentation()) {
+    try {
+      const funnel = new RetrievalFunnel();
+      funnel.countDiscovered(totalDiscovered);
+      funnel.countFetched(totalFetched);
+      // "Extracted" = fetched docs that produced usable text (extractionState not
+      // a failure); fall back to fetched-ok when extractionState is absent.
+      const extractedCount = finalDocs.filter((d) =>
+        d.fetchStatus === "ok" &&
+        (d as any).extractionState !== "failed" &&
+        (d as any).extractionState !== "empty",
+      ).length;
+      funnel.countExtracted(extractedCount);
+      for (const d of finalDocs) {
+        if (d.fetchStatus === "dead") funnel.countFailure((d as any).type || "unknown");
+      }
+      console.log(`[${companyName}] [Funnel][3.4a] ${JSON.stringify(funnel.toJSON())}`);
+    } catch (funnelErr: any) {
+      console.warn(`[${companyName}] [Funnel][3.4a] instrumentation failed (non-fatal): ${funnelErr?.message}`);
+    }
+  }
+
   // ─── Persist a fetch-coverage signal ───────────────────────────────────────
   // A low score backed by thin retrieval (most key docs `dead`) should be
   // visibly distinguishable from a genuine low score. We merge a `fetchCoverage`
@@ -3211,6 +3260,20 @@ async function runAnalyzePhase(opts: {
         .filter((s): s is ExtractionCompleteness => !!s && (validCompleteness as string[]).includes(s));
     } catch (ecErr) {
       console.warn(`[${companyName}] EX04 completeness load failed (non-fatal): ${ecErr instanceof Error ? ecErr.message : String(ecErr)}`);
+    }
+  }
+
+  // 3.4a — RETRIEVAL FUNNEL (passed-to-scorer leg). ADDITIVE/behaviour-preserving:
+  // emits the count of documents whose extracted text actually reaches the scorer,
+  // completing the discovered→fetched→extracted→passedToScorer funnel. Pure log;
+  // never alters the corpus or a verdict. Flag off → not computed.
+  if (retrievalFunnelInstrumentation()) {
+    try {
+      const funnel = new RetrievalFunnel();
+      funnel.countPassedToScorer(Array.isArray(documentTexts) ? documentTexts.length : 0);
+      console.log(`[${companyName}] [Funnel][3.4a] passedToScorer=${funnel.passedToScorer}`);
+    } catch (funnelErr: any) {
+      console.warn(`[${companyName}] [Funnel][3.4a] passed-to-scorer instrumentation failed (non-fatal): ${funnelErr?.message}`);
     }
   }
 

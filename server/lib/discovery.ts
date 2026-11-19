@@ -8,6 +8,8 @@ import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
 import { assertDispatchAllowed, requestAbortSignal, isLifecycleCancelledError, revokeAttempt } from "./lifecycle-fence.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
+import { retrievalKnownUrlsSeed, retrievalExclusionKeywordsRelaxed } from "./scoring-fix-flags.js";
+import { seedKnownDisclosureUrls, shouldExcludeByKeywords } from "./retrieval-funnel.js";
 import {
   resolveDiscoveryParallelPolicy,
   resolveDiscoveryMaxParallel,
@@ -3450,9 +3452,17 @@ function calculatePriority(
 
   // Negative keywords penalty
   if (framework.negativeKeywords) {
-    for (const kw of framework.negativeKeywords) {
-      if (titleLower.includes(kw.toLowerCase())) {
-        priority += 12;
+    // 3.2c — when RETRIEVAL_EXCLUSION_KEYWORDS_RELAXED is ON, a candidate that is
+    // ALSO on-theme (matches the framework's topicPhrases) is NOT down-ranked by a
+    // negative keyword, so sustainability/TCFD/CDP docs aren't penalised away. Off
+    // → skipPenalty is false and the original per-keyword penalty runs verbatim.
+    const skipPenalty = retrievalExclusionKeywordsRelaxed() &&
+      !shouldExcludeByKeywords(titleLower, framework.negativeKeywords as string[], topicPhrases, true);
+    if (!skipPenalty) {
+      for (const kw of framework.negativeKeywords) {
+        if (titleLower.includes(kw.toLowerCase())) {
+          priority += 12;
+        }
       }
     }
   }
@@ -4943,6 +4953,37 @@ async function searchCompanyDocumentsInner(opts: {
         for (const r of results) addCandidate(r, "localized");
       }
     }
+  }
+
+  // 3.2a — seed per-COMPANY known disclosure URLs from config (default-off
+  // RETRIEVAL_KNOWN_URLS_SEED). These come from the company row's own config
+  // (never fabricated); seedKnownDisclosureUrls de-dupes/normalises them. They are
+  // added as high-priority "known" candidates so a company whose primary
+  // disclosures are known up-front are guaranteed into the first-run corpus. Off →
+  // this block is skipped entirely, so discovery is byte-for-byte unchanged.
+  if (retrievalKnownUrlsSeed()) {
+    const companyRow = (opts as any).companyRow || {};
+    const companyKnown = (companyRow.knownDisclosureUrls
+      ?? companyRow.known_disclosure_urls
+      ?? []) as unknown;
+    const seedUrls = seedKnownDisclosureUrls([], {
+      companyId,
+      companyName,
+      knownDisclosureUrls: Array.isArray(companyKnown)
+        ? companyKnown.map((u) => (typeof u === "string" ? u : (u && typeof u === "object" ? ((u as any).url ?? (u as any).link ?? (u as any).href) : null)))
+            .filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+        : [],
+    });
+    let seeded = 0;
+    for (const url of seedUrls) {
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url);
+        allCandidates.push({ url, title: "Company known disclosure", snippet: "", lane: "known", priority: -60 });
+        laneCounts["known"] = (laneCounts["known"] || 0) + 1;
+        seeded++;
+      }
+    }
+    if (seeded > 0) console.log(`[${companyName}] 3.2a seeded ${seeded} company-known disclosure URL(s)`);
   }
 
   // Lane 5: Known disclosure URLs from framework

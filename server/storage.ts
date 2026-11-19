@@ -8,6 +8,7 @@ import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironm
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 import { registrableDomainOf, classifySuggestedBucket, type SuggestedBucket } from "./lib/provenance.js";
 import { diagTags, getDiagContext } from "./lib/diag-context.js";
+import { frozenCorpusContentHashReuse } from "./lib/scoring-fix-flags.js";
 import { type AttemptOwnership, type FenceDb, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason, lockJobAndBatch, claimPredicate, successCompletionPredicate, failureRecordPredicate, ownershipFromContext } from "./lib/lifecycle-fence.js";
 import {
   documentUpsertFingerprint,
@@ -630,6 +631,57 @@ export async function purgeFrozenCorpus(
   return (res as any).rowCount ?? 0;
 }
 
+/** 3.1 — build a content-identity index of the CURRENTLY-LIVE accepted corpus so
+ *  a frozen snapshot can be re-resolved by content_hash/url when a documents-table
+ *  reset has changed the ids out from under it. Returns the live document_content
+ *  identity hash (url_hash) → live accepted document id, resolved via the same
+ *  documents⋈document_content join writeFrozenCorpus froze. OOM-safe: selects only
+ *  id/url_hash, never body text. Only called under FROZEN_CORPUS_CONTENT_HASH_REUSE. */
+export async function getAcceptedContentHashMap(
+  companyId: number,
+): Promise<Map<string, number>> {
+  const rows = await db.execute(sql`
+    SELECT d.id AS id, dc.url_hash AS url_hash
+    FROM documents d
+    LEFT JOIN document_content dc ON dc.id = d.content_id
+    WHERE d.company_id = ${companyId}
+      AND d.gate_verdict = 'accept'
+      AND dc.url_hash IS NOT NULL
+  `);
+  const map = new Map<string, number>();
+  for (const r of rows.rows as any[]) {
+    if (r && r.url_hash != null && r.id != null) {
+      const k = String(r.url_hash).trim();
+      if (k && !map.has(k)) map.set(k, Number(r.id));
+    }
+  }
+  return map;
+}
+
+/** 3.1 — cascade-invalidate frozen snapshots when a documents purge/reset deletes
+ *  the rows a snapshot points at, for every company matching a subquery. Mirrors
+ *  the company-subquery DELETE pattern the reset paths already use. Gated by the
+ *  caller (FROZEN_CORPUS_CONTENT_HASH_REUSE); with the flag off it is never
+ *  invoked, so reset behaviour is byte-for-byte unchanged. Returns rows deleted. */
+export async function purgeFrozenCorpusForCompany(companyId: number): Promise<number> {
+  const res = await db.execute(sql`DELETE FROM frozen_corpus_snapshot WHERE company_id = ${companyId}`);
+  return (res as any).rowCount ?? 0;
+}
+export async function purgeFrozenCorpusForWorkspace(workspaceId: number): Promise<number> {
+  const res = await db.execute(sql`
+    DELETE FROM frozen_corpus_snapshot WHERE company_id IN (
+      SELECT id FROM companies WHERE workspace_id = ${workspaceId}
+    )`);
+  return (res as any).rowCount ?? 0;
+}
+export async function purgeFrozenCorpusForList(listId: number): Promise<number> {
+  const res = await db.execute(sql`
+    DELETE FROM frozen_corpus_snapshot WHERE company_id IN (
+      SELECT company_id FROM company_list_members WHERE list_id = ${listId}
+    )`);
+  return (res as any).rowCount ?? 0;
+}
+
 /** Purge EVERY company's frozen snapshot for one framework (P1.4 operator
  *  "refresh corpus" action at framework scope). Next run of each affected pair
  *  re-discovers cleanly and re-freezes. Returns the number of snapshot rows
@@ -1202,6 +1254,11 @@ export async function fullResetCompanyDocuments(companyId: number) {
   const [company] = await db.select({ workspaceId: schema.companies.workspaceId }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1);
   const count = await db.execute(sql`SELECT COUNT(*)::int AS n FROM documents WHERE company_id = ${companyId}`);
   await db.delete(schema.documents).where(eq(schema.documents.companyId, companyId));
+  // 3.1 — cascade-invalidate the frozen snapshot so the operator's clean reset
+  // rebuilds a fresh corpus (gated; off = unchanged behaviour).
+  if (frozenCorpusContentHashReuse()) {
+    try { await purgeFrozenCorpusForCompany(companyId); } catch { /* non-fatal */ }
+  }
   // B1/WP10: all documents for this company deleted — invalidate its fingerprints.
   invalidateDocumentUpsertForCompany(companyId);
   if (company) {
@@ -1225,6 +1282,10 @@ export async function fullResetAllCompanies(workspaceId: number): Promise<number
       )
     `);
     await recordReliabilityAuditEvent({ workspaceId, eventType: "deletion", reason: "explicit workspace full reset deleted document artifacts", metadata: { deletedDocumentCount: Number((deletedDocs.rows[0] as any)?.n || 0) } });
+  // 3.1 — cascade-invalidate frozen snapshots for the workspace (gated).
+  if (frozenCorpusContentHashReuse()) {
+    try { await purgeFrozenCorpusForWorkspace(workspaceId); } catch { /* non-fatal */ }
+  }
   // B1/WP10: a bulk delete spanning many companies — clear the whole in-process
   // upsert dedupe registry so no stale fingerprint can suppress a later real write.
   clearDocumentUpsertDedupe();
@@ -1266,6 +1327,10 @@ export async function fullResetListCompanies(listId: number, workspaceId: number
       )
     `);
   await recordReliabilityAuditEvent({ workspaceId, eventType: "deletion", reason: "explicit list full reset deleted document artifacts", metadata: { listId, deletedDocumentCount: Number((deletedDocs.rows[0] as any)?.n || 0) } });
+  // 3.1 — cascade-invalidate frozen snapshots for the list (gated).
+  if (frozenCorpusContentHashReuse()) {
+    try { await purgeFrozenCorpusForList(listId); } catch { /* non-fatal */ }
+  }
   // B1/WP10: a bulk delete spanning many companies — clear the whole in-process
   // upsert dedupe registry so no stale fingerprint can suppress a later real write.
   clearDocumentUpsertDedupe();

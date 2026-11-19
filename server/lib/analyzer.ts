@@ -45,7 +45,12 @@ import {
   evidenceRepairRegradeEnabled,
   scoringBaseRatePriorAllowEnabled,
   readjudicationPassEnabled,
+  applicabilityRulesExecuted,
+  coverageRulesExecuted,
+  retrievalVehicleAgnostic,
 } from "./scoring-fix-flags.js";
+import { evaluateApplicability, evaluateCoverage } from "./framework-rules.js";
+import { requiredSourceTypesBlocking } from "./retrieval-funnel.js";
 import { recordVerdictOverride } from "./verdict-override.js";
 import { readjudicateMeasure, type ReadjudicationTrace } from "./readjudication.js";
 // A3 / WP04: end-to-end entity/provenance/temporal eligibility composition guardrail.
@@ -153,6 +158,10 @@ export interface MeasureResult {
   verdict: "Yes" | "No" | "Partial" | "Insufficient evidence" | "Scoring error";
   verdictNuance: string | null;
   displayOrder: number;
+  // 2.1: true when the measure was ruled NOT APPLICABLE by its framework
+  // applicabilityRule against the company profile (audit only; denominator
+  // removal is carried by `abstained`).
+  notApplicable?: boolean;
   // v3e (Section 3): true when the measure was abstained because a required
   // source type was absent from the corpus (excluded from the denominator).
   abstained?: boolean;
@@ -2975,6 +2984,46 @@ export async function analyzeCompanyMeasures(opts: {
       const evidencePack = evidencePacks.find((e) => e.measureId === measure.measureId);
       const evidenceText = evidencePack?.text || "";
 
+      // 2.1 — APPLICABILITY GATE (default-off APPLICABILITY_RULES_EXECUTED). When
+      // the measure declares a structured `applicabilityRule`, evaluate it against
+      // the company/framework profile facts BEFORE any verdict. A non-applicable
+      // measure is marked "Not applicable" and REMOVED FROM THE DENOMINATOR
+      // (abstained → excluded from answered). Rule data + facts are read from
+      // CONFIG (never hardcoded). Fail-open: no rule / "always" → applies, so with
+      // the flag off (or no rule authored) behaviour is byte-for-byte unchanged.
+      if (applicabilityRulesExecuted()) {
+        const applicabilityRule = (measure as any).applicabilityRule ?? null;
+        if (applicabilityRule) {
+          const profileFacts: string[] = [
+            ...(((company as any)?.profileFacts as string[]) || []),
+            ...(((company as any)?.materialFacts as string[]) || []),
+            ...(((framework as any)?.profileFacts as string[]) || []),
+          ].filter((f) => typeof f === "string" && f.trim().length > 0);
+          const appl = evaluateApplicability(applicabilityRule, profileFacts);
+          if (!appl.applicable) {
+            console.log(`[${companyName}] NOT-APPLICABLE ${measure.measureId}: ${appl.rationale}`);
+            return {
+              measureId: measure.measureId,
+              title: measure.title,
+              definition: measure.definition,
+              category: measure.category,
+              categoryNumber: measure.categoryNumber,
+              score: 0,
+              coverage: "none",
+              confidence: "Low",
+              evidenceSummary: `Not applicable: ${appl.rationale}. Excluded from the answered-measures denominator (framework applicabilityRule, facts used: [${appl.factsUsed.join(", ")}]).`,
+              quotes: [],
+              verdict: "Insufficient evidence",
+              verdictNuance: "Not applicable — framework applicabilityRule not satisfied by the company profile.",
+              displayOrder: measure.displayOrder,
+              notApplicable: true,
+              abstained: true,
+              evidenceFingerprint: null,
+            };
+          }
+        }
+      }
+
       // v3e (Section 3): ABSTAIN GATE. If this measure declares requiredSourceTypes
       // and NONE of them are present in the corpus, we cannot answer it — emit an
       // "Insufficient evidence" verdict (abstained) instead of a misleading hard
@@ -2982,7 +3031,13 @@ export async function analyzeCompanyMeasures(opts: {
       // downstream. TOPIC-AGNOSTIC: requiredSourceTypes are framework-authored
       // document categories, so this behaves correctly for any framework.
       const required = ((measure as any).requiredSourceTypes as string[] | null | undefined) || [];
-      if (Array.isArray(required) && required.length > 0) {
+      // 3.2b — when RETRIEVAL_VEHICLE_AGNOSTIC is ON, requiredSourceTypes becomes a
+      // ranking signal, not a blocking gate: a measure is NOT abstained purely
+      // because its required vehicle is absent, so material evidence in another
+      // vehicle can still carry a verdict. Off → requiredSourceTypesBlocking(false)
+      // returns true, so the abstain gate behaves byte-for-byte as before.
+      const reqTypesBlock = requiredSourceTypesBlocking(retrievalVehicleAgnostic());
+      if (reqTypesBlock && Array.isArray(required) && required.length > 0) {
         const satisfied = required.some((t) => availableSourceTypes.has(t));
         if (!satisfied) {
           console.log(`[${companyName}] ABSTAIN ${measure.measureId}: requires [${required.join(", ")}], corpus has none`);
@@ -3471,6 +3526,30 @@ export async function analyzeCompanyMeasures(opts: {
           ].filter((s): s is string => typeof s === "string" && s.trim().length > 0),
           packText: finalEvidence,
         });
+      }
+
+      // 2.2 — COVERAGE GATE (default-off COVERAGE_RULES_EXECUTED). When the measure
+      // declares a structured `coverageRule`, a positive verdict (score === 1) is
+      // only kept if the disclosed evidence actually establishes a qualifying
+      // denominator (evaluateCoverage). An UNDISCLOSED denominator (vague
+      // company-wide phrasing or no quantified fraction) downgrades the Yes to a No.
+      // Rule data (populationDefinition, thresholds, acceptedPhrases, doesNotCount)
+      // and the per-measure coverageWhitelist are read from CONFIG — never hardcoded.
+      // Fail-open: no rule authored, or a non-positive verdict, leaves the result
+      // byte-for-byte unchanged, as does the flag being off.
+      if (coverageRulesExecuted()) {
+        const coverageRule = (measure as any).coverageRule ?? null;
+        if (coverageRule && measureResult.score === 1) {
+          const coverageWhitelist = (measure as any).coverageWhitelist ?? null;
+          const cov = evaluateCoverage(coverageRule, coverageWhitelist, finalEvidence);
+          if (!cov.covered) {
+            console.log(`[${companyName}] COVERAGE-DOWNGRADE ${measure.measureId}: ${cov.rationale}`);
+            measureResult.score = 0;
+            measureResult.verdict = "No";
+            measureResult.verdictNuance = (measureResult.verdictNuance || "") +
+              ` [Coverage: Yes downgraded to No — ${cov.rationale} (framework coverageRule).]`;
+          }
+        }
       }
 
       // Layer D — Honest coverage signal. Previously hardcoded to null, which let
