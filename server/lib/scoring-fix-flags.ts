@@ -335,6 +335,76 @@ export function r2SuspectExpectedSourcingEnabled(): boolean {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Priority 1 — verdict-correctness remediation (companyiq-code-changes-plan.md
+// §1.1–1.6). Every flag below defaults OFF / default-preserving: with none set,
+// behaviour is byte-identical to today. No company/framework/measure names are
+// referenced — all per-framework data (trusted sources etc.) is read from config.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── 1.1 — re-grade rescued verdicts (harden the latent search-and-repair path) ─
+/** Default OFF. Only has any effect in combination with RETRIEVAL_EVIDENCE_REPAIR.
+ *  When ON, a YES rescued by the corpus re-search (evidence-gate Option C step 3)
+ *  is NOT carried over on a single shared keyword: the replacement passage must
+ *  satisfy the measure's FULL positive-criteria predicate (all required
+ *  conditions present). If it does not reach Yes on the real replacement text, the
+ *  verdict is recorded as No with a `rescue-failed` audit reason. When OFF, the
+ *  rescue keeps the YES exactly as today. */
+export function evidenceRepairRegradeEnabled(): boolean {
+  return envOnDefaultFalse("EVIDENCE_REPAIR_REGRADE");
+}
+
+// ── 1.2 — retire the expected-Yes-rate prior (route behind an explicit allow) ──
+/** Default OFF. The legacy SCORING_BASE_RATE_PRIOR variable can no longer, on its
+ *  own, let the expected-Yes-rate prior influence the verdict-cache salt: the
+ *  prior is only honoured when BOTH this allow-flag is ON and
+ *  SCORING_BASE_RATE_PRIOR === "true". With the allow-flag OFF (the compiled
+ *  default) the salt is byte-identical to today's production (prior off → "br0"),
+ *  so a stray SCORING_BASE_RATE_PRIOR cannot silently re-enable it. */
+export function scoringBaseRatePriorAllowEnabled(): boolean {
+  return envOnDefaultFalse("SCORING_BASE_RATE_PRIOR_ALLOW");
+}
+
+// ── 1.3 — finish publisher-based attribution + wire the trusted-source list ────
+/** Default OFF. When ON, reviewQuoteAttribution additionally resolves first-party
+ *  status by PROVENANCE from framework data: a document on the company's own
+ *  domain OR on a framework-registered trusted-source domain (frameworks.
+ *  trustedSourceIds → trusted_sources.domain, threaded as
+ *  company.frameworkTrustedDomains) is first-party regardless of the quote text,
+ *  and publisher provenance is authoritative — a name/brand mention can never
+ *  upgrade a document whose host is a known third party. All inputs are framework
+ *  config; nothing is hardcoded. When OFF, attribution behaves exactly as today. */
+export function attributionTrustedSourceResolveEnabled(): boolean {
+  return envOnDefaultFalse("ATTRIBUTION_TRUSTED_SOURCE_RESOLVE");
+}
+
+// ── 1.5 — keep rationale and verdict self-consistent on a gate/rule override ───
+/** Default OFF. When ON, any gate/rule that overrides the model's verdict writes
+ *  the controlling reason into a dedicated, never-truncated field
+ *  (verdictOverrideReason) surfaced in both the screen and the CSV, AND reconciles
+ *  the stale affirmative prose by PREFIXING the rationale with the controlling
+ *  reason so the displayed narrative no longer asserts the opposite of the
+ *  verdict. Display/consistency only — it NEVER moves a verdict. The
+ *  detectRationaleScoreInconsistency detector stays in place as a safety net. When
+ *  OFF, the legacy append-then-truncate behaviour is unchanged. */
+export function gateRationaleSyncEnabled(): boolean {
+  return envOnDefaultFalse("GATE_RATIONALE_SYNC");
+}
+
+// ── 1.6 — act on needs_readjudication (gated re-adjudication pass) ─────────────
+/** Default OFF. When ON, a gated post-scoring pass selects rows flagged
+ *  needsReadjudication / rationaleScoreInconsistent and resolves each ONCE: it
+ *  re-queries the company's extracted corpus for ALTERNATIVE evidence that
+ *  satisfies the measure's positive criteria and re-scores on what it finds. If a
+ *  qualifying passage is found the verdict moves to Yes; otherwise the row records
+ *  No with a cleared flag and a recorded reason. It writes an auditable trace,
+ *  touches only flagged rows, is idempotent (one re-look per row per run) and
+ *  deterministic (stable across runs over the same corpus). When OFF, flagged rows
+ *  behave exactly as today (remain first-pass scored). */
+export function readjudicationPassEnabled(): boolean {
+  return envOnDefaultFalse("READJUDICATION_PASS");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SHIPPED in this workstream (SCORING_REMEDIATION_PLAN_20261118.md §3/§6) — each
 // behind its own env flag above; all default ON per the user's "push so I can
 // retest" instruction and independently disablable in Railway:

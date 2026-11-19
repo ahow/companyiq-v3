@@ -15,6 +15,7 @@ import {
   p2ThirdPartyHostAttributionGateEnabled,
   z3FundEntityDisambiguationEnabled,
   fAdmissionGatePrototypeEnabled,
+  attributionTrustedSourceResolveEnabled,
 } from "./scoring-fix-flags.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -84,6 +85,13 @@ export interface CompanyIdentity {
   // this field (the fund-name list does not exist yet) — see DEFERRED note in
   // scoring-fix-flags.ts. Until that source exists, this stays empty in production.
   fundEntities?: string[] | null;
+  // 1.3 (ATTRIBUTION_TRUSTED_SOURCE_RESOLVE) — the framework's registered
+  // trusted-source domains (frameworks.trustedSourceIds → trusted_sources.domain),
+  // resolved from config upstream in analyzer. A quote whose host matches one of
+  // these is first-party by PROVENANCE regardless of its text. FRAMEWORK DATA only
+  // — never hardcoded. Absent/empty (today's state) → a pure no-op; only consulted
+  // when ATTRIBUTION_TRUSTED_SOURCE_RESOLVE is on.
+  frameworkTrustedDomains?: string[] | null;
 }
 
 export interface EligibilityFlagsInput {
@@ -231,6 +239,31 @@ function isOwnDomainSource(url: string | undefined, company: CompanyIdentity): b
       .map(d => d.toLowerCase().replace(/^www\./, ""));
     for (const t of targets) {
       if (t.length >= 4 && (hostname === t || hostname.endsWith("." + t))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+// 1.3 (ATTRIBUTION_TRUSTED_SOURCE_RESOLVE) — True when the URL's host matches one
+// of the framework's registered trusted-source domains (company.frameworkTrustedDomains,
+// resolved upstream from frameworks.trustedSourceIds → trusted_sources.domain). A
+// document published on an authoritative regulatory registry the framework trusts is
+// first-party by PROVENANCE regardless of the quote text. Domains are FRAMEWORK DATA,
+// never hardcoded; each is normalised (proto/www/path stripped) and must be ≥4 chars
+// so a short token can't admit unrelated hosts.
+function isFrameworkTrustedRegistrySource(url: string | undefined, company: CompanyIdentity): boolean {
+  if (!url) return false;
+  const domains = (company.frameworkTrustedDomains || []).filter(nonEmpty);
+  if (domains.length === 0) return false;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    for (const raw of domains) {
+      // Accept a bare domain or a full URL in config; reduce to its host label.
+      let d = String(raw).toLowerCase().trim().replace(/^https?:\/\//, "").replace(/^www\./, "");
+      d = d.split("/")[0];
+      if (d.length >= 4 && (hostname === d || hostname.endsWith("." + d))) return true;
     }
   } catch {
     return false;
@@ -594,6 +627,13 @@ export function reviewQuoteAttribution(
     const rationaleTokens = getDistinctiveTokens(evidenceSummary);
     const ownDocFirst = p2OwnDocBeforeSubsidiaryEnabled();
     const thirdPartyGate = p2ThirdPartyHostAttributionGateEnabled();
+    // 1.3 (ATTRIBUTION_TRUSTED_SOURCE_RESOLVE): finish publisher-based attribution.
+    // When on, (a) publisher provenance is authoritative — a name/brand mention can
+    // never upgrade a document whose host is a known third party (the third-party
+    // host gate below fires even if P2.4's own flag is off); and (b) a document on
+    // the company's OWN domain or on a framework-registered trusted-source registry
+    // is first-party by PROVENANCE regardless of the quote text. Default off → no-op.
+    const trustedSourceResolve = attributionTrustedSourceResolveEnabled();
     // F (PROTOTYPE) — admission-gate loosening paired with attribution tightening.
     // Default OFF (ADMISSION_GATE_PROTOTYPE), so when unset every path below is
     // byte-for-byte as today.
@@ -636,8 +676,23 @@ export function reviewQuoteAttribution(
       // nature only; the issuer's own domain and trusted filing repositories
       // (sec.gov, q4cdn, …) are never third-party hosts, so legitimate filings are
       // unaffected. Runs before every acceptance path.
-      if (thirdPartyGate && isThirdPartyHost(q.sourceUrl)) {
+      if ((thirdPartyGate || trustedSourceResolve) && isThirdPartyHost(q.sourceUrl)) {
         return { index, attributedToTarget: false, reason: "Third-party analyst/news/ratings host — not first-party disclosure" };
+      }
+
+      // 1.3 (ATTRIBUTION_TRUSTED_SOURCE_RESOLVE): first-party by PROVENANCE. Runs
+      // after the third-party host reject above (so a third-party host is never
+      // upgraded) and regardless of the quote text: a document published on the
+      // company's OWN domain, or on a framework-registered trusted-source registry,
+      // is first-party by provenance. No-op when the flag is off or the framework's
+      // trusted-source list is empty (today's state). Framework DATA only.
+      if (trustedSourceResolve) {
+        if (isOwnDomainSource(q.sourceUrl, company)) {
+          return { index, attributedToTarget: true, reason: "Company own domain (provenance)" };
+        }
+        if (isFrameworkTrustedRegistrySource(q.sourceUrl, company)) {
+          return { index, attributedToTarget: true, reason: "Framework trusted-source registry (provenance)" };
+        }
       }
 
       // P2.1 — own-document provenance wins. When enabled, the own-domain /

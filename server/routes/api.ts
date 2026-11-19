@@ -26,6 +26,8 @@ import { analyzeCompanyMeasures } from "../lib/analyzer.js";
 import { loadPriceTable, lookupPrice, computeCost } from "../lib/llm-usage.js";
 import { runMeasureDesignDiagnostic } from "../lib/measure-design-diagnostic.js";
 import { normalizeVerdict, isMet, normalizedScore, computeCompanyScore } from "../../shared/verdict.js";
+import { gateRationaleSyncEnabled } from "../lib/scoring-fix-flags.js";
+import { extractVerdictOverrideReason } from "../lib/verdict-override.js";
 // WP02/A1 (additive): explicit research-state accounting. Pure derivation —
 // never affects scores/verdicts; attached to responses as metadata only.
 import { buildManifest, deriveResearchStatus, researchStatusCsvColumns, deriveEvidenceCompleteness, deriveQuoteReuse } from "../../shared/research-state.js";
@@ -154,6 +156,11 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
       return candidate.length > 0 ? candidate : null;
     };
 
+    // 1.5 (GATE_RATIONALE_SYNC): when on, surface the controlling override reason in
+    // a dedicated field, independent of the 600-char evidenceSummary slice. It is
+    // extracted from the durable [OVERRIDE: …] marker the gate prefixed onto the
+    // persisted evidenceSummary (no new DB column). No-op when the flag is off.
+    const syncOn = gateRationaleSyncEnabled();
     const scores = rawScores.map((s: any) => {
       const def = measureDefByFramework.get(s.frameworkId)?.get(s.measureId);
       return {
@@ -161,6 +168,7 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
         verdict: normalizeVerdict(s.verdict),
         score: normalizedScore(s.verdict, s.score),
         requirementsToScoreYes: requirementsToScoreYes(def),
+        ...(syncOn ? { verdictOverrideReason: extractVerdictOverrideReason(s.evidenceSummary) } : {}),
       };
     });
 
@@ -2171,11 +2179,17 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
     }
 
     // ── Header row (identical column set/order to the client) ────────────────
+    // GATE_RATIONALE_SYNC (1.5): when ON, add a dedicated never-truncated
+    // "Override Reason" column per measure, surfaced independently of the
+    // Rationale (evidenceSummary) value. When OFF, the column set is byte-for-byte
+    // identical to today.
+    const syncOn = gateRationaleSyncEnabled();
     const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total", "Coverage Level", "Missing Tier 1 Sources"];
     const measureHeaders: string[] = [];
     for (const title of measureTitles) {
       measureHeaders.push(`${title} - Score`);
       measureHeaders.push(`${title} - Rationale`);
+      if (syncOn) measureHeaders.push(`${title} - Override Reason`);
       measureHeaders.push(`${title} - Supporting Quote`);
       measureHeaders.push(`${title} - Source Document`);
       measureHeaders.push(`${title} - Source Link`);
@@ -2230,6 +2244,11 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
         if (ms) {
           measureValues.push(normalizeVerdict(ms.verdict || (ms.score > 0 ? "Yes" : "No")));
           measureValues.push(ms.evidenceSummary || "");
+          if (syncOn) {
+            // Never-truncated override reason: prefer the dedicated field, else
+            // recover it from the [OVERRIDE: …] marker on the (untruncated) summary.
+            measureValues.push(ms.verdictOverrideReason || extractVerdictOverrideReason(ms.evidenceSummary) || "");
+          }
 
           const quotes = realQuotes(ms.quotes).map((q: any) => q.text).filter(Boolean);
           if (isMet(ms.verdict, ms.score)) {
@@ -2270,6 +2289,7 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
           measureValues.push(dt?.validation?.status ?? "");
           measureValues.push((dt?.diagnostics || []).join(" | "));
         } else {
+          if (syncOn) measureValues.push("");
           measureValues.push("", "", "", "", "", "");
           measureValues.push("", "", "", "", "", "", "", "");
         }

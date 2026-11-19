@@ -62,7 +62,10 @@ export type GateFailureReason =
   | "provenance"
   | "anti-echo"
   | "source"
-  | "source-attribution";
+  | "source-attribution"
+  // 1.1 (EVIDENCE_REPAIR_REGRADE): a rescued YES whose replacement passage did
+  // not satisfy the measure's full positive-criteria predicate on real text.
+  | "rescue-failed";
 
 export interface GateFailure {
   quoteText: string;
@@ -131,6 +134,15 @@ export interface ResearchRecord {
   // Overlap score (# of distinct criteria tokens the rescue passage shared) so a
   // carried-over rescue's strength is visible in telemetry/audit.
   overlap?: number;
+  // 1.1 (EVIDENCE_REPAIR_REGRADE) audit: when the re-grade ran, whether the
+  // replacement passage satisfied the measure's full positive-criteria predicate
+  // (regradeVerdict), and the per-condition tally. regradeReason is set to
+  // "rescue-failed" when the rescued YES was downgraded to No on real text.
+  regraded?: boolean;
+  regradeVerdict?: "Yes" | "No";
+  regradeReason?: string;
+  conditionsMet?: number;
+  conditionsRequired?: number;
 }
 
 export interface QuoteInput {
@@ -175,6 +187,15 @@ export interface GateParams {
    * provenance. Ignored by the legacy `gateEvidence` path.
    */
   researchCriteria?: string[];
+  /**
+   * 1.1 (EVIDENCE_REPAIR_REGRADE) — when true, a YES rescued by the corpus
+   * re-search (Option C step 3) is re-graded against the replacement passage
+   * instead of being carried over: the replacement must satisfy the measure's
+   * full positive-criteria predicate, else the verdict is recorded No with a
+   * `rescue-failed` audit reason. Default false → the rescue keeps the YES
+   * exactly as today. Only has effect inside `gateEvidenceWithRepair`.
+   */
+  regradeRescue?: boolean;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -589,15 +610,40 @@ function researchTokens(policy: GatePolicyVersion, s: string): string[] {
 }
 
 /**
+ * Enumerate the candidate rescue passages for a pack (single source of truth for
+ * both `researchBestPassage` and the 1.6 re-adjudication pass, which counts how
+ * many passages were searched). Candidate passages are sentences sliced from each
+ * present segment (or the whole pack when there are no DOCUMENT headers), so every
+ * returned passage is — by construction — a contiguous substring of the pack and
+ * therefore passes pack-wide provenance. Deterministic: order follows segment
+ * order then sentence order. NO network, NO new fetch — existing pack only.
+ */
+export function researchCandidatePassages(
+  segments: DocumentSegment[],
+  packText: string,
+): Array<{ text: string; source: string }> {
+  const searchSegs: DocumentSegment[] =
+    segments && segments.length > 0 ? segments : [{ id: "pack", text: packText || "" }];
+  const out: Array<{ text: string; source: string }> = [];
+  for (const seg of searchSegs) {
+    // Drop the DOCUMENT header line so it never becomes a candidate passage.
+    const body = (seg.text || "").replace(/--- DOCUMENT: .+? \[.+?\] ---/g, " ");
+    const sentences = body
+      .split(/(?<=[.!?])\s+|\n+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 40 && s.length <= 600);
+    for (const sent of sentences) out.push({ text: sent, source: seg.id });
+  }
+  return out;
+}
+
+/**
  * Deterministic, corpus-only re-search (Option C step 3). Given the measure's
  * positive criteria, find the best verbatim-present passage in the pack that
- * supports them. Candidate passages are sentences sliced from each present
- * segment (or the whole pack when there are no DOCUMENT headers), so every
- * returned passage is — by construction — a contiguous substring of the pack and
- * therefore passes pack-wide provenance. Scored by distinct-criteria-term
- * overlap; the single best candidate (ties broken deterministically by first
- * occurrence) is returned, or null when nothing in the corpus matches (→ the
- * last-resort downgrade). NO network, NO new fetch — existing pack only.
+ * supports them. Scored by distinct-criteria-term overlap; the single best
+ * candidate (ties broken deterministically by first occurrence) is returned, or
+ * null when nothing in the corpus matches (→ the last-resort downgrade). NO
+ * network, NO new fetch — existing pack only.
  */
 export function researchBestPassage(
   policy: GatePolicyVersion,
@@ -617,34 +663,63 @@ export function researchBestPassage(
   const MIN_RATIO = Number(process.env.REPAIR_MIN_OVERLAP_RATIO ?? "0.34") || 0.34;
   const requiredOverlap = Math.max(MIN_TOKENS, Math.ceil(MIN_RATIO * Math.min(terms.size, 6)));
 
-  const searchSegs: DocumentSegment[] =
-    segments && segments.length > 0 ? segments : [{ id: "pack", text: packText || "" }];
-
   let best: { text: string; source: string } | null = null;
   let bestScore = 0;
-  for (const seg of searchSegs) {
-    // Drop the DOCUMENT header line so it never becomes a candidate passage.
-    const body = (seg.text || "").replace(/--- DOCUMENT: .+? \[.+?\] ---/g, " ");
-    const sentences = body
-      .split(/(?<=[.!?])\s+|\n+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length >= 40 && s.length <= 600);
-    for (const sent of sentences) {
-      const toks = new Set(researchTokens(policy, sent));
-      let overlap = 0;
-      for (const t of terms) if (toks.has(t)) overlap++;
-      if (overlap > bestScore) {
-        bestScore = overlap;
-        best = { text: sent, source: seg.id };
-      }
+  for (const cand of researchCandidatePassages(segments, packText)) {
+    const toks = new Set(researchTokens(policy, cand.text));
+    let overlap = 0;
+    for (const t of terms) if (toks.has(t)) overlap++;
+    if (overlap > bestScore) {
+      bestScore = overlap;
+      best = { text: cand.text, source: cand.source };
     }
   }
   // Integrity fix: a single shared keyword (bestScore === 1 with the old
   // `bestScore > 0` test) used to be enough to supply a replacement passage that
   // KEPT an invented-quote Yes. Require meaningful overlap instead. NOTE: this is
-  // text-overlap tightening only — a full LLM re-grade of the replacement passage
-  // is a deliberate non-goal here.
+  // text-overlap tightening only — the FULL positive-criteria predicate re-grade
+  // is applied separately by `rescuePassageSatisfiesCriteria` (1.1).
   return bestScore >= requiredOverlap && best ? { ...best, overlap: bestScore } : null;
+}
+
+/**
+ * 1.1 (EVIDENCE_REPAIR_REGRADE) — re-grade a rescue replacement passage against
+ * the measure's FULL positive-criteria predicate instead of carrying over the
+ * prior YES on a single shared keyword. Each non-empty criterion is treated as a
+ * required condition; a condition is "met" when the passage shares at least
+ * `max(MIN_TOKENS, ceil(MIN_RATIO * min(distinctCriterionTokens, 8)))` distinct
+ * content tokens with that criterion. The replacement satisfies the measure only
+ * when ALL required conditions are met. Deterministic and corpus-only; no LLM.
+ */
+export function rescuePassageSatisfiesCriteria(
+  policy: GatePolicyVersion,
+  criteria: string[],
+  passageText: string,
+): { satisfied: boolean; conditionsMet: number; conditionsRequired: number } {
+  const MIN_TOKENS = Math.max(1, parseInt(process.env.REPAIR_REGRADE_MIN_TOKENS || "2", 10) || 2);
+  const MIN_RATIO = Number(process.env.REPAIR_REGRADE_MIN_RATIO ?? "0.5") || 0.5;
+  const passageTokens = new Set(researchTokens(policy, passageText || ""));
+
+  // Build the required conditions: each criterion that carries content tokens.
+  const conditions: Set<string>[] = [];
+  for (const c of criteria || []) {
+    const toks = new Set(researchTokens(policy, c));
+    if (toks.size > 0) conditions.push(toks);
+  }
+  const conditionsRequired = conditions.length;
+  if (conditionsRequired === 0) {
+    // No gradable criteria → cannot affirm on real text; treat as not satisfied.
+    return { satisfied: false, conditionsMet: 0, conditionsRequired: 0 };
+  }
+
+  let conditionsMet = 0;
+  for (const cond of conditions) {
+    let shared = 0;
+    for (const t of cond) if (passageTokens.has(t)) shared++;
+    const need = Math.max(MIN_TOKENS, Math.ceil(MIN_RATIO * Math.min(cond.size, 8)));
+    if (shared >= need) conditionsMet++;
+  }
+  return { satisfied: conditionsMet === conditionsRequired, conditionsMet, conditionsRequired };
 }
 
 /**
@@ -774,19 +849,68 @@ export function gateEvidenceWithRepair<Q extends QuoteInput>(
     // verbatim-present supporting passage before considering any downgrade.
     const found = researchBestPassage(policy, researchCriteria, segments, packText);
     if (found) {
-      researched.push({
-        criteria: researchCriteria.join(" | "),
-        repairedSource: found.source,
-        repairedQuote: found.text,
-        overlap: found.overlap,
-      });
-      if (strictStrip) {
-        // Replace the stripped (unprovenanced) quotes with the repaired one.
-        keptQuotes.length = 0;
+      if (params.regradeRescue) {
+        // 1.1 (EVIDENCE_REPAIR_REGRADE on): do NOT carry over the prior YES on a
+        // single shared keyword. Re-grade the replacement against the measure's
+        // full positive-criteria predicate; keep YES only if it is satisfied on
+        // the real replacement text, else record No with a `rescue-failed` reason.
+        const regrade = rescuePassageSatisfiesCriteria(policy, researchCriteria, found.text);
+        if (regrade.satisfied) {
+          researched.push({
+            criteria: researchCriteria.join(" | "),
+            repairedSource: found.source,
+            repairedQuote: found.text,
+            overlap: found.overlap,
+            regraded: true,
+            regradeVerdict: "Yes",
+            conditionsMet: regrade.conditionsMet,
+            conditionsRequired: regrade.conditionsRequired,
+          });
+          if (strictStrip) {
+            // Replace the stripped (unprovenanced) quotes with the repaired one.
+            keptQuotes.length = 0;
+          }
+          keptQuotes.push({ text: found.text, source: found.source } as unknown as Q);
+          quotesValid++;
+          score = 1;
+        } else {
+          researched.push({
+            criteria: researchCriteria.join(" | "),
+            repairedSource: found.source,
+            repairedQuote: found.text,
+            overlap: found.overlap,
+            regraded: true,
+            regradeVerdict: "No",
+            regradeReason: "rescue-failed",
+            conditionsMet: regrade.conditionsMet,
+            conditionsRequired: regrade.conditionsRequired,
+          });
+          // The replacement text does not satisfy the measure → downgrade and
+          // record the failed rescue (do NOT keep the replacement as a quote).
+          failures.push({
+            quoteText: found.text,
+            source: found.source,
+            reasons: ["rescue-failed"],
+          });
+          score = 0;
+          downgraded = true;
+        }
+      } else {
+        // Flag OFF (today's behaviour): carry over the YES with the replacement.
+        researched.push({
+          criteria: researchCriteria.join(" | "),
+          repairedSource: found.source,
+          repairedQuote: found.text,
+          overlap: found.overlap,
+        });
+        if (strictStrip) {
+          // Replace the stripped (unprovenanced) quotes with the repaired one.
+          keptQuotes.length = 0;
+        }
+        keptQuotes.push({ text: found.text, source: found.source } as unknown as Q);
+        quotesValid++;
+        score = 1;
       }
-      keptQuotes.push({ text: found.text, source: found.source } as unknown as Q);
-      quotesValid++;
-      score = 1;
     } else {
       // Step 4: no supporting passage anywhere in the corpus → last-resort flip.
       score = 0;

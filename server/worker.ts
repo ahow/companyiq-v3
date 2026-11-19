@@ -681,7 +681,12 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       // This enables the below-prior-best diagnostics path (Instruction 8).
       try {
         const scores = await storage.getMeasureScores(companyId, frameworkId);
-        const runTotal = scores.reduce((sum: number, s: any) => sum + (s.score || 0), 0);
+        // 1.4: route the legacy diagnostic sum through the single canonical
+        // aggregator (shared/verdict.ts computeCompanyScore) so no second scoring
+        // formula exists anywhere. Binary scoring (Partial = 0) → measuresMet is the
+        // count of met measures, identical to the former reduce(score) sum. The
+        // screen, CSV and saved score already use computeCompanyScore.
+        const runTotal = computeCompanyScore(scores as any).measuresMet;
         const existing = (company as any).priorBestScore || 0;
         if (runTotal > existing) {
           await storage.updateCompany(companyId, workspaceId, {
@@ -697,7 +702,9 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       // log viewer doesn't truncate/filter the single JSON blob.
       try {
         const companyScores = await storage.getMeasureScores(companyId, frameworkId);
-        const totalScore = companyScores.reduce((sum: number, s: any) => sum + (s.score || 0), 0);
+        // 1.4: single canonical aggregator (see note above) — measuresMet equals the
+        // former reduce(score) sum under binary scoring. No second formula remains.
+        const totalScore = computeCompanyScore(companyScores as any).measuresMet;
 
         // I45: Log scoring diagnostics for every completed company so Gate Report
         // can aggregate fleet-level timeout/fallback/failure counts.

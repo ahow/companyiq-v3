@@ -40,7 +40,14 @@ import { describeDowngrade, type DowngradeDecision } from "./framework-v2/scorin
 import { buildCanonicalRuleTrace, buildCanonicalRule, type CanonicalRuleTrace } from "./framework-v2/reliability/canonical-rule.js";
 import { PASSAGE_LEVEL_EQUIVALENCE_CLAUSE } from "./framework-v2/structured-guidance.js";
 import { computeEligibilityFlags, isPositiveVerdict, reviewQuoteAttribution, type EligibilityFlag } from "./eligibility-flags.js";
-import { rc3OneQuotePerMeasureEnabled } from "./scoring-fix-flags.js";
+import {
+  rc3OneQuotePerMeasureEnabled,
+  evidenceRepairRegradeEnabled,
+  scoringBaseRatePriorAllowEnabled,
+  readjudicationPassEnabled,
+} from "./scoring-fix-flags.js";
+import { recordVerdictOverride } from "./verdict-override.js";
+import { readjudicateMeasure, type ReadjudicationTrace } from "./readjudication.js";
 // A3 / WP04: end-to-end entity/provenance/temporal eligibility composition guardrail.
 // Attached per measure in SHADOW mode by default (observability only); verdict-
 // mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
@@ -217,6 +224,15 @@ export interface MeasureResult {
   // never change the verdict unless ELIGIBILITY_ENFORCE=on. Back-compat optional.
   eligibilityDecisions?: EligibilityDecision[] | null;
   eligibilityCellStatus?: EligibilityStatus | null;
+  // 1.5 (GATE_RATIONALE_SYNC): the controlling reason when a gate/rule overrode
+  // the model's verdict, written to a dedicated NEVER-truncated field surfaced in
+  // both screen and CSV (independent of the 600-char evidenceSummary slice). Set
+  // only when GATE_RATIONALE_SYNC is on; null/absent otherwise. Display-only.
+  verdictOverrideReason?: string | null;
+  // 1.6 (READJUDICATION_PASS): auditable trace of the gated re-adjudication pass
+  // (original verdict/score, reason for the re-look, passages searched, passage
+  // found, new verdict). Set only when READJUDICATION_PASS acted on this row.
+  readjudicationTrace?: ReadjudicationTrace | null;
 }
 
 // ─── RC3 — one quote → one measure reconciliation ────────────────────────────
@@ -2532,6 +2548,26 @@ export async function analyzeCompanyMeasures(opts: {
   // Opt2 hygiene may reassign these three, so bind them mutably (positionally aligned).
   let { documentTexts, documentUrls, documentTitles } = opts;
 
+  // 1.3 (ATTRIBUTION_TRUSTED_SOURCE_RESOLVE): resolve the framework's registered
+  // trusted-source domains from config, once per analysis. frameworks.trustedSourceIds
+  // (number[]) selects rows in trustedSources; an active row with a non-empty domain
+  // contributes its host so a document published there is first-party by PROVENANCE.
+  // All framework DATA — no company/framework/measure names are hardcoded. Empty when
+  // the framework has no trusted-source list (today's state), so attribution is
+  // unchanged until the list is populated AND the flag is enabled downstream.
+  const frameworkTrustedSourceIds: number[] = Array.isArray((framework as any)?.trustedSourceIds)
+    ? ((framework as any).trustedSourceIds as any[]).filter((n) => typeof n === "number")
+    : [];
+  const frameworkTrustedDomains: string[] = (trustedSources || [])
+    .filter((s: any) =>
+      s &&
+      frameworkTrustedSourceIds.includes(s.id) &&
+      s.isActive !== false &&
+      typeof s.domain === "string" &&
+      s.domain.trim().length > 0,
+    )
+    .map((s: any) => s.domain.trim());
+
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
 
@@ -3417,6 +3453,26 @@ export async function analyzeCompanyMeasures(opts: {
         result: measureResult,
       });
 
+      // 1.6 (READJUDICATION_PASS): act on the needs_readjudication /
+      // rationale_score_inconsistent flags the detector just set. Default OFF → the
+      // flagged row is left exactly as first-pass scored (today's behaviour). When
+      // ON, re-query the company's extracted corpus (finalEvidence) for ALTERNATIVE
+      // evidence that satisfies the measure's positive criteria and re-score on what
+      // it finds; the pass is idempotent (one re-look per row per run, skipped once
+      // a trace exists), bounded, deterministic and fully audited in the trace.
+      if (readjudicationPassEnabled()) {
+        measureResult = readjudicateMeasure({
+          result: measureResult,
+          criteria: [
+            measure.title,
+            (measure as any).definition,
+            (measure as any).primaryAssessmentTarget,
+            (measure as any).substantiveDefinition,
+          ].filter((s): s is string => typeof s === "string" && s.trim().length > 0),
+          packText: finalEvidence,
+        });
+      }
+
       // Layer D — Honest coverage signal. Previously hardcoded to null, which let
       // a 0% score coexist with a "full coverage" label. We now base coverage on
       // whether topic-relevant evidence actually reached this measure's pack and
@@ -3642,6 +3698,15 @@ export async function analyzeCompanyMeasures(opts: {
           console.log(`[${companyName}] U17-FIX-B DOWNGRADE ${mr.measureId}: ${mr.verdict} → No (all ${outcome.decisions.length} quotes third-party)`);
         }
         result = outcome.result;
+        // 1.5 (GATE_RATIONALE_SYNC): when on, record the controlling reason for the
+        // provenance-gate downgrade in the dedicated never-truncated field and prefix
+        // the rationale with the [OVERRIDE: …] marker. No-op when the flag is off.
+        if (outcome.action === "downgraded") {
+          recordVerdictOverride(
+            result,
+            `Provenance gate: all ${outcome.decisions.length} supporting quotes resolve to third-party publishers, so they cannot evidence the company's own practice`,
+          );
+        }
       }
       // Change #3: compute the advisory eligibility flags on the FINAL verdict
       // (after any provenance-gate downgrade), for positive cells only. ADVISORY
@@ -3658,6 +3723,8 @@ export async function analyzeCompanyMeasures(opts: {
               ticker: company?.ticker ?? null,
               domain: company?.domain ?? null,
               relatedDomains: company?.relatedDomains ?? null,
+              // 1.3: framework trusted-source domains (empty today → no effect).
+              frameworkTrustedDomains,
             },
           });
           result.eligibilityFlags = flags;
@@ -3686,6 +3753,12 @@ export async function analyzeCompanyMeasures(opts: {
             const gateNote = `[Entity-attribution gate: downgraded ${prevVerdict}→No — ${entityFlag.reason}]`;
             result.evidenceSummary = (result.evidenceSummary ? `${result.evidenceSummary} ` : "") + gateNote;
             result.verdictNuance = (result.verdictNuance ? `${result.verdictNuance} ` : "") + gateNote;
+            // 1.5 (GATE_RATIONALE_SYNC): when on, also record the controlling reason
+            // in the dedicated never-truncated verdictOverrideReason field AND prefix
+            // the rationale with an [OVERRIDE: …] marker so the displayed narrative
+            // no longer asserts the opposite of the verdict. No-op when the flag is
+            // off, so the legacy append-then-truncate behaviour above is unchanged.
+            recordVerdictOverride(result, `Entity-attribution gate: ${entityFlag.reason}`);
             // NOTE: the supporting quotes attached to this (now overturned) verdict
             // are marked disqualified by the path-independent QUOTE–VERDICT
             // CONSISTENCY REVIEW at the end of runProvenanceGate — which also
@@ -3836,6 +3909,8 @@ export async function analyzeCompanyMeasures(opts: {
             aliases: (company as any)?.aliases ?? null,
             domain: company?.domain ?? null,
             relatedDomains: company?.relatedDomains ?? null,
+            // 1.3: framework trusted-source domains (empty today → no effect).
+            frameworkTrustedDomains,
           }, result.evidence_summary);
           const attrByIndex = new Map(attributions.map((a) => [a.index, a.attributedToTarget]));
           let disqCount = 0;
@@ -4108,7 +4183,13 @@ async function scoreSingleMeasure(opts: {
   //     A cached verdict from a run with the prior OFF must not be reused when
   //     the prior is ON (or vice versa), and a change to expected_yes_rate on
   //     the measure must invalidate too. Rate is rounded to 2 dp for stability.
-  const baseRateOn = process.env.SCORING_BASE_RATE_PRIOR === "true";
+  // 1.2 (SCORING_BASE_RATE_PRIOR_ALLOW): the legacy SCORING_BASE_RATE_PRIOR
+  // variable can no longer, on its own, let the uncalibrated expected-Yes-rate
+  // prior influence the verdict-cache salt. The prior is honoured ONLY when BOTH
+  // the explicit allow-flag is on AND SCORING_BASE_RATE_PRIOR === "true". With the
+  // allow-flag off (the compiled default, matching production) the salt stays "br0"
+  // → byte-identical to today, so a stray SCORING_BASE_RATE_PRIOR cannot re-enable it.
+  const baseRateOn = scoringBaseRatePriorAllowEnabled() && process.env.SCORING_BASE_RATE_PRIOR === "true";
   const rateVal = (measure as any).expectedYesRate;
   const rateTag = baseRateOn && typeof rateVal === "number" && rateVal > 0 && rateVal < 1
     ? `br${Math.round(rateVal * 100)}`
@@ -4792,6 +4873,10 @@ async function scoreWithCascade(opts: {
         sourceAttribution: sourceAttributionEnabled,
         documentSegments: repairSegments,
         researchCriteria,
+        // 1.1 (EVIDENCE_REPAIR_REGRADE): when on, a rescued YES is re-graded
+        // against the full positive-criteria predicate instead of carried over on
+        // a single shared keyword. Default off → rescue behaves exactly as today.
+        regradeRescue: evidenceRepairRegradeEnabled(),
       });
       result.quotes = keptQuotes;
       if (gate.downgraded) {
