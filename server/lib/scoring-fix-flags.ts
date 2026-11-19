@@ -212,6 +212,24 @@ export function p1CorpusRefreshEndpointEnabled(): boolean {
   return envOnDefaultTrue("CORPUS_REFRESH_ENDPOINT");
 }
 
+// ── P1.6 — orphaned frozen-snapshot self-heal guard ──────────────────────────
+/** Default ON: before reusing a framework-scoped frozen corpus, verify the
+ *  snapshot still resolves to live gate-accepted `documents` rows. The frozen
+ *  snapshot references evidence by `document_id`, but the `documents` table is
+ *  mutated by reset/clear operations (clearDiscoveredDocuments, fullReset*) that
+ *  do NOT cascade to frozen_corpus_snapshot. When every snapshot row is orphaned
+ *  (its document_id no longer exists in the accepted set), the reuse path loads an
+ *  EMPTY corpus → every measure abstains → an all-zero score that looks like a
+ *  real assessment. This guard detects a fully-orphaned snapshot, purges it so the
+ *  immutable first-wins freeze can be rebuilt, and lets the run re-discover from
+ *  scratch (then re-freeze). Self-healing and framework/company-agnostic — it
+ *  reads only live table state, never any hardcoded company/framework/measure.
+ *  Switch OFF (CORPUS_ORPHAN_REDISCOVER=false) to restore the prior reuse-always
+ *  behaviour. */
+export function frozenCorpusOrphanGuardEnabled(): boolean {
+  return envOnDefaultTrue("CORPUS_ORPHAN_REDISCOVER");
+}
+
 // ── Z1 — within-document passage-retrieval re-weighting ──────────────────────
 /** Default ON: during passage retrieval, boost chunks drawn from the SECTION of
  *  an umbrella document whose text matches the framework's OWN thematic vocabulary

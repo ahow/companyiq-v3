@@ -51,7 +51,7 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, r1ChecklistContentFallbackEnabled } from "./lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, frozenCorpusOrphanGuardEnabled, r1ChecklistContentFallbackEnabled } from "./lib/scoring-fix-flags.js";
 import { computeCompanyScore } from "../shared/verdict.js";
 // A9 / WP15 (truthful publication). Build the canonical per-cell publication
 // record for each company and store it in the snapshot metadata so every reader
@@ -521,6 +521,43 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
         frozenCount = snapshot.length;
         hasFrozenCorpus = frozenCount > 0;
         frozenSource = "framework-scoped snapshot";
+        // P1.6 — orphaned-snapshot self-heal guard. The snapshot references
+        // evidence by document_id, but reset/clear operations on the `documents`
+        // table do NOT cascade to frozen_corpus_snapshot. A fully-orphaned
+        // snapshot (every referenced document_id gone from the accepted set)
+        // makes the reuse path load an EMPTY corpus → every measure abstains →
+        // an all-zero score that looks like a real assessment. Detect that case,
+        // purge the stale snapshot (so the immutable first-wins freeze can be
+        // rebuilt), and fall through to a fresh discovery + re-freeze. Only acts
+        // when the snapshot resolves to ZERO live accepted docs, so an intact or
+        // partially-pruned snapshot is reused unchanged.
+        if (hasFrozenCorpus && frozenCorpusOrphanGuardEnabled()) {
+          try {
+            const accepted = await storage.getAcceptedDocuments(companyId);
+            const acceptedIds = new Set(accepted.map((d: any) => d.id));
+            const resolvable = snapshot.reduce(
+              (n, s) => (acceptedIds.has(s.documentId) ? n + 1 : n),
+              0,
+            );
+            if (resolvable === 0) {
+              const purged = await storage.purgeFrozenCorpus(companyId, frameworkId);
+              console.warn(
+                "[Worker][P1.6] Frozen snapshot for company=" + companyId +
+                ", fw=" + frameworkId + " is fully ORPHANED (" + frozenCount +
+                " snapshot docs, 0 still in the live accepted set of " +
+                accepted.length + ") — purged " + purged +
+                " stale rows and will re-discover + re-freeze a clean corpus",
+              );
+              hasFrozenCorpus = false;
+              frozenCount = 0;
+            }
+          } catch (orphanErr: any) {
+            console.warn(
+              "[Worker][P1.6] orphan-guard check failed (non-fatal), proceeding with existing reuse decision: " +
+              orphanErr?.message,
+            );
+          }
+        }
       } else {
         const frozen = await storage.getAcceptedDocuments(companyId);
         frozenCount = frozen?.length ?? 0;
