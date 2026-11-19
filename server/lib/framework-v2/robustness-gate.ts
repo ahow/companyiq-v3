@@ -10,6 +10,8 @@
  * or proceed with best-guess drafts and flagged warnings.
  */
 
+import { BUILDER_SCOPE_FIELDS_INLINE } from "./builder-lint-flags.js";
+
 export interface IntakeArtefact {
   topic?: string;
   topicTerm?: string;
@@ -121,12 +123,37 @@ export function evaluateRobustness(intake: IntakeArtefact): RobustnessGateResult
     detail: `${af.length} anchor frameworks`,
   });
 
-  items.push({
-    id: "entityScope",
-    label: "Entity type, sector scope, universe, reporting period all set",
-    passed: !!(intake.entityType && intake.sectorScope && intake.universe && intake.reportingPeriod),
-    detail: `${intake.entityType || "?"} / ${intake.sectorScope || "?"} / ${intake.universe || "?"} / ${intake.reportingPeriod || "?"}`,
-  });
+  // Scope fields. Deliverable B (b): when BUILDER_SCOPE_FIELDS_INLINE is ON
+  // (default), each of the four scope fields is surfaced as its OWN inline
+  // checklist item so the UX can show per-field contextual validation feedback
+  // (consistent with the Framework Builder V2 inline-validation requirement),
+  // instead of one batched "all four set" item that hides WHICH field is null.
+  // When the flag is OFF the original single batched item is preserved verbatim
+  // for backward compatibility. No hardcoded framework/company/measure names.
+  if (BUILDER_SCOPE_FIELDS_INLINE()) {
+    const scopeFields: Array<{ id: string; label: string; value?: string }> = [
+      { id: "scope.entityType", label: "Entity type is set (e.g. listed issuer / consolidated group)", value: intake.entityType },
+      { id: "scope.sectorScope", label: "Sector scope is set (single sector or cross-sector)", value: intake.sectorScope },
+      { id: "scope.universe", label: "Universe is set (group-level vs subsidiary/site scope)", value: intake.universe },
+      { id: "scope.reportingPeriod", label: "Reporting period is set (how recent evidence must be)", value: intake.reportingPeriod },
+    ];
+    for (const f of scopeFields) {
+      const set = !!(f.value && f.value.trim());
+      items.push({
+        id: f.id,
+        label: f.label,
+        passed: set,
+        detail: set ? f.value : "not set — leaving this null weakens the built framework's scope gate",
+      });
+    }
+  } else {
+    items.push({
+      id: "entityScope",
+      label: "Entity type, sector scope, universe, reporting period all set",
+      passed: !!(intake.entityType && intake.sectorScope && intake.universe && intake.reportingPeriod),
+      detail: `${intake.entityType || "?"} / ${intake.sectorScope || "?"} / ${intake.universe || "?"} / ${intake.reportingPeriod || "?"}`,
+    });
+  }
 
   items.push({
     id: "sensitivity",

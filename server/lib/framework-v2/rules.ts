@@ -13,6 +13,11 @@
 import { runLexiconHygiene, type SurfaceInput } from "./reliability/lexicon-hygiene.js";
 import { isAdjudicated, normalizeTopicKey, type SynonymAdjudication } from "./synonym-adjudication.js";
 import { buildCanonicalRule } from "./reliability/canonical-rule.js";
+import {
+  BUILDER_LINT_SECTOR_MATERIALITY,
+  BUILDER_LINT_EXPECTED_YES_RATE_UNCALIBRATED,
+  BUILDER_LINT_UNDEFINED_TERMS,
+} from "./builder-lint-flags.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -63,6 +68,12 @@ export interface FrameworkDraft {
   // flagged term already carries a decision here, the lexicon-hygiene advisory
   // skips it so the notice terminates instead of recurring. Optional/additive.
   synonymAdjudications?: SynonymAdjudication[];
+  // Scope / persona fields (optional, backward-compatible). Consumed by the
+  // Deliverable B advisory lints only (sector-materiality persona lint). `null`
+  // is treated the same as absent. sectorScope "cross-sector" / "all sectors"
+  // (or absent) means the framework scores identically across sectors.
+  scoringPersona?: string | null;
+  sectorScope?: string | null;
   measures: MeasureDraft[];
 }
 
@@ -1698,6 +1709,184 @@ export function validateDefinitionPresent(fw: FrameworkDraft): ValidationResult 
   return { passed: violations.filter((v) => v.severity === "error").length === 0, violations };
 }
 
+// ─── BLINT-SECTOR (Deliverable B, change c) — sector-relative materiality ───
+//
+// A cross-sector framework scores identically across every sector, so a scoring
+// persona that instructs the model to judge against the materiality "for its
+// sector" (or "plausibly faces for its sector", "relative to its sector", etc.)
+// reintroduces a sector-relative bar that contradicts the design. This advisory
+// lint flags such phrasing in `scoringPersona` when the framework is cross-sector
+// (sectorScope absent, or "cross-sector" / "all sectors" / "every sector"). It
+// NEVER emits `error` (never blocks); the UX surfaces it inline with the fix:
+// remove the sentence. Topic/company/framework-agnostic — it matches the
+// sector-relative grammatical pattern only, never any subject matter.
+//
+// Gated by BUILDER_LINT_SECTOR_MATERIALITY (default ON). When OFF, no findings.
+const SECTOR_RELATIVE_PERSONA_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\bmateriality[^.]{0,60}\bfor its sector\b/i, label: "materiality ... for its sector" },
+  { pattern: /\bfor (its|their|the) (own )?sector\b/i, label: "for its sector" },
+  { pattern: /\b(relative to|against|compared to|for) (its|their|the) sector('s)?\b/i, label: "sector-relative judgement" },
+  { pattern: /\bsector-(relative|specific|adjusted)\b[^.]{0,40}\b(materiality|bar|threshold|standard|judg?ement)\b/i, label: "sector-relative materiality bar" },
+  { pattern: /\bmateriality (it|the company|they) (plausibly )?faces? for (its|their) sector\b/i, label: "sector-relative materiality it faces" },
+];
+
+function isCrossSector(sectorScope?: string | null): boolean {
+  const s = (sectorScope || "").trim().toLowerCase();
+  if (!s) return true; // absent scope → treat as cross-sector (identical scoring)
+  return (
+    s.includes("cross-sector") ||
+    s.includes("cross sector") ||
+    s.includes("all sector") ||
+    s.includes("every sector") ||
+    s.includes("any sector") ||
+    s.includes("sector-agnostic") ||
+    s.includes("sector agnostic")
+  );
+}
+
+export function validateScoringPersonaSectorNeutral(fw: FrameworkDraft): ValidationResult {
+  const violations: Violation[] = [];
+  if (!BUILDER_LINT_SECTOR_MATERIALITY()) return { passed: true, violations };
+
+  const persona = typeof fw.scoringPersona === "string" ? fw.scoringPersona : "";
+  if (persona.trim() && isCrossSector(fw.sectorScope)) {
+    const hit = SECTOR_RELATIVE_PERSONA_PATTERNS.find((p) => p.pattern.test(persona));
+    if (hit) {
+      violations.push({
+        rule: "BLINT-SECTOR",
+        severity: "warning",
+        message:
+          `The scoring persona contains sector-relative materiality phrasing ("${hit.label}"), but this framework scores ` +
+          `cross-sector (identical binary criteria across every sector). Judging against a sector-relative materiality bar ` +
+          `reintroduces sector-dependent drift the cross-sector design removes.`,
+        suggestion:
+          "Remove the sector-relative sentence from scoringPersona (the persona should frame topic expertise only, not a " +
+          "sector-relative materiality bar). If the framework is in fact sector-specific, set sectorScope accordingly.",
+        meta: { field: "scoringPersona", matched: hit.label },
+      });
+    }
+  }
+  return { passed: true, violations };
+}
+
+// ─── BLINT-EYR (Deliverable B, change d) — expectedYesRate is uncalibrated ───
+//
+// expected_yes_rate values are AUTHORING PRIORS, not validated empirical
+// distributions. Nothing downstream should treat them as calibrated. This
+// advisory lint emits one `info` finding per measure that carries an
+// expected_yes_rate, labelling it an uncalibrated authoring prior so the UX can
+// surface it inline. It never emits error/warning and never blocks. This is
+// distinct from C9 (which validates the value's RANGE and extreme-rate
+// justification) — this one is purely a calibration-provenance notice.
+//
+// Gated by BUILDER_LINT_EXPECTED_YES_RATE_UNCALIBRATED (default ON).
+export function validateExpectedYesRateUncalibrated(fw: FrameworkDraft): ValidationResult {
+  const violations: Violation[] = [];
+  if (!BUILDER_LINT_EXPECTED_YES_RATE_UNCALIBRATED()) return { passed: true, violations };
+
+  for (const m of fw.measures) {
+    if (typeof m.expected_yes_rate === "number") {
+      violations.push({
+        measureId: m.measureId,
+        rule: "BLINT-EYR",
+        severity: "info",
+        message:
+          `expected_yes_rate (${m.expected_yes_rate}) is an UNCALIBRATED authoring prior, not a validated empirical ` +
+          `distribution. Treat it as an authoring estimate only; do not rely on it as a calibrated base rate.`,
+        suggestion:
+          "Calibrate against observed Yes-rates on a labelled sample before any consumer treats this as validated. Until " +
+          "then it remains an authoring prior.",
+        meta: { field: "expected_yes_rate", value: m.expected_yes_rate, calibrated: false },
+      });
+    }
+  }
+  return { passed: true, violations };
+}
+
+// ─── BLINT-TERM (Deliverable B, change e) — undefined bar-setting terms ──────
+//
+// Vague bar-setting adjectives (e.g. "critical", "material", "significant",
+// "key", "major", "substantial") silently hand the model a free threshold when
+// they appear in a measure's bar-setting text WITHOUT a nearby definition. This
+// advisory lint flags, per measure, each such term used without a definition
+// cue ("defined as", "means", "i.e.", "critical:" etc.) in the SAME field. It
+// never emits error/warning (info only) and never blocks. Topic-agnostic — the
+// term list is generic English bar-setting words; it hardcodes no framework,
+// company, measure, or sector name.
+//
+// Gated by BUILDER_LINT_UNDEFINED_TERMS (default ON).
+const UNDEFINED_BAR_TERMS: readonly string[] = [
+  "critical",
+  "material",
+  "significant",
+  "substantial",
+  "major",
+  "key",
+];
+
+// Fields where an undefined bar-term actually sets the scoring threshold.
+function barSettingText(m: MeasureDraft): string {
+  return [
+    toText(m.whatConstitutesEvidence),
+    m.substantive_definition || "",
+    m.fallback_yes_criterion || "",
+    m.scoringGuidance || "",
+    m.definition || "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function hasDefinitionCueFor(term: string, text: string): boolean {
+  const t = term.toLowerCase();
+  // A definition cue anywhere in the field that names the term, OR a generic
+  // definition connective immediately after the term ("critical means ...",
+  // "critical is defined as ...", "critical, i.e. ...", "critical:").
+  const cues = [
+    // "<term> ... is/are defined/understood/taken to mean" (same sentence)
+    new RegExp(`\\b${t}\\b[^.\\n]{0,25}(is|are)\\s+(defined|understood|taken to mean)`, "i"),
+    // "<term> [a few words] means/refers to/i.e./that is/:/—" — the term may sit
+    // INSIDE the defined phrase ("a material site means ..."), so allow a short
+    // intervening span (no sentence break) before the definition connective.
+    new RegExp(`\\b${t}\\b[^.\\n]{0,25}?(:|\\u2014|\\bmeans\\b|\\brefers to\\b|\\bi\\.e\\.|\\bthat is\\b|\\bis defined\\b|\\bare defined\\b)`, "i"),
+    new RegExp(`\\bdefinition of\\s+["']?${t}`, "i"),
+    new RegExp(`\\b(what (counts|qualifies) as|we (define|treat))\\s+["']?${t}`, "i"),
+    new RegExp(`\\b${t}\\b[^.\\n]{0,40}\\(([^)]{3,})\\)`, "i"), // term (parenthetical gloss)
+  ];
+  return cues.some((re) => re.test(text));
+}
+
+export function validateUndefinedTerms(fw: FrameworkDraft): ValidationResult {
+  const violations: Violation[] = [];
+  if (!BUILDER_LINT_UNDEFINED_TERMS()) return { passed: true, violations };
+
+  for (const m of fw.measures) {
+    const text = barSettingText(m);
+    if (!text.trim()) continue;
+    const flagged: string[] = [];
+    for (const term of UNDEFINED_BAR_TERMS) {
+      const used = new RegExp(`\\b${term}\\b`, "i").test(text);
+      if (used && !hasDefinitionCueFor(term, text)) flagged.push(term);
+    }
+    if (flagged.length > 0) {
+      violations.push({
+        measureId: m.measureId,
+        rule: "BLINT-TERM",
+        severity: "info",
+        message:
+          `Bar-setting term(s) used without a definition: ${flagged.map((t) => `"${t}"`).join(", ")}. ` +
+          `An undefined threshold word lets the model pick its own bar, which varies run to run.`,
+        suggestion:
+          `Define each flagged term in the measure text (e.g. \`<term> means ...\`, \`definition of <term>: ...\`, or a ` +
+          `parenthetical gloss) so the Yes-bar is fixed. Example for "critical": a dependency the company itself ` +
+          `designates as critical, OR a single-source input to a named product/site.`,
+        meta: { field: "measure-text", terms: flagged },
+      });
+    }
+  }
+  return { passed: true, violations };
+}
+
 export function validateAll(fw: FrameworkDraft): ValidationResult {
   const all: Violation[] = [];
   for (const [name, fn] of [
@@ -1724,6 +1913,13 @@ export function validateAll(fw: FrameworkDraft): ValidationResult {
     // Set-level advisory diagnostics — emits ONLY `severity: "info"`, which is
     // excluded from the repair trigger and grouping (see validateSetLevel).
     ["set-level", validateSetLevel],
+    // Deliverable B advisory lints (builder robustness). All are flag-gated
+    // (default ON) and emit only `warning`/`info` — never `error` — so they
+    // surface inline in the UX but never block a draft/save or grow the repair
+    // payload. No hardcoded framework/company/measure names.
+    ["BLINT-SECTOR", validateScoringPersonaSectorNeutral], // (c)
+    ["BLINT-EYR", validateExpectedYesRateUncalibrated],    // (d)
+    ["BLINT-TERM", validateUndefinedTerms],                // (e)
   ] as const) {
     const r = fn(fw);
     all.push(...r.violations);

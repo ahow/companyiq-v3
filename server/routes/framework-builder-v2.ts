@@ -17,6 +17,8 @@ import { sanitizeSearchTemplates } from "../lib/framework-v2/query-template-hygi
 import { deriveRequiredDocTypes, deriveLegacyQueryTemplates, deriveWithdrawalPatterns, deriveNegativeDomains, validateTargetingCoverage } from "../lib/framework-v2/retrieval-targeting.js";
 import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "../lib/framework-v2/export-as-seed.js";
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
+import { deriveRequiredSourceTypes } from "../lib/framework-v2/required-source-types.js";
+import { BUILDER_AUTOFILL_REQUIRED_SOURCE_TYPES } from "../lib/framework-v2/builder-lint-flags.js";
 import { buildFrameworkExport, buildFrameworkInserts, isFrameworkExportPayload } from "../lib/framework-v2/import-framework.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
@@ -2777,6 +2779,14 @@ router.post("/v2/save", requireWorkspace, async (req: Request, res: Response) =>
           expectedYesRate: typeof measure.expected_yes_rate === "number" ? measure.expected_yes_rate : null,
           expectedYesRateJustification: measure.expected_yes_rate_justification || null, // Issue 4
           disclosureVehicles: measure.disclosure_vehicles || null,
+          // Deliverable B (a): auto-populate requiredSourceTypes from the measure's
+          // OWN disclosure vehicles (+ universal annual/regulatory backbone) so the
+          // built framework arrives with a LIVE abstain gate instead of null. Gated
+          // by BUILDER_AUTOFILL_REQUIRED_SOURCE_TYPES (default ON). Topic-agnostic;
+          // the backbone guarantees it can never abstain-forever on a real corpus.
+          requiredSourceTypes: BUILDER_AUTOFILL_REQUIRED_SOURCE_TYPES()
+            ? deriveRequiredSourceTypes(measure.disclosure_vehicles)
+            : null,
           r31ExceptionMetrics: Boolean(measure.r3_1_exception_metrics),
           r31ExceptionCoverage: Boolean(measure.r3_1_exception_coverage),
         } as any);
