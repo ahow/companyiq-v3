@@ -445,3 +445,99 @@ export function readjudicationPassEnabled(): boolean {
 //    disclosures live under individual fund names correctly read as low-coverage,
 //    not a confident 0%. See the TODO in entity-attribution.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Priority 2 — execute the framework's OWN rules (read from framework config).
+// All DEFAULT-OFF: with every flag unset, every measure applies, coverage is
+// narrated as before, no reporting-period window is enforced, and entity scope is
+// not restricted — i.e. behaviour is byte-for-byte the current production path.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** 2.1 — evaluate a structured `applicabilityRule` from the company profile
+ *  BEFORE any Yes/No verdict. A non-applicable measure is marked
+ *  "not applicable" (auditable rationale) and REMOVED FROM THE DENOMINATOR
+ *  (computeCompanyScore already distinguishes assessed/answered via backfilled).
+ *  Off = all measures apply. */
+export function applicabilityRulesExecuted(): boolean {
+  return envOnDefaultFalse("APPLICABILITY_RULES_EXECUTED");
+}
+
+/** 2.2 — add structured `coverageRule` + `coverageWhitelist` evaluation so a
+ *  coverage verdict is COMPUTED, not narrated; an undisclosed denominator cannot
+ *  pass. Off = coverage handled by the existing narrated path. */
+export function coverageRulesExecuted(): boolean {
+  return envOnDefaultFalse("COVERAGE_RULES_EXECUTED");
+}
+
+/** 2.3 — consume a framework-level `reportingPeriod` window; evidence older than
+ *  the window cannot support a Yes. Window comes from framework data (no dates
+ *  hardcoded). Off = no recency enforcement. */
+export function reportingPeriodEnforced(): boolean {
+  return envOnDefaultFalse("REPORTING_PERIOD_ENFORCED");
+}
+
+/** 2.4 — consume `entityType`/`universe` to apply a parent/subsidiary rule
+ *  (group/parent disclosures only; subsidiary docs excluded unless consolidated).
+ *  Integrates with the 1.3 trusted-source resolution. Off = no scope restriction. */
+export function entityScopeEnforced(): boolean {
+  return envOnDefaultFalse("ENTITY_SCOPE_ENFORCED");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Priority 3 — retrieval robustness + first-run comprehensiveness. All DEFAULT-OFF
+// except the shipped CORPUS_ORPHAN_REDISCOVER safety net (unchanged).
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** 3.1 — on frozen-corpus reuse, resolve frozen content by content_hash/url
+ *  against document_content (not just documents.id) so a snapshot survives a
+ *  documents-table reset; cascade-invalidate snapshots on a documents purge. */
+export function frozenCorpusContentHashReuse(): boolean {
+  return envOnDefaultFalse("FROZEN_CORPUS_CONTENT_HASH_REUSE");
+}
+
+/** 3.2a — seed `knownDisclosureUrls` per company from framework data. */
+export function retrievalKnownUrlsSeed(): boolean {
+  return envOnDefaultFalse("RETRIEVAL_KNOWN_URLS_SEED");
+}
+/** 3.2b — rebuild retrieval as two lexical families + a performance family and
+ *  make `requiredSourceTypes` NON-BLOCKING so material evidence isn't excluded
+ *  by vehicle. */
+export function retrievalVehicleAgnostic(): boolean {
+  return envOnDefaultFalse("RETRIEVAL_VEHICLE_AGNOSTIC");
+}
+/** 3.2c — make transition-risk exclusion keywords relaxable so
+ *  sustainability/TCFD/CDP docs aren't down-ranked. */
+export function retrievalExclusionKeywordsRelaxed(): boolean {
+  return envOnDefaultFalse("RETRIEVAL_EXCLUSION_KEYWORDS_RELAXED");
+}
+
+/** 3.3a — count each quote toward ONE measure unless the measure explicitly
+ *  allows sharing (`allowQuoteSharing`). */
+export function evidenceQuoteSingleUse(): boolean {
+  return envOnDefaultFalse("EVIDENCE_QUOTE_SINGLE_USE");
+}
+/** 3.3b — allow conditions to be met across two ADJACENT passages of the same
+ *  document (or raise `minQuoteContextChars`). */
+export function evidenceAdjacentPassageSpan(): boolean {
+  return envOnDefaultFalse("EVIDENCE_ADJACENT_PASSAGE_SPAN");
+}
+/** Max char gap between two passages for them to count as "adjacent". */
+export function evidenceAdjacentPassageMaxGap(): number {
+  return Math.max(0, envInt("EVIDENCE_ADJACENT_PASSAGE_MAX_GAP", 400));
+}
+
+/** 3.4b — bounded extraction-retry + fallback for dominant failure vehicles
+ *  (PDF-behind-link). MUST be bounded; cannot loop or inflate cost. */
+export function extractionRetryFallback(): boolean {
+  return envOnDefaultFalse("EXTRACTION_RETRY_FALLBACK");
+}
+/** Hard upper bound on extraction retries per document (floored at 0). */
+export function extractionRetryBudget(): number {
+  return Math.max(0, envInt("EXTRACTION_RETRY_BUDGET", 1));
+}
+/** 3.4a — ADDITIVE discovery→extraction→in-evidence funnel instrumentation.
+ *  Pure counting + logging; never changes a verdict. Default OFF (log only when
+ *  explicitly enabled to avoid log noise). */
+export function retrievalFunnelInstrumentation(): boolean {
+  return envOnDefaultFalse("RETRIEVAL_FUNNEL_INSTRUMENTATION");
+}
