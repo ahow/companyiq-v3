@@ -177,7 +177,7 @@ const GENERIC_NAME_WORDS = new Set<string>([
   "hong", "kong", "china", "japan", "korea", "america", "american", "national",
 ]);
 
-/** Primary domains from domain_policies (Source Domains page) */
+/** Primary domains from domain_policies (Source Domains page) and regulator hosts */
 const PRIMARY_DOMAINS = new Set([
   "adx.ae", "annualreports.com", "asx.com.au", "bseindia.com", "cninfo.com.cn",
   "companiesmarketcap.com", "corporate-ir.net", "edgar-online.com", "euronext.com",
@@ -186,7 +186,14 @@ const PRIMARY_DOMAINS = new Set([
   "londonstockexchange.com", "marketscreener.com", "nasdaq.com", "nseindia.com",
   "proxyvote.com", "q4cdn.com", "scribd.com", "sec.gov", "sedarplus.ca", "sgx.com",
   "sina.com.cn", "sse.com.cn", "stocktitan.net", "sustainabilityreports.com", "szse.cn",
-  "unglobalcompact.org"
+  "unglobalcompact.org", "filings.xbrl.org", "modernslaveryregister.gov.au",
+  "unternehmensregister.de", "handelsregister.de", "registers.esma.europa.eu",
+  "esap.europa.eu", "info-financiere.fr", "cnmv.es", "1info.it", "registroimprese.it",
+  "afm.nl", "kvk.nl", "bolagsverket.se", "brreg.no", "datacvr.virk.dk", "zefix.ch",
+  "core.cro.ie", "edinet-fsa.go.jp", "tdnet.info", "krx.co.kr", "twse.com.tw",
+  "sebi.gov.in", "mca.gov.in", "b3.com.br", "cvm.gov.br", "saudiexchange.sa",
+  "dfm.ae", "kap.org.tr", "tase.co.il", "jse.co.za", "asic.gov.au", "mziq.com",
+  "precisionir.com",
 ]);
 
 function isTrustedSource(url: string | undefined, company: CompanyIdentity): boolean {
@@ -514,38 +521,20 @@ function attributeOwnDocument(
   company: CompanyIdentity,
   toks: string[],
 ): { attributedToTarget: true; reason: string } | null {
-  // RC4 (Filing-class provenance): a verified primary/statutory filing or
-  // registration document is, by its nature, the issuer's own disclosure about
-  // itself. On a first-party host, provenance alone establishes attribution —
-  // no in-span pronoun required. For the issuer's OWN domain, provenance is
-  // sufficient; for a trusted filing repository (sec.gov, hkexnews, ...) the
-  // title must also name the target so a repo hosting many issuers cannot
-  // over-attribute.
-  if (rc4FilingProvenanceEnabled() && isFilingClassSource(q)) {
-    if (isOwnDomainSource(q.sourceUrl, company)) {
-      return { attributedToTarget: true, reason: "Primary filing on own domain (RC4)" };
-    }
-    const titleNamesTarget = toks.some(t => t.length >= 3 && (q.source || "").toLowerCase().includes(t));
-    if (isTrustedSource(q.sourceUrl, company) && titleNamesTarget) {
-      return { attributedToTarget: true, reason: "Primary filing in trusted repository (RC4)" };
-    }
+  // Rule 1 (First-Party Domain): any document on the company's own domain is
+  // attributed to the company automatically (per user steer 2026-11). Hosting
+  // on own domain is the strongest possible identity signal.
+  if (isOwnDomainSource(q.sourceUrl, company)) {
+    return { attributedToTarget: true, reason: "Company Own Domain" };
   }
 
-  // Rule 1 (First-Party Domain Waiver): the company's OWN domain is a strong
-  // first-party signal, but HOSTING ALONE does not make a passage first-party.
-  // A company's own thought-leadership / marketing / insights pages routinely
-  // describe OTHER entities (clients, case-study subjects). So attribute an
-  // own-domain quote only when it also carries a first-party cue — a we/our/us
-  // or "the company/the group/..." reference (PRONOUNS_REGEX), or a CJK
-  // first-party reference for non-English filings where the Latin identity
-  // tokens never appear in the body. Shared regulator/aggregator domains
-  // (cninfo, sina, hkexnews) are explicitly NOT own-domain.
-  if (
-    isOwnDomainSource(q.sourceUrl, company) &&
-    text.trim().length >= 12 &&
-    (PRONOUNS_REGEX.test(text) || CJK_FIRST_PARTY_REGEX.test(text))
-  ) {
-    return { attributedToTarget: true, reason: "Company Own Domain + First-Party" };
+  // RC4 (Filing-class provenance): a verified primary/statutory filing or
+  // registration document is, by its nature, the issuer's own disclosure about
+  // itself. On a trusted host, we attribute it even without an in-span pronoun
+  // or the name appearing in the title (per user steer 2026-11), trusting that
+  // the retrieval process already confirmed the entity for the document.
+  if (rc4FilingProvenanceEnabled() && isFilingClassSource(q) && isTrustedSource(q.sourceUrl, company)) {
+    return { attributedToTarget: true, reason: "Primary filing in trusted repository (RC4)" };
   }
 
   // Rule 1 (brand-aware First-Party Domain Waiver — BUG 1 fix): the quote is

@@ -815,18 +815,25 @@ export function computeCoverageMetric(
       case 4: tier4Count++; break;
     }
 
-    // Universal type detection
-    if (/10-?k|20-?f|annual.?report|integrated.?report/i.test(combined)) {
-      has10KOrAnnualReport = true;
-    }
-    if (/def.?14a|proxy.?statement|agm.?circular/i.test(combined)) {
-      hasProxyOrDEF14A = true;
-    }
-    // Non-US governance-disclosure analogues (AGM/governance report, notice of
-    // meeting, remuneration/governance statement). These satisfy the governance
-    // family for non-US issuers that do not file a US proxy / DEF 14A.
-    if (/governance.?report|corporate.?governance.?statement|remuneration.?report|notice.?of.?(annual.?)?(general.?)?meeting|agm.?(notice|circular)|annual.?general.?meeting/i.test(combined)) {
-      hasGovernanceReport = true;
+    // Universal type detection — hardened to exclude third-party filings
+    // (beneficial ownership, fund holdings) that happen to mention the form
+    // type in their title or URL (per user steer 2026-11).
+    const types = detectSourceTypes(doc.url, doc.title);
+    const isThirdPartyFiling = types.has("regulatory-filing-about-issuer");
+
+    if (!isThirdPartyFiling) {
+      if (/10-?k|20-?f|annual.?report|integrated.?report/i.test(combined)) {
+        has10KOrAnnualReport = true;
+      }
+      if (/def.?14a|proxy.?statement|agm.?circular/i.test(combined)) {
+        hasProxyOrDEF14A = true;
+      }
+      // Non-US governance-disclosure analogues (AGM/governance report, notice of
+      // meeting, remuneration/governance statement). These satisfy the governance
+      // family for non-US issuers that do not file a US proxy / DEF 14A.
+      if (/governance.?report|corporate.?governance.?statement|remuneration.?report|notice.?of.?(annual.?)?(general.?)?meeting|agm.?(notice|circular)|annual.?general.?meeting/i.test(combined)) {
+        hasGovernanceReport = true;
+      }
     }
     if (/investor.?presentation|investor.?day|capital.?markets/i.test(combined)) {
       hasInvestorPresentation = true;
@@ -3509,17 +3516,21 @@ function matchesRequiredDocType(candidate: { title?: string; url?: string }, fra
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length >= 3);
     const forms = Array.from(new Set([String(dt).trim().toLowerCase(), ...clauses]));
-    for (const f of forms) {
-      if (f.length < 3) continue;
-      // For multi-word clauses require the full phrase; for short/acronym clauses
-      // require a word-boundary-ish match to avoid accidental substring hits.
-      if (f.includes(" ")) {
-        if (hay.includes(f)) return true;
-      } else {
-        const re = new RegExp(`(^|[^a-z0-9])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i");
-        if (re.test(hay)) return true;
+      for (const f of forms) {
+        if (f.length < 3) continue;
+        // For multi-word clauses require ALL words to be present in any order
+        // (per user steer 2026-11), which matches compound titles like "2023 TCFD
+        // Disclosure and Report" against the "TCFD Report" required type.
+        // For short/acronym clauses require a word-boundary-ish match to avoid
+        // accidental substring hits.
+        if (f.includes(" ")) {
+          const words = f.split(/\s+/).filter(w => w.length >= 3);
+          if (words.length > 0 && words.every(w => hay.includes(w))) return true;
+        } else {
+          const re = new RegExp(`(^|[^a-z0-9])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i");
+          if (re.test(hay)) return true;
+        }
       }
-    }
   }
   return false;
 }

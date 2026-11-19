@@ -206,7 +206,7 @@ export async function loadWorkspaceCompletenessRows(opts: {
 }): Promise<CompanyCompletenessRow[]> {
   const idFilter =
     opts.companyIds && opts.companyIds.length > 0
-      ? sql`AND c.id = ANY(${opts.companyIds})`
+      ? sql`AND c.id IN (${sql.join(opts.companyIds, sql`, `)})`
       : sql``;
   const res = await db.execute(sql`
     WITH latest_job AS (

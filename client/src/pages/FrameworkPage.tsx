@@ -27,8 +27,6 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
       } catch { /* non-fatal */ }
     })();
   }, []);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newName, setNewName] = useState("");
   const [showAIEditor, setShowAIEditor] = useState(false);
   const [exportingFull, setExportingFull] = useState(false);
   const [exportingJson, setExportingJson] = useState(false);
@@ -96,20 +94,6 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
     setExpandedCategories((prev) => ({ ...prev, [cat]: !prev[cat] }));
   };
 
-  const handleCreate = async () => {
-    if (!newName.trim()) return;
-    try {
-      await api.request("/frameworks", {
-        method: "POST",
-        body: JSON.stringify({ name: newName }),
-      });
-      setNewName("");
-      setShowCreateModal(false);
-      queryClient.invalidateQueries({ queryKey: ["frameworks"] });
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
 
   const handleDeleteFramework = async (id: number) => {
     if (!confirm("Delete this framework? This cannot be undone.")) return;
@@ -391,15 +375,9 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
               className="flex items-center gap-1 px-3 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700"
               title="Correct-by-construction v2 builder: C1–C10 rules, intake pushback, and test-drive validation"
             >
-              <Sparkles className="w-4 h-4" /> Create with v2 builder
+              <Sparkles className="w-4 h-4" /> New Framework
             </button>
           )}
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
-          >
-            <Plus className="w-4 h-4" /> New Framework
-          </button>
         </div>
       </div>
 
@@ -505,7 +483,7 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
           })}
           {(!frameworks || frameworks.length === 0) && orphanV2Drafts.length === 0 && (
             <div className="p-8 text-center text-gray-400 text-sm">
-              No frameworks yet. Create one manually or use the v2 builder.
+              No frameworks yet. Click "New Framework" to create one with the v2 builder.
             </div>
           )}
         </div>
@@ -906,37 +884,6 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
         </div>
       )}
 
-      {/* Create Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-96 shadow-xl">
-            <h3 className="text-lg font-semibold mb-4">Create New Framework</h3>
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg text-sm"
-              placeholder="Framework name..."
-              autoFocus
-              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-            />
-            <div className="flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreate}
-                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

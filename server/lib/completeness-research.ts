@@ -35,8 +35,14 @@ export function candidateMatchesDocType(candidate: CandidateLike, docType: strin
   const hay = `${candidate.title || ""} ${candidate.url || ""}`.toLowerCase();
   if (!hay.trim()) return false;
   for (const f of docTypeMatchForms(docType)) {
+    // For multi-word clauses require ALL words to be present in any order
+    // (per user steer 2026-11), which matches compound titles like "2023 TCFD
+    // Disclosure and Report" against the "TCFD Report" required type.
+    // For short/acronym clauses require a word-boundary-ish match to avoid
+    // accidental substring hits.
     if (f.includes(" ")) {
-      if (hay.includes(f)) return true;
+      const words = f.split(/\s+/).filter(w => w.length >= 3);
+      if (words.length > 0 && words.every(w => hay.includes(w))) return true;
     } else {
       const re = new RegExp(
         `(^|[^a-z0-9])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`,
