@@ -26,7 +26,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { scoreOnlyReplayEnabled, decideScoreOnlyReplay } from "./scoring-fix-flags.js";
+import { scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay } from "./scoring-fix-flags.js";
 import { isRetriableError } from "./retry-policy.js";
 
 function setFlag(name: string, v: string | null) {
@@ -36,6 +36,7 @@ function setFlag(name: string, v: string | null) {
 
 afterEach(() => {
   setFlag("SCORE_ONLY_REPLAY", null);
+  setFlag("SCORE_ONLY_REPLAY_COLD_START_DISCOVERS", null);
 });
 
 // ─── (a) flag default is OFF ────────────────────────────────────────────────────
@@ -92,6 +93,52 @@ test("decideScoreOnlyReplay: flag ON + NO pinned corpus → 'skip' (fail-safe, n
   const d = decideScoreOnlyReplay({ enabled: true, sourceBatchIdPresent: false, pinnedDocCount: 0 });
   assert.equal(d.mode, "skip", "no pinned docs → skip the company, do NOT re-discover");
   assert.equal(d.reason, "no-pinned-corpus");
+});
+
+// ─── cold-start fallback (SCORE_ONLY_REPLAY_COLD_START_DISCOVERS) ────────────────
+
+test("SCORE_ONLY_REPLAY_COLD_START_DISCOVERS defaults OFF when unset", () => {
+  setFlag("SCORE_ONLY_REPLAY_COLD_START_DISCOVERS", null);
+  assert.equal(scoreOnlyReplayColdStartDiscoversEnabled(), false, "unset → disabled");
+});
+
+test("SCORE_ONLY_REPLAY_COLD_START_DISCOVERS reads env via the shared helper", () => {
+  setFlag("SCORE_ONLY_REPLAY_COLD_START_DISCOVERS", "1");
+  assert.equal(scoreOnlyReplayColdStartDiscoversEnabled(), true, "'1' → enabled");
+  setFlag("SCORE_ONLY_REPLAY_COLD_START_DISCOVERS", "false");
+  assert.equal(scoreOnlyReplayColdStartDiscoversEnabled(), false, "'false' → disabled");
+});
+
+test("decideScoreOnlyReplay: ON + NO pinned + cold-start ON → 'discover' (discover+freeze, NOT skip)", () => {
+  const d = decideScoreOnlyReplay({
+    enabled: true, sourceBatchIdPresent: false, pinnedDocCount: 0, coldStartDiscovers: true,
+  });
+  assert.equal(d.mode, "discover", "cold start → run a normal discovery+freeze this run");
+  assert.match(d.reason, /cold-start-discovery/);
+});
+
+test("decideScoreOnlyReplay: cold-start ON does NOT override an existing pinned corpus → still 'replay'", () => {
+  const d = decideScoreOnlyReplay({
+    enabled: true, sourceBatchIdPresent: false, pinnedDocCount: 4, coldStartDiscovers: true,
+  });
+  assert.equal(d.mode, "replay", "a frozen corpus is always replayed — evidence held constant");
+});
+
+test("decideScoreOnlyReplay: cold-start absent/false + NO pinned → still 'skip' (unchanged default)", () => {
+  const dAbsent = decideScoreOnlyReplay({ enabled: true, sourceBatchIdPresent: false, pinnedDocCount: 0 });
+  assert.equal(dAbsent.mode, "skip", "flag absent → byte-for-byte prior skip behaviour");
+  const dFalse = decideScoreOnlyReplay({
+    enabled: true, sourceBatchIdPresent: false, pinnedDocCount: 0, coldStartDiscovers: false,
+  });
+  assert.equal(dFalse.mode, "skip", "flag false → skip");
+});
+
+test("decideScoreOnlyReplay: cold-start never engages while the flag itself is OFF", () => {
+  const d = decideScoreOnlyReplay({
+    enabled: false, sourceBatchIdPresent: false, pinnedDocCount: 0, coldStartDiscovers: true,
+  });
+  assert.equal(d.mode, "off", "SCORE_ONLY_REPLAY off → no replay behaviour at all");
+  assert.equal(d.reason, "flag-off");
 });
 
 // ─── skip error is NON-RETRIABLE (worker must not loop a fresh discovery) ────────

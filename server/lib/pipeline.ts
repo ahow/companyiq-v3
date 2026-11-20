@@ -40,7 +40,7 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, decideScoreOnlyReplay } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay } from "./scoring-fix-flags.js";
 import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
@@ -4230,7 +4230,18 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       enabled: replayEnabled,
       sourceBatchIdPresent: !!sourceBatchId,
       pinnedDocCount,
+      coldStartDiscovers: scoreOnlyReplayColdStartDiscoversEnabled(),
     });
+    if (decision.mode === "discover") {
+      // Cold start (SCORE_ONLY_REPLAY_COLD_START_DISCOVERS on): the harness is ON
+      // but nothing is frozen yet for this pair. Do NOT skip — fall through to a
+      // normal discovery+score run. The worker freezes the golden snapshot on
+      // success (writeFrozenCorpus, first-wins), so the NEXT run of this pair
+      // replays against it and evidence is held constant from here on. This is
+      // what lets a fresh set of companies / a new framework yield complete
+      // results in one run without a prior golden run.
+      console.log(`[${companyName}] SCORE_ONLY_REPLAY cold-start: ${decision.reason} for (company=${companyId}, fw=${framework.id}) — running a normal discovery+freeze this run (no prior run required); subsequent runs will replay the frozen corpus.`);
+    }
     if (decision.mode === "skip") {
       // Fail-safe: NO pinned corpus for this pair. Skip the company with a clear
       // logged reason — explicitly DO NOT fall through to re-discovery, which

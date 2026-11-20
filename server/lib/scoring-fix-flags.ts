@@ -601,6 +601,20 @@ export function scoreOnlyReplayEnabled(): boolean {
   return envOnDefaultFalse("SCORE_ONLY_REPLAY");
 }
 
+/** Default OFF. Cold-start fallback for SCORE_ONLY_REPLAY. When ON, a
+ *  (company, framework) pair that has NO pinned frozen_corpus_snapshot is NOT
+ *  skipped — it falls through to a normal discovery + score run, which then
+ *  freezes the golden snapshot (first-wins). The next run of that pair finds the
+ *  snapshot and replays against it (evidence held constant). This lets a fresh
+ *  set of companies / a new framework produce complete results in ONE run
+ *  without a prior "golden" run, while preserving hold-evidence-constant for
+ *  every subsequent run. A pair that already has a snapshot still replays — this
+ *  flag only changes the no-snapshot case, from "skip" to "discover+freeze".
+ *  With it OFF (compiled default) the no-snapshot case skips exactly as before. */
+export function scoreOnlyReplayColdStartDiscoversEnabled(): boolean {
+  return envOnDefaultFalse("SCORE_ONLY_REPLAY_COLD_START_DISCOVERS");
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // FRAMEWORK_SCOPE_CONFIG_ENRICH — generic scope-config enrichment carrier.
 //
@@ -649,11 +663,21 @@ export function decideScoreOnlyReplay(opts: {
   enabled: boolean;
   sourceBatchIdPresent: boolean;
   pinnedDocCount: number;
-}): { mode: "off" | "replay" | "skip"; reason: string } {
+  /** SCORE_ONLY_REPLAY_COLD_START_DISCOVERS. When true, a pair with no pinned
+   *  corpus returns "discover" (normal discovery + freeze this run) instead of
+   *  "skip". Defaults false → unchanged skip behaviour. */
+  coldStartDiscovers?: boolean;
+}): { mode: "off" | "replay" | "skip" | "discover"; reason: string } {
   if (!opts.enabled) return { mode: "off", reason: "flag-off" };
   if (opts.sourceBatchIdPresent) return { mode: "off", reason: "source-batch-replay-active" };
   if (opts.pinnedDocCount > 0) {
     return { mode: "replay", reason: `pinned-corpus-present:${opts.pinnedDocCount}` };
+  }
+  if (opts.coldStartDiscovers) {
+    // Cold start: nothing frozen yet for this pair. Do a normal discovery+score
+    // run (the worker freezes the golden snapshot on success); later runs replay
+    // it. "Hold evidence constant" is preserved — there is no evidence to hold.
+    return { mode: "discover", reason: "cold-start-discovery:no-pinned-corpus" };
   }
   return { mode: "skip", reason: "no-pinned-corpus" };
 }
