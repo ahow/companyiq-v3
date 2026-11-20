@@ -9,7 +9,7 @@ const base = (): Record<string, any> => ({
   universe: null,
   reportingPeriodMonths: null,
   subsidiaryDomains: null,
-  metadata: {
+  intakeArtefact: {
     scopeConfig: {
       entityType: "group",
       universe: "MSCI_ACWI",
@@ -33,7 +33,7 @@ test("flag ON + no metadata → unchanged (same reference)", () => {
 });
 
 test("flag ON + metadata without scopeConfig → unchanged (same reference)", () => {
-  const fw: any = { id: 3, name: "Meta no scope", metadata: { other: 1 } };
+  const fw: any = { id: 3, name: "Meta no scope", intakeArtefact: { other: 1 } };
   const out = enrichFrameworkScopeConfig(fw, { enabled: true });
   assert.equal(out, fw);
 });
@@ -68,7 +68,7 @@ test("invalid reportingPeriodMonths (0 / negative / NaN / non-number) → ignore
       id: 9,
       entityType: null,
       reportingPeriodMonths: null,
-      metadata: { scopeConfig: { reportingPeriodMonths: bad } },
+      intakeArtefact: { scopeConfig: { reportingPeriodMonths: bad } },
     };
     const out = enrichFrameworkScopeConfig(fw, { enabled: true });
     assert.equal(out.reportingPeriodMonths ?? null, null, `bad value ${String(bad)} ignored`);
@@ -80,7 +80,7 @@ test("subsidiaryDomains trims entries and drops empties / non-strings", () => {
   const fw: any = {
     id: 10,
     subsidiaryDomains: null,
-    metadata: {
+    intakeArtefact: {
       scopeConfig: {
         subsidiaryDomains: ["  sub-a.com  ", "", "   ", 42, null, "sub-b.com"],
       },
@@ -94,7 +94,7 @@ test("subsidiaryDomains all-empty → field not set, unchanged reference", () =>
   const fw: any = {
     id: 11,
     subsidiaryDomains: null,
-    metadata: { scopeConfig: { subsidiaryDomains: ["", "   ", 7] } },
+    intakeArtefact: { scopeConfig: { subsidiaryDomains: ["", "   ", 7] } },
   };
   const out = enrichFrameworkScopeConfig(fw, { enabled: true });
   assert.equal(out, fw);
@@ -106,7 +106,7 @@ test("empty-string entityType/universe in scopeConfig → ignored", () => {
     id: 12,
     entityType: null,
     universe: null,
-    metadata: { scopeConfig: { entityType: "   ", universe: "" } },
+    intakeArtefact: { scopeConfig: { entityType: "   ", universe: "" } },
   };
   const out = enrichFrameworkScopeConfig(fw, { enabled: true });
   assert.equal(out, fw);
@@ -121,7 +121,7 @@ test("partial scopeConfig → only present fields set, others untouched", () => 
     universe: null,
     reportingPeriodMonths: null,
     subsidiaryDomains: null,
-    metadata: { scopeConfig: { universe: "CUSTOM" } },
+    intakeArtefact: { scopeConfig: { universe: "CUSTOM" } },
   };
   const out = enrichFrameworkScopeConfig(fw, { enabled: true });
   assert.equal(out.universe, "CUSTOM");

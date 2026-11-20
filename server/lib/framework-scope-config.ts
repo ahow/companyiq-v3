@@ -55,10 +55,13 @@ export function enrichFrameworkScopeConfig<T extends Record<string, any>>(
   if (!opts || !opts.enabled) return framework;
   if (!framework || typeof framework !== "object") return framework;
 
-  const metadata = (framework as any).metadata;
-  if (!metadata || typeof metadata !== "object") return framework;
+  // Carrier is the frameworks table's existing `intake_artefact` jsonb column
+  // (Drizzle-mapped to `intakeArtefact`). The frameworks table has NO `metadata`
+  // column; scope config lives under `intakeArtefact.scopeConfig`.
+  const carrier = (framework as any).intakeArtefact;
+  if (!carrier || typeof carrier !== "object") return framework;
 
-  const scopeConfig = (metadata as any).scopeConfig as FrameworkScopeConfig | undefined;
+  const scopeConfig = (carrier as any).scopeConfig as FrameworkScopeConfig | undefined;
   if (!scopeConfig || typeof scopeConfig !== "object") return framework;
 
   // Build the set of changes defensively; only apply a field when valid in
