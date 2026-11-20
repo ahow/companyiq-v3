@@ -541,3 +541,70 @@ export function extractionRetryBudget(): number {
 export function retrievalFunnelInstrumentation(): boolean {
   return envOnDefaultFalse("RETRIEVAL_FUNNEL_INSTRUMENTATION");
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Score-Only Replay harness — HOLD EVIDENCE CONSTANT across runs so a scoring /
+// flag / config delta becomes measurable.
+//
+// WHY: framework 25 (and others) swing run-to-run because the document set per
+// company is re-discovered + re-retrieved + re-extracted on every run (Yes-match
+// consistency across consecutive runs was only ~49%). No code/flag/config delta
+// can be attributed while the evidence moves underneath. This harness pins ONE
+// accepted document set per (company, framework) — the IMMUTABLE
+// frozen_corpus_snapshot already frozen on the first successful assessment of the
+// pair (storage.writeFrozenCorpus) — and, on later runs, bypasses
+// discovery + retrieval(fetch) + extraction entirely, feeding that exact pinned
+// corpus's already-extracted content straight to scoring. Scoring then runs
+// NORMALLY (all other scoring flags still apply), so the ONLY thing held constant
+// is the evidence set.
+//
+// This is DISTINCT from CORPUS_REUSE_ACROSS_RUNS / FROZEN_CORPUS_CONTENT_HASH_REUSE
+// (which skip only the discovery SEARCH but still fetch/extract the persisted
+// corpus, and still fall back to re-discovery in several paths). Score-only replay
+// additionally skips fetch + extraction and NEVER re-discovers: a company with no
+// pinned set is SKIPPED with a logged reason rather than silently re-discovered
+// (which would defeat the purpose).
+//
+// The replay source is keyed by (company_id, framework_id) via the immutable
+// frozen_corpus_snapshot — there is exactly one golden set per pair (first-wins),
+// so no run/snapshot id needs to be supplied. Nothing is hardcoded: company,
+// framework and measure are all resolved from live DB/config at run time.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** Default OFF. When ON, a run of a (company, framework) pair that has a pinned
+ *  frozen_corpus_snapshot replays score-only against that exact evidence set
+ *  (discovery + fetch + extraction bypassed); a pair with no pinned set is
+ *  skipped with a logged reason (never re-discovered). With the flag OFF the
+ *  pipeline behaves byte-for-byte as today. */
+export function scoreOnlyReplayEnabled(): boolean {
+  return envOnDefaultFalse("SCORE_ONLY_REPLAY");
+}
+
+/**
+ * Pure, deterministic decision used by the pipeline to choose the Score-Only
+ * Replay branch. Kept side-effect-free so it is directly unit-testable and so the
+ * replay/skip/off contract is discoverable in one place.
+ *
+ *   mode "off"    → harness disabled (or a batch_corpus replay is already active):
+ *                   run the pipeline exactly as today.
+ *   mode "replay" → harness ON and a pinned corpus exists for (company,framework):
+ *                   bypass discovery/retrieval/extraction, score the pinned set.
+ *   mode "skip"   → harness ON but NO pinned corpus for this pair: SKIP the
+ *                   company with a reason — explicitly do NOT re-discover (that
+ *                   would move the evidence and defeat the harness).
+ *
+ * `sourceBatchIdPresent` yields "off" so this never double-engages with the
+ * existing batch_corpus (`sourceBatchId`) replay path.
+ */
+export function decideScoreOnlyReplay(opts: {
+  enabled: boolean;
+  sourceBatchIdPresent: boolean;
+  pinnedDocCount: number;
+}): { mode: "off" | "replay" | "skip"; reason: string } {
+  if (!opts.enabled) return { mode: "off", reason: "flag-off" };
+  if (opts.sourceBatchIdPresent) return { mode: "off", reason: "source-batch-replay-active" };
+  if (opts.pinnedDocCount > 0) {
+    return { mode: "replay", reason: `pinned-corpus-present:${opts.pinnedDocCount}` };
+  }
+  return { mode: "skip", reason: "no-pinned-corpus" };
+}

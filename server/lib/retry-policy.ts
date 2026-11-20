@@ -29,6 +29,12 @@ export const NON_RETRIABLE_ERRORS = [
   // not be confirmed terminated and the replica quarantined its permits. The
   // attempt may already have done (paid) work; do not re-run it automatically.
   "Isolated job child cleanup unconfirmed",
+  // Score-Only Replay harness (SCORE_ONLY_REPLAY): when the harness is on and a
+  // (company, framework) has NO pinned frozen_corpus_snapshot, the pipeline skips
+  // the company with this reason and explicitly does NOT re-discover (that would
+  // move the evidence and defeat the harness). Retrying would only loop the same
+  // no-pinned-corpus skip, so it is final.
+  "score-only-replay: no pinned corpus",
 ] as const;
 
 export function isRetriableError(error: string): boolean {

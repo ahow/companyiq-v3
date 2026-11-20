@@ -40,7 +40,7 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, decideScoreOnlyReplay } from "./scoring-fix-flags.js";
 import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
@@ -2746,8 +2746,13 @@ async function runAnalyzePhase(opts: {
   // PR 1 · Change 4: signals replay / skipFetch — suppresses network calls
   // even when reviewQueue is present so replay determinism is preserved.
   skipFetch?: boolean;
+  // Score-Only Replay harness: when true, the document corpus is loaded EXACTLY
+  // from this (company, framework)'s pinned frozen_corpus_snapshot (already
+  // extracted content), holding evidence constant across runs. Set only by
+  // runAnalysisPipeline after decideScoreOnlyReplay returns "replay".
+  scoreOnlyReplay?: boolean;
 }): Promise<AnalysisResult | null> {
-  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck, issuerProfile, reviewQueue, skipFetch } = opts;
+  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck, issuerProfile, reviewQueue, skipFetch, scoreOnlyReplay } = opts;
   const companyId = company.id;
   const companyName = company.name;
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
@@ -2776,7 +2781,36 @@ async function runAnalyzePhase(opts: {
   // so the evidence pack is identical every time. Falls back to the full pool if no snapshot.
   let fetchedDocs: Awaited<ReturnType<typeof storage.getFetchedDocuments>>;
   const replayBatchId = sourceBatchId ?? null;
-  if (replayBatchId) {
+  if (scoreOnlyReplay) {
+    // ── SCORE-ONLY REPLAY: load EXACTLY the (company, framework) pinned corpus ──
+    // Read documents straight from the immutable frozen_corpus_snapshot joined to
+    // the already-extracted document_content. Discovery/fetch/extraction were
+    // bypassed upstream (runAnalysisPipeline set skipFetch=true); this is the
+    // evidence set held constant across runs. ORDER BY d.id keeps the pack stable.
+    // Mirrors the sourceBatchId batch_corpus replay query shape, but keyed on the
+    // per-(company, framework) snapshot instead of a batch.
+    const { db: dbImport } = await import("../db.js");
+    const { sql: sqlImport } = await import("drizzle-orm");
+    const expected = await storage.getFrozenCorpus(companyId, framework.id);
+    const snapshotRows = await dbImport.execute(sqlImport`
+      SELECT d.id, d.company_id, d.url, d.title, d.type, d.gate_verdict,
+             d.gate_reason, d.fetch_status, d.fetch_failures, d.fetched_at, d.created_at,
+             COALESCE(dc.content, d.content) AS content
+      FROM frozen_corpus_snapshot fcs
+      JOIN documents d ON d.id = fcs.document_id
+      LEFT JOIN document_content dc ON dc.id = d.content_id
+      WHERE fcs.company_id = ${companyId} AND fcs.framework_id = ${framework.id}
+      ORDER BY d.id
+    `);
+    fetchedDocs = snapshotRows.rows as any;
+    console.log(`[${companyName}] SCORE_ONLY_REPLAY: loaded ${fetchedDocs.length}/${expected.length} pinned docs from frozen_corpus_snapshot (fw=${framework.id}); discovery/retrieval/extraction skipped`);
+    if (fetchedDocs.length === 0) {
+      // Pinned rows exist but none resolve to live documents (snapshot orphaned by
+      // a documents-table reset). Fail safe: do NOT re-discover — fall through to
+      // the empty-corpus handling below, which records a 0 with a clear reason.
+      console.warn(`[${companyName}] SCORE_ONLY_REPLAY: all ${expected.length} pinned snapshot rows are orphaned (no live documents); scoring an empty corpus rather than re-discovering.`);
+    }
+  } else if (replayBatchId) {
     // CORPUS REPLAY MODE: read exactly from the source batch's corpus snapshot.
     // Never fall back to live documents — deterministic failure on missing snapshot.
     const { db: dbImport } = await import("../db.js");
@@ -4170,6 +4204,56 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
     throw new Error(`Corpus replay requires skipFetch=true (sourceBatchId=${sourceBatchId}). Refusing to run discovery/fetch during replay.`);
   }
 
+  // ── Score-Only Replay harness (SCORE_ONLY_REPLAY) ──────────────────────────
+  // HOLD EVIDENCE CONSTANT: when the harness is ON and this (company, framework)
+  // has a pinned frozen_corpus_snapshot, bypass discovery + fetch + extraction
+  // and feed EXACTLY that pinned corpus to scoring. The decision is a pure
+  // function (decideScoreOnlyReplay) so the replay/skip/off contract is unit
+  // tested. The pinned-corpus probe only runs when the flag is on AND no
+  // batch_corpus replay (sourceBatchId) is already active, so with the flag off
+  // there is zero behaviour change and no extra DB read.
+  let scoreOnlyReplay = false;
+  let effectiveSkipFetch = skipFetch;
+  {
+    const replayEnabled = scoreOnlyReplayEnabled();
+    let pinnedDocCount = 0;
+    if (replayEnabled && !sourceBatchId) {
+      try {
+        const pinned = await storage.getFrozenCorpus(companyId, framework.id);
+        pinnedDocCount = pinned.length;
+      } catch (probeErr: any) {
+        console.warn(`[${companyName}] SCORE_ONLY_REPLAY pinned-corpus probe failed (non-fatal), treating as no-pinned: ${probeErr?.message}`);
+        pinnedDocCount = 0;
+      }
+    }
+    const decision = decideScoreOnlyReplay({
+      enabled: replayEnabled,
+      sourceBatchIdPresent: !!sourceBatchId,
+      pinnedDocCount,
+    });
+    if (decision.mode === "skip") {
+      // Fail-safe: NO pinned corpus for this pair. Skip the company with a clear
+      // logged reason — explicitly DO NOT fall through to re-discovery, which
+      // would move the evidence and defeat the harness. Non-retriable (see
+      // retry-policy NON_RETRIABLE_ERRORS "score-only-replay") so the worker does
+      // not loop a fresh discovery on top.
+      console.warn(`[${companyName}] SCORE_ONLY_REPLAY: ${decision.reason} for (company=${companyId}, fw=${framework.id}) — SKIPPING company (NOT re-discovering; evidence held constant).`);
+      return {
+        success: false,
+        error: `score-only-replay: no pinned corpus for company=${companyId} fw=${framework.id} — skipped (no re-discovery)`,
+        documentsProcessed: 0,
+        documentsFresh: 0,
+        documentsCached: 0,
+        failureType: "no_documents" as const,
+      };
+    }
+    if (decision.mode === "replay") {
+      scoreOnlyReplay = true;
+      effectiveSkipFetch = true; // bypass discovery + fetch + extraction entirely
+      console.log(`[${companyName}] SCORE_ONLY_REPLAY ACTIVE (${decision.reason}) for (company=${companyId}, fw=${framework.id}): bypassing discovery/retrieval/extraction; feeding pinned corpus straight to scoring.`);
+    }
+  }
+
   // Wrap the entire pipeline in a hard timeout to prevent any single company
   // from blocking the worker indefinitely. This ensures batch counters always
   // increment and the batch eventually completes.
@@ -4185,7 +4269,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // PR 1 · Change 1c: type widened to carry the optional issuerProfile returned
       // by runFetchPhase; used to thread the profile into the analyze phase.
       let fetchResult: { fetchedCount: number; totalAccepted: number; issuerProfile?: import("./issuer-profile.js").IssuerProfile; corpusReadiness?: { ready: boolean; reason?: string; primariesDiscovered: number; primariesFetched: number; ownIssuerFetched: number; refetchAttempts: number } } = { fetchedCount: 0, totalAccepted: 0 };
-      if (!skipFetch) {
+      if (!effectiveSkipFetch) {
         setDiagStage("fetch");
         fetchResult = await runFetchPhase({ company, framework, workspaceId, batchId, cancelCheck: effectiveCancel, batchFetchState: opts.batchFetchState, skipDiscovery, recheck });
         
@@ -4260,7 +4344,10 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         cancelCheck: effectiveCancel,
         issuerProfile: fetchResult.issuerProfile,
         reviewQueue,
-        skipFetch,
+        skipFetch: effectiveSkipFetch,
+        // Score-Only Replay: load EXACTLY the pinned frozen_corpus_snapshot docs
+        // as the evidence corpus (see runAnalyzePhase doc-loading branch).
+        scoreOnlyReplay,
       });
 
       if (!analysis) {
@@ -4294,7 +4381,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
             success: true,
             documentsProcessed: fetchResult.fetchedCount,
             documentsFresh: fetchResult.totalAccepted,
-            documentsCached: skipFetch ? fetchResult.fetchedCount : 0,
+            documentsCached: effectiveSkipFetch ? fetchResult.fetchedCount : 0,
           };
         }
         if (zc.outcome === "capped" || zc.outcome === "quarantine") {
@@ -4307,7 +4394,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
             error: `Insufficient corpus — zero usable content across all measures (${zc.outcome}${zc.reason ? ": " + zc.reason : ""})`,
             documentsProcessed: fetchResult.fetchedCount,
             documentsFresh: fetchResult.totalAccepted,
-            documentsCached: skipFetch ? fetchResult.fetchedCount : 0,
+            documentsCached: effectiveSkipFetch ? fetchResult.fetchedCount : 0,
             failureType: "scoring_error" as const,
           };
         }
@@ -4327,7 +4414,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         analysis,
         documentsProcessed: fetchResult.fetchedCount,
         documentsFresh: fetchResult.totalAccepted,
-        documentsCached: skipFetch ? fetchResult.fetchedCount : 0,
+        documentsCached: effectiveSkipFetch ? fetchResult.fetchedCount : 0,
       };
     } catch (error: any) {
       // Lifecycle: a dispatch gate / fenced write threw because this attempt lost
