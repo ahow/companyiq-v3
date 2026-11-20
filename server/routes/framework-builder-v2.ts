@@ -19,7 +19,7 @@ import { exportFrameworkAsSeedTemplate, type ExistingFrameworkForExport } from "
 import { exportFrameworkAsFullDetail } from "../lib/framework-v2/export-as-full.js";
 import { deriveRequiredSourceTypes } from "../lib/framework-v2/required-source-types.js";
 import { BUILDER_AUTOFILL_REQUIRED_SOURCE_TYPES } from "../lib/framework-v2/builder-lint-flags.js";
-import { buildFrameworkExport, buildFrameworkInserts, isFrameworkExportPayload } from "../lib/framework-v2/import-framework.js";
+import { buildFrameworkExport, buildFrameworkInserts, isFrameworkExportPayload, deriveLineageKey, resolveImportLineageId, type ExistingLineageFramework } from "../lib/framework-v2/import-framework.js";
 import { analyseTestDrive, buildSampleSelectionPrompt, computeFlipStats, buildSparseCorpusFlag, type TestDriveCompanyResult, type TestDriveSampleRequest, type MultiRunIteration, type SparseCompanySignal } from "../lib/framework-v2/test-drive.js";
 import { computeRobustnessCriteria, type CompanyLabel } from "../lib/framework-v2/robustness-criteria.js";
 import { proposeEditsForFlags, proposeMergeForNearDuplicate, FRAMEWORK_LEVEL_OPS, DIRECT_MEASURE_OPS, FRAMEWORK_SENTINEL } from "../lib/framework-v2/edit-proposer.js";
@@ -5050,6 +5050,11 @@ router.post("/v2/import", requireWorkspace, async (req: Request, res: Response) 
       throw guardErr;
     }
 
+    // F1 (FRAMEWORK_LINEAGE_FREEZE): never persist a stale cross-DB lineage id from
+    // the payload — the lineage is resolved fresh against the target workspace below.
+    delete (framework as any).frameworkLineageId;
+    delete (framework as any).framework_lineage_id;
+
     const created = await storage.createFramework(framework as any);
 
     let measureCount = 0;
@@ -5058,7 +5063,35 @@ router.post("/v2/import", requireWorkspace, async (req: Request, res: Response) 
       measureCount++;
     }
 
-    return res.json({ frameworkId: created.id, name: created.name, measureCount });
+    // F1 (FRAMEWORK_LINEAGE_FREEZE): assign a STABLE lineage id so a later re-import
+    // (which mints yet another framework id) keys to the same frozen corpus. This is
+    // input plumbing and runs regardless of the flag — the flag only gates whether
+    // the freeze key CONSUMES the lineage id. Match against existing frameworks in
+    // this workspace by a data-derived lineage key (never a hardcoded name).
+    let frameworkLineageId: number | null = null;
+    try {
+      const candidateKey = deriveLineageKey(created as any);
+      const existingLineage: ExistingLineageFramework[] = ((existing as any[]) ?? []).map((f) => ({
+        id: f.id,
+        frameworkLineageId: f.frameworkLineageId ?? f.framework_lineage_id ?? null,
+        lineageKey: deriveLineageKey(f),
+      }));
+      const resolution = resolveImportLineageId({ candidateKey, existing: existingLineage });
+      frameworkLineageId = resolution.lineageId ?? created.id; // no match → root at own id
+      await storage.updateFramework(created.id, { frameworkLineageId });
+      if (resolution.backfillFrameworkId != null) {
+        // The matched existing framework had no lineage id — root it at itself so the
+        // whole lineage (old + new) shares one stable id.
+        await storage.updateFramework(resolution.backfillFrameworkId, {
+          frameworkLineageId: resolution.backfillFrameworkId,
+        });
+      }
+    } catch (lineageErr: any) {
+      // Non-fatal: lineage is additive. Log and continue so import never fails on it.
+      console.warn(`[v2/import] lineage assignment skipped: ${lineageErr?.message || lineageErr}`);
+    }
+
+    return res.json({ frameworkId: created.id, name: created.name, measureCount, frameworkLineageId });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || "internal error" });
   }

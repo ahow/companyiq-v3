@@ -277,3 +277,81 @@ export function buildFrameworkInserts(
 
   return { framework, measures };
 }
+
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// F1 (FRAMEWORK_LINEAGE_FREEZE) — lineage resolution for /v2/import.
+//
+// Each /v2/import mints a NEW framework id, so the frozen corpus (keyed on the id)
+// is cold on every re-import. These pure helpers let the import route assign a
+// STABLE lineage id by matching an incoming framework to an existing one already
+// in the target workspace, using only data-derived values — never a hardcoded
+// framework name. The route performs the DB reads/writes; the decision is here so
+// it is unit-testable.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Data-derived lineage key for a framework. Combines the display name (with a
+ * trailing " (imported)" suffix stripped, since the import route appends it on a
+ * name clash) and the topic term / description, both normalized (lowercased,
+ * collapsed whitespace). Two frameworks that are re-imports of the same lineage
+ * produce the same key. Nothing is hardcoded — every value comes from the row.
+ */
+export function deriveLineageKey(fw: Record<string, any> | null | undefined): string {
+  const norm = (v: unknown): string =>
+    typeof v === "string" ? v.trim().toLowerCase().replace(/\s+/g, " ") : "";
+  const rawName = norm(fw?.name);
+  // Strip one or more trailing " (imported)" suffixes added on name clashes.
+  const name = rawName.replace(/(?:\s*\(imported\))+$/i, "").trim();
+  const topic = norm(fw?.topicTerm ?? fw?.topic_term ?? fw?.topicDescription ?? fw?.topic_description);
+  return `${name}|${topic}`;
+}
+
+export interface ExistingLineageFramework {
+  id: number;
+  frameworkLineageId: number | null | undefined;
+  lineageKey: string;
+}
+
+export interface LineageResolution {
+  /** Lineage id to assign to the newly-created framework. `null` means "no match —
+   *  the new framework is a lineage ROOT; set its lineage id to its own id after
+   *  it is created". */
+  lineageId: number | null;
+  /** When an existing matched framework has a NULL lineage id, this is its id so
+   *  the route can backfill it (self-root) to the same lineage. `null` otherwise. */
+  backfillFrameworkId: number | null;
+}
+
+/**
+ * Decide the lineage id for an import given the candidate's lineage key and the
+ * existing frameworks in the target workspace. Pure — the route supplies the
+ * existing rows and applies the result.
+ *
+ *  - Match found whose lineage id is set  → adopt it.
+ *  - Match found whose lineage id is NULL  → adopt the match's own id as the
+ *    lineage root AND flag it for backfill.
+ *  - No match  → lineageId null (caller roots the new framework at its own id).
+ *
+ * When several existing frameworks share the key, the one with the smallest id
+ * (the earliest, most-root) wins, deterministically.
+ */
+export function resolveImportLineageId(opts: {
+  candidateKey: string;
+  existing: ExistingLineageFramework[];
+}): LineageResolution {
+  const matches = (opts.existing ?? [])
+    .filter((e) => e.lineageKey === opts.candidateKey)
+    .sort((a, b) => a.id - b.id);
+  if (matches.length === 0) {
+    return { lineageId: null, backfillFrameworkId: null };
+  }
+  // Prefer an existing already-set lineage id (smallest), else root at earliest id.
+  const withLineage = matches.find((m) => m.frameworkLineageId != null);
+  if (withLineage && withLineage.frameworkLineageId != null) {
+    return { lineageId: withLineage.frameworkLineageId, backfillFrameworkId: null };
+  }
+  const root = matches[0];
+  return { lineageId: root.id, backfillFrameworkId: root.id };
+}

@@ -187,6 +187,11 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS frozen_corpus JSONB`);
     // W8 (Variance harness): latest per-framework variance report (flip rate / score stddev / corpus-size variance).
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS variance_report JSONB`);
+    // F1 (FRAMEWORK_LINEAGE_FREEZE): stable lineage id carried across /v2/import
+    // re-imports. Nullable/additive — existing rows read NULL (freeze key falls
+    // back to framework id, i.e. unchanged behaviour). Only consumed when the
+    // FRAMEWORK_LINEAGE_FREEZE flag is ON.
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS framework_lineage_id INTEGER`);
 
     // ─── Framework Measures ─────────────────────────────────────────────────
     await db.execute(sql`
@@ -1302,6 +1307,25 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_run_manifests_batch ON run_manifests(batch_id)`);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_run_manifests_hash ON run_manifests(manifest_hash)`);
+
+    // F2 (VERDICT_CACHE_DURABLE): durable backing store for the analyzer's
+    // in-memory verdictCache. Keyed on (company_id, measure_id, evidence_hash,
+    // prompt_hash) — the same fingerprint as the in-memory key — so a verdict
+    // computed in a prior run is reused on replay instead of re-calling the model.
+    // Only read/written when the VERDICT_CACHE_DURABLE flag is ON; with it OFF this
+    // table is never touched and the in-memory Map behaves exactly as today.
+    // Idempotent: CREATE TABLE IF NOT EXISTS + ON CONFLICT upsert at write time.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS verdict_cache (
+        company_id INTEGER NOT NULL,
+        measure_id TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        prompt_hash TEXT NOT NULL,
+        verdict JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (company_id, measure_id, evidence_hash, prompt_hash)
+      )
+    `);
 
     // ─── Seed Default Settings for All Workspaces ──────────────────────
     await seedDefaultSettings();

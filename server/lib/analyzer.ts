@@ -49,6 +49,12 @@ import {
   coverageRulesExecuted,
   retrievalVehicleAgnostic,
   extractionRetryFallback,
+  verdictCacheDurableEnabled,
+  scoringTiebreakRetryEnabled,
+  decideTiebreakRetry,
+  formatVoteString,
+  attributionManualDomainsAtGateEnabled,
+  unionOwnDomains,
 } from "./scoring-fix-flags.js";
 import { evaluateApplicability, evaluateCoverage, type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { requiredSourceTypesBlocking } from "./retrieval-funnel.js";
@@ -3186,7 +3192,7 @@ export async function analyzeCompanyMeasures(opts: {
                 name: company?.name || companyName,
                 ticker: company?.ticker ?? null,
                 domain: company?.domain ?? null,
-                relatedDomains: company?.relatedDomains ?? null,
+                relatedDomains: gateRelatedDomains(company),
                 isin: company?.isin ?? null,
               },
               source: {
@@ -3863,7 +3869,7 @@ export async function analyzeCompanyMeasures(opts: {
               name: company?.name || companyName,
               ticker: company?.ticker ?? null,
               domain: company?.domain ?? null,
-              relatedDomains: company?.relatedDomains ?? null,
+              relatedDomains: gateRelatedDomains(company),
               // 1.3: framework trusted-source domains (empty today → no effect).
               frameworkTrustedDomains,
             },
@@ -3947,7 +3953,7 @@ export async function analyzeCompanyMeasures(opts: {
             name: company?.name || companyName,
             ticker: company?.ticker ?? null,
             domain: company?.domain ?? null,
-            relatedDomains: company?.relatedDomains ?? null,
+            relatedDomains: gateRelatedDomains(company),
             isin: company?.isin ?? null,
           },
           sources,
@@ -4049,7 +4055,7 @@ export async function analyzeCompanyMeasures(opts: {
             ticker: company?.ticker ?? null,
             aliases: (company as any)?.aliases ?? null,
             domain: company?.domain ?? null,
-            relatedDomains: company?.relatedDomains ?? null,
+            relatedDomains: gateRelatedDomains(company),
             // 1.3: framework trusted-source domains (empty today → no effect).
             frameworkTrustedDomains,
           }, result.evidence_summary);
@@ -4293,6 +4299,84 @@ export function verdictCacheKey(measureId: string, evidenceText: string, provide
   return `${companyKey}:${measureId}:${provider}:${scoringMode}:${evidenceHash}:${promptHash}`;
 }
 
+// F2 (VERDICT_CACHE_DURABLE): split the composite verdict-cache key into the DB
+// column parts (company id, measure id, evidence hash, prompt hash). Mirrors the
+// exact fingerprint verdictCacheKey() folds into its string, so the durable table
+// and the in-memory Map agree on identity. Pure.
+function durableVerdictKeyParts(opts: {
+  measureId: string;
+  evidenceText: string;
+  promptText: string;
+  companyId?: number;
+}): { companyId: number; measureId: string; evidenceHash: string; promptHash: string } | null {
+  if (opts.companyId == null || !Number.isFinite(opts.companyId)) return null; // need a real company id to key the row
+  const evidenceHash = createHash("sha256").update(opts.evidenceText).digest("hex").slice(0, 16);
+  const promptHash = createHash("sha256").update(opts.promptText).digest("hex").slice(0, 8);
+  return { companyId: opts.companyId, measureId: opts.measureId, evidenceHash, promptHash };
+}
+
+/** F2: read a durable verdict row. Returns the stored MeasureResult or null.
+ *  Best-effort — any DB error degrades to a cache miss (never throws). */
+async function readDurableVerdict(parts: {
+  companyId: number;
+  measureId: string;
+  evidenceHash: string;
+  promptHash: string;
+}): Promise<MeasureResult | null> {
+  try {
+    const { db } = await import("../db.js");
+    const { sql } = await import("drizzle-orm");
+    const rows = await db.execute(sql`
+      SELECT verdict FROM verdict_cache
+      WHERE company_id = ${parts.companyId}
+        AND measure_id = ${parts.measureId}
+        AND evidence_hash = ${parts.evidenceHash}
+        AND prompt_hash = ${parts.promptHash}
+      LIMIT 1
+    `);
+    const row = (rows.rows as any[])[0];
+    if (!row || row.verdict == null) return null;
+    const v = typeof row.verdict === "string" ? JSON.parse(row.verdict) : row.verdict;
+    return v as MeasureResult;
+  } catch (e: any) {
+    console.warn(`[VERDICT_CACHE_DURABLE] read failed (non-fatal, treating as miss): ${e?.message || e}`);
+    return null;
+  }
+}
+
+/** F2: write a durable verdict row (idempotent upsert). Best-effort — any DB
+ *  error is logged and swallowed so scoring never fails on a cache write. */
+async function writeDurableVerdict(
+  parts: { companyId: number; measureId: string; evidenceHash: string; promptHash: string },
+  result: MeasureResult,
+): Promise<void> {
+  try {
+    const { db } = await import("../db.js");
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`
+      INSERT INTO verdict_cache (company_id, measure_id, evidence_hash, prompt_hash, verdict)
+      VALUES (${parts.companyId}, ${parts.measureId}, ${parts.evidenceHash}, ${parts.promptHash}, ${JSON.stringify(result)}::jsonb)
+      ON CONFLICT (company_id, measure_id, evidence_hash, prompt_hash) DO NOTHING
+    `);
+  } catch (e: any) {
+    console.warn(`[VERDICT_CACHE_DURABLE] write failed (non-fatal): ${e?.message || e}`);
+  }
+}
+
+// F3 (ATTRIBUTION_MANUAL_DOMAINS_AT_GATE): the relatedDomains value handed to the
+// attribution/eligibility gate. OFF (default) → exactly company.relatedDomains, so
+// behaviour is byte-identical. ON → the deduped/normalized UNION of related_domains
+// + related_domains_manual, so manually-curated domains reach the gate under replay
+// (RC#3). Falls back to relatedDomains when the union is empty. Nothing hardcoded —
+// every value comes from the company row.
+function gateRelatedDomains(company: any): string[] | null {
+  if (attributionManualDomainsAtGateEnabled()) {
+    const union = unionOwnDomains(company?.relatedDomains, company?.relatedDomainsManual);
+    if (union.length > 0) return union;
+  }
+  return company?.relatedDomains ?? null;
+}
+
 // 36-B.1: Deterministic seed per (measureId, companyId, providerIndex).
 // Gives each measure a unique seed, reducing systematic bias across measures.
 function deterministicSeed(measureId: string, companyId: number, providerIndex: number): number {
@@ -4342,6 +4426,26 @@ async function scoreSingleMeasure(opts: {
     return { ...cachedVerdict.result };
   }
 
+  // F2 (VERDICT_CACHE_DURABLE): on an in-memory miss, consult the durable table
+  // when the flag is ON. A hit is promoted into the in-memory Map so subsequent
+  // lookups in this process are free and behaviour downstream is identical. With
+  // the flag OFF the table is never touched → exact in-memory behaviour as today.
+  const durableParts = verdictCacheDurableEnabled()
+    ? durableVerdictKeyParts({
+        measureId: measure.measureId,
+        evidenceText: opts.evidenceText,
+        promptText: promptSalt,
+        companyId: opts.companyId,
+      })
+    : null;
+  if (durableParts) {
+    const durable = await readDurableVerdict(durableParts);
+    if (durable) {
+      verdictCache.set(vKey, { result: { ...durable }, ts: Date.now() });
+      return { ...durable };
+    }
+  }
+
   // Self-consistency: run N passes on the SAME provider (no silent cross-model
   // fallback) and take the majority verdict. This bounds the residual best-effort
   // -seed noise that drives cross-run volatility. N is env-tunable; default 3.
@@ -4373,10 +4477,40 @@ async function scoreSingleMeasure(opts: {
   // majority tally so a transient model/network crash can never tip or override a
   // genuine verdict. If EVERY pass crashed, propagate the abstained sentinel so
   // the cell is EXCLUDED from totals (fail-loud), never folded into a fake "No".
-  const substantivePasses = passResults.filter((r) => !(r as any)._scoringFailure);
+  let substantivePasses = passResults.filter((r) => !(r as any)._scoringFailure);
   if (substantivePasses.length === 0) {
     console.error(`[${companyName}] All ${passes} scoring passes crashed for ${measure.measureId} — abstaining (excluded from totals), NOT emitting a substantive zero`);
     return withCanonicalTrace(passResults[0]);
+  }
+
+  // F6 (SCORING_TIEBREAK_RETRY): when a pass FAILED and the substantive passes are
+  // split evenly (a true tie that the failed pass would otherwise have broken by
+  // defaulting UP), retry the failed pass ONCE on a fresh provider index. If the
+  // retry yields a substantive verdict it joins the tally and breaks the tie on
+  // evidence; if it still fails we fall through to the current default-up behaviour
+  // so nothing hangs. With the flag OFF this block is skipped entirely → unchanged.
+  {
+    const failedPassCount = passResults.length - substantivePasses.length;
+    const retry = decideTiebreakRetry({
+      flagOn: scoringTiebreakRetryEnabled(),
+      substantiveScores: substantivePasses.map((r) => r.score),
+      failedPassCount,
+    });
+    if (retry) {
+      console.log(`[${companyName}] SCORING_TIEBREAK_RETRY: ${failedPassCount} failed pass(es) + even substantive split on ${measure.measureId} — retrying one pass instead of defaulting up`);
+      try {
+        const extra = await scoreSingleMeasurePass({ ...opts, providerIndex: passes });
+        passResults.push(extra);
+        if ((extra as any)._gradedBy) gradedBy.add((extra as any)._gradedBy);
+        if (!(extra as any)._scoringFailure) {
+          substantivePasses = passResults.filter((r) => !(r as any)._scoringFailure);
+        } else {
+          console.log(`[${companyName}] SCORING_TIEBREAK_RETRY: retry pass also failed for ${measure.measureId} — falling back to default-up tie-break`);
+        }
+      } catch (retryErr: any) {
+        console.warn(`[${companyName}] SCORING_TIEBREAK_RETRY: retry pass threw for ${measure.measureId} (non-fatal): ${retryErr?.message || retryErr} — falling back to default-up tie-break`);
+      }
+    }
   }
 
   // Majority verdict by score bucket (0 / 0.5 / 1). Ties resolve toward the
@@ -4415,6 +4549,11 @@ async function scoreSingleMeasure(opts: {
   chosen.confidence = unanimous ? "High" : winningCount >= Math.ceil(substantiveCount / 2) ? "Medium" : "Low";
   chosen.verdictNuance = (chosen.verdictNuance ? chosen.verdictNuance + " " : "") +
     `[Self-consistency ${winningCount}/${substantiveCount} on ${gradedByLabel}]`;
+  // F6 (SCORING_VOTE_EXPORT): stamp a clean, structured self-consistency vote
+  // (e.g. "2/3") on the result so the CSV exporter can surface it without parsing
+  // verdictNuance. This is verdict-neutral metadata — it NEVER affects the score,
+  // verdict or totals; the CSV column that reads it is itself flag-gated.
+  (chosen as any).selfConsistencyVote = formatVoteString(winningCount, substantiveCount);
   // Propagate model identity for methodology stamping
   (chosen as any)._gradedBy = gradedByLabel;
 
@@ -4428,6 +4567,12 @@ async function scoreSingleMeasure(opts: {
     for (const [k, v] of verdictCache) {
       if (now - v.ts > VERDICT_CACHE_TTL_MS) verdictCache.delete(k);
     }
+  }
+  // F2 (VERDICT_CACHE_DURABLE): persist the chosen verdict so a later replay reuses
+  // it instead of re-calling the model. Best-effort + flag-gated (durableParts is
+  // null when the flag is OFF or no company id is available). Verdict-neutral.
+  if (durableParts) {
+    await writeDurableVerdict(durableParts, chosen);
   }
   return chosen;
 }

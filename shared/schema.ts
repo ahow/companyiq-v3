@@ -106,6 +106,13 @@ export const frameworks = pgTable("frameworks", {
   name: text("name").notNull(),
   topicDescription: text("topic_description"),
   version: integer("version").notNull().default(1),
+  // F1 (FRAMEWORK_LINEAGE_FREEZE). Stable lineage identity that persists across
+  // /v2/import re-imports (which mint a new framework id each time). Set to the id
+  // of the lineage ROOT framework; a re-import of the same lineage carries this
+  // value forward so the frozen corpus can be keyed on it instead of the per-import
+  // id. Nullable/additive: existing rows read NULL (treated as "no lineage" → the
+  // freeze key falls back to the framework id, i.e. unchanged behaviour).
+  frameworkLineageId: integer("framework_lineage_id"),
   isActive: boolean("is_active").notNull().default(false),
   isShared: boolean("is_shared").notNull().default(false),
   trustedSourceIds: jsonb("trusted_source_ids").$type<number[]>(),

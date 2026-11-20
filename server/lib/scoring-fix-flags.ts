@@ -681,3 +681,204 @@ export function decideScoreOnlyReplay(opts: {
   }
   return { mode: "skip", reason: "no-pinned-corpus" };
 }
+
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 2026-11-20 scoring-reproducibility remediation (F1–F6).
+//
+// Every flag below is DEFAULT-OFF: with none set, the pipeline, analyzer and CSV
+// export behave byte-for-byte as before. Nothing hardcodes a company, framework
+// or measure — every such value is resolved from live DB rows / framework config
+// / CSV input at run time. The pure decision helpers are kept side-effect-free so
+// they are directly unit-testable.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── F1 — FRAMEWORK_LINEAGE_FREEZE ────────────────────────────────────────────
+/** Default OFF. When ON, the frozen-corpus lookup/write key uses the framework's
+ *  stable `frameworkLineageId` (the id of the lineage root framework, carried
+ *  forward across /v2/import re-imports) instead of the per-import framework id.
+ *  This makes the golden corpus survive a re-import that mints a new framework id
+ *  (RC#1). When OFF, the key is the framework id exactly as today. */
+export function frameworkLineageFreezeEnabled(): boolean {
+  return envOnDefaultFalse("FRAMEWORK_LINEAGE_FREEZE");
+}
+
+/** Pure freeze-key selector. Returns the lineage id when the flag is ON and a
+ *  non-null lineage id is available, otherwise the framework id. Used at every
+ *  frozen_corpus_snapshot call site so lookup and write always agree. */
+export function freezeFrameworkKey(opts: {
+  flagOn: boolean;
+  frameworkId: number;
+  frameworkLineageId?: number | null;
+}): number {
+  if (opts.flagOn && opts.frameworkLineageId != null) {
+    return opts.frameworkLineageId;
+  }
+  return opts.frameworkId;
+}
+
+// ── F2 — VERDICT_CACHE_DURABLE ───────────────────────────────────────────────
+/** Default OFF. When ON, the analyzer's in-memory `verdictCache` Map is backed by
+ *  a durable `verdict_cache` DB table keyed on (company id, measure id, evidence
+ *  hash, prompt hash) so a verdict already computed in a prior run is reused on
+ *  replay instead of re-calling the model. When OFF, only the in-memory Map is
+ *  used — exactly as today. */
+export function verdictCacheDurableEnabled(): boolean {
+  return envOnDefaultFalse("VERDICT_CACHE_DURABLE");
+}
+
+// ── F3 — ATTRIBUTION_MANUAL_DOMAINS_AT_GATE ──────────────────────────────────
+/** Default OFF. When ON, the attribution gate call sites pass the UNION of
+ *  company.related_domains + company.related_domains_manual (deduped/normalized)
+ *  instead of related_domains alone, so manually-curated domains reach the gate
+ *  under replay (RC#3). When OFF, only related_domains is passed, as today. */
+export function attributionManualDomainsAtGateEnabled(): boolean {
+  return envOnDefaultFalse("ATTRIBUTION_MANUAL_DOMAINS_AT_GATE");
+}
+
+/** Normalize a single domain-ish string to a bare lowercase host: strip scheme,
+ *  leading www., any path/query, surrounding whitespace and a trailing dot/slash.
+ *  Returns "" for anything that does not look like a host (caller filters). */
+export function normalizeDomain(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  let d = raw.trim().toLowerCase();
+  if (d === "") return "";
+  d = d.replace(/^[a-z][a-z0-9+.-]*:\/\//, ""); // strip scheme://
+  d = d.replace(/^www\./, "");
+  d = d.split("/")[0].split("?")[0].split("#")[0]; // drop path/query/fragment
+  d = d.replace(/\.+$/, "").trim();
+  return d;
+}
+
+/** Pure union of the two domain lists, normalized and deduped, preserving the
+ *  order in which distinct hosts first appear (related_domains first, then the
+ *  manual list). Non-string / empty / malformed entries are dropped. */
+export function unionOwnDomains(
+  relatedDomains: unknown,
+  relatedDomainsManual: unknown,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    for (const entry of list) {
+      const d = normalizeDomain(entry);
+      if (d && !seen.has(d)) {
+        seen.add(d);
+        out.push(d);
+      }
+    }
+  };
+  push(relatedDomains);
+  push(relatedDomainsManual);
+  return out;
+}
+
+// ── F4 — CSV_RUN_MANIFEST_EXPORT ─────────────────────────────────────────────
+/** Default OFF. When ON, the CSV export gains a run-header section (git commit,
+ *  framework id + content hash, run mode, non-default flag snapshot, framework
+ *  version) and per-company corpus columns (Corpus Hash, Docs In Corpus, Corpus
+ *  Frozen At, Replay Y/N), sourced from the stored run manifest + frozen-corpus
+ *  records. When OFF, the CSV is byte-for-byte unchanged. */
+export function csvRunManifestExportEnabled(): boolean {
+  return envOnDefaultFalse("CSV_RUN_MANIFEST_EXPORT");
+}
+
+// ── F5 — PINNED_DOCUMENTS_ENABLED ────────────────────────────────────────────
+/** Default OFF. Completeness flag for pinned-document pipeline consumption. The
+ *  pipeline already consumes company.pinnedDocuments unconditionally (a no-op
+ *  when the list is empty), so this flag does NOT gate that existing behaviour;
+ *  it exists so any NEW pinned-document behaviour can be gated consistently and
+ *  so the capability is discoverable. The CSV import column and single-company
+ *  route that SET pinnedDocuments are always available (input plumbing). */
+export function pinnedDocumentsEnabled(): boolean {
+  return envOnDefaultFalse("PINNED_DOCUMENTS_ENABLED");
+}
+
+// ── F6 — SCORING_VOTE_EXPORT + SCORING_TIEBREAK_RETRY ────────────────────────
+/** Default OFF. When ON, the CSV export adds a per-measure self-consistency vote
+ *  column (e.g. "2/3"). Verdicts are NOT changed. When OFF, the column is absent
+ *  and the CSV is unchanged. */
+export function scoringVoteExportEnabled(): boolean {
+  return envOnDefaultFalse("SCORING_VOTE_EXPORT");
+}
+
+/** Default OFF. When ON, if the self-consistency passes split evenly because a
+ *  pass FAILED (rather than returning a verdict), the analyzer retries the failed
+ *  pass once before falling back to the current default-up tie-break. When OFF,
+ *  the tie-break behaves exactly as today. */
+export function scoringTiebreakRetryEnabled(): boolean {
+  return envOnDefaultFalse("SCORING_TIEBREAK_RETRY");
+}
+
+/** Pure formatter for the self-consistency vote string, e.g. (2, 3) → "2/3".
+ *  Returns "" when the inputs are not usable (no substantive passes), so the
+ *  export can leave the cell blank rather than print "0/0" or "NaN". */
+export function formatVoteString(
+  winningCount: unknown,
+  substantiveCount: unknown,
+): string {
+  const w = Number(winningCount);
+  const s = Number(substantiveCount);
+  if (!Number.isFinite(w) || !Number.isFinite(s) || s <= 0) return "";
+  if (w < 0 || w > s) return "";
+  return `${w}/${s}`;
+}
+
+/** Pure tie-break decision. Returns true when the failed pass should be retried
+ *  instead of defaulting up. Conditions: flag ON, at least one pass failed, and
+ *  the substantive (non-failed) passes are split evenly (a true tie that the
+ *  failed pass would otherwise have broken). When the substantive passes already
+ *  have a majority, or no pass failed, or the flag is OFF, returns false (no
+ *  retry — current behaviour stands). */
+export function decideTiebreakRetry(opts: {
+  flagOn: boolean;
+  /** Numeric score bucket per substantive (non-failed) pass. */
+  substantiveScores: number[];
+  /** How many passes FAILED (returned no verdict) this round. */
+  failedPassCount: number;
+}): boolean {
+  if (!opts.flagOn) return false;
+  if (opts.failedPassCount <= 0) return false;
+  const scores = opts.substantiveScores ?? [];
+  if (scores.length === 0) return false;
+  // Tally the substantive buckets; a retry only helps when they are tied.
+  const tally = new Map<number, number>();
+  for (const s of scores) tally.set(s, (tally.get(s) ?? 0) + 1);
+  const counts = [...tally.values()].sort((a, b) => b - a);
+  if (counts.length < 2) return false; // all substantive passes agree → no tie
+  return counts[0] === counts[1]; // top two buckets equal → even split
+}
+
+/**
+ * Snapshot of every DEFAULT-OFF scoring-fix flag that is currently turned ON,
+ * computed at CSV-export time from process.env. This is intentionally NOT part of
+ * the hashed run-manifest body (adding fields there would break the manifest-hash
+ * stability test RP01) — it reflects the environment of the EXPORTING process,
+ * which for a replay export is normally the same deployment that produced the run.
+ * Returns a stable comma-separated "FLAG=value" list (sorted) or "" when none are
+ * set, so the CSV header is deterministic.
+ */
+export function snapshotNonDefaultScoringFixFlags(): string {
+  const names = [
+    "FRAMEWORK_LINEAGE_FREEZE",
+    "VERDICT_CACHE_DURABLE",
+    "ATTRIBUTION_MANUAL_DOMAINS_AT_GATE",
+    "CSV_RUN_MANIFEST_EXPORT",
+    "PINNED_DOCUMENTS_ENABLED",
+    "SCORING_VOTE_EXPORT",
+    "SCORING_TIEBREAK_RETRY",
+    "SCORE_ONLY_REPLAY",
+    "SCORE_ONLY_REPLAY_COLD_START_DISCOVERS",
+    "FRAMEWORK_SCOPE_CONFIG_ENRICH",
+  ];
+  const on: string[] = [];
+  for (const n of names) {
+    const v = (process.env[n] || "").toLowerCase();
+    if (v === "1" || v === "true" || v === "on" || v === "yes") {
+      on.push(`${n}=on`);
+    }
+  }
+  return on.sort().join(",");
+}

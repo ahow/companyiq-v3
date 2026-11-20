@@ -51,7 +51,7 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, frozenCorpusOrphanGuardEnabled, frozenCorpusContentHashReuse, r1ChecklistContentFallbackEnabled } from "./lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, frozenCorpusOrphanGuardEnabled, frozenCorpusContentHashReuse, r1ChecklistContentFallbackEnabled, frameworkLineageFreezeEnabled, freezeFrameworkKey } from "./lib/scoring-fix-flags.js";
 import { resolveFrozenCorpus } from "./lib/retrieval-funnel.js";
 import { computeCompanyScore } from "../shared/verdict.js";
 // A9 / WP15 (truthful publication). Build the canonical per-cell publication
@@ -423,6 +423,16 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     return { success: false, error: "No measures in framework", documentsProcessed: 0, documentsFresh: 0, documentsCached: 0 };
   }
 
+  // F1 (FRAMEWORK_LINEAGE_FREEZE): the key used for every frozen_corpus_snapshot
+  // read/write in this job. With the flag OFF (default) it is exactly frameworkId,
+  // so behaviour is unchanged; with it ON it is the stable lineage id so a
+  // re-imported framework (new id) reuses the same golden corpus.
+  const frozenKey = freezeFrameworkKey({
+    flagOn: frameworkLineageFreezeEnabled(),
+    frameworkId,
+    frameworkLineageId: (framework as any).frameworkLineageId,
+  });
+
   // Run the pipeline. cancelCheck stays synchronous (the pipeline calls it at
   // many hot checkpoints) but is backed by a Redis-refreshed cache, so an
   // in-flight pipeline aborts within ~2s of a cancel on any replica.
@@ -518,7 +528,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       let frozenCount: number;
       let frozenSource: string;
       if (p1FrameworkScopedCorpusEnabled()) {
-        const snapshot = await storage.getFrozenCorpus(companyId, frameworkId);
+        const snapshot = await storage.getFrozenCorpus(companyId, frozenKey);
         frozenCount = snapshot.length;
         hasFrozenCorpus = frozenCount > 0;
         frozenSource = "framework-scoped snapshot";
@@ -564,7 +574,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
               );
             }
             if (resolvable === 0) {
-              const purged = await storage.purgeFrozenCorpus(companyId, frameworkId);
+              const purged = await storage.purgeFrozenCorpus(companyId, frozenKey);
               console.warn(
                 "[Worker][P1.6] Frozen snapshot for company=" + companyId +
                 ", fw=" + frameworkId + " is fully ORPHANED (" + frozenCount +
@@ -692,7 +702,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
       // Never fatal — a snapshot write failure must not fail a scored job.
       if (p1FrameworkScopedCorpusEnabled()) {
         try {
-          const wrote = await storage.writeFrozenCorpus(companyId, frameworkId);
+          const wrote = await storage.writeFrozenCorpus(companyId, frozenKey);
           if (wrote > 0) {
             console.log("[Worker][P1] Froze framework-scoped corpus snapshot for company=" + companyId + ", fw=" + frameworkId + " (" + wrote + " accepted docs)");
           }

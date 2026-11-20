@@ -40,7 +40,7 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay, frameworkLineageFreezeEnabled, freezeFrameworkKey } from "./scoring-fix-flags.js";
 import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
@@ -508,7 +508,7 @@ async function runFetchPhase(opts: {
     // back to the full accepted set so the job can still score (defensive).
     if (p1FrameworkScopedCorpusEnabled()) {
       try {
-        const snap = await storage.getFrozenCorpus(companyId, framework.id);
+        const snap = await storage.getFrozenCorpus(companyId, freezeFrameworkKey({ flagOn: frameworkLineageFreezeEnabled(), frameworkId: framework.id, frameworkLineageId: (framework as any).frameworkLineageId }));
         if (snap.length > 0) {
           // 3.1 — when FROZEN_CORPUS_CONTENT_HASH_REUSE is ON, allow snapshot rows
           // whose document_id is gone (ids reset) to re-resolve to the live accepted
@@ -2791,7 +2791,7 @@ async function runAnalyzePhase(opts: {
     // per-(company, framework) snapshot instead of a batch.
     const { db: dbImport } = await import("../db.js");
     const { sql: sqlImport } = await import("drizzle-orm");
-    const expected = await storage.getFrozenCorpus(companyId, framework.id);
+    const expected = await storage.getFrozenCorpus(companyId, freezeFrameworkKey({ flagOn: frameworkLineageFreezeEnabled(), frameworkId: framework.id, frameworkLineageId: (framework as any).frameworkLineageId }));
     const snapshotRows = await dbImport.execute(sqlImport`
       SELECT d.id, d.company_id, d.url, d.title, d.type, d.gate_verdict,
              d.gate_reason, d.fetch_status, d.fetch_failures, d.fetched_at, d.created_at,
@@ -4219,7 +4219,7 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
     let pinnedDocCount = 0;
     if (replayEnabled && !sourceBatchId) {
       try {
-        const pinned = await storage.getFrozenCorpus(companyId, framework.id);
+        const pinned = await storage.getFrozenCorpus(companyId, freezeFrameworkKey({ flagOn: frameworkLineageFreezeEnabled(), frameworkId: framework.id, frameworkLineageId: (framework as any).frameworkLineageId }));
         pinnedDocCount = pinned.length;
       } catch (probeErr: any) {
         console.warn(`[${companyName}] SCORE_ONLY_REPLAY pinned-corpus probe failed (non-fatal), treating as no-pinned: ${probeErr?.message}`);

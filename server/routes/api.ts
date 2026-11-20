@@ -32,7 +32,7 @@ import { extractVerdictOverrideReason } from "../lib/verdict-override.js";
 // never affects scores/verdicts; attached to responses as metadata only.
 import { buildManifest, deriveResearchStatus, researchStatusCsvColumns, deriveEvidenceCompleteness, deriveQuoteReuse } from "../../shared/research-state.js";
 // RC1: checklist embedding content check flags (central scoring-fix flags module).
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, p1CorpusRefreshEndpointEnabled } from "../lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, p1CorpusRefreshEndpointEnabled, frameworkLineageFreezeEnabled, freezeFrameworkKey, csvRunManifestExportEnabled, scoringVoteExportEnabled, attributionManualDomainsAtGateEnabled, pinnedDocumentsEnabled, unionOwnDomains, normalizeDomain, snapshotNonDefaultScoringFixFlags, formatVoteString } from "../lib/scoring-fix-flags.js";
 // BUG 6 helper: reused to decide whether a measure carries first-party (non
 // third-party-host) evidence when deriving the BUG 2 insufficient-evidence label.
 import { isThirdPartyHost } from "../lib/eligibility-flags.js";
@@ -595,6 +595,34 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
       const country = findCol(row, "GEOGRAPHIC DESCR.", "GEOGRAPHIC DESCR", "country", "Country", "COUNTRY", "cntry", "domicile", "Geography", "Region");
       const domain = findCol(row, "domain", "Domain", "DOMAIN", "website", "Website", "URL", "url");
 
+      // F3 input plumbing: "Own Domains" column → related_domains_manual. Always
+      // available regardless of ATTRIBUTION_MANUAL_DOMAINS_AT_GATE (that flag only
+      // gates whether the gate CONSUMES these). Entries are split on any common
+      // delimiter and normalized to bare hosts; malformed entries are dropped.
+      const ownDomainsRaw = findCol(row, "Own Domains", "own domains", "OWN DOMAINS", "Related Domains Manual", "related_domains_manual", "Own Domains (manual)", "Manual Domains");
+      const ownDomains = ownDomainsRaw
+        ? Array.from(new Set(
+            ownDomainsRaw
+              .split(/[,;|\n\r\t ]+/)
+              .map((d: string) => normalizeDomain(d))
+              .filter((d: string) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d))
+          ))
+        : null;
+
+      // F5 input plumbing: "Pinned Documents" column → pinned_documents. Always
+      // available (PINNED_DOCUMENTS_ENABLED gates pipeline consumption, not input).
+      // Entries are split on newline/semicolon/pipe/whitespace and validated as
+      // http(s) URLs. Commas are NOT delimiters here because URLs may contain them.
+      const pinnedRaw = findCol(row, "Pinned Documents", "pinned documents", "PINNED DOCUMENTS", "Pinned URLs", "pinned_documents", "Pinned Docs");
+      const pinnedDocs = pinnedRaw
+        ? Array.from(new Set(
+            pinnedRaw
+              .split(/[;|\n\r\t ]+/)
+              .map((u: string) => u.trim())
+              .filter((u: string) => /^https?:\/\/\S+$/i.test(u))
+          ))
+        : null;
+
       // Finding 1 fix: dedup on IDENTITY (normalized ISIN) first, then fall back to
       // exact-name match only when no ISIN is supplied. This prevents the same
       // security being re-inserted as a duplicate row under a different name casing
@@ -612,6 +640,10 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
         if (country && country !== existing.country) patch.country = country;
         if (domain && domain !== existing.domain) patch.domain = domain;
         if (normIsin && normIsin !== (existing.isin || "")) patch.isin = normIsin;
+        // Only overwrite the curated lists when the import actually supplied values,
+        // so a re-upload without these columns never clears existing manual data.
+        if (ownDomains && ownDomains.length > 0) patch.relatedDomainsManual = ownDomains;
+        if (pinnedDocs && pinnedDocs.length > 0) patch.pinnedDocuments = pinnedDocs;
         if (Object.keys(patch).length > 0) {
           try { existing = await storage.updateCompany(existing.id, workspaceId, patch); } catch { /* keep existing on patch failure */ }
         }
@@ -626,6 +658,8 @@ apiRouter.post("/companies/import", upload.single("file"), async (req: Request, 
         sector: sector || null,
         country: country || null,
         domain: domain || null,
+        relatedDomainsManual: ownDomains && ownDomains.length > 0 ? ownDomains : null,
+        pinnedDocuments: pinnedDocs && pinnedDocs.length > 0 ? pinnedDocs : null,
         workspaceId,
       });
       created.push(company);
@@ -1831,6 +1865,21 @@ apiRouter.post("/corpus/refresh", async (req: Request, res: Response) => {
     if (!Number.isFinite(frameworkId) || frameworkId <= 0) {
       return res.status(400).json({ error: "frameworkId (positive integer) is required." });
     }
+    // F1 (FRAMEWORK_LINEAGE_FREEZE): when ON, snapshots are keyed on the stable
+    // lineage id, so the per-company purge must target that same key. OFF → the
+    // key is the framework id exactly as before.
+    let purgeKey = frameworkId;
+    if (frameworkLineageFreezeEnabled()) {
+      try {
+        const { workspaceId } = getSessionContext(req);
+        const fw = await storage.getFrameworkById(frameworkId, workspaceId);
+        purgeKey = freezeFrameworkKey({
+          flagOn: true,
+          frameworkId,
+          frameworkLineageId: (fw as any)?.frameworkLineageId,
+        });
+      } catch { /* fall back to frameworkId */ }
+    }
     let purged: number;
     let scope: string;
     if (companyIdRaw != null && companyIdRaw !== "") {
@@ -1838,10 +1887,10 @@ apiRouter.post("/corpus/refresh", async (req: Request, res: Response) => {
       if (!Number.isFinite(companyId) || companyId <= 0) {
         return res.status(400).json({ error: "companyId, when supplied, must be a positive integer." });
       }
-      purged = await storage.purgeFrozenCorpus(companyId, frameworkId);
+      purged = await storage.purgeFrozenCorpus(companyId, purgeKey);
       scope = `company ${companyId} / framework ${frameworkId}`;
     } else {
-      purged = await storage.purgeFrozenCorpusForFramework(frameworkId);
+      purged = await storage.purgeFrozenCorpusForFramework(purgeKey);
       scope = `all companies / framework ${frameworkId}`;
     }
     console.log(`[P1.4] Corpus refresh: purged ${purged} frozen-snapshot row(s) for ${scope}; next run re-discovers.`);
@@ -2184,6 +2233,12 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
     // Rationale (evidenceSummary) value. When OFF, the column set is byte-for-byte
     // identical to today.
     const syncOn = gateRationaleSyncEnabled();
+    // F6 SCORING_VOTE_EXPORT (default off): add a per-measure self-consistency vote
+    // column. Verdict-neutral; when OFF the column set is byte-for-byte unchanged.
+    const voteOn = scoringVoteExportEnabled();
+    // F4 CSV_RUN_MANIFEST_EXPORT (default off): add a run-header section + per-company
+    // corpus columns. When OFF the CSV is byte-for-byte unchanged.
+    const manifestOn = csvRunManifestExportEnabled();
     const baseHeaders = ["Company", "ISIN", "Sector", "Country", "Total Score (%)", "Measures Met", "Measures Total", "Coverage Level", "Missing Tier 1 Sources"];
     const measureHeaders: string[] = [];
     for (const title of measureTitles) {
@@ -2194,6 +2249,7 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
       measureHeaders.push(`${title} - Source Document`);
       measureHeaders.push(`${title} - Source Link`);
       measureHeaders.push(`${title} - Confidence`);
+      if (voteOn) measureHeaders.push(`${title} - Self-Consistency Vote`);
       measureHeaders.push(`${title} - Rule ID`);
       measureHeaders.push(`${title} - Rule Version`);
       measureHeaders.push(`${title} - Rule Provenance`);
@@ -2204,12 +2260,86 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
       measureHeaders.push(`${title} - Trace Diagnostics`);
     }
     const researchHeaders = researchStatusCsvColumns(null).map((c) => c.header);
-    const headers = [...baseHeaders, ...measureHeaders, "Source Documents", ...researchHeaders];
+    // F4 per-company corpus columns appended at the end of each row (so the base
+    // column set stays stable when only this flag is on).
+    const corpusHeaders = manifestOn
+      ? ["Corpus Hash", "Docs In Corpus", "Corpus Frozen At", "Replay (Y/N)"]
+      : [];
+    const headers = [...baseHeaders, ...measureHeaders, "Source Documents", ...researchHeaders, ...corpusHeaders];
+
+    // ── F4 CSV_RUN_MANIFEST_EXPORT: gather run manifest + per-company frozen-corpus
+    //    data (only when the flag is ON; otherwise this block is skipped and the CSV
+    //    is byte-identical to today). Sources: the stored run_manifests row for this
+    //    batch, and the frozen_corpus_snapshot freeze timestamps. Best-effort: any
+    //    failure degrades to blank cells rather than failing the export. ──────────
+    let runManifest: any = null;
+    const frozenAtByCompany = new Map<number, string>();
+    let runIsReplay = false;
+    if (manifestOn) {
+      try {
+        const mRes = await db.execute(sql`
+          SELECT run_mode, manifest FROM run_manifests
+          WHERE batch_id = ${(row as any).batchId}
+          ORDER BY emit_ts DESC LIMIT 1
+        `);
+        const mr = (mRes.rows as any[])[0];
+        if (mr) {
+          runManifest = mr.manifest ?? null;
+          runIsReplay = String(mr.run_mode || "").toLowerCase() === "replay";
+        }
+      } catch { /* best-effort: leave runManifest null */ }
+      try {
+        // The freeze key is the framework's lineage id when FRAMEWORK_LINEAGE_FREEZE
+        // is ON (so the lookup matches the write), else its own id.
+        const fw = await storage.getFrameworkById((row as any).frameworkId, workspaceId);
+        const freezeKey = freezeFrameworkKey({
+          flagOn: frameworkLineageFreezeEnabled(),
+          frameworkId: (row as any).frameworkId,
+          frameworkLineageId: (fw as any)?.frameworkLineageId ?? null,
+        });
+        const companyIds = Array.from(new Set(
+          rows.map((r: any) => Number(r.companyId)).filter((n: number) => Number.isFinite(n))
+        ));
+        if (companyIds.length > 0) {
+          const fRes = await db.execute(sql`
+            SELECT company_id, MIN(created_at) AS frozen_at
+            FROM frozen_corpus_snapshot
+            WHERE framework_id = ${freezeKey} AND company_id = ANY(${companyIds})
+            GROUP BY company_id
+          `);
+          for (const fr of (fRes.rows as any[])) {
+            if (fr.frozen_at) frozenAtByCompany.set(Number(fr.company_id), new Date(fr.frozen_at).toISOString());
+          }
+        }
+      } catch { /* best-effort: leave frozenAt map empty */ }
+    }
 
     // Write the header line first, then one row at a time. Rows are joined with a
     // leading "\n" separator (never a trailing one) so the byte output is
     // identical to the client's old `[header, ...rows].join("\n")`. The full CSV
     // string is never assembled in memory.
+    //
+    // F4: when ON, a run-header section precedes the data header. Each line is a
+    // 2-column "key,value" pair (CSV-escaped), followed by a blank spacer line.
+    if (manifestOn) {
+      const gitSha = runManifest?.codeTree?.components?.git_sha ?? "";
+      const fwHash = runManifest?.framework?.hash ?? "";
+      const fwVersion = runManifest?.framework?.version ?? "";
+      const runMode = runManifest?.runMode ?? (runIsReplay ? "replay" : "");
+      const headerPairs: Array<[string, any]> = [
+        ["Run Manifest", "CompanyIQ run export"],
+        ["Git Commit", gitSha],
+        ["Framework ID", (row as any).frameworkId ?? ""],
+        ["Framework Content Hash", fwHash],
+        ["Framework Version", fwVersion],
+        ["Run Mode", runMode],
+        ["Non-Default Flags", snapshotNonDefaultScoringFixFlags()],
+      ];
+      for (const [k, v] of headerPairs) {
+        res.write([escapeCSV(k), escapeCSV(v)].join(",") + "\n");
+      }
+      res.write("\n"); // blank spacer between manifest block and data header
+    }
     res.write(headers.map(escapeCSV).join(","));
 
     for (const r of rows) {
@@ -2277,6 +2407,17 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
           measureValues.push(sourceNames.join(" ; "));
           measureValues.push(sourceLinks.join(" ; "));
           measureValues.push(ms.confidence || "Low");
+          if (voteOn) {
+            // Prefer the structured stamp; fall back to parsing the
+            // "[Self-consistency X/Y on …]" note already embedded in verdictNuance
+            // (present on older snapshots that predate the structured field).
+            let vote = (ms as any).selfConsistencyVote || "";
+            if (!vote && typeof ms.verdictNuance === "string") {
+              const m = ms.verdictNuance.match(/\[Self-consistency\s+(\d+)\/(\d+)/i);
+              if (m) vote = `${m[1]}/${m[2]}`;
+            }
+            measureValues.push(vote);
+          }
 
           const dt = ms.decisionTrace || null;
           const cr = dt?.canonicalRule || null;
@@ -2291,6 +2432,7 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
         } else {
           if (syncOn) measureValues.push("");
           measureValues.push("", "", "", "", "", "");
+          if (voteOn) measureValues.push("");
           measureValues.push("", "", "", "", "", "", "", "");
         }
       }
@@ -2302,7 +2444,21 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
 
       const researchValues = researchStatusCsvColumns(r.researchStatus).map((c) => c.value);
 
-      const rowValues = [...baseValues, ...measureValues, sourceDocs, ...researchValues];
+      // F4 per-company corpus values (only when manifestOn; else empty array keeps
+      // the row byte-identical to today).
+      let corpusValues: any[] = [];
+      if (manifestOn) {
+        const docIds = String(r.corpusHash || "").split(",").filter(Boolean);
+        const cid = Number(r.companyId);
+        corpusValues = [
+          r.corpusHashSha || "",
+          docIds.length,
+          frozenAtByCompany.get(cid) || "",
+          runIsReplay ? "Y" : "N",
+        ];
+      }
+
+      const rowValues = [...baseValues, ...measureValues, sourceDocs, ...researchValues, ...corpusValues];
       res.write("\n" + rowValues.map(escapeCSV).join(","));
     }
 
@@ -3540,6 +3696,31 @@ apiRouter.post("/companies/:id/related-domains-manual", async (req: Request, res
       WHERE id = ${cid} AND workspace_id = ${workspaceId}
     `);
     res.json({ success: true, related_domains_manual: cleaned });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// F5: Manual setter for pinned_documents (mirrors related-domains-manual route).
+// Input plumbing — always available; the pipeline already consumes pinnedDocuments.
+apiRouter.post("/companies/:id/pinned-documents", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const cid = parseInt(String(req.params.id), 10);
+    const { documents } = req.body as { documents: string[] };
+    if (!Array.isArray(documents) || documents.some(d => typeof d !== "string")) {
+      return res.status(400).json({ error: "documents must be string[]" });
+    }
+    const cleaned = Array.from(new Set(
+      documents
+        .map(d => d.trim())
+        .filter(d => /^https?:\/\/\S+$/i.test(d))
+    ));
+    await db.execute(sql`
+      UPDATE companies SET pinned_documents = ${JSON.stringify(cleaned)}::jsonb, updated_at = NOW()
+      WHERE id = ${cid} AND workspace_id = ${workspaceId}
+    `);
+    res.json({ success: true, pinned_documents: cleaned });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
