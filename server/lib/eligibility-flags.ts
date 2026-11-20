@@ -16,6 +16,7 @@ import {
   z3FundEntityDisambiguationEnabled,
   fAdmissionGatePrototypeEnabled,
   attributionTrustedSourceResolveEnabled,
+  attributionFailOpenWhenNoTrustedDataEnabled,
 } from "./scoring-fix-flags.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -638,6 +639,15 @@ export function reviewQuoteAttribution(
     // Default OFF (ADMISSION_GATE_PROTOTYPE), so when unset every path below is
     // byte-for-byte as today.
     const fPrototype = fAdmissionGatePrototypeEnabled();
+    // 1.3b (ATTRIBUTION_FAIL_OPEN_WHEN_NO_TRUSTED_DATA): default off. When on, the
+    // two TERMINAL "could-not-determine" rejections below (F-prototype bare
+    // name-mention, and the final fallthrough) fail OPEN instead of closed, so a
+    // company's own-published document is not rejected merely because no per-company
+    // trusted/own-domain data was available to positively confirm provenance. The
+    // positive negative-signal rejections (low-value, case-study, third-party host,
+    // subsidiary, fund) above/below are unaffected, so genuine third-party documents
+    // are still rejected. No-op when off → byte-for-byte today's behaviour.
+    const failOpenNoTrustedData = attributionFailOpenWhenNoTrustedDataEnabled();
 
     return (quotes || []).map((q, index) => {
       if (!q || !nonEmpty(q.text)) return { index, attributedToTarget: false };
@@ -760,6 +770,13 @@ export function reviewQuoteAttribution(
           if (FIRST_PARTY_POSSESSIVE_REGEX.test(text)) {
             return { index, attributedToTarget: true, reason: "Identity token + first-party possessive (F prototype)" };
           }
+          // 1.3b: the quote NAMES the target but own-doc provenance could not be
+          // confirmed (typically because no per-company trusted/own-domain data was
+          // available) — fail OPEN rather than closed when the flag is on. A
+          // name-mention is positive evidence; there is no contrary signal here.
+          if (failOpenNoTrustedData) {
+            return { index, attributedToTarget: true, reason: "Fail-open: name-mention, no trusted/own-domain data to confirm provenance (1.3b)" };
+          }
           return { index, attributedToTarget: false, reason: "Bare name-mention without own-doc provenance or first-party possessive (F prototype)" };
         }
         return { index, attributedToTarget: true };
@@ -804,6 +821,19 @@ export function reviewQuoteAttribution(
       }
 
       // Rule: Industry-Specific Alias is now part of PRONOUNS_REGEX
+
+      // 1.3b (ATTRIBUTION_FAIL_OPEN_WHEN_NO_TRUSTED_DATA): terminal fallthrough.
+      // No own-domain / trusted-source / identity-token / rationale match was found,
+      // AND no NEGATIVE signal fired above (not a low-value page, case study,
+      // third-party host, subsidiary, or distinct fund). The resolver simply has no
+      // data to make a positive determination either way. When the flag is on, fail
+      // OPEN (do not reject) so a company's own-published document is not knocked out
+      // for lack of per-company trusted/own-domain data; genuine third-party docs are
+      // already rejected by the negative-signal gates above. Default off → fail closed
+      // exactly as today.
+      if (failOpenNoTrustedData) {
+        return { index, attributedToTarget: true, reason: "Fail-open: no trusted-source/own-domain data to make a determination (1.3b)" };
+      }
 
       return { index, attributedToTarget: false };
     });

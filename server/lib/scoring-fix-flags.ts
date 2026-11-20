@@ -377,6 +377,27 @@ export function attributionTrustedSourceResolveEnabled(): boolean {
   return envOnDefaultFalse("ATTRIBUTION_TRUSTED_SOURCE_RESOLVE");
 }
 
+// ── 1.3b — fail OPEN when attribution cannot be positively determined ──────────
+/** Default OFF. When ON, reviewQuoteAttribution fails OPEN (attributes the quote
+ *  to the target) at the two terminal points where it could NOT make a positive
+ *  determination AND has NO contrary signal to justify a rejection:
+ *    (a) the F-prototype "bare name-mention without own-doc provenance" reject, and
+ *    (b) the final fallthrough (no own-domain / trusted-source / identity / rationale
+ *        match was found).
+ *  It does NOT touch the positive NEGATIVE-signal rejections (low-value page,
+ *  case-study, third-party analyst/news host, more-specific subsidiary, distinct
+ *  fund entity) — those remain rejects, so a genuine third-party document is still
+ *  rejected. This protects a company's OWN published documents from being wrongly
+ *  rejected (and the downstream entity-attribution gate from downgrading them) when
+ *  no per-company trusted/own-domain data was available to positively confirm
+ *  provenance — mirroring how the other strictness flags fail open rather than
+ *  closed. Keys only off the resolver's own decision state; hardcodes NO company,
+ *  framework, domain, or measure name. When OFF, attribution behaves exactly as
+ *  today (fail closed). */
+export function attributionFailOpenWhenNoTrustedDataEnabled(): boolean {
+  return envOnDefaultFalse("ATTRIBUTION_FAIL_OPEN_WHEN_NO_TRUSTED_DATA");
+}
+
 // ── 1.5 — keep rationale and verdict self-consistent on a gate/rule override ───
 /** Default OFF. When ON, any gate/rule that overrides the model's verdict writes
  *  the controlling reason into a dedicated, never-truncated field
