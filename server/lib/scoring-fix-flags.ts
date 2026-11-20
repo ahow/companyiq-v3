@@ -601,6 +601,34 @@ export function scoreOnlyReplayEnabled(): boolean {
   return envOnDefaultFalse("SCORE_ONLY_REPLAY");
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// FRAMEWORK_SCOPE_CONFIG_ENRICH — generic scope-config enrichment carrier.
+//
+// WHY: the Priority-2 strictness flags REPORTING_PERIOD_ENFORCED and
+// ENTITY_SCOPE_ENFORCED are enabled in production, but they fail OPEN because the
+// analyzer reads fw.entityType / fw.reportingPeriodMonths / fw.universe /
+// fw.subsidiaryDomains and NONE of those are columns on the frameworks Drizzle
+// table — they are always undefined, so the strictness never engages. This flag
+// lets a framework carry those scope fields in its existing `metadata` jsonb
+// column under `metadata.scopeConfig`, and enrichFrameworkScopeConfig
+// (framework-scope-config.ts) back-fills them onto the framework object returned by
+// getFrameworkById — exactly where the analyzer reads them.
+//
+// Mechanism ONLY: this flag does NOT populate any framework's metadata and is NOT
+// enabled anywhere. With it OFF (the compiled default) the framework object is
+// returned byte-for-byte as today, so evidence is held constant. Completely
+// generic — no company/framework/measure name is referenced.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** Default OFF. When ON, getFrameworkById back-fills entityType / universe /
+ *  reportingPeriodMonths / subsidiaryDomains from `framework.metadata.scopeConfig`
+ *  onto the framework object (only when present there AND not already set), so the
+ *  already-enabled REPORTING_PERIOD_ENFORCED / ENTITY_SCOPE_ENFORCED strictness
+ *  flags can actually engage. When OFF, the framework is returned unchanged. */
+export function frameworkScopeConfigEnrichEnabled(): boolean {
+  return envOnDefaultFalse("FRAMEWORK_SCOPE_CONFIG_ENRICH");
+}
+
 /**
  * Pure, deterministic decision used by the pipeline to choose the Score-Only
  * Replay branch. Kept side-effect-free so it is directly unit-testable and so the

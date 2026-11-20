@@ -8,7 +8,8 @@ import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironm
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 import { registrableDomainOf, classifySuggestedBucket, type SuggestedBucket } from "./lib/provenance.js";
 import { diagTags, getDiagContext } from "./lib/diag-context.js";
-import { frozenCorpusContentHashReuse } from "./lib/scoring-fix-flags.js";
+import { frozenCorpusContentHashReuse, frameworkScopeConfigEnrichEnabled } from "./lib/scoring-fix-flags.js";
+import { enrichFrameworkScopeConfig } from "./lib/framework-scope-config.js";
 import { type AttemptOwnership, type FenceDb, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason, lockJobAndBatch, claimPredicate, successCompletionPredicate, failureRecordPredicate, ownershipFromContext } from "./lib/lifecycle-fence.js";
 import {
   documentUpsertFingerprint,
@@ -412,7 +413,20 @@ export async function getFrameworkById(frameworkId: number, workspaceId: number)
     console.warn(`[getFrameworkById] retrievalQueryTerms back-fill failed for framework ${frameworkId}: ${rqtErr?.message ?? rqtErr}`);
   }
 
-  return framework;
+  // FRAMEWORK_SCOPE_CONFIG_ENRICH — back-fill entityType / universe /
+  // reportingPeriodMonths / subsidiaryDomains from framework.metadata.scopeConfig
+  // so the already-enabled REPORTING_PERIOD_ENFORCED / ENTITY_SCOPE_ENFORCED
+  // strictness flags (which read exactly these fields in analyzer.ts) can engage.
+  // Default OFF → returns the framework unchanged. Non-fatal: any throw falls back
+  // to the un-enriched framework, consistent with the back-fills above.
+  try {
+    return enrichFrameworkScopeConfig(framework as any, {
+      enabled: frameworkScopeConfigEnrichEnabled(),
+    });
+  } catch (scErr: any) {
+    console.warn(`[getFrameworkById] scope-config enrich failed for framework ${frameworkId}: ${scErr?.message ?? scErr}`);
+    return framework;
+  }
 }
 
 export async function createFramework(data: schema.InsertFramework) {
