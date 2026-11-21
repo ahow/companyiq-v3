@@ -8,7 +8,7 @@ import { buildRunKey, computeProgressSnapshot, deploymentFingerprintFromEnvironm
 import { promoteHardeningFields } from "./lib/framework-v2/promote-hardening-fields.js";
 import { registrableDomainOf, classifySuggestedBucket, type SuggestedBucket } from "./lib/provenance.js";
 import { diagTags, getDiagContext } from "./lib/diag-context.js";
-import { frozenCorpusContentHashReuse, frameworkScopeConfigEnrichEnabled } from "./lib/scoring-fix-flags.js";
+import { frozenCorpusContentHashReuse, frameworkScopeConfigEnrichEnabled, frozenCorpusFrameworkScopedEnabled } from "./lib/scoring-fix-flags.js";
 import { enrichFrameworkScopeConfig } from "./lib/framework-scope-config.js";
 import { type AttemptOwnership, type FenceDb, runFencedWrite, fenceLogScore, fenceLogTerminal, dispatchRevokedReason, lockJobAndBatch, claimPredicate, successCompletionPredicate, failureRecordPredicate, ownershipFromContext } from "./lib/lifecycle-fence.js";
 import {
@@ -619,6 +619,49 @@ export async function writeFrozenCorpus(
     LIMIT 1
   `);
   if (existing.rows.length > 0) return 0; // already frozen — immutable, do not touch
+
+  // CHANGE 1 (FROZEN_CORPUS_FRAMEWORK_SCOPED, default OFF): when ON, restrict the
+  // frozen set to documents accepted FOR THIS FRAMEWORK. The only relation that
+  // links a framework to the documents it scored is batch_corpus (document_id)
+  // ⋈ batch_runs (framework_id); we accept any framework id sharing the same
+  // framework_lineage_id (falling back to the framework's own id when the lineage
+  // is null) so a re-imported framework's frozen set survives an id change. When
+  // OFF the filter is absent and the frozen set is the current per-company
+  // accepted-document set, byte-for-byte as today.
+  let frameworkScopeFilter = sql``;
+  if (frozenCorpusFrameworkScopedEnabled()) {
+    // Resolve the set of framework ids that are lineage-equivalent to this one.
+    const lineageRows = await db.execute(sql`
+      SELECT framework_lineage_id FROM frameworks WHERE id = ${frameworkId} LIMIT 1
+    `);
+    const lineageId =
+      lineageRows.rows.length > 0 && (lineageRows.rows[0] as any).framework_lineage_id != null
+        ? Number((lineageRows.rows[0] as any).framework_lineage_id)
+        : null;
+    let frameworkIds: number[] = [frameworkId];
+    if (lineageId != null) {
+      const sibRows = await db.execute(sql`
+        SELECT id FROM frameworks WHERE framework_lineage_id = ${lineageId}
+      `);
+      const sibs = (sibRows.rows as any[])
+        .map((r) => Number(r.id))
+        .filter((n) => Number.isFinite(n));
+      frameworkIds = Array.from(new Set<number>([frameworkId, ...sibs]));
+    }
+    const idList = sql.join(
+      frameworkIds.map((id) => sql`${id}`),
+      sql`, `,
+    );
+    frameworkScopeFilter = sql`
+      AND d.id IN (
+        SELECT bc.document_id
+        FROM batch_corpus bc
+        JOIN batch_runs br ON br.id = bc.batch_id
+        WHERE bc.company_id = ${companyId}
+          AND br.framework_id IN (${idList})
+      )`;
+  }
+
   const res = await db.execute(sql`
     INSERT INTO frozen_corpus_snapshot
       (company_id, framework_id, document_id, url, content_hash, gate_verdict, source_type)
@@ -626,7 +669,7 @@ export async function writeFrozenCorpus(
     FROM documents d
     LEFT JOIN document_content dc ON dc.id = d.content_id
     WHERE d.company_id = ${companyId}
-      AND d.gate_verdict = 'accept'
+      AND d.gate_verdict = 'accept'${frameworkScopeFilter}
     ON CONFLICT (company_id, framework_id, document_id) DO NOTHING
   `);
   return (res as any).rowCount ?? 0;

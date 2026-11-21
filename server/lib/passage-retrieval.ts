@@ -8,7 +8,9 @@ import { scoreEntityMatch } from "./issuer-profile.js";
 import { isPrepComputeCacheEnabled } from "./prep-compute-cache.js";
 import { z1WithinDocReweightEnabled, z1ThematicBoost, z1BoilerplatePenalty,
   reportingPeriodEnforced, entityScopeEnforced, evidenceQuoteSingleUse,
-  evidenceAdjacentPassageSpan, evidenceAdjacentPassageMaxGap } from "./scoring-fix-flags.js";
+  evidenceAdjacentPassageSpan, evidenceAdjacentPassageMaxGap,
+  evidenceQuoteOverlapMatchEnabled, evidenceQuoteOverlapThreshold,
+  reportingPeriodWebpageFetchdateFallbackEnabled } from "./scoring-fix-flags.js";
 import { evidenceWithinReportingPeriod, documentInEntityScope,
   type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { QuoteLedger, passagesAreAdjacent, type PassageSpan } from "./retrieval-funnel.js";
@@ -1449,6 +1451,13 @@ export function buildEvidencePackForMeasure(opts: {
   quoteLedger?: QuoteLedger;
   // Per-measure override: this measure explicitly permits a shared quote.
   allowQuoteSharing?: boolean;
+  // CHANGE 3 (REPORTING_PERIOD_WEBPAGE_FETCHDATE_FALLBACK) — per-document date
+  // metadata keyed by document URL. When REPORTING_PERIOD_ENFORCED AND
+  // REPORTING_PERIOD_WEBPAGE_FETCHDATE_FALLBACK are both on, an undated WEB PAGE
+  // (isWebPage=true) whose own text yields no extractable year falls back to its
+  // fetchedAt date for window membership. Absent / undefined → fail-closed exactly
+  // as today.
+  docDateByUrl?: Map<string, { fetchedAt?: Date | string | null; isWebPage?: boolean }>;
 }): EvidencePack {
   const {
     measure,
@@ -1467,6 +1476,7 @@ export function buildEvidencePackForMeasure(opts: {
     entityScope,
     quoteLedger,
     allowQuoteSharing,
+    docDateByUrl,
   } = opts;
 
   // Lever 2: effective total char budget (base + BM25 reserve headroom).
@@ -1559,7 +1569,24 @@ export function buildEvidencePackForMeasure(opts: {
         // provenance signal the vintage gate uses). Use end-of-year so a borderline
         // in-window document is never excluded on a conservative date guess.
         const yr = extractDocYear(ch.docUrl, ch.docTitle, currentYear);
-        const iso = yr ? `${yr}-12-31` : null;
+        let iso = yr ? `${yr}-12-31` : null;
+        // CHANGE 3 (REPORTING_PERIOD_WEBPAGE_FETCHDATE_FALLBACK, default OFF):
+        // only when the extracted year is null (undated) AND the document is a WEB
+        // PAGE (not a dated PDF), fall back to the document's fetchedAt date for
+        // window membership. A dated PDF with no extractable year still fails
+        // closed. Off / no metadata → unchanged (iso stays null → fail-closed).
+        if (
+          iso == null &&
+          reportingPeriodWebpageFetchdateFallbackEnabled() &&
+          docDateByUrl &&
+          ch.docUrl
+        ) {
+          const meta = docDateByUrl.get(ch.docUrl);
+          if (meta && meta.isWebPage && meta.fetchedAt != null) {
+            const d = meta.fetchedAt instanceof Date ? meta.fetchedAt : new Date(meta.fetchedAt);
+            if (!isNaN(d.getTime())) iso = d.toISOString().slice(0, 10);
+          }
+        }
         if (!evidenceWithinReportingPeriod(reportingPeriod!, iso)) return false;
       }
       if (applyScope) {
@@ -1654,9 +1681,25 @@ export function buildEvidencePackForMeasure(opts: {
   // true → selection is unchanged. The ledger is shared across the category's
   // measures, so first-come ownership is deterministic in measure-array order.
   const singleUseActive = evidenceQuoteSingleUse() && !!quoteLedger;
-  const mayClaimQuote = (text: string): boolean => {
+  // CHANGE 8 (EVIDENCE_QUOTE_OVERLAP_MATCH, default OFF): when ON, the single-use
+  // ledger ALSO dedupes by passage id / ≥threshold token overlap, not just exact
+  // text. The threshold is undefined when the flag is off → ledger uses exact-text
+  // matching exactly as today.
+  const overlapThreshold = evidenceQuoteOverlapMatchEnabled()
+    ? evidenceQuoteOverlapThreshold()
+    : undefined;
+  const passageIdFor = (chunkIdx?: number): string | undefined => {
+    if (chunkIdx == null) return undefined;
+    const ch = chunks[chunkIdx];
+    if (!ch) return undefined;
+    return `${ch.docUrl ?? ch.docIndex}#${ch.seqInDoc ?? chunkIdx}`;
+  };
+  const mayClaimQuote = (text: string, chunkIdx?: number): boolean => {
     if (!singleUseActive) return true;
-    return quoteLedger!.claim(text, String(measure.measureId), !!allowQuoteSharing);
+    return quoteLedger!.claim(text, String(measure.measureId), !!allowQuoteSharing, {
+      passageId: passageIdFor(chunkIdx),
+      overlapThreshold,
+    });
   };
 
   const tryAdd = (item: (typeof scored)[number]): boolean => {
@@ -1665,7 +1708,7 @@ export function buildEvidencePackForMeasure(opts: {
     if (evidenceLen + item.text.length > totalBudget) return false;
     const used = perDocCount.get(item.docIndex) || 0;
     if (used >= capForDoc(item.docIndex)) return false;
-    if (!mayClaimQuote(item.text)) return false;
+    if (!mayClaimQuote(item.text, item.idx)) return false;
     selected.push(item);
     perDocCount.set(item.docIndex, used + 1);
     evidenceLen += item.text.length + 2;
@@ -2400,7 +2443,7 @@ export function buildEvidencePackForMeasure(opts: {
         if (evidenceLen + cand.text.length > totalBudget) continue;
         const used = perDocCount.get(cand.docIndex) || 0;
         if (used >= capForDoc(cand.docIndex)) continue;
-        if (!mayClaimQuote(cand.text)) continue;
+        if (!mayClaimQuote(cand.text, cand.idx)) continue;
         selected.push(cand);
         selectedIdx.add(nb.idx);
         perDocCount.set(cand.docIndex, used + 1);
@@ -2540,8 +2583,11 @@ export function buildEvidencePacksForCategory(opts: {
   // (today's state) → no recency/scope enforcement regardless of flag state.
   reportingPeriod?: ReportingPeriod | null;
   entityScope?: EntityScopeContext | null;
+  // CHANGE 3 — per-document date metadata (url → {fetchedAt, isWebPage}), forwarded
+  // to each measure's pack build for the webpage fetchedAt recency fallback.
+  docDateByUrl?: Map<string, { fetchedAt?: Date | string | null; isWebPage?: boolean }>;
 }): EvidencePack[] {
-  const { measures, combinedText, terminology, topicTerms = DEFAULT_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl, topicPrimaryDocUrls, reportingPeriod, entityScope } = opts;
+  const { measures, combinedText, terminology, topicTerms = DEFAULT_TOPIC_TERMS, topK, maxChars, companyId, frameworkId, reservedAnnualUrl, topicPrimaryDocUrls, reportingPeriod, entityScope, docDateByUrl } = opts;
 
   // 3.3a EVIDENCE_QUOTE_SINGLE_USE — ONE ledger shared across all of this category's
   // measures so a passage claimed by the first measure (in array order) cannot also
@@ -2644,6 +2690,7 @@ export function buildEvidencePacksForCategory(opts: {
       entityScope,
       quoteLedger,
       allowQuoteSharing: !!(measure as any).allowQuoteSharing,
+      docDateByUrl,
     })
   );
 }

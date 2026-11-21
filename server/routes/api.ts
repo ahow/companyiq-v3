@@ -32,10 +32,12 @@ import { extractVerdictOverrideReason } from "../lib/verdict-override.js";
 // never affects scores/verdicts; attached to responses as metadata only.
 import { buildManifest, deriveResearchStatus, researchStatusCsvColumns, deriveEvidenceCompleteness, deriveQuoteReuse } from "../../shared/research-state.js";
 // RC1: checklist embedding content check flags (central scoring-fix flags module).
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, p1CorpusRefreshEndpointEnabled, frameworkLineageFreezeEnabled, freezeFrameworkKey, csvRunManifestExportEnabled, scoringVoteExportEnabled, attributionManualDomainsAtGateEnabled, pinnedDocumentsEnabled, unionOwnDomains, normalizeDomain, snapshotNonDefaultScoringFixFlags, formatVoteString } from "../lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, p1CorpusRefreshEndpointEnabled, frameworkLineageFreezeEnabled, freezeFrameworkKey, csvRunManifestExportEnabled, scoringVoteExportEnabled, attributionManualDomainsAtGateEnabled, pinnedDocumentsEnabled, unionOwnDomains, normalizeDomain, snapshotNonDefaultScoringFixFlags, formatVoteString, runHeaderFullFlagSnapshotEnabled, readSelfConsistencyVoteFromTrace, checklistSourceTypeClassifyEnabled } from "../lib/scoring-fix-flags.js";
 // BUG 6 helper: reused to decide whether a measure carries first-party (non
 // third-party-host) evidence when deriving the BUG 2 insufficient-evidence label.
 import { isThirdPartyHost } from "../lib/eligibility-flags.js";
+// CHANGE 7: the scorer's source-type classifier, injected into the checklist builder.
+import { detectSourceTypes } from "../lib/discovery.js";
 import { buildEvidenceFunnel } from "../lib/evidence-funnel.js";
 import { runCompletenessValidator } from "../lib/framework-completeness.js";
 import { frameworkReadiness } from "../lib/framework-readiness.js";
@@ -215,7 +217,15 @@ apiRouter.get("/companies/:id", async (req: Request, res: Response) => {
         entityBoundary: company.name,
         requiredDocTypes: requiredDocTypesSet.size > 0 ? Array.from(requiredDocTypesSet) : undefined,
       }),
-      checklistOptions: { embeddingContentCheck: rc1ContentCheck },
+      checklistOptions: {
+        embeddingContentCheck: rc1ContentCheck,
+        // CHANGE 7 (default off): classify each checklist item with the same
+        // source-type classifier the scorer uses, and gate "Comprehensive" on both
+        // an annual report and a sustainability/climate report being present.
+        sourceTypeClassify: checklistSourceTypeClassifyEnabled(),
+        classifySourceTypes: (u: string, t: string) =>
+          Array.from(detectSourceTypes(u, t, requiredDocTypesSet.size > 0 ? Array.from(requiredDocTypesSet) : [])),
+      },
     });
 
     // Evidence funnel (§3, additive/display-only): per-stage counts + the
@@ -2275,6 +2285,11 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
     let runManifest: any = null;
     const frozenAtByCompany = new Map<number, string>();
     let runIsReplay = false;
+    // CHANGE 2 (RUN_HEADER_FULL_FLAG_SNAPSHOT): hoisted so the run header can print
+    // the freeze key and a "Replay: N of total" line when that flag is ON.
+    let freezeKeyForHeader: number | null = null;
+    let totalCompanyCount = 0;
+    let replayCompanyCount = 0;
     if (manifestOn) {
       try {
         const mRes = await db.execute(sql`
@@ -2297,9 +2312,11 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
           frameworkId: (row as any).frameworkId,
           frameworkLineageId: (fw as any)?.frameworkLineageId ?? null,
         });
+        freezeKeyForHeader = Number.isFinite(freezeKey) ? Number(freezeKey) : null;
         const companyIds = Array.from(new Set(
           rows.map((r: any) => Number(r.companyId)).filter((n: number) => Number.isFinite(n))
         ));
+        totalCompanyCount = companyIds.length;
         if (companyIds.length > 0) {
           const fRes = await db.execute(sql`
             SELECT company_id, MIN(created_at) AS frozen_at
@@ -2311,7 +2328,15 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
             if (fr.frozen_at) frozenAtByCompany.set(Number(fr.company_id), new Date(fr.frozen_at).toISOString());
           }
         }
-      } catch { /* best-effort: leave frozenAt map empty */ }
+        replayCompanyCount = frozenAtByCompany.size;
+      } catch (err) {
+        // CHANGE 2: when RUN_HEADER_FULL_FLAG_SNAPSHOT is ON, surface the freeze-key
+        // lookup failure instead of swallowing it silently. Still best-effort (the
+        // export continues with blank corpus cells).
+        if (runHeaderFullFlagSnapshotEnabled()) {
+          console.warn("[export] freeze-key/frozen-corpus lookup failed:", (err as any)?.message ?? err);
+        }
+      }
     }
 
     // Write the header line first, then one row at a time. Rows are joined with a
@@ -2335,6 +2360,12 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
         ["Run Mode", runMode],
         ["Non-Default Flags", snapshotNonDefaultScoringFixFlags()],
       ];
+      // CHANGE 2 (RUN_HEADER_FULL_FLAG_SNAPSHOT): additively surface the resolved
+      // freeze key and a replay count when that flag is ON.
+      if (runHeaderFullFlagSnapshotEnabled()) {
+        headerPairs.push(["Freeze Key", freezeKeyForHeader ?? ""]);
+        headerPairs.push(["Replay", `${replayCompanyCount} of ${totalCompanyCount}`]);
+      }
       for (const [k, v] of headerPairs) {
         res.write([escapeCSV(k), escapeCSV(v)].join(",") + "\n");
       }
@@ -2412,6 +2443,10 @@ apiRouter.get("/results/:id/csv", async (req: Request, res: Response) => {
             // "[Self-consistency X/Y on …]" note already embedded in verdictNuance
             // (present on older snapshots that predate the structured field).
             let vote = (ms as any).selfConsistencyVote || "";
+            // CHANGE 6: the vote is now persisted inside the decision_trace jsonb
+            // (gated on this same SCORING_VOTE_EXPORT flag at write time), so read it
+            // back from there when the live object does not carry it.
+            if (!vote) vote = readSelfConsistencyVoteFromTrace(ms.decisionTrace);
             if (!vote && typeof ms.verdictNuance === "string") {
               const m = ms.verdictNuance.match(/\[Self-consistency\s+(\d+)\/(\d+)/i);
               if (m) vote = `${m[1]}/${m[2]}`;

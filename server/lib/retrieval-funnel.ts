@@ -188,6 +188,7 @@ export function shouldExcludeByKeywords(
  */
 export class QuoteLedger {
   private claimed = new Map<string, string>(); // normQuote -> measureId
+  private byPassage = new Map<string, string>(); // passageId -> measureId (CHANGE 8)
 
   private norm(q: string): string {
     return q.toLowerCase().replace(/\s+/g, " ").replace(/[^\p{L}\p{N} ]/gu, "").trim();
@@ -195,18 +196,71 @@ export class QuoteLedger {
 
   /**
    * Try to claim a quote for a measure.
+   * @param opts CHANGE 8 (EVIDENCE_QUOTE_OVERLAP_MATCH, default OFF): when
+   *   `overlapThreshold` is a number in (0,1], the dedupe ALSO treats two quotes
+   *   as the same when they reference the same `passageId` OR share ≥ that fraction
+   *   of their tokens (Jaccard). When `overlapThreshold` is undefined (the default,
+   *   flag off) only the exact normalised-text match is used, exactly as today.
    * @returns true if the quote may count toward `measureId`.
    */
-  claim(quote: string, measureId: string, allowSharing: boolean): boolean {
+  claim(
+    quote: string,
+    measureId: string,
+    allowSharing: boolean,
+    opts?: { passageId?: string | null; overlapThreshold?: number },
+  ): boolean {
     const key = this.norm(quote);
     if (!key) return true;
     if (allowSharing) return true;
+
+    const threshold = opts?.overlapThreshold;
+    const overlapOn = typeof threshold === "number" && threshold > 0 && threshold <= 1;
+
+    if (overlapOn) {
+      // 1) exact normalised-text owner (same as legacy).
+      const exactOwner = this.claimed.get(key);
+      if (exactOwner != null) return exactOwner === measureId;
+      // 2) same passage id → same quote.
+      const passageId = opts?.passageId ? String(opts.passageId) : "";
+      if (passageId) {
+        const pOwner = this.byPassage.get(passageId);
+        if (pOwner != null) return pOwner === measureId;
+      }
+      // 3) ≥ threshold token overlap with any already-claimed quote.
+      for (const [k, owner] of this.claimed) {
+        if (QuoteLedger.tokenOverlap(key, k) >= threshold!) {
+          return owner === measureId;
+        }
+      }
+      // No collision → claim under both the text key and (if any) the passage id.
+      this.claimed.set(key, measureId);
+      if (passageId && !this.byPassage.has(passageId)) this.byPassage.set(passageId, measureId);
+      return true;
+    }
+
+    // Legacy exact-text path (flag off).
     const owner = this.claimed.get(key);
     if (owner == null) {
       this.claimed.set(key, measureId);
       return true;
     }
     return owner === measureId;
+  }
+
+  /** Pure Jaccard token overlap of two normalised quote strings (lowercased word
+   *  sets). Returns 0 when either side has no tokens. Mirrors
+   *  scoring-fix-flags.quoteTokenOverlap but kept local so this module stays a pure
+   *  no-import leaf. */
+  static tokenOverlap(a: string, b: string): number {
+    const toks = (s: string): Set<string> =>
+      new Set((s || "").split(/\s+/).filter((w) => w.length > 0));
+    const sa = toks(a);
+    const sb = toks(b);
+    if (sa.size === 0 || sb.size === 0) return 0;
+    let inter = 0;
+    for (const t of sa) if (sb.has(t)) inter++;
+    const union = sa.size + sb.size - inter;
+    return union === 0 ? 0 : inter / union;
   }
 }
 

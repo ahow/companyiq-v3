@@ -17,6 +17,7 @@ import {
   fAdmissionGatePrototypeEnabled,
   attributionTrustedSourceResolveEnabled,
   attributionFailOpenWhenNoTrustedDataEnabled,
+  corpusLowValuePageFilterExtendedEnabled,
 } from "./scoring-fix-flags.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -536,6 +537,16 @@ export function isLowValuePageSource(title?: string | null, url?: string | null)
   const uLow = u.toLowerCase();
   if (/\/(terms(?:-of-(?:use|service))?|terms-and-conditions|cookie-policy|cookies?|privacy(?:-policy)?|legal|disclaimer|login|signin|sign-in|register|404|not-found|sitemap)(?:[/?#.]|$)/.test(uLow)) {
     return true;
+  }
+  // CHANGE 4 (CORPUS_LOW_VALUE_PAGE_FILTER_EXTENDED, default OFF): when ON, also
+  // exclude careers/jobs pages, LinkedIn and Wikipedia — generic non-first-party
+  // disclosure vehicles. Keys off page nature / host only; no company name.
+  if (corpusLowValuePageFilterExtendedEnabled()) {
+    const tLow = t.toLowerCase();
+    if (/\b(careers?|job\s*openings?|vacanc(?:y|ies)|wikipedia)\b/.test(tLow)) return true;
+    if (/\/(careers?|jobs?|vacanc(?:y|ies))(?:[/?#.]|$)/.test(uLow)) return true;
+    if (/(?:^|\/\/|\.)linkedin\.com(?:[/:?#]|$)/.test(uLow)) return true;
+    if (/(?:^|\/\/|\.)[a-z]*\.?wikipedia\.org(?:[/:?#]|$)/.test(uLow)) return true;
   }
   return false;
 }

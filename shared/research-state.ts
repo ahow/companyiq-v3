@@ -407,6 +407,18 @@ export interface ChecklistOptions {
    *  the required type's own terms. When false, the legacy title/URL-only embedding
    *  match is used (a bare "found" via any umbrella title). */
   embeddingContentCheck?: boolean;
+  /** CHANGE 7 (CHECKLIST_SOURCE_TYPE_CLASSIFY, default off). When true, the
+   *  checklist augments each document's title/URL haystack with the source-type
+   *  tokens produced by `classifySourceTypes`, and the "Comprehensive" status is
+   *  additionally gated on BOTH an annual report AND a sustainability-or-climate
+   *  report being present in the classified set. When false/undefined, the current
+   *  labels are kept unchanged. */
+  sourceTypeClassify?: boolean;
+  /** Injected source-type classifier (server supplies the same `detectSourceTypes`
+   *  the scorer uses). Kept as an injected function so this client-bundled module
+   *  never imports server-only discovery logic. Returns the source-type tokens for
+   *  one document given its URL and title. */
+  classifySourceTypes?: (url: string, title: string) => string[];
 }
 
 /**
@@ -528,6 +540,15 @@ export function deriveEssentialDocChecklist(
 ): EssentialDocChecklistItem[] {
   // RC1: content check is ON unless the caller explicitly disables it.
   const embeddingContentCheck = options?.embeddingContentCheck !== false;
+  // CHANGE 7: source-type classification is OFF unless the caller turns it on.
+  const sourceTypeClassify = options?.sourceTypeClassify === true && typeof options?.classifySourceTypes === "function";
+  const classifyTokens = (url: string | null | undefined, title: string | null | undefined): string => {
+    if (!sourceTypeClassify || !options?.classifySourceTypes) return "";
+    try {
+      const toks = options.classifySourceTypes(url || "", title || "");
+      return Array.isArray(toks) && toks.length > 0 ? " " + toks.join(" ").toLowerCase() : "";
+    } catch { return ""; }
+  };
   const docTypes = (requiredDocTypes || [])
     .map((d) => (typeof d === "string" ? d.trim() : ""))
     .filter((d) => d.length > 0);
@@ -558,7 +579,7 @@ export function deriveEssentialDocChecklist(
     let embedded = false;
     let embeddingCandidateSeen = false;   // an umbrella report was retrieved but body lacked the terms
     for (const d of eligible) {
-      const haystack = `${(d.url || "").toLowerCase()} ${(d.title || "").toLowerCase()}`;
+      const haystack = `${(d.url || "").toLowerCase()} ${(d.title || "").toLowerCase()}${classifyTokens(d.url, d.title)}`;
       const directMatch = matchesDocType(haystack, docType);
       const embeddingMatch = !directMatch && matchesEmbeddingReport(haystack, docType);
       if (!directMatch && !embeddingMatch) continue;
@@ -624,6 +645,45 @@ export function deriveEssentialDocChecklist(
   }
 
   return items;
+}
+
+// CHANGE 7: generic (topic-agnostic) classification of annual-report vs
+// sustainability/climate-report source-type tokens. These are generic document
+// categories, never a company/framework/measure name.
+const ANNUAL_REPORT_TOKEN_RE = /10-?k|20-?f|40-?f|annual.?report|integrated.?report|regulatory-filing-by-issuer/;
+const SUST_CLIMATE_TOKEN_RE = /sustainab|\besg\b|climate|tcfd|responsib|\bcsr\b/;
+
+/**
+ * CHANGE 7 — pure: given the eligible (first-party, non-rejected) documents and an
+ * injected source-type classifier, report whether the classified set contains an
+ * annual report and a sustainability-or-climate report, and whether coverage is
+ * "comprehensive" (BOTH present). Side-effect-free and directly unit-testable.
+ */
+export function classifiedCoverageComprehensive(input: {
+  documents: ClassifiableDocument[];
+  classifySourceTypes?: (url: string, title: string) => string[];
+}): { annualReportPresent: boolean; sustainabilityOrClimatePresent: boolean; comprehensive: boolean } {
+  const classify = input.classifySourceTypes;
+  let annual = false;
+  let sustClimate = false;
+  if (typeof classify === "function") {
+    const eligible = (input.documents || []).filter(
+      (d) => d.gateVerdict !== "reject" && d.sourceType === "first_party",
+    );
+    for (const d of eligible) {
+      let toks: string[] = [];
+      try { toks = classify(d.url || "", d.title || "") || []; } catch { toks = []; }
+      const hay = Array.isArray(toks) ? toks.join(" ").toLowerCase() : "";
+      if (!annual && ANNUAL_REPORT_TOKEN_RE.test(hay)) annual = true;
+      if (!sustClimate && SUST_CLIMATE_TOKEN_RE.test(hay)) sustClimate = true;
+      if (annual && sustClimate) break;
+    }
+  }
+  return {
+    annualReportPresent: annual,
+    sustainabilityOrClimatePresent: sustClimate,
+    comprehensive: annual && sustClimate,
+  };
 }
 
 /** Single-line summary of a checklist (CSV / compact display). */
@@ -729,11 +789,27 @@ export function deriveResearchStatus(input: {
   for (const g of gaps) reasons.push(`${g.label}: ${g.detail}`);
 
   const hasUnresolved = unresolvedEssentialGaps.length > 0;
-  const comprehensive = !hasUnresolved;
+  let comprehensive = !hasUnresolved;
+
+  // CHANGE 7 (CHECKLIST_SOURCE_TYPE_CLASSIFY, default off): when on, "Comprehensive"
+  // additionally requires BOTH an annual report AND a sustainability-or-climate
+  // report in the classified set. This can only make the status stricter; when off,
+  // the result is byte-identical to today.
+  if (comprehensive && input.checklistOptions?.sourceTypeClassify === true) {
+    const cov = classifiedCoverageComprehensive({
+      documents,
+      classifySourceTypes: input.checklistOptions.classifySourceTypes,
+    });
+    if (!cov.comprehensive) {
+      comprehensive = false;
+      if (!cov.annualReportPresent) reasons.push("Classified coverage: no annual report present");
+      if (!cov.sustainabilityOrClimatePresent) reasons.push("Classified coverage: no sustainability/climate report present");
+    }
+  }
 
   let state: ResearchStatus["state"];
   if (comprehensive) state = "comprehensive";
-  else if (retryableGaps.length > 0) state = "incomplete";
+  else if (retryableGaps.length > 0 || !hasUnresolved) state = "incomplete";
   else state = "unresolved_gaps";
 
   return {

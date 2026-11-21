@@ -40,7 +40,7 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay, frameworkLineageFreezeEnabled, freezeFrameworkKey } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay, frameworkLineageFreezeEnabled, freezeFrameworkKey, withSelfConsistencyVoteInTrace, scoringVoteExportEnabled } from "./scoring-fix-flags.js";
 import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
@@ -3622,17 +3622,30 @@ async function runAnalyzePhase(opts: {
         // passage(s), and a three-valued validation status. FAIL-LOUD: an
         // un-attributable decision surfaces its reason in decisionTrace.diagnostics
         // (never a silently blank record).
-        decisionTrace: buildDecisionTrace({
-          companyId,
-          measureId: m.measureId,
-          verdict: m.verdict,
-          quotes: finalQuotes,
-          canonicalRuleTrace: (m as any).canonicalRuleTrace ?? null,
-          runId: batchId ?? null,
-          frameworkId: framework.id,
-          frameworkVersion: (framework as any).version ?? null,
-          frameworkHash: runFrameworkHash,
-        }),
+        decisionTrace: (() => {
+          const dt: any = buildDecisionTrace({
+            companyId,
+            measureId: m.measureId,
+            verdict: m.verdict,
+            quotes: finalQuotes,
+            canonicalRuleTrace: (m as any).canonicalRuleTrace ?? null,
+            runId: batchId ?? null,
+            frameworkId: framework.id,
+            frameworkVersion: (framework as any).version ?? null,
+            frameworkHash: runFrameworkHash,
+          });
+          // CHANGE 5 (SCORING_PHYSICAL_HAZARD_TERM_REQUIRED): when the physical-hazard
+          // gate downgraded this measure in the analyzer, surface the reason in the
+          // trace diagnostics. The marker is only ever set when that flag is ON.
+          if ((m as any).physicalHazardGateFired === true) {
+            if (!Array.isArray(dt.diagnostics)) dt.diagnostics = [];
+            dt.diagnostics.push(`physical-hazard-gate:${(m as any).physicalHazardGateReason ?? "downgraded"}`);
+          }
+          // CHANGE 6 (reuses SCORING_VOTE_EXPORT): persist the self-consistency vote
+          // inside the decision_trace jsonb without overwriting other trace data, so
+          // the export can read it back. No-op when the flag is off or no vote exists.
+          return withSelfConsistencyVoteInTrace(dt, (m as any).selfConsistencyVote, scoringVoteExportEnabled());
+        })(),
 
         // DIAGNOSTIC-ONLY score-write provenance (batch-1255 §6.2): which job
         // attempt / batch wrote this row. Nullable; never read by scoring.

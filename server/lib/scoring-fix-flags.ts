@@ -851,16 +851,355 @@ export function decideTiebreakRetry(opts: {
   return counts[0] === counts[1]; // top two buckets equal → even split
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 2026-11-21 "Run 8 Review" remediation (CHANGE 1–8). Every flag below is
+// DEFAULT-OFF (CHANGE 6 reuses the existing SCORING_VOTE_EXPORT flag and adds no
+// new flag): with none set, the pipeline, analyzer, storage, export and checklist
+// behave byte-for-byte as before. Nothing hardcodes a company, framework or
+// measure name — the physical-hazard VOCABULARY is generic domain vocabulary,
+// supplied as a default list and overridable by env. The pure decision helpers
+// are side-effect-free so they are directly unit-testable.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── CHANGE 1 — FROZEN_CORPUS_FRAMEWORK_SCOPED ────────────────────────────────
+/** Default OFF. When ON, storage.writeFrozenCorpus restricts the frozen document
+ *  set to documents that were accepted FOR THIS FRAMEWORK (resolved via
+ *  batch_corpus → batch_runs on framework_id, across every framework id sharing
+ *  the same framework_lineage_id — falling back to the framework's own id when the
+ *  lineage is null). When OFF, the frozen set is the current per-company
+ *  accepted-document set (no framework filter), byte-for-byte as today. */
+export function frozenCorpusFrameworkScopedEnabled(): boolean {
+  return envOnDefaultFalse("FROZEN_CORPUS_FRAMEWORK_SCOPED");
+}
+
+// ── CHANGE 2 — RUN_HEADER_FULL_FLAG_SNAPSHOT ─────────────────────────────────
+/** Default OFF. When ON: (a) the export freeze-key lookup logs a warning instead
+ *  of swallowing the error silently; (b) the run/corpus header prints the freeze
+ *  key and a "Replay: N of total" line; and (c) snapshotNonDefaultScoringFixFlags
+ *  emits EVERY boolean flag whose effective value differs from its compiled
+ *  default (computed dynamically from the registry below), instead of the fixed
+ *  10-name list. When OFF, all three behave exactly as today. */
+export function runHeaderFullFlagSnapshotEnabled(): boolean {
+  return envOnDefaultFalse("RUN_HEADER_FULL_FLAG_SNAPSHOT");
+}
+
+// ── CHANGE 3 — REPORTING_PERIOD_WEBPAGE_FETCHDATE_FALLBACK ────────────────────
+/** Default OFF. Only has any effect when REPORTING_PERIOD_ENFORCED is also ON.
+ *  When both are ON, an UNDATED web page (not a dated PDF) whose own text yields
+ *  no extractable year falls back to the document's fetchedAt date for
+ *  reporting-period-window membership. When OFF, an undated document fails closed
+ *  (excluded) exactly as today. */
+export function reportingPeriodWebpageFetchdateFallbackEnabled(): boolean {
+  return envOnDefaultFalse("REPORTING_PERIOD_WEBPAGE_FETCHDATE_FALLBACK");
+}
+
+// ── CHANGE 4 — CORPUS_LOW_VALUE_PAGE_FILTER_EXTENDED ─────────────────────────
+/** Default OFF. When ON, isLowValuePageSource ALSO excludes careers/jobs pages,
+ *  linkedin.com and wikipedia.org (in addition to the base low-value patterns).
+ *  When OFF, only the base patterns apply, exactly as today. */
+export function corpusLowValuePageFilterExtendedEnabled(): boolean {
+  return envOnDefaultFalse("CORPUS_LOW_VALUE_PAGE_FILTER_EXTENDED");
+}
+
+// ── CHANGE 5 — SCORING_PHYSICAL_HAZARD_TERM_REQUIRED ─────────────────────────
+/** Default OFF. When ON, a "Yes" on a physical-climate-track measure is
+ *  downgraded to "No" unless its supporting/lead evidence contains a concrete
+ *  physical-hazard term (a generic "climate-related" mention alone does NOT
+ *  satisfy the gate). When OFF, verdicts are untouched. */
+export function scoringPhysicalHazardTermRequiredEnabled(): boolean {
+  return envOnDefaultFalse("SCORING_PHYSICAL_HAZARD_TERM_REQUIRED");
+}
+
+const DEFAULT_PHYSICAL_HAZARD_TERMS = [
+  "flood",
+  "heat",
+  "heatwave",
+  "storm",
+  "cyclone",
+  "hurricane",
+  "typhoon",
+  "drought",
+  "wildfire",
+  "sea-level",
+  "sea level",
+  "water stress",
+  "water scarcity",
+  "acute",
+  "chronic",
+  "extreme weather",
+  "physical risk",
+  "physical climate risk",
+  "landslide",
+  "subsidence",
+  "precipitation",
+];
+
+const DEFAULT_PHYSICAL_HAZARD_TRACK_TOKENS = [
+  "physical_climate",
+  "physical climate",
+  "physical risk",
+  "physical resilience",
+  "business continuity",
+];
+
+/** Generic physical-hazard vocabulary. Default list above (none of which is a
+ *  substring of "climate-related"), overridable wholesale via the comma-separated
+ *  SCORING_PHYSICAL_HAZARD_TERMS env var. Not a company/framework/measure name. */
+export function physicalHazardTerms(): string[] {
+  const raw = process.env["SCORING_PHYSICAL_HAZARD_TERMS"];
+  if (raw != null && raw.trim() !== "") {
+    const list = raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0);
+    if (list.length > 0) return list;
+  }
+  return DEFAULT_PHYSICAL_HAZARD_TERMS.slice();
+}
+
+/** Generic tokens that identify a physical-climate / physical-resilience track,
+ *  overridable via comma-separated SCORING_PHYSICAL_HAZARD_TRACKS. */
+export function physicalHazardTrackTokens(): string[] {
+  const raw = process.env["SCORING_PHYSICAL_HAZARD_TRACKS"];
+  if (raw != null && raw.trim() !== "") {
+    const list = raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0);
+    if (list.length > 0) return list;
+  }
+  return DEFAULT_PHYSICAL_HAZARD_TRACK_TOKENS.slice();
+}
+
+/** Pure: true when any of the provided free-text signals (framework name/track,
+ *  measure category, etc.) contains any physical-hazard track token. */
+export function matchesPhysicalHazardTrack(
+  signals: Array<string | null | undefined>,
+  tokens?: string[],
+): boolean {
+  const toks = tokens && tokens.length > 0 ? tokens : physicalHazardTrackTokens();
+  const hay = signals
+    .filter((s): s is string => typeof s === "string" && s.length > 0)
+    .join(" ")
+    .toLowerCase();
+  if (hay === "") return false;
+  return toks.some((t) => hay.includes(t.toLowerCase()));
+}
+
+/** Pure: true when the evidence text mentions a concrete physical-hazard term. */
+export function evidenceHasPhysicalHazardTerm(
+  evidenceText: string,
+  hazardTerms?: string[],
+): boolean {
+  const terms = hazardTerms && hazardTerms.length > 0 ? hazardTerms : physicalHazardTerms();
+  const hay = (evidenceText || "").toLowerCase();
+  if (hay === "") return false;
+  return terms.some((t) => hay.includes(t.toLowerCase()));
+}
+
 /**
- * Snapshot of every DEFAULT-OFF scoring-fix flag that is currently turned ON,
- * computed at CSV-export time from process.env. This is intentionally NOT part of
+ * Pure, side-effect-free decision for the physical-hazard-term gate (CHANGE 5).
+ * Returns whether a "Yes" should be downgraded and a human-readable reason.
+ *   flag off                → no downgrade
+ *   not a physical track     → no downgrade
+ *   verdict is not "Yes"     → no downgrade
+ *   hazard term present       → no downgrade
+ *   otherwise                → downgrade ("physical-hazard-term-missing")
+ */
+export function decidePhysicalHazardGate(opts: {
+  flagOn: boolean;
+  isPhysicalTrack: boolean;
+  verdict: string | null | undefined;
+  evidenceText: string;
+  hazardTerms?: string[];
+}): { downgrade: boolean; reason: string } {
+  if (!opts.flagOn) return { downgrade: false, reason: "flag-off" };
+  if (!opts.isPhysicalTrack) return { downgrade: false, reason: "not-physical-track" };
+  if ((opts.verdict || "").trim().toLowerCase() !== "yes") {
+    return { downgrade: false, reason: "verdict-not-yes" };
+  }
+  if (evidenceHasPhysicalHazardTerm(opts.evidenceText, opts.hazardTerms)) {
+    return { downgrade: false, reason: "physical-hazard-term-present" };
+  }
+  return { downgrade: true, reason: "physical-hazard-term-missing" };
+}
+
+// ── CHANGE 6 — self-consistency vote persisted in decision_trace jsonb ────────
+// (reuses the existing SCORING_VOTE_EXPORT flag — scoringVoteExportEnabled())
+/**
+ * Pure: merge a self-consistency vote string into a decision_trace jsonb value
+ * WITHOUT overwriting any existing trace data. Returns the (possibly new) trace
+ * object. A no-op (returns the trace unchanged) when the flag is off or the vote
+ * is empty. Tolerant of a null/undefined/non-object trace (starts a fresh object).
+ */
+export function withSelfConsistencyVoteInTrace(
+  trace: unknown,
+  vote: unknown,
+  flagOn: boolean,
+): unknown {
+  if (!flagOn) return trace;
+  const v = typeof vote === "string" ? vote.trim() : "";
+  if (v === "") return trace;
+  const base: Record<string, unknown> =
+    trace && typeof trace === "object" && !Array.isArray(trace)
+      ? { ...(trace as Record<string, unknown>) }
+      : {};
+  base.selfConsistencyVote = v;
+  return base;
+}
+
+/** Pure: read a self-consistency vote string previously merged into a
+ *  decision_trace jsonb value. Returns "" when absent or unusable. */
+export function readSelfConsistencyVoteFromTrace(trace: unknown): string {
+  if (!trace || typeof trace !== "object" || Array.isArray(trace)) return "";
+  const v = (trace as Record<string, unknown>)["selfConsistencyVote"];
+  return typeof v === "string" ? v : "";
+}
+
+// ── CHANGE 7 — CHECKLIST_SOURCE_TYPE_CLASSIFY ────────────────────────────────
+/** Default OFF. When ON, the document checklist classifies each item using the
+ *  same source-type classifier the scorer uses, so e.g. "Sustainability/ESG
+ *  Report: found" reflects reality, and allows the "Comprehensive" status ONLY
+ *  when BOTH an annual report AND a sustainability-or-climate report are present
+ *  in the classified set. When OFF, the current checklist labels are kept. */
+export function checklistSourceTypeClassifyEnabled(): boolean {
+  return envOnDefaultFalse("CHECKLIST_SOURCE_TYPE_CLASSIFY");
+}
+
+// ── CHANGE 8 — EVIDENCE_QUOTE_OVERLAP_MATCH ──────────────────────────────────
+/** Default OFF. Extends the existing EVIDENCE_QUOTE_SINGLE_USE dedupe: when ON,
+ *  two quotes are treated as the same when they reference the same passage id OR
+ *  share ≥ (threshold) of their tokens (Jaccard on normalized lowercased word
+ *  sets). When OFF, only exact-text matching is used, exactly as today. */
+export function evidenceQuoteOverlapMatchEnabled(): boolean {
+  return envOnDefaultFalse("EVIDENCE_QUOTE_OVERLAP_MATCH");
+}
+/** Jaccard token-overlap threshold for CHANGE 8 (default 0.6). */
+export function evidenceQuoteOverlapThreshold(): number {
+  const t = envFloat("EVIDENCE_QUOTE_OVERLAP_THRESHOLD", 0.6);
+  if (!(t > 0) || t > 1) return 0.6;
+  return t;
+}
+
+/** Pure: Jaccard token overlap of two quote strings on normalized lowercased
+ *  word sets (punctuation stripped). Returns 0 when either side has no tokens. */
+export function quoteTokenOverlap(a: string, b: string): number {
+  const toks = (s: string): Set<string> =>
+    new Set(
+      (s || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 0),
+    );
+  const sa = toks(a);
+  const sb = toks(b);
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let inter = 0;
+  for (const t of sa) if (sb.has(t)) inter++;
+  const union = sa.size + sb.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Boolean-flag default registry (CHANGE 2c). Maps every boolean scoring-fix flag
+// env name to its COMPILED default (true for default-ON, false for default-OFF).
+// Used by snapshotNonDefaultScoringFixFlags when RUN_HEADER_FULL_FLAG_SNAPSHOT is
+// on to emit every flag whose EFFECTIVE value differs from its default. Kept here
+// so the one place that enumerates flags stays in sync with the helpers above.
+// ─────────────────────────────────────────────────────────────────────────────
+const BOOLEAN_FLAG_DEFAULTS: Record<string, boolean> = {
+  // default-ON flags
+  CHECKLIST_EMBEDDING_CONTENT_CHECK: true,
+  CORPUS_READINESS_RETRY: true,
+  CORPUS_LOW_VALUE_PAGE_FILTER: true,
+  ATTRIBUTION_FILING_PROVENANCE: true,
+  ATTRIBUTION_SUBSIDIARY_DISAMBIGUATION: true,
+  SCORING_ONE_QUOTE_PER_MEASURE: true,
+  CORPUS_REUSE_ACROSS_RUNS: true,
+  CORPUS_FRAMEWORK_SCOPED_SNAPSHOT: true,
+  CORPUS_REUSE_ON_RECHECK: true,
+  CORPUS_REFRESH_ENDPOINT: true,
+  CORPUS_ORPHAN_REDISCOVER: true,
+  PASSAGE_WITHIN_DOC_REWEIGHT: true,
+  ENTITY_FUND_DISAMBIGUATION: true,
+  ATTRIBUTION_OWNDOC_BEFORE_SUBSIDIARY: true,
+  ATTRIBUTION_RC5_ENTITY_LIST_SCOPED: true,
+  ADMISSION_COMPETITOR_DOMINANCE: true,
+  ATTRIBUTION_THIRD_PARTY_HOST_GATE: true,
+  CHECKLIST_CONTENT_MAP_FALLBACK: true,
+  COVERAGE_SUSPECT_EXPECTED_SOURCING: true,
+  // default-OFF flags
+  DISCOVERY_DEEP_SECOND_PASS: false,
+  COMPLETENESS_MANDATORY_RESEARCH: false,
+  ADMISSION_GATE_PROTOTYPE: false,
+  SCORING_CROSS_RUN_MAJORITY: false,
+  EVIDENCE_REPAIR_REGRADE: false,
+  SCORING_BASE_RATE_PRIOR_ALLOW: false,
+  ATTRIBUTION_TRUSTED_SOURCE_RESOLVE: false,
+  ATTRIBUTION_FAIL_OPEN_WHEN_NO_TRUSTED_DATA: false,
+  GATE_RATIONALE_SYNC: false,
+  READJUDICATION_PASS: false,
+  APPLICABILITY_RULES_EXECUTED: false,
+  COVERAGE_RULES_EXECUTED: false,
+  REPORTING_PERIOD_ENFORCED: false,
+  ENTITY_SCOPE_ENFORCED: false,
+  FROZEN_CORPUS_CONTENT_HASH_REUSE: false,
+  RETRIEVAL_KNOWN_URLS_SEED: false,
+  RETRIEVAL_VEHICLE_AGNOSTIC: false,
+  RETRIEVAL_EXCLUSION_KEYWORDS_RELAXED: false,
+  EVIDENCE_QUOTE_SINGLE_USE: false,
+  EVIDENCE_ADJACENT_PASSAGE_SPAN: false,
+  EXTRACTION_RETRY_FALLBACK: false,
+  RETRIEVAL_FUNNEL_INSTRUMENTATION: false,
+  SCORE_ONLY_REPLAY: false,
+  SCORE_ONLY_REPLAY_COLD_START_DISCOVERS: false,
+  FRAMEWORK_SCOPE_CONFIG_ENRICH: false,
+  FRAMEWORK_LINEAGE_FREEZE: false,
+  VERDICT_CACHE_DURABLE: false,
+  ATTRIBUTION_MANUAL_DOMAINS_AT_GATE: false,
+  CSV_RUN_MANIFEST_EXPORT: false,
+  PINNED_DOCUMENTS_ENABLED: false,
+  SCORING_VOTE_EXPORT: false,
+  SCORING_TIEBREAK_RETRY: false,
+  // CHANGE 1–8 flags (all default-OFF; CHANGE 6 reuses SCORING_VOTE_EXPORT above)
+  FROZEN_CORPUS_FRAMEWORK_SCOPED: false,
+  RUN_HEADER_FULL_FLAG_SNAPSHOT: false,
+  REPORTING_PERIOD_WEBPAGE_FETCHDATE_FALLBACK: false,
+  CORPUS_LOW_VALUE_PAGE_FILTER_EXTENDED: false,
+  SCORING_PHYSICAL_HAZARD_TERM_REQUIRED: false,
+  CHECKLIST_SOURCE_TYPE_CLASSIFY: false,
+  EVIDENCE_QUOTE_OVERLAP_MATCH: false,
+};
+
+/** Pure: effective boolean value of a flag given its compiled default, using the
+ *  same env-parsing convention as the per-flag helpers above. */
+function effectiveFlag(name: string, dflt: boolean): boolean {
+  return dflt ? envOnDefaultTrue(name) : envOnDefaultFalse(name);
+}
+
+/**
+ * Snapshot of scoring-fix flags for the CSV/run header. Intentionally NOT part of
  * the hashed run-manifest body (adding fields there would break the manifest-hash
  * stability test RP01) — it reflects the environment of the EXPORTING process,
  * which for a replay export is normally the same deployment that produced the run.
- * Returns a stable comma-separated "FLAG=value" list (sorted) or "" when none are
- * set, so the CSV header is deterministic.
+ * Returns a stable comma-separated list (sorted) or "" when none apply.
+ *
+ * CHANGE 2c: when RUN_HEADER_FULL_FLAG_SNAPSHOT is ON, every boolean flag whose
+ * EFFECTIVE value differs from its compiled default is emitted dynamically from
+ * BOOLEAN_FLAG_DEFAULTS (so a newly-added flag is covered automatically and a
+ * default-ON flag turned OFF is visible too). When OFF, the legacy fixed list of
+ * default-OFF flags turned ON is returned byte-for-byte as before.
  */
 export function snapshotNonDefaultScoringFixFlags(): string {
+  if (runHeaderFullFlagSnapshotEnabled()) {
+    const out: string[] = [];
+    for (const [name, dflt] of Object.entries(BOOLEAN_FLAG_DEFAULTS)) {
+      const eff = effectiveFlag(name, dflt);
+      if (eff !== dflt) out.push(`${name}=${eff ? "on" : "off"}`);
+    }
+    return out.sort().join(",");
+  }
   const names = [
     "FRAMEWORK_LINEAGE_FREEZE",
     "VERDICT_CACHE_DURABLE",

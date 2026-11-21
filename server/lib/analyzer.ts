@@ -55,6 +55,11 @@ import {
   formatVoteString,
   attributionManualDomainsAtGateEnabled,
   unionOwnDomains,
+  reportingPeriodEnforced,
+  reportingPeriodWebpageFetchdateFallbackEnabled,
+  scoringPhysicalHazardTermRequiredEnabled,
+  matchesPhysicalHazardTrack,
+  decidePhysicalHazardGate,
 } from "./scoring-fix-flags.js";
 import { evaluateApplicability, evaluateCoverage, type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { requiredSourceTypesBlocking } from "./retrieval-funnel.js";
@@ -2637,6 +2642,32 @@ export async function analyzeCompanyMeasures(opts: {
     };
   })();
 
+  // CHANGE 3 (REPORTING_PERIOD_WEBPAGE_FETCHDATE_FALLBACK, default OFF): only when
+  // BOTH REPORTING_PERIOD_ENFORCED and this flag are ON, build a per-document date
+  // map (url → {fetchedAt, isWebPage}) from the live accepted-document set so the
+  // passage recency filter can fall back to a web page's fetchedAt when it is
+  // undated. A web page is any accepted document whose type is not "pdf" (dated
+  // PDFs keep failing closed). Null when either flag is off → no new DB read and
+  // the recency filter behaves byte-for-byte as today.
+  let docDateByUrl:
+    | Map<string, { fetchedAt?: Date | string | null; isWebPage?: boolean }>
+    | undefined;
+  if (reportingPeriodEnforced() && reportingPeriodWebpageFetchdateFallbackEnabled()) {
+    try {
+      const accepted = await storage.getAcceptedDocuments(companyId);
+      const m = new Map<string, { fetchedAt?: Date | string | null; isWebPage?: boolean }>();
+      for (const d of accepted) {
+        if (!d || !d.url) continue;
+        const isWebPage = String((d as any).type || "").toLowerCase() !== "pdf";
+        m.set(d.url, { fetchedAt: (d as any).fetchedAt ?? null, isWebPage });
+      }
+      docDateByUrl = m;
+    } catch (e) {
+      console.warn(`[reporting-period] fetchedAt fallback map build failed: ${(e as any)?.message || e}`);
+      docDateByUrl = undefined;
+    }
+  }
+
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
 
@@ -2979,6 +3010,9 @@ export async function analyzeCompanyMeasures(opts: {
         // the respective flag is on AND the framework config populates them).
         reportingPeriod: frameworkReportingPeriod,
         entityScope: frameworkEntityScope,
+        // CHANGE 3 — per-document date metadata for the webpage fetchedAt recency
+        // fallback (undefined unless both flags on).
+        docDateByUrl,
       });
 
       // I69: Optional LLM passage rescoring layered on top of BM25. Env-gated.
@@ -3916,6 +3950,46 @@ export async function analyzeCompanyMeasures(opts: {
         }
       } catch (err) {
         console.warn(`[${companyName}] eligibility-flags ${result.measureId}: computation skipped (${(err as Error)?.message ?? "error"}) — advisory only, not blocking`);
+      }
+
+      // CHANGE 5 (SCORING_PHYSICAL_HAZARD_TERM_REQUIRED, default OFF): on a
+      // physical-climate-track measure, a "Yes" whose supporting/lead evidence names
+      // no concrete physical-hazard term (a bare "climate-related" mention does not
+      // count) is downgraded Yes → No (score 0). Pure decision helper; no-op when the
+      // flag is off, when the track does not match, or when a hazard term is present.
+      try {
+        const isPhysicalTrack = matchesPhysicalHazardTrack([
+          (framework as any).track,
+          (framework as any).metadata?.scopeConfig?.track,
+          framework.name,
+          (framework as any).topicDescription,
+          result.category,
+        ]);
+        const evidenceText = [
+          result.evidenceSummary,
+          ...((result.quotes || []).map((q) => (q as any)?.text ?? "")),
+        ].join(" ");
+        const gate = decidePhysicalHazardGate({
+          flagOn: scoringPhysicalHazardTermRequiredEnabled(),
+          isPhysicalTrack,
+          verdict: result.verdict,
+          evidenceText,
+        });
+        if (gate.downgrade) {
+          const prevVerdict = result.verdict;
+          const prevScore = result.score;
+          result.verdict = "No";
+          result.score = 0;
+          const gateNote = `[Physical-hazard gate: downgraded ${prevVerdict}→No — no concrete physical-hazard term in supporting evidence]`;
+          result.evidenceSummary = (result.evidenceSummary ? `${result.evidenceSummary} ` : "") + gateNote;
+          result.verdictNuance = (result.verdictNuance ? `${result.verdictNuance} ` : "") + gateNote;
+          recordVerdictOverride(result, `Physical-hazard gate: ${gate.reason}`);
+          (result as any).physicalHazardGateFired = true;
+          (result as any).physicalHazardGateReason = gate.reason;
+          console.log(`[${companyName}] PHYSICAL-HAZARD DOWNGRADE ${result.measureId}: ${prevVerdict} (score ${prevScore}) → No (0) — ${gate.reason}`);
+        }
+      } catch (err) {
+        console.warn(`[${companyName}] physical-hazard gate ${result.measureId}: skipped (${(err as Error)?.message ?? "error"}) — not blocking`);
       }
 
       // A3 / WP04: compose the single immutable eligibility decision for this

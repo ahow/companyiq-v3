@@ -51,7 +51,9 @@ import { buildAndRecordRunManifest } from "./lib/run-manifest.js";
 // WP02/A1: additive research-state accounting. Pure derivation — never affects
 // scores/verdicts; attached to the snapshot as metadata only.
 import { buildManifest, deriveResearchStatus } from "../shared/research-state.js";
-import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, frozenCorpusOrphanGuardEnabled, frozenCorpusContentHashReuse, r1ChecklistContentFallbackEnabled, frameworkLineageFreezeEnabled, freezeFrameworkKey } from "./lib/scoring-fix-flags.js";
+import { rc1EmbeddingContentCheckEnabled, rc1ChecklistContentFetchChars, rc7CorpusReuseAcrossRunsEnabled, shouldReuseCorpusForRerun, p1RecheckReusesCorpusEnabled, p1FrameworkScopedCorpusEnabled, frozenCorpusOrphanGuardEnabled, frozenCorpusContentHashReuse, r1ChecklistContentFallbackEnabled, frameworkLineageFreezeEnabled, freezeFrameworkKey, checklistSourceTypeClassifyEnabled } from "./lib/scoring-fix-flags.js";
+// CHANGE 7: the scorer's source-type classifier, injected into the checklist builder.
+import { detectSourceTypes } from "./lib/discovery.js";
 import { resolveFrozenCorpus } from "./lib/retrieval-funnel.js";
 import { computeCompanyScore } from "../shared/verdict.js";
 // A9 / WP15 (truthful publication). Build the canonical per-cell publication
@@ -1491,10 +1493,19 @@ async function saveAnalysisResultsForBatch(batchId: number, frameworkId: number,
           }
         }
       }
+      const declaredDocTypes = (((framework as any)?.requiredDocTypes as string[] | null) || [])
+        .filter((d): d is string => typeof d === "string" && d.trim().length > 0);
       const researchStatus = deriveResearchStatus({
         documents: docsForChecklist as any,
         manifest: researchManifest,
-        checklistOptions: { embeddingContentCheck: effectiveEmbeddingCheck },
+        checklistOptions: {
+          embeddingContentCheck: effectiveEmbeddingCheck,
+          // CHANGE 7 (default off): classify checklist items with the scorer's
+          // source-type classifier; gate "Comprehensive" on both an annual report
+          // and a sustainability/climate report being present.
+          sourceTypeClassify: checklistSourceTypeClassifyEnabled(),
+          classifySourceTypes: (u: string, t: string) => Array.from(detectSourceTypes(u, t, declaredDocTypes)),
+        },
       });
 
       // A9 / WP15: build the canonical publication record for every measure cell
