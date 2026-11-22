@@ -23,12 +23,15 @@ function arg(name: string, def?: string): string | undefined {
   const frameworkId = parseInt(arg("fw", "18")!, 10);
   const listId = parseInt(arg("list", "9")!, 10);
   const confirm = process.argv.includes("--confirm");
+  // Cold-start: force fresh discovery+fetch on every job, bypassing the RC7
+  // corpus-reuse gate (CORPUS_REUSE_ACROSS_RUNS). Each run rebuilds its own corpus.
+  const forceRefresh = process.argv.includes("--force-refresh");
 
   const dbUrl = process.env.DATABASE_URL || "";
   const host = dbUrl.replace(/^.*@/, "").replace(/\/.*$/, "");
   console.log(`[launch] DB host: ${host}`);
   console.log(`[launch] REDIS set: ${process.env.REDIS_URL ? "yes" : "NO"}`);
-  console.log(`[launch] ws=${workspaceId} fw=${frameworkId} list=${listId} confirm=${confirm}`);
+  console.log(`[launch] ws=${workspaceId} fw=${frameworkId} list=${listId} forceRefresh=${forceRefresh} confirm=${confirm}`);
 
   const framework = await storage.getFrameworkById(frameworkId, workspaceId);
   if (!framework) throw new Error(`framework ${frameworkId} not found in ws ${workspaceId}`);
@@ -51,7 +54,7 @@ function arg(name: string, def?: string): string | undefined {
   const allJobs = await storage.getJobsForBatch((batch as any).id);
   const queueJobs = allJobs
     .filter((j: any) => j.status === "pending")
-    .map((j: any) => ({ jobId: j.id, companyId: j.companyId, frameworkId: j.frameworkId, batchId: (batch as any).id, workspaceId, skipFetch: false }));
+    .map((j: any) => ({ jobId: j.id, companyId: j.companyId, frameworkId: j.frameworkId, batchId: (batch as any).id, workspaceId, skipFetch: false, forceRefresh }));
   await addBatchJobs(queueJobs, workspaceId, (batch as any).id);
   console.log(`[launch] CREATED batch ${(batch as any).id} with ${queueJobs.length} jobs enqueued.`);
   process.exit(0);
