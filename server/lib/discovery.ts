@@ -8,7 +8,9 @@ import { faultTimeoutMs, maybeFireCancel } from "./fault-inject.js";
 import { assertDispatchAllowed, requestAbortSignal, isLifecycleCancelledError, revokeAttempt } from "./lifecycle-fence.js";
 import { completeWithFallback } from "./ai-providers.js";
 import { noteRateLimited } from "./adaptive-concurrency.js";
-import { retrievalKnownUrlsSeed, retrievalExclusionKeywordsRelaxed } from "./scoring-fix-flags.js";
+import { retrievalKnownUrlsSeed, retrievalExclusionKeywordsRelaxed,
+  discoveryDeterministicEnabled, deterministicDiscoverySeed, sortDedupeCanonicalUrls, canonicalUrlKey,
+  discoveryProviderBackoffEnabled, discoveryBackoffBaseMs, discoveryBackoffMaxRetries, backoffDelayMs } from "./scoring-fix-flags.js";
 import { seedKnownDisclosureUrls, shouldExcludeByKeywords } from "./retrieval-funnel.js";
 import {
   resolveDiscoveryParallelPolicy,
@@ -1468,6 +1470,20 @@ async function webSearchInner(
 
   // Each provider call acquires/releases its OWN bucket; no token is held
   // during 429 backoff sleeps or across the Serper→SerpAPI fallback.
+  //
+  // DISCOVERY_PROVIDER_BACKOFF (default OFF): a transient provider error is a
+  // network timeout or a 5xx (502/503/504) — i.e. not a 429 (handled above) and
+  // not a lifecycle cancellation. When the flag is unset isRetryableProviderErr
+  // is never consulted, so behaviour is byte-for-byte identical to current main.
+  const isRetryableProviderErr = (err: any): boolean => {
+    if (isLifecycleCancelledError(err)) return false;
+    const status = err?.response?.status;
+    if (typeof status === "number") return status >= 500 && status < 600;
+    const code = err?.code;
+    if (code === "ECONNABORTED" || code === "ETIMEDOUT" || code === "ECONNRESET") return true;
+    const msg = String(err?.message || "").toLowerCase();
+    return msg.includes("timeout") || msg.includes("timed out") || msg.includes("socket hang up");
+  };
   if (serperKey) {
     try {
       // Goto links are resolved at FETCH time (axios maxRedirects / Playwright
@@ -1487,6 +1503,28 @@ async function webSearchInner(
           const raw = await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal));
           return mapOrganicResults(raw?.organic || []);
         } catch (retryErr) { if (isLifecycleCancelledError(retryErr)) throw retryErr; /* fall through */ }
+      }
+      // DISCOVERY_PROVIDER_BACKOFF (default OFF): on a transient Serper error
+      // (timeout / 5xx), retry with exponential backoff before giving up and
+      // falling through to SerpAPI. Default-unset: the loop never runs.
+      if (discoveryProviderBackoffEnabled() && isRetryableProviderErr(error)) {
+        const maxRetries = discoveryBackoffMaxRetries();
+        const baseMs = discoveryBackoffBaseMs();
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          assertDispatchAllowed("discovery.webSearchInner:serper-backoff-pre");
+          const delay = backoffDelayMs(attempt, baseMs);
+          console.warn(`[Discovery] Serper transient error, backoff retry ${attempt}/${maxRetries} after ${delay}ms for "${query.slice(0, 60)}"`);
+          await timeStage("retry_backoff", "search_provider_backoff", () => new Promise(r => setTimeout(r, delay)));
+          assertDispatchAllowed("discovery.webSearchInner:serper-backoff-retry");
+          try {
+            const raw = await withBucket(serperBucket, (signal) => webSearchSerper(query, serperKey, opts, signal));
+            return mapOrganicResults(raw?.organic || []);
+          } catch (retryErr: any) {
+            if (isLifecycleCancelledError(retryErr)) throw retryErr;
+            error = retryErr;
+            if (!isRetryableProviderErr(error)) break;
+          }
+        }
       }
       noteRateLimited(); // genuine Serper failure (429-retry-success returns earlier) = back-pressure signal for adaptive concurrency
       console.warn(`[Discovery] Serper.dev failed for "${query}": ${error.message}`);
@@ -1593,7 +1631,13 @@ async function generateQueryVariants(
 
   try {
     const topicDesc = framework.topicDescription || framework.name;
+    // DISCOVERY_DETERMINISTIC (flag 2, default OFF): when ON, seed the variant
+    // generator from a stable per-(company, framework) seed so the same company
+    // yields the same query variants each run. No-op when OFF (seed omitted).
+    const detDisc = discoveryDeterministicEnabled();
+    const detSeed = detDisc ? deterministicDiscoverySeed(companyName, framework.name) : undefined;
     const { text } = await completeWithFallback("deepseek", {
+      ...(detSeed !== undefined ? { seed: detSeed } : {}),
       system: `You generate search query variants for corporate document discovery. Given base search queries about a company, generate alternative phrasings that would find the same or similar documents but using different keywords, synonyms, or angles. Focus on finding documents relevant to: ${topicDesc}. Generate queries that target the specific topic — do NOT default to generic sustainability/ESG queries unless the topic is explicitly about sustainability.`,
       prompt: `Company: ${companyName}
 Topic: ${topicDesc}
@@ -1610,7 +1654,12 @@ IMPORTANT: The queries MUST be relevant to the topic "${framework.name}". Do NOT
 
     const variants = JSON.parse(text);
     if (Array.isArray(variants)) {
-      return variants.slice(0, numVariants * 2); // Allow up to 2x variants
+      // DISCOVERY_DETERMINISTIC (flag 2): when ON, order the variants stably so the
+      // downstream query set is order-independent run-to-run. OFF = original order.
+      const ordered = detDisc
+        ? [...variants].map((v) => String(v)).sort((a, b) => a.localeCompare(b))
+        : variants;
+      return ordered.slice(0, numVariants * 2); // Allow up to 2x variants
     }
     return [];
   } catch (error: any) {
@@ -5546,6 +5595,32 @@ async function searchCompanyDocumentsInner(opts: {
     }
     if (allCandidates.length < beforeSanitise) {
       console.warn(`[${companyName}] dropped ${beforeSanitise - allCandidates.length} candidate(s) with a non-string url`);
+    }
+  }
+
+  // DISCOVERY_DETERMINISTIC (default OFF): make the candidate set order
+  // independent of provider response order / timing before fetch. Dedupe by
+  // canonical URL key (first occurrence wins, preserving the original spelling)
+  // and sort by that key. Default-unset: allCandidates is left exactly as the
+  // lanes produced it, so fetch order is byte-for-byte identical to current main.
+  if (discoveryDeterministicEnabled()) {
+    const before = allCandidates.length;
+    const orderedUrls = sortDedupeCanonicalUrls(allCandidates.map(c => c.url));
+    const firstByKey = new Map<string, DiscoveryCandidate>();
+    for (const c of allCandidates) {
+      const k = canonicalUrlKey(c.url);
+      if (k && !firstByKey.has(k)) firstByKey.set(k, c);
+    }
+    const reordered: DiscoveryCandidate[] = [];
+    for (const u of orderedUrls) {
+      const c = firstByKey.get(canonicalUrlKey(u));
+      if (c) reordered.push(c);
+    }
+    allCandidates.splice(0, allCandidates.length, ...reordered);
+    if (allCandidates.length !== before) {
+      console.log(`[${companyName}] DISCOVERY_DETERMINISTIC: canonicalised candidate order (${before} → ${allCandidates.length} after canonical dedupe)`);
+    } else {
+      console.log(`[${companyName}] DISCOVERY_DETERMINISTIC: candidate order canonicalised (${allCandidates.length} candidates)`);
     }
   }
 

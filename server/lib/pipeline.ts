@@ -40,7 +40,10 @@ import { processDocument, inferDocumentType, PermanentFetchError, TransientFetch
 import { cacheDocumentFetch } from "./pipeline-cache.js";
 import type { PdfRecoveryOutcome } from "./processor.js";
 import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourcingCoverage, type AnalysisResult } from "./analyzer.js";
-import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay, frameworkLineageFreezeEnabled, freezeFrameworkKey, withSelfConsistencyVoteInTrace, scoringVoteExportEnabled } from "./scoring-fix-flags.js";
+import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay, frameworkLineageFreezeEnabled, freezeFrameworkKey, withSelfConsistencyVoteInTrace, scoringVoteExportEnabled,
+ corpusOverlapInstrumentEnabled, canonicalDocKey,
+ corpusCoverageBarFreezeEnabled, corpusCoverageBarMaxRetries, corpusCoverageRequiredCategories, decideCoverageBarFreeze,
+ fetchFloorRequiredRetryEnabled, fetchFloorMaxRetries, decideFetchFloorRetry } from "./scoring-fix-flags.js";
 import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
@@ -2684,6 +2687,64 @@ async function runFetchPhase(opts: {
     }
   }
 
+  // ─── CORPUS_COVERAGE_BAR_FREEZE (flag 3) + FETCH_FLOOR_REQUIRED_RETRY (flag 4) ──
+  // Both default OFF. When ON, before freezing the snapshot we make a BOUNDED set of
+  // extra re-fetch attempts at discovered-but-unfetched REQUIRED documents, using
+  // the same fork-free direct-HTTPS retry primitive the readiness barrier uses.
+  //  • Flag 3 keys "required" off coverage CATEGORIES (default: an annual report AND
+  //    a sustainability/climate report), matched by substring against each doc's
+  //    title+url, and freezes anyway once the bounded budget is exhausted so the
+  //    pipeline never stalls.
+  //  • Flag 4 keys "required" off any discovered doc that matches a required category
+  //    but did not fetch, and retries those specifically.
+  // No company/framework/measure names are hardcoded (categories are env-tunable and
+  // matched against document metadata). When both flags are OFF, nothing runs.
+  if (corpusCoverageBarFreezeEnabled() || fetchFloorRequiredRetryEnabled()) {
+    try {
+      const { fetchPdfDirectRetry } = (await import("./processor.js")) as any;
+      const getOrigin = (u: string) => { try { const p = new URL(u); return p.protocol + "//" + p.host; } catch { return ""; } };
+      const requiredCats = corpusCoverageRequiredCategories();
+      const maxRetries = Math.max(corpusCoverageBarMaxRetries(), fetchFloorMaxRetries());
+      const REFETCH_CAP = 10; // bound work per attempt
+      const catKey = (d: any) => `${d.title || ""} ${d.url || ""}`.toLowerCase();
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const docs: any[] = await storage.getAcceptedDocuments(companyId);
+        const presentCategories = docs.filter((d) => d.fetchStatus === "ok").map(catKey);
+        const requiredUnfetched = docs.filter(
+          (d) => d.fetchStatus !== "ok" && requiredCats.some((c) => catKey(d).includes(c)),
+        );
+        const cov = decideCoverageBarFreeze({
+          flagOn: corpusCoverageBarFreezeEnabled(),
+          presentCategories,
+          requiredCategories: requiredCats,
+          attempt,
+          maxRetries,
+        });
+        const floor = decideFetchFloorRetry({
+          flagOn: fetchFloorRequiredRetryEnabled(),
+          requiredUnfetched: requiredUnfetched.map((d) => d.url),
+          attempt,
+          maxRetries,
+        });
+        console.log(`[${companyName}] COVERAGE-BAR/FETCH-FLOOR attempt ${attempt}: coverage=${cov.reason}; fetch-floor=${floor.reason}`);
+        if (!cov.retry && !floor.retry) break;
+        const targets = (requiredUnfetched.length ? requiredUnfetched : docs.filter((d) => d.fetchStatus !== "ok")).slice(0, REFETCH_CAP);
+        if (targets.length === 0) break;
+        for (const doc of targets) {
+          try {
+            const text = typeof fetchPdfDirectRetry === "function" ? await fetchPdfDirectRetry(doc.url, getOrigin(doc.url)) : null;
+            if (text && text.length > 200) {
+              await storage.recordFetchSuccess(companyId, doc.url, text, getExtractionCompleteness(doc.url));
+              console.log(`[${companyName}] FETCH-FLOOR: recovered ${text.length} chars from ${(doc.url || "").slice(0, 80)}`);
+            }
+          } catch { /* per-URL non-fatal */ }
+        }
+      }
+    } catch (floorErr: any) {
+      console.warn(`[${companyName}] coverage-bar/fetch-floor: skipped (non-fatal): ${floorErr?.message || floorErr}`);
+    }
+  }
+
   // ─── Corpus Snapshot: freeze the evidence set for this batch ──────────────
   // This makes re-scoring byte-identical: the analyze phase reads from batch_corpus
   // instead of the live documents table, so corpus composition is frozen at fetch time.
@@ -2713,6 +2774,47 @@ async function runFetchPhase(opts: {
       }
     } catch (snapErr: any) {
       console.warn(`[${companyName}] Corpus snapshot failed (non-fatal): ${snapErr.message}`);
+    }
+  }
+
+  // ─── CORPUS_OVERLAP_INSTRUMENT (flag 1) ──────────────────────────────────
+  // Measurement only, default OFF. When ON, log the frozen doc-set for this
+  // (batch, company) to a durable sink (corpus_overlap_log) keyed by a stable doc
+  // key (content hash preferred, else canonical URL), so run-to-run corpus overlap
+  // can be measured offline. The table is created idempotently on first use so OFF
+  // means ZERO schema/DB change. Never alters which documents are frozen or scored.
+  if (corpusOverlapInstrumentEnabled() && batchId) {
+    try {
+      const { db } = await import("../db.js");
+      const { sql } = await import("drizzle-orm");
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS corpus_overlap_log (
+          id serial PRIMARY KEY,
+          batch_id integer NOT NULL,
+          company_id integer NOT NULL,
+          doc_key text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      const frozen: any = await db.execute(sql`
+        SELECT content_id, url FROM documents
+        WHERE company_id = ${companyId}
+          AND (fetch_status = 'ok' OR content_id IS NOT NULL)
+      `);
+      const rows: any[] = frozen.rows || [];
+      let logged = 0;
+      for (const r of rows) {
+        const key = canonicalDocKey({ contentHash: r.content_id != null ? String(r.content_id) : null, url: r.url });
+        if (!key) continue;
+        await db.execute(sql`
+          INSERT INTO corpus_overlap_log (batch_id, company_id, doc_key)
+          VALUES (${batchId}, ${companyId}, ${key})
+        `);
+        logged++;
+      }
+      console.log(`[${companyName}] CORPUS-OVERLAP-INSTRUMENT: logged ${logged} frozen doc key(s) for batch ${batchId}`);
+    } catch (instErr: any) {
+      console.warn(`[${companyName}] corpus-overlap-instrument: skipped (non-fatal): ${instErr?.message || instErr}`);
     }
   }
 

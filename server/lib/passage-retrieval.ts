@@ -10,7 +10,10 @@ import { z1WithinDocReweightEnabled, z1ThematicBoost, z1BoilerplatePenalty,
   reportingPeriodEnforced, entityScopeEnforced, evidenceQuoteSingleUse,
   evidenceAdjacentPassageSpan, evidenceAdjacentPassageMaxGap,
   evidenceQuoteOverlapMatchEnabled, evidenceQuoteOverlapThreshold,
-  reportingPeriodWebpageFetchdateFallbackEnabled } from "./scoring-fix-flags.js";
+  reportingPeriodWebpageFetchdateFallbackEnabled,
+  retrievalDeterministicRankEnabled, stablePassageTiebreak,
+  chunkingDeterministicEnabled, compareDocsForStableChunking,
+  extractionOverlapInstrumentEnabled } from "./scoring-fix-flags.js";
 import { evidenceWithinReportingPeriod, documentInEntityScope,
   type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { QuoteLedger, passagesAreAdjacent, type PassageSpan } from "./retrieval-funnel.js";
@@ -954,8 +957,17 @@ export function chunkText(text: string): string[] {
 /** Document-aware chunker: returns chunks tagged with their source doc index. */
 export function chunkDocuments(combinedText: string): Chunk[] {
   const docs = splitIntoDocuments(combinedText);
+  // CHUNKING_DETERMINISTIC (flag 8): when ON, order documents by a stable key
+  // (canonical URL, then title) before assigning docIndex, so chunk docIndex and
+  // seqInDoc boundaries are independent of fetch/assembly order. Within-doc
+  // chunking (chunkBody) is already a pure function of text + window/stride, so
+  // this is the only source of cross-run chunk nondeterminism. When OFF, the
+  // original splitIntoDocuments order is preserved byte-for-byte.
+  const orderedDocs = chunkingDeterministicEnabled()
+    ? [...docs].sort(compareDocsForStableChunking)
+    : docs;
   const out: Chunk[] = [];
-  docs.forEach((doc, docIndex) => {
+  orderedDocs.forEach((doc, docIndex) => {
     let seqInDoc = 0;
     for (const c of chunkBody(doc.body)) {
       out.push({ text: c.text, docIndex, docUrl: doc.url, docTitle: doc.title, seqInDoc, section: c.section });
@@ -2034,7 +2046,21 @@ export function buildEvidencePackForMeasure(opts: {
         .slice()
         .map((c) => ({ c, tc: topicCountOf(c) }))
         .filter((x) => x.tc > 0)
-        .sort((a, b) => b.tc - a.tc || b.c.score - a.c.score);
+        .sort((a, b) => {
+          const base = b.tc - a.tc || b.c.score - a.c.score;
+          // RETRIEVAL_DETERMINISTIC_RANK (flag 7): the remaining 4 named passage
+          // sorts (L1625 scored, L1961 cands, L2012/2015 byPosition/byScore,
+          // L2169 floorCands) already carry total-order tie-breaks from the prior
+          // B2 determinism work; this byTopic sort was the only one tie-breaking on
+          // score alone, so equal-(tc,score) chunks could reorder run-to-run. When
+          // ON, append the shared stable tie-break (doc key → seqInDoc → docIndex →
+          // idx). When OFF, behaviour is byte-for-byte unchanged.
+          if (base !== 0 || !retrievalDeterministicRankEnabled()) return base;
+          return stablePassageTiebreak(
+            { docKey: chunks[a.c.idx].docUrl, seqInDoc: chunks[a.c.idx].seqInDoc, offset: chunks[a.c.idx].docIndex, idx: a.c.idx },
+            { docKey: chunks[b.c.idx].docUrl, seqInDoc: chunks[b.c.idx].seqInDoc, offset: chunks[b.c.idx].docIndex, idx: b.c.idx },
+          );
+        });
       const picked: (typeof scored)[number][] = [];
       const pushUnique = (c: (typeof scored)[number]) => {
         if (!picked.includes(c)) picked.push(c);
@@ -2510,6 +2536,20 @@ export function buildEvidencePackForMeasure(opts: {
   const fingerprint = createHash("sha1")
     .update(`${ident}||${chunkIds.join("|")}`)
     .digest("hex");
+
+  // EXTRACTION_OVERLAP_INSTRUMENT (flag 6): measurement only. Emit the selected
+  // passage identity keys and the lead quote for this (company, framework,
+  // measure) to the log sink so run-to-run extraction overlap can be measured
+  // offline. Never changes which passages are selected; a no-op when OFF.
+  if (extractionOverlapInstrumentEnabled()) {
+    const lead = (selected[0] ? (chunks[selected[0].idx]?.text || selected[0].text || "") : "")
+      .slice(0, 240)
+      .replace(/\s+/g, " ")
+      .trim();
+    console.log(
+      `[extraction-overlap-instrument] ${ident} passageIds=${JSON.stringify(chunkIds)} lead=${JSON.stringify(lead)}`,
+    );
+  }
 
   // I51-B: Per-measure passage-retrieval telemetry. Captures which chunks were
   // selected into the pack for later offline analysis. Diagnostic-only.

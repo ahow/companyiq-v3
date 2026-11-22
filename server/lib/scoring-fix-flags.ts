@@ -7,6 +7,8 @@
 //   default-ON  flag → (process.env.X || "true").toLowerCase() !== "false"
 //   default-OFF flag → (process.env.X || "").toLowerCase() is one of 1/true/on/yes
 
+import { createHash } from "node:crypto";
+
 function envOnDefaultTrue(name: string): boolean {
   return (process.env[name] || "true").toLowerCase() !== "false";
 }
@@ -1101,6 +1103,457 @@ export function quoteTokenOverlap(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// CONSISTENCY LEVERS (2026-11-22) — 12 default-OFF flags to reduce run-to-run
+// loss of positive findings (Yes→No flips). Each is declared here, defaults OFF,
+// is read via the envOnDefaultFalse / envInt / envFloat helpers above, and is
+// threaded into exactly one gate point. With every flag unset behaviour is
+// byte-for-byte identical to current main. Pure decision helpers are exported so
+// the behaviour is unit-testable without touching the pipeline.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── STAGE 1 · document collection ────────────────────────────────────────────
+
+// (1) CORPUS_OVERLAP_INSTRUMENT — measurement only. When ON, the frozen doc-set
+//     per (run/batch, company) is logged to a durable sink keyed by a stable doc
+//     key (content hash preferred, else canonical URL). Never changes which docs
+//     are frozen or scored.
+export function corpusOverlapInstrumentEnabled(): boolean {
+  return envOnDefaultFalse("CORPUS_OVERLAP_INSTRUMENT");
+}
+
+/** Pure: stable doc key for overlap instrumentation / canonical dedupe. Prefers
+ *  a content hash (collapses the same bytes fetched from different URLs); falls
+ *  back to the canonical URL (trimmed, trailing slashes removed, lowercased);
+ *  finally "" when neither is usable. */
+export function canonicalDocKey(opts: {
+  contentHash?: string | null;
+  url?: string | null;
+}): string {
+  const h = (opts.contentHash || "").trim();
+  if (h) return `h:${h.toLowerCase()}`;
+  const u = (opts.url || "").trim().replace(/\/+$/, "").toLowerCase();
+  return u ? `u:${u}` : "";
+}
+
+// (2) DISCOVERY_DETERMINISTIC — when ON, query-variant generation is seeded from
+//     a stable per-(company,framework) seed (mirrors analyzer.deterministicSeed)
+//     and candidate URLs are sorted + deduped by canonical URL before fetch, so
+//     discovery order no longer depends on provider response ordering.
+export function discoveryDeterministicEnabled(): boolean {
+  return envOnDefaultFalse("DISCOVERY_DETERMINISTIC");
+}
+
+/** Pure: stable uint32 seed for a (company, framework) pair. Mirrors the
+ *  sha256→readUInt32BE(0) scheme used by analyzer.deterministicSeed so discovery
+ *  and scoring share the same deterministic seeding style. */
+export function deterministicDiscoverySeed(
+  companyId: number | string,
+  framework: string,
+): number {
+  const h = createHash("sha256")
+    .update(`${companyId}:${framework}`)
+    .digest();
+  return h.readUInt32BE(0);
+}
+
+/** Pure: canonical URL key (trim, drop trailing slashes, lowercase). Matches
+ *  retrieval-funnel.normalizeUrlKey so both stages dedupe identically. */
+export function canonicalUrlKey(u: string): string {
+  return (u || "").trim().replace(/\/+$/, "").toLowerCase();
+}
+
+/** Pure: sort + dedupe candidate URLs by canonical key. First occurrence of each
+ *  canonical key wins (preserves the original URL spelling); output is ordered by
+ *  canonical key so fetch order is independent of provider response order. */
+export function sortDedupeCanonicalUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const u of urls) {
+    const k = canonicalUrlKey(u);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    kept.push(u);
+  }
+  return kept.sort((a, b) =>
+    canonicalUrlKey(a).localeCompare(canonicalUrlKey(b)),
+  );
+}
+
+// (3) CORPUS_COVERAGE_BAR_FREEZE — when ON, the corpus is only frozen once
+//     discovery returned the minimum REQUIRED source-type categories; otherwise
+//     a bounded retry runs, then freeze happens anyway so the pipeline never
+//     stalls. Default required set: an annual report AND a sustainability/climate
+//     report (matched by substring against classified categories).
+export function corpusCoverageBarFreezeEnabled(): boolean {
+  return envOnDefaultFalse("CORPUS_COVERAGE_BAR_FREEZE");
+}
+/** Max bounded retries before the coverage bar freezes anyway (default 2). */
+export function corpusCoverageBarMaxRetries(): number {
+  return Math.max(0, envInt("CORPUS_COVERAGE_BAR_MAX_RETRIES", 2));
+}
+/** Required coverage categories (comma-separated env override). Matched by
+ *  case-insensitive substring against the present classified categories, so
+ *  "annual" matches "Annual Report" and "sustainability" matches
+ *  "Sustainability/ESG Report". */
+export function corpusCoverageRequiredCategories(): string[] {
+  const raw = (process.env["CORPUS_COVERAGE_REQUIRED_CATEGORIES"] || "").trim();
+  if (raw) {
+    return raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0);
+  }
+  return ["annual", "sustainability"];
+}
+
+/** Pure: decide whether to freeze now, retry, or freeze-anyway under the coverage
+ *  bar. A required category is "present" when some present category contains it as
+ *  a case-insensitive substring. */
+export function decideCoverageBarFreeze(opts: {
+  flagOn: boolean;
+  presentCategories: string[];
+  requiredCategories: string[];
+  attempt: number;
+  maxRetries: number;
+}): { freeze: boolean; retry: boolean; reason: string } {
+  if (!opts.flagOn) return { freeze: true, retry: false, reason: "flag-off" };
+  const present = (opts.presentCategories || []).map((s) =>
+    (s || "").toLowerCase(),
+  );
+  const missing = (opts.requiredCategories || []).filter(
+    (req) => !present.some((p) => p.includes(req)),
+  );
+  if (missing.length === 0) {
+    return { freeze: true, retry: false, reason: "coverage-satisfied" };
+  }
+  if (opts.attempt < opts.maxRetries) {
+    return {
+      freeze: false,
+      retry: true,
+      reason: `coverage-missing:${missing.join("+")}`,
+    };
+  }
+  return {
+    freeze: true,
+    retry: false,
+    reason: `coverage-missing-freeze-anyway:${missing.join("+")}`,
+  };
+}
+
+// (4) FETCH_FLOOR_REQUIRED_RETRY — when ON, REQUIRED docs that were discovered
+//     but failed to fetch are retried (bounded) before scoring, so a transient
+//     fetch failure of a key report does not quietly drop it from the corpus.
+export function fetchFloorRequiredRetryEnabled(): boolean {
+  return envOnDefaultFalse("FETCH_FLOOR_REQUIRED_RETRY");
+}
+/** Max bounded fetch-floor retries (default 2). */
+export function fetchFloorMaxRetries(): number {
+  return Math.max(0, envInt("FETCH_FLOOR_MAX_RETRIES", 2));
+}
+
+/** Pure: decide whether to retry fetching required-but-unfetched docs. */
+export function decideFetchFloorRetry(opts: {
+  flagOn: boolean;
+  requiredUnfetched: string[];
+  attempt: number;
+  maxRetries: number;
+}): { retry: boolean; reason: string } {
+  if (!opts.flagOn) return { retry: false, reason: "flag-off" };
+  const n = (opts.requiredUnfetched || []).length;
+  if (n === 0) return { retry: false, reason: "all-required-fetched" };
+  if (opts.attempt < opts.maxRetries) {
+    return { retry: true, reason: `required-unfetched:${n}` };
+  }
+  return { retry: false, reason: `required-unfetched-exhausted:${n}` };
+}
+
+// (5) DISCOVERY_PROVIDER_BACKOFF — when ON, discovery provider calls
+//     (Serper/SerpAPI) retry on timeout/5xx with exponential backoff and a
+//     candidate floor is enforced before freeze, so a slow provider response
+//     does not silently shrink the corpus.
+export function discoveryProviderBackoffEnabled(): boolean {
+  return envOnDefaultFalse("DISCOVERY_PROVIDER_BACKOFF");
+}
+/** Backoff base delay in ms (default 500). */
+export function discoveryBackoffBaseMs(): number {
+  return Math.max(0, envInt("DISCOVERY_BACKOFF_BASE_MS", 500));
+}
+/** Max backoff retries on provider timeout/5xx (default 3). */
+export function discoveryBackoffMaxRetries(): number {
+  return Math.max(0, envInt("DISCOVERY_BACKOFF_MAX_RETRIES", 3));
+}
+
+/** Pure: exponential backoff delay for attempt N (0-based): base * 2^attempt. */
+export function backoffDelayMs(attempt: number, baseMs: number): number {
+  const a = attempt < 0 ? 0 : attempt;
+  return baseMs * Math.pow(2, a);
+}
+
+// ── STAGE 2 · extraction ─────────────────────────────────────────────────────
+
+// (6) EXTRACTION_OVERLAP_INSTRUMENT — measurement only. When ON, the selected
+//     passage ids and the lead quote per (cell, run) are logged to a durable
+//     sink. Never changes which passages are selected.
+export function extractionOverlapInstrumentEnabled(): boolean {
+  return envOnDefaultFalse("EXTRACTION_OVERLAP_INSTRUMENT");
+}
+
+// (7) RETRIEVAL_DETERMINISTIC_RANK — when ON, every passage sort gets a fully
+//     specified stable tie-break (primary score, then doc key, then sequence /
+//     offset), so equal-score passages no longer reorder run-to-run. Top-K is
+//     unchanged (still governed by RETRIEVAL_EVIDENCE_TOP_K).
+export function retrievalDeterministicRankEnabled(): boolean {
+  return envOnDefaultFalse("RETRIEVAL_DETERMINISTIC_RANK");
+}
+
+/** Pure: stable tie-break comparator for two passages that already compared
+ *  equal on their primary score. Orders by doc key, then sequence-in-doc, then
+ *  char offset, then a final index — total order, so sorting is deterministic. */
+export function stablePassageTiebreak(
+  a: {
+    docKey?: string | null;
+    seqInDoc?: number | null;
+    offset?: number | null;
+    idx?: number | null;
+  },
+  b: {
+    docKey?: string | null;
+    seqInDoc?: number | null;
+    offset?: number | null;
+    idx?: number | null;
+  },
+): number {
+  const ak = (a.docKey || "").toLowerCase();
+  const bk = (b.docKey || "").toLowerCase();
+  if (ak !== bk) return ak < bk ? -1 : 1;
+  const as = a.seqInDoc ?? Number.MAX_SAFE_INTEGER;
+  const bs = b.seqInDoc ?? Number.MAX_SAFE_INTEGER;
+  if (as !== bs) return as - bs;
+  const ao = a.offset ?? Number.MAX_SAFE_INTEGER;
+  const bo = b.offset ?? Number.MAX_SAFE_INTEGER;
+  if (ao !== bo) return ao - bo;
+  const ai = a.idx ?? Number.MAX_SAFE_INTEGER;
+  const bi = b.idx ?? Number.MAX_SAFE_INTEGER;
+  return ai - bi;
+}
+
+// (8) CHUNKING_DETERMINISTIC — when ON, documents are ordered by a stable key
+//     (canonical URL, then title) before chunk indices are assigned, so
+//     doc→chunk boundaries and chunk indices are independent of fetch order.
+//     Within-doc chunking is already a pure function of text + window/stride.
+export function chunkingDeterministicEnabled(): boolean {
+  return envOnDefaultFalse("CHUNKING_DETERMINISTIC");
+}
+
+/** Pure: stable ordering key for a document (canonical URL, else title). */
+export function stableDocOrderKey(doc: {
+  url?: string | null;
+  title?: string | null;
+}): string {
+  const u = canonicalUrlKey(doc.url || "");
+  if (u) return u;
+  return (doc.title || "").trim().toLowerCase();
+}
+
+/** Pure: comparator ordering documents for deterministic chunking. */
+export function compareDocsForStableChunking(
+  a: { url?: string | null; title?: string | null },
+  b: { url?: string | null; title?: string | null },
+): number {
+  const ak = stableDocOrderKey(a);
+  const bk = stableDocOrderKey(b);
+  if (ak === bk) return 0;
+  return ak < bk ? -1 : 1;
+}
+
+// ── STAGE 3 · scoring ────────────────────────────────────────────────────────
+
+// (9) SCORING_QUOTE_VERBATIM_REQUIRED — when ON, a Yes whose supporting quote
+//     cannot be located VERBATIM in the corpus (after whitespace/quote-char
+//     normalisation) is downgraded to not-met, killing "rescued"/invented quotes
+//     that only share a keyword with the corpus.
+export function scoringQuoteVerbatimRequiredEnabled(): boolean {
+  return envOnDefaultFalse("SCORING_QUOTE_VERBATIM_REQUIRED");
+}
+
+/** Pure: normalise a string for verbatim matching — unify curly quotes/dashes,
+ *  collapse whitespace, lowercase. */
+export function normalizeForVerbatim(s: string): string {
+  return (s || "")
+    .replace(/[\u2018\u2019\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201F\u2033]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** Pure: is `quote` present verbatim in `corpus` after normalisation? A quote
+ *  shorter than `minChars` (default 8) is treated as present (too short to be a
+ *  meaningful verbatim claim — avoids false downgrades on fragments). */
+export function quoteVerbatimPresent(
+  quote: string,
+  corpus: string,
+  minChars = 8,
+): boolean {
+  const q = normalizeForVerbatim(quote);
+  if (q.length < minChars) return true;
+  return normalizeForVerbatim(corpus).includes(q);
+}
+
+/** Pure: decide whether a Yes should be downgraded because no supporting quote is
+ *  verbatim in the corpus.
+ *    flag off / verdict not Yes → no downgrade
+ *    no quotes supplied          → no downgrade (nothing to verify against)
+ *    any quote verbatim-present  → no downgrade
+ *    otherwise                   → downgrade. */
+export function decideQuoteVerbatimGate(opts: {
+  flagOn: boolean;
+  verdict: string | null | undefined;
+  quotes: string[];
+  corpusText: string;
+}): { downgrade: boolean; reason: string } {
+  if (!opts.flagOn) return { downgrade: false, reason: "flag-off" };
+  if ((opts.verdict || "").trim().toLowerCase() !== "yes") {
+    return { downgrade: false, reason: "verdict-not-yes" };
+  }
+  const quotes = (opts.quotes || []).filter(
+    (q) => typeof q === "string" && q.trim() !== "",
+  );
+  if (quotes.length === 0) {
+    return { downgrade: false, reason: "no-quotes-to-verify" };
+  }
+  const anyPresent = quotes.some((q) =>
+    quoteVerbatimPresent(q, opts.corpusText),
+  );
+  if (anyPresent) return { downgrade: false, reason: "quote-verbatim-present" };
+  return { downgrade: true, reason: "quote-not-verbatim" };
+}
+
+// (10) READJUDICATION_CONFIDENCE_THRESHOLD — when set (a float), cells whose
+//      confidence maps below the threshold are routed to the existing
+//      READJUDICATION_PASS in addition to the current triggers. Unset → null →
+//      no change to who gets re-adjudicated.
+export function readjudicationConfidenceThreshold(): number | null {
+  const raw = process.env["READJUDICATION_CONFIDENCE_THRESHOLD"];
+  if (raw == null || raw.trim() === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Pure: map a textual confidence to a [0,1] number. Unknown → 1.0 (treated as
+ *  high, so it is NOT pulled into re-adjudication by a low threshold). */
+export function confidenceToNumber(conf: string | null | undefined): number {
+  const c = (conf || "").trim().toLowerCase();
+  // Empty/missing confidence is "unknown" → treat as high so it is NOT pulled
+  // into re-adjudication by a low threshold. (Guard BEFORE the numeric parse:
+  // Number("") === 0 would otherwise misclassify a missing value as low.)
+  if (c === "") return 1.0;
+  if (c === "high") return 1.0;
+  if (c === "medium" || c === "med") return 0.6;
+  if (c === "low") return 0.3;
+  const n = Number(c);
+  if (Number.isFinite(n)) {
+    if (n < 0) return 0;
+    if (n > 1) return 1;
+    return n;
+  }
+  return 1.0;
+}
+
+/** Pure: should this cell be routed to re-adjudication purely on the confidence
+ *  threshold? False when the threshold is null (flag unset). */
+export function decideReadjudicationByConfidence(opts: {
+  threshold: number | null;
+  confidenceValue: number;
+}): boolean {
+  if (opts.threshold == null) return false;
+  return opts.confidenceValue < opts.threshold;
+}
+
+// (11) SCORING_PROVIDER_PINNED — when ON, the scoring cascade is pinned to its
+//      primary/first provider (fallback providers nulled) so identical evidence
+//      is scored by the same model every run.
+export function scoringProviderPinnedEnabled(): boolean {
+  return envOnDefaultFalse("SCORING_PROVIDER_PINNED");
+}
+
+// (12) CROSS_MEASURE_CONSISTENCY — when ON, a deterministic post-scoring pass
+//      flags logically inconsistent verdict combinations for the SAME company
+//      across measures, keyed on dependency metadata carried on the measure rows
+//      (see detectCrossMeasureInconsistencies). Log-only; verdicts are not
+//      mutated. No-op when no dependency metadata is present.
+export function crossMeasureConsistencyEnabled(): boolean {
+  return envOnDefaultFalse("CROSS_MEASURE_CONSISTENCY");
+}
+
+/** Pure: detect logically inconsistent verdict combinations across measures for a
+ *  single company.
+ *
+ *  Dependency metadata is read from whatever relational field the measure row
+ *  carries, in priority order: `prerequisiteMeasureId`, `prerequisiteId`,
+ *  `dependsOnMeasureId`, `dependsOn`, `parentMeasureId`. The value is matched
+ *  against another result's `measureId`. NO measure ids/names are hardcoded.
+ *
+ *  A flag is raised when a measure's verdict is "Yes" while the verdict of the
+ *  measure it depends on is "No" (a Yes on an outcome with a No on its
+ *  prerequisite). Returns [] when no result carries any dependency field, so the
+ *  pass is a no-op on schemas without dependency metadata. */
+export function detectCrossMeasureInconsistencies(
+  results: Array<{
+    measureId?: string | number | null;
+    verdict?: string | null;
+    prerequisiteMeasureId?: string | number | null;
+    prerequisiteId?: string | number | null;
+    dependsOnMeasureId?: string | number | null;
+    dependsOn?: string | number | null;
+    parentMeasureId?: string | number | null;
+  }>,
+): Array<{ measureId: string; dependsOn: string; reason: string }> {
+  const norm = (v: unknown): string =>
+    v == null ? "" : String(v).trim();
+  const verdictYes = (v: string | null | undefined): boolean =>
+    (v || "").trim().toLowerCase() === "yes";
+  const verdictNo = (v: string | null | undefined): boolean => {
+    const c = (v || "").trim().toLowerCase();
+    return c === "no" || c === "not met" || c === "not-met";
+  };
+  const depOf = (r: (typeof results)[number]): string => {
+    return (
+      norm(r.prerequisiteMeasureId) ||
+      norm(r.prerequisiteId) ||
+      norm(r.dependsOnMeasureId) ||
+      norm(r.dependsOn) ||
+      norm(r.parentMeasureId)
+    );
+  };
+  const anyDeps = results.some((r) => depOf(r) !== "");
+  if (!anyDeps) return [];
+  const byId = new Map<string, (typeof results)[number]>();
+  for (const r of results) {
+    const id = norm(r.measureId);
+    if (id) byId.set(id, r);
+  }
+  const out: Array<{ measureId: string; dependsOn: string; reason: string }> =
+    [];
+  for (const r of results) {
+    const id = norm(r.measureId);
+    const dep = depOf(r);
+    if (!id || !dep) continue;
+    const depResult = byId.get(dep);
+    if (!depResult) continue;
+    if (verdictYes(r.verdict) && verdictNo(depResult.verdict)) {
+      out.push({
+        measureId: id,
+        dependsOn: dep,
+        reason: "yes-with-prerequisite-no",
+      });
+    }
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Boolean-flag default registry (CHANGE 2c). Maps every boolean scoring-fix flag
 // env name to its COMPILED default (true for default-ON, false for default-OFF).
@@ -1170,6 +1623,20 @@ const BOOLEAN_FLAG_DEFAULTS: Record<string, boolean> = {
   SCORING_PHYSICAL_HAZARD_TERM_REQUIRED: false,
   CHECKLIST_SOURCE_TYPE_CLASSIFY: false,
   EVIDENCE_QUOTE_OVERLAP_MATCH: false,
+  // CONSISTENCY LEVERS (2026-11-22) — 12 flags, all default-OFF
+  CORPUS_OVERLAP_INSTRUMENT: false,
+  DISCOVERY_DETERMINISTIC: false,
+  CORPUS_COVERAGE_BAR_FREEZE: false,
+  FETCH_FLOOR_REQUIRED_RETRY: false,
+  DISCOVERY_PROVIDER_BACKOFF: false,
+  EXTRACTION_OVERLAP_INSTRUMENT: false,
+  RETRIEVAL_DETERMINISTIC_RANK: false,
+  CHUNKING_DETERMINISTIC: false,
+  SCORING_QUOTE_VERBATIM_REQUIRED: false,
+  SCORING_PROVIDER_PINNED: false,
+  CROSS_MEASURE_CONSISTENCY: false,
+  // READJUDICATION_CONFIDENCE_THRESHOLD is a float env (not a boolean flag), so it
+  // is read via readjudicationConfidenceThreshold() and not listed here.
 };
 
 /** Pure: effective boolean value of a flag given its compiled default, using the

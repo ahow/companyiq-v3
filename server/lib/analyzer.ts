@@ -60,6 +60,12 @@ import {
   scoringPhysicalHazardTermRequiredEnabled,
   matchesPhysicalHazardTrack,
   decidePhysicalHazardGate,
+  scoringQuoteVerbatimRequiredEnabled,
+  decideQuoteVerbatimGate,
+  readjudicationConfidenceThreshold,
+  scoringProviderPinnedEnabled,
+  crossMeasureConsistencyEnabled,
+  detectCrossMeasureInconsistencies,
 } from "./scoring-fix-flags.js";
 import { evaluateApplicability, evaluateCoverage, type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { requiredSourceTypesBlocking } from "./retrieval-funnel.js";
@@ -3623,6 +3629,9 @@ export async function analyzeCompanyMeasures(opts: {
             (measure as any).substantiveDefinition,
           ].filter((s): s is string => typeof s === "string" && s.trim().length > 0),
           packText: finalEvidence,
+          // READJUDICATION_CONFIDENCE_THRESHOLD (flag 10): null when the env var is
+          // unset → candidacy unchanged; a float routes low-confidence cells too.
+          confidenceThreshold: readjudicationConfidenceThreshold(),
         });
       }
 
@@ -3648,6 +3657,33 @@ export async function analyzeCompanyMeasures(opts: {
               ` [Coverage: Yes downgraded to No — ${cov.rationale} (framework coverageRule).]`;
           }
         }
+      }
+
+      // SCORING_QUOTE_VERBATIM_REQUIRED (flag 9, default OFF): a Yes whose
+      // supporting quotes cannot be located VERBATIM in the extracted corpus
+      // (finalEvidence, after whitespace/quote normalisation) is downgraded to a No.
+      // This kills "rescued"/invented quotes that only share a keyword with the
+      // corpus. The provenance check above merely demotes confidence; this gate,
+      // when ON, fails the verdict. No-op when OFF (byte-for-byte unchanged).
+      try {
+        const vGate = decideQuoteVerbatimGate({
+          flagOn: scoringQuoteVerbatimRequiredEnabled(),
+          verdict: measureResult.verdict,
+          quotes: (measureResult.quotes || []).map((q) => (q as any)?.text ?? ""),
+          corpusText: finalEvidence,
+        });
+        if (vGate.downgrade) {
+          const prevVerdict = measureResult.verdict;
+          const prevScore = measureResult.score;
+          measureResult.verdict = "No";
+          measureResult.score = 0;
+          const note = `[Quote-verbatim gate: downgraded ${prevVerdict}→No — no supporting quote found verbatim in corpus]`;
+          measureResult.verdictNuance = (measureResult.verdictNuance || "") + " " + note;
+          recordVerdictOverride(measureResult, `Quote-verbatim gate: ${vGate.reason}`);
+          console.log(`[${companyName}] QUOTE-VERBATIM DOWNGRADE ${measure.measureId}: ${prevVerdict} (score ${prevScore}) → No (0) — ${vGate.reason}`);
+        }
+      } catch (err) {
+        console.warn(`[${companyName}] quote-verbatim gate ${measure.measureId}: skipped (${(err as Error)?.message ?? "error"}) — not blocking`);
       }
 
       // Layer D — Honest coverage signal. Previously hardcoded to null, which let
@@ -4196,6 +4232,43 @@ export async function analyzeCompanyMeasures(opts: {
       }
     } catch (e) {
       console.warn(`[${companyName}] RC3 one-quote-per-measure: skipped (${(e as Error)?.message ?? "error"}) — verdicts unchanged`);
+    }
+  }
+
+  // CROSS_MEASURE_CONSISTENCY (flag 12, default OFF): deterministic post-scoring
+  // pass that FLAGS (does not mutate) logically inconsistent verdict combinations
+  // for THIS company across measures — e.g. a Yes on a measure whose prerequisite
+  // measure scored No. Dependency relationships are read from whatever relational
+  // field each measure row carries (prerequisiteMeasureId / prerequisiteId /
+  // dependsOnMeasureId / dependsOn / parentMeasureId); NO measure ids/names are
+  // hardcoded. A no-op when no measure row carries any dependency metadata. When
+  // OFF, nothing runs (byte-for-byte unchanged).
+  if (crossMeasureConsistencyEnabled()) {
+    try {
+      const measureById = new Map<string, any>(
+        (measures || []).map((m) => [String((m as any).measureId), m as any]),
+      );
+      const depInput = allResults.map((r) => {
+        const m = measureById.get(String(r.measureId));
+        return {
+          measureId: r.measureId,
+          verdict: r.verdict,
+          prerequisiteMeasureId: m?.prerequisiteMeasureId,
+          prerequisiteId: m?.prerequisiteId,
+          dependsOnMeasureId: m?.dependsOnMeasureId,
+          dependsOn: m?.dependsOn,
+          parentMeasureId: m?.parentMeasureId,
+        };
+      });
+      const inconsistencies = detectCrossMeasureInconsistencies(depInput);
+      for (const inc of inconsistencies) {
+        console.log(`[${companyName}] CROSS-MEASURE-INCONSISTENCY: ${inc.measureId} (Yes) with prerequisite ${inc.dependsOn} (No) — ${inc.reason}`);
+      }
+      if (inconsistencies.length === 0) {
+        console.log(`[${companyName}] cross-measure consistency: no inconsistencies (or no dependency metadata present)`);
+      }
+    } catch (e) {
+      console.warn(`[${companyName}] cross-measure consistency: skipped (${(e as Error)?.message ?? "error"}) — verdicts unchanged`);
     }
   }
 
@@ -5162,9 +5235,15 @@ async function scoreWithCascade(opts: {
 
   // Cascade resilience (I81): per-stage fallback providers + per-stage timeout.
   // See normaliseCascadeFallback / withStageTimeout / runCascadeStage above.
-  const primaryFallback = normaliseCascadeFallback(settings.cascadePrimaryFallback, primary);
-  const secondaryFallback = normaliseCascadeFallback(settings.cascadeSecondaryFallback, secondary);
-  const arbiterFallback = normaliseCascadeFallback(settings.cascadeArbiterFallback, arbiter);
+  // SCORING_PROVIDER_PINNED (flag 11, default OFF): when ON, pin each cascade
+  // stage to its primary/first provider by nulling the per-stage fallbacks, so a
+  // stage never silently swaps to a different model mid-run. Combined with the
+  // existing deterministic seed this makes identical evidence score on the same
+  // model every run. When OFF, the fallbacks are computed exactly as before.
+  const providerPinned = scoringProviderPinnedEnabled();
+  const primaryFallback = providerPinned ? null : normaliseCascadeFallback(settings.cascadePrimaryFallback, primary);
+  const secondaryFallback = providerPinned ? null : normaliseCascadeFallback(settings.cascadeSecondaryFallback, secondary);
+  const arbiterFallback = providerPinned ? null : normaliseCascadeFallback(settings.cascadeArbiterFallback, arbiter);
   const stageTimeoutMs = settings.cascadeStageTimeoutMs > 0 ? settings.cascadeStageTimeoutMs : 0;
 
   // Task A: deterministic evidence-integrity gate config. ON by default in

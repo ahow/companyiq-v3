@@ -27,6 +27,7 @@ import {
   type DocumentSegment,
   type GatePolicyVersion,
 } from "./evidence-gate.js";
+import { confidenceToNumber, decideReadjudicationByConfidence } from "./scoring-fix-flags.js";
 
 /** Auditable record of a single re-adjudication. */
 export interface ReadjudicationTrace {
@@ -56,14 +57,36 @@ export interface ReadjudicableResult {
   rationaleScoreInconsistent?: boolean;
   needsReadjudication?: boolean;
   readjudicationTrace?: ReadjudicationTrace | null;
+  /** Textual confidence ("High"/"Medium"/"Low"), read by flag 10's threshold route. */
+  confidence?: string | null;
 }
 
 /** A row is a re-adjudication candidate when it is flagged AND has not already
- *  been re-looked this run (idempotency: a trace means it was handled). */
-export function shouldReadjudicate(result: ReadjudicableResult): boolean {
+ *  been re-looked this run (idempotency: a trace means it was handled).
+ *
+ *  READJUDICATION_CONFIDENCE_THRESHOLD (flag 10): when a numeric `confidenceThreshold`
+ *  is supplied (non-null), a row whose confidence maps below it is ALSO routed to
+ *  re-adjudication, in addition to the existing flag-driven triggers. A null/absent
+ *  threshold (flag unset) leaves candidacy exactly as before. */
+export function shouldReadjudicate(
+  result: ReadjudicableResult,
+  opts?: { confidenceThreshold?: number | null },
+): boolean {
   if (!result) return false;
   if (result.readjudicationTrace) return false;
-  return result.needsReadjudication === true || result.rationaleScoreInconsistent === true;
+  if (result.needsReadjudication === true || result.rationaleScoreInconsistent === true) {
+    return true;
+  }
+  const threshold = opts?.confidenceThreshold ?? null;
+  if (
+    decideReadjudicationByConfidence({
+      threshold,
+      confidenceValue: confidenceToNumber(result.confidence),
+    })
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export interface ReadjudicateParams<T extends ReadjudicableResult> {
@@ -75,6 +98,8 @@ export interface ReadjudicateParams<T extends ReadjudicableResult> {
   /** Pre-parsed segments; derived from packText when omitted. */
   segments?: DocumentSegment[];
   policyVersion?: GatePolicyVersion;
+  /** Flag 10: numeric confidence threshold (null/absent = unchanged candidacy). */
+  confidenceThreshold?: number | null;
 }
 
 /**
@@ -85,7 +110,7 @@ export interface ReadjudicateParams<T extends ReadjudicableResult> {
  */
 export function readjudicateMeasure<T extends ReadjudicableResult>(params: ReadjudicateParams<T>): T {
   const { result, criteria, packText } = params;
-  if (!shouldReadjudicate(result)) return result;
+  if (!shouldReadjudicate(result, { confidenceThreshold: params.confidenceThreshold })) return result;
 
   const policy = resolveGatePolicy(params.policyVersion);
   const segments = params.segments ?? parsePackSegments(packText || "");
