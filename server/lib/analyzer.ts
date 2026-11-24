@@ -60,6 +60,9 @@ import {
   scoringPhysicalHazardTermRequiredEnabled,
   matchesPhysicalHazardTrack,
   decidePhysicalHazardGate,
+  scoringTopicTermRequiredEnabled,
+  frameworkTopicTerms,
+  decideTopicTermGate,
   scoringQuoteVerbatimRequiredEnabled,
   decideQuoteVerbatimGate,
   readjudicationConfidenceThreshold,
@@ -4026,6 +4029,44 @@ export async function analyzeCompanyMeasures(opts: {
         }
       } catch (err) {
         console.warn(`[${companyName}] physical-hazard gate ${result.measureId}: skipped (${(err as Error)?.message ?? "error"}) — not blocking`);
+      }
+
+      // GENERIC TOPIC-TERM GATE (SCORING_TOPIC_TERM_REQUIRED or per-framework
+      // scoringFlags.topicTermRequired, default OFF): the framework-agnostic
+      // analogue of the physical-hazard gate above. When ON for THIS framework, a
+      // "Yes" whose supporting/lead evidence names no term from the framework's OWN
+      // derived topic vocabulary (topicTerm / topicSynonyms / retrievalQueryTerms /
+      // adjacentTopics) is downgraded Yes → No (score 0). Same downgrade mechanics
+      // and evidence-field access as the hazard gate; no-op when the flag is off,
+      // when the verdict is not Yes, when the framework exposes no topic vocabulary
+      // (fail-open), or when a topic term is present.
+      try {
+        const topicTerms = frameworkTopicTerms(framework);
+        const evidenceText = [
+          result.evidenceSummary,
+          ...((result.quotes || []).map((q) => (q as any)?.text ?? "")),
+        ].join(" ");
+        const gate = decideTopicTermGate({
+          flagOn: scoringTopicTermRequiredEnabled(framework),
+          verdict: result.verdict,
+          evidenceText,
+          topicTerms,
+        });
+        if (gate.downgrade) {
+          const prevVerdict = result.verdict;
+          const prevScore = result.score;
+          result.verdict = "No";
+          result.score = 0;
+          const gateNote = `[Topic-term gate: downgraded ${prevVerdict}→No — no framework topic term in supporting evidence]`;
+          result.evidenceSummary = (result.evidenceSummary ? `${result.evidenceSummary} ` : "") + gateNote;
+          result.verdictNuance = (result.verdictNuance ? `${result.verdictNuance} ` : "") + gateNote;
+          recordVerdictOverride(result, `Topic-term gate: ${gate.reason}`);
+          (result as any).topicTermGateFired = true;
+          (result as any).topicTermGateReason = gate.reason;
+          console.log(`[${companyName}] TOPIC-TERM DOWNGRADE ${result.measureId}: ${prevVerdict} (score ${prevScore}) → No (0) — ${gate.reason}`);
+        }
+      } catch (err) {
+        console.warn(`[${companyName}] topic-term gate ${result.measureId}: skipped (${(err as Error)?.message ?? "error"}) — not blocking`);
       }
 
       // A3 / WP04: compose the single immutable eligibility decision for this

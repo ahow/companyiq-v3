@@ -1032,15 +1032,30 @@ export function matchesPhysicalHazardTrack(
   return toks.some((t) => hay.includes(t.toLowerCase()));
 }
 
+/** Pure, shared helper: true when the evidence text contains (case-insensitive
+ *  substring) at least one of the provided terms. Defensive about malformed
+ *  term lists (non-string/empty entries are skipped). Used by BOTH the
+ *  physical-hazard gate and the generic topic-term gate so the two gates match
+ *  evidence identically. */
+export function evidenceHasAnyTerm(
+  evidenceText: string,
+  terms: Array<string | null | undefined>,
+): boolean {
+  const hay = (evidenceText || "").toLowerCase();
+  if (hay === "") return false;
+  if (!Array.isArray(terms)) return false;
+  return terms.some(
+    (t) => typeof t === "string" && t.length > 0 && hay.includes(t.toLowerCase()),
+  );
+}
+
 /** Pure: true when the evidence text mentions a concrete physical-hazard term. */
 export function evidenceHasPhysicalHazardTerm(
   evidenceText: string,
   hazardTerms?: string[],
 ): boolean {
   const terms = hazardTerms && hazardTerms.length > 0 ? hazardTerms : physicalHazardTerms();
-  const hay = (evidenceText || "").toLowerCase();
-  if (hay === "") return false;
-  return terms.some((t) => hay.includes(t.toLowerCase()));
+  return evidenceHasAnyTerm(evidenceText, terms);
 }
 
 /**
@@ -1068,6 +1083,137 @@ export function decidePhysicalHazardGate(opts: {
     return { downgrade: false, reason: "physical-hazard-term-present" };
   }
   return { downgrade: true, reason: "physical-hazard-term-missing" };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GENERIC, TOPIC-NEUTRAL "topic-term required for a Yes" gate.
+//
+// This is the framework-agnostic analogue of the physical-hazard gate above:
+// instead of a hardcoded climate hazard vocabulary and a physical-climate TRACK
+// test, it derives the REQUIRED VOCABULARY from the framework's OWN topic fields
+// (topicTerm / topicSynonyms / retrievalQueryTerms / adjacentTopics) and applies
+// the SAME downgrade mechanics. Any framework can opt in via its stored
+// scoring_flags map ({ topicTermRequired: true }) or a global env override, so a
+// "a Yes must cite a topic-specific term" discipline is available to EVERY
+// framework, not just the climate one. No topic words, company, framework, or
+// measure name is hardcoded — the vocabulary is always the framework's own.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Generic capability key for the topic-term requirement. */
+export const TOPIC_TERM_REQUIRED_CAPABILITY = "topicTermRequired";
+
+/** Default OFF globally. When ON, a "Yes" is downgraded to "No" unless its
+ *  supporting/lead evidence contains at least one term from the framework's OWN
+ *  derived topic vocabulary (see frameworkTopicTerms). When OFF, verdicts are
+ *  untouched.
+ *
+ *  Resolution mirrors scoringPhysicalHazardTermRequiredEnabled exactly:
+ *    • the global env flag SCORING_TOPIC_TERM_REQUIRED, when set, enables the
+ *      capability for EVERY framework; OR
+ *    • the given framework's stored `scoringFlags.topicTermRequired` being true
+ *      enables it for THAT framework only.
+ *
+ *  `framework` is optional so callers/tests that pass nothing keep the pure
+ *  env-only behaviour. */
+export function scoringTopicTermRequiredEnabled(framework?: unknown): boolean {
+  if (envOnDefaultFalse("SCORING_TOPIC_TERM_REQUIRED")) return true;
+  return frameworkScoringCapabilityEnabled(
+    framework,
+    TOPIC_TERM_REQUIRED_CAPABILITY,
+  );
+}
+
+/** Pure, defensive: derive the REQUIRED topic vocabulary from the framework's
+ *  OWN fields — topicTerm (string), topicSynonyms (string[]), retrievalQueryTerms
+ *  (string[]) and adjacentTopics (array of { name, example_phrases[] }). Each
+ *  value is normalised (lowercased, trimmed), de-duplicated and emptied entries
+ *  dropped. Tolerant of null / string / array / object shapes for every field.
+ *  No hardcoded topic words.
+ *
+ *  A GLOBAL env override SCORING_TOPIC_TERMS (comma-separated, same pattern as
+ *  SCORING_PHYSICAL_HAZARD_TERMS) takes precedence when set — but the PRIMARY
+ *  source is always the framework's own vocabulary. */
+export function frameworkTopicTerms(framework?: unknown): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (raw: unknown) => {
+    if (typeof raw !== "string") return;
+    const t = raw.trim().toLowerCase();
+    if (t === "" || seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  };
+
+  // Global env override (optional) — wholesale replacement when non-empty.
+  const envRaw = process.env["SCORING_TOPIC_TERMS"];
+  if (envRaw != null && envRaw.trim() !== "") {
+    for (const part of envRaw.split(",")) add(part);
+    if (out.length > 0) return out;
+  }
+
+  // Primary source: the framework's own topic vocabulary fields. Collect from
+  // every recognised shape defensively.
+  const collect = (v: unknown): void => {
+    if (v == null) return;
+    if (typeof v === "string") {
+      add(v);
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const item of v) collect(item);
+      return;
+    }
+    if (typeof v === "object") {
+      // adjacentTopics entries look like { name, example_phrases?: string[] }.
+      const o = v as Record<string, unknown>;
+      if (typeof o.name === "string") add(o.name);
+      if (Array.isArray(o.example_phrases)) {
+        for (const p of o.example_phrases) collect(p);
+      }
+    }
+  };
+
+  const fw =
+    framework && typeof framework === "object" ? (framework as Record<string, unknown>) : {};
+  collect(fw.topicTerm);
+  collect(fw.topicSynonyms);
+  collect(fw.retrievalQueryTerms);
+  collect(fw.adjacentTopics);
+  return out;
+}
+
+/**
+ * Pure, side-effect-free decision for the generic topic-term gate. Mirrors
+ * decidePhysicalHazardGate's shape and mechanics.
+ *   flag off                 → no downgrade ("flag-off")
+ *   verdict is not "Yes"      → no downgrade ("verdict-not-yes")
+ *   no derived vocabulary      → no downgrade ("no-topic-vocabulary") — fail OPEN
+ *   a topic term present        → no downgrade ("topic-term-present")
+ *   otherwise                  → downgrade ("topic-term-missing")
+ *
+ * There is deliberately NO "track" precondition: when a framework opts into this
+ * capability, it applies to every Yes for that framework (the vocabulary itself
+ * is the framework-specific scoping). When the framework exposes no topic
+ * vocabulary at all, the gate fails open so it can never zero out a whole
+ * framework for lack of config.
+ */
+export function decideTopicTermGate(opts: {
+  flagOn: boolean;
+  verdict: string | null | undefined;
+  evidenceText: string;
+  topicTerms: string[];
+}): { downgrade: boolean; reason: string } {
+  if (!opts.flagOn) return { downgrade: false, reason: "flag-off" };
+  if ((opts.verdict || "").trim().toLowerCase() !== "yes") {
+    return { downgrade: false, reason: "verdict-not-yes" };
+  }
+  if (!Array.isArray(opts.topicTerms) || opts.topicTerms.length === 0) {
+    return { downgrade: false, reason: "no-topic-vocabulary" };
+  }
+  if (evidenceHasAnyTerm(opts.evidenceText, opts.topicTerms)) {
+    return { downgrade: false, reason: "topic-term-present" };
+  }
+  return { downgrade: true, reason: "topic-term-missing" };
 }
 
 // ── CHANGE 6 — self-consistency vote persisted in decision_trace jsonb ────────
@@ -1665,6 +1811,7 @@ const BOOLEAN_FLAG_DEFAULTS: Record<string, boolean> = {
   REPORTING_PERIOD_WEBPAGE_FETCHDATE_FALLBACK: false,
   CORPUS_LOW_VALUE_PAGE_FILTER_EXTENDED: false,
   SCORING_PHYSICAL_HAZARD_TERM_REQUIRED: false,
+  SCORING_TOPIC_TERM_REQUIRED: false,
   CHECKLIST_SOURCE_TYPE_CLASSIFY: false,
   EVIDENCE_QUOTE_OVERLAP_MATCH: false,
   // CONSISTENCY LEVERS (2026-11-22) — 12 flags, all default-OFF

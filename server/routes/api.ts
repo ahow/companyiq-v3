@@ -1047,6 +1047,23 @@ apiRouter.post("/frameworks/:id/measures", async (req: Request, res: Response) =
   }
 });
 
+// Generic validator for the per-framework scoring-capability map (DB column
+// scoring_flags JSONB). Accepts a plain object of { capabilityName: boolean };
+// coerces values to strict booleans, drops non-boolean/empty-key entries, and
+// never references any specific capability name — so ANY named scoring capability
+// can be toggled as data. Returns {} for a malformed payload (clears the map).
+function sanitizeScoringFlags(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof key !== "string" || key.trim() === "") continue;
+    if (typeof value === "boolean") out[key] = value;
+    else if (value === "true" || value === 1) out[key] = true;
+    else if (value === "false" || value === 0) out[key] = false;
+  }
+  return out;
+}
+
 apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
@@ -1054,12 +1071,18 @@ apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
     if (!framework) return res.status(404).json({ error: "Framework not found" });
 
-    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared", "requiredDocTypes", "dataPatterns", "legacyQueryTemplates", "multiDocumentQueryTemplates", "authoritativeRegistries", "authoritativeFilingTypes", "scoringExamples", "antiInferenceRules", "documentPriorityUrlPatterns"];
+    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared", "requiredDocTypes", "dataPatterns", "legacyQueryTemplates", "multiDocumentQueryTemplates", "authoritativeRegistries", "authoritativeFilingTypes", "scoringExamples", "antiInferenceRules", "documentPriorityUrlPatterns", "scoringFlags"];
     const updates: Record<string, any> = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
         updates[field] = req.body[field];
       }
+    }
+    // scoringFlags is a generic boolean capability map (DB column scoring_flags
+    // JSONB). Persist the WHOLE validated map — never special-case any capability
+    // name — so the builder can toggle any named scoring capability as data.
+    if (updates.scoringFlags !== undefined) {
+      updates.scoringFlags = sanitizeScoringFlags(updates.scoringFlags);
     }
 
     if (Object.keys(updates).length > 0) {

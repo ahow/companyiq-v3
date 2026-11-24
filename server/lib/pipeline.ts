@@ -3743,6 +3743,13 @@ async function runAnalyzePhase(opts: {
             if (!Array.isArray(dt.diagnostics)) dt.diagnostics = [];
             dt.diagnostics.push(`physical-hazard-gate:${(m as any).physicalHazardGateReason ?? "downgraded"}`);
           }
+          // Generic topic-term gate (SCORING_TOPIC_TERM_REQUIRED or per-framework
+          // scoringFlags.topicTermRequired): surface the downgrade reason in the
+          // trace diagnostics. The marker is only ever set when that gate fired.
+          if ((m as any).topicTermGateFired === true) {
+            if (!Array.isArray(dt.diagnostics)) dt.diagnostics = [];
+            dt.diagnostics.push(`topic-term-gate:${(m as any).topicTermGateReason ?? "downgraded"}`);
+          }
           // CHANGE 6 (reuses SCORING_VOTE_EXPORT): persist the self-consistency vote
           // inside the decision_trace jsonb without overwriting other trace data, so
           // the export can read it back. No-op when the flag is off or no vote exists.

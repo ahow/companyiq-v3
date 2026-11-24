@@ -517,6 +517,29 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
                   className="w-3.5 h-3.5 rounded text-purple-600"
                 />
               </label>
+              {/* Generic per-framework scoring capability: require a topic-specific
+                  term for a Yes. Sets scoringFlags.topicTermRequired and saves it via
+                  the standard framework PATCH (persists the whole scoring_flags map).
+                  Topic-neutral — the required vocabulary is derived from THIS
+                  framework's own topic fields at scoring time. */}
+              <label
+                className="flex items-center gap-1.5 cursor-pointer"
+                title="When on, a 'Yes' is downgraded to 'No' unless its supporting evidence contains at least one of this framework's own topic terms (topic term / synonyms / retrieval terms / adjacent topics). Topic-neutral — nothing climate-specific is hardcoded."
+              >
+                <Settings className="w-3.5 h-3.5 text-gray-400" />
+                <span className="text-xs text-gray-500">Require topic term for Yes</span>
+                <input
+                  type="checkbox"
+                  checked={!!(framework.scoringFlags && framework.scoringFlags.topicTermRequired)}
+                  onChange={async (e) => {
+                    const nextFlags = { ...(framework.scoringFlags || {}), topicTermRequired: e.target.checked };
+                    await api.updateFramework(activeFrameworkId!, { scoringFlags: nextFlags });
+                    queryClient.invalidateQueries({ queryKey: ["frameworks"] });
+                    queryClient.invalidateQueries({ queryKey: ["framework", activeFrameworkId] });
+                  }}
+                  className="w-3.5 h-3.5 rounded text-purple-600"
+                />
+              </label>
               <button
                 onClick={() => setShowDiscoverySettings(!showDiscoverySettings)}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${

@@ -10,6 +10,11 @@ import {
   scoringPhysicalHazardTermRequiredEnabled,
   frameworkScoringCapabilityEnabled,
   PHYSICAL_HAZARD_TERM_REQUIRED_CAPABILITY,
+  decideTopicTermGate,
+  frameworkTopicTerms,
+  scoringTopicTermRequiredEnabled,
+  evidenceHasAnyTerm,
+  TOPIC_TERM_REQUIRED_CAPABILITY,
 } from "./scoring-fix-flags.js";
 import { QuoteLedger } from "./retrieval-funnel.js";
 import { classifiedCoverageComprehensive } from "../../shared/research-state.js";
@@ -103,6 +108,156 @@ test("scoringPhysicalHazardTermRequiredEnabled: (c) env OFF + framework without 
   } finally {
     if (prev !== undefined) process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED = prev;
   }
+});
+
+// ── GENERIC TOPIC-TERM GATE (SCORING_TOPIC_TERM_REQUIRED / topicTermRequired) ─
+// The framework-agnostic analogue of the physical-hazard gate. Capability is OFF
+// by default, enabled by EITHER the global env flag OR a per-framework
+// scoringFlags.topicTermRequired, and the required vocabulary is derived from the
+// framework's OWN topic fields. No topic word, framework id, or name is hardcoded.
+
+test("scoringTopicTermRequiredEnabled: OFF by default (no env, no framework flag)", () => {
+  const prev = process.env.SCORING_TOPIC_TERM_REQUIRED;
+  delete process.env.SCORING_TOPIC_TERM_REQUIRED;
+  try {
+    assert.equal(scoringTopicTermRequiredEnabled(), false);
+    assert.equal(scoringTopicTermRequiredEnabled({}), false);
+    assert.equal(scoringTopicTermRequiredEnabled({ scoringFlags: {} }), false);
+    assert.equal(scoringTopicTermRequiredEnabled({ name: "whatever" }), false);
+  } finally {
+    if (prev !== undefined) process.env.SCORING_TOPIC_TERM_REQUIRED = prev;
+  }
+});
+
+test("scoringTopicTermRequiredEnabled: (a) global env ON enables it for ANY framework", () => {
+  const prev = process.env.SCORING_TOPIC_TERM_REQUIRED;
+  process.env.SCORING_TOPIC_TERM_REQUIRED = "true";
+  try {
+    assert.equal(scoringTopicTermRequiredEnabled(), true);
+    assert.equal(scoringTopicTermRequiredEnabled({}), true);
+    assert.equal(scoringTopicTermRequiredEnabled({ scoringFlags: {} }), true);
+  } finally {
+    if (prev === undefined) delete process.env.SCORING_TOPIC_TERM_REQUIRED;
+    else process.env.SCORING_TOPIC_TERM_REQUIRED = prev;
+  }
+});
+
+test("scoringTopicTermRequiredEnabled: (b) env OFF + framework opts in => ON for that framework only", () => {
+  const prev = process.env.SCORING_TOPIC_TERM_REQUIRED;
+  delete process.env.SCORING_TOPIC_TERM_REQUIRED;
+  try {
+    const optedIn = { scoringFlags: { [TOPIC_TERM_REQUIRED_CAPABILITY]: true } };
+    const other = { scoringFlags: { [TOPIC_TERM_REQUIRED_CAPABILITY]: false } };
+    assert.equal(scoringTopicTermRequiredEnabled(optedIn), true);
+    assert.equal(scoringTopicTermRequiredEnabled(other), false);
+    // A different framework with no flag at all stays OFF — proves per-framework scoping.
+    assert.equal(scoringTopicTermRequiredEnabled({ scoringFlags: {} }), false);
+  } finally {
+    if (prev !== undefined) process.env.SCORING_TOPIC_TERM_REQUIRED = prev;
+  }
+});
+
+test("frameworkTopicTerms: derives + normalises from the framework's own topic fields", () => {
+  const prev = process.env.SCORING_TOPIC_TERMS;
+  delete process.env.SCORING_TOPIC_TERMS;
+  try {
+    const terms = frameworkTopicTerms({
+      topicTerm: "Biodiversity",
+      topicSynonyms: ["Nature loss", "  ecosystem  ", "Biodiversity"],
+      retrievalQueryTerms: ["habitat restoration", ""],
+      adjacentTopics: [
+        { name: "Deforestation", example_phrases: ["forest clearing", "Nature loss"] },
+        "Rewilding",
+      ],
+    });
+    // lowercased + trimmed + de-duplicated across every field/shape
+    assert.ok(terms.includes("biodiversity"));
+    assert.ok(terms.includes("nature loss"));
+    assert.ok(terms.includes("ecosystem"));
+    assert.ok(terms.includes("habitat restoration"));
+    assert.ok(terms.includes("deforestation"));
+    assert.ok(terms.includes("forest clearing"));
+    assert.ok(terms.includes("rewilding"));
+    // no empties, no dupes
+    assert.ok(!terms.includes(""));
+    assert.equal(terms.filter((t) => t === "biodiversity").length, 1);
+    assert.equal(terms.filter((t) => t === "nature loss").length, 1);
+  } finally {
+    if (prev !== undefined) process.env.SCORING_TOPIC_TERMS = prev;
+  }
+});
+
+test("frameworkTopicTerms: empty / malformed framework yields no vocabulary", () => {
+  const prev = process.env.SCORING_TOPIC_TERMS;
+  delete process.env.SCORING_TOPIC_TERMS;
+  try {
+    assert.deepEqual(frameworkTopicTerms(), []);
+    assert.deepEqual(frameworkTopicTerms({}), []);
+    assert.deepEqual(frameworkTopicTerms(null), []);
+    assert.deepEqual(frameworkTopicTerms({ topicTerm: null, topicSynonyms: null }), []);
+  } finally {
+    if (prev !== undefined) process.env.SCORING_TOPIC_TERMS = prev;
+  }
+});
+
+test("frameworkTopicTerms: global SCORING_TOPIC_TERMS env override wins when set", () => {
+  const prev = process.env.SCORING_TOPIC_TERMS;
+  process.env.SCORING_TOPIC_TERMS = "Alpha, Beta ,, alpha";
+  try {
+    const terms = frameworkTopicTerms({ topicTerm: "biodiversity" });
+    assert.deepEqual(terms, ["alpha", "beta"]); // normalised, de-duped, framework fields ignored
+  } finally {
+    if (prev === undefined) delete process.env.SCORING_TOPIC_TERMS;
+    else process.env.SCORING_TOPIC_TERMS = prev;
+  }
+});
+
+test("evidenceHasAnyTerm: case-insensitive substring match, defensive about bad terms", () => {
+  assert.equal(evidenceHasAnyTerm("We assessed BIODIVERSITY loss", ["biodiversity"]), true);
+  assert.equal(evidenceHasAnyTerm("nothing relevant", ["biodiversity"]), false);
+  assert.equal(evidenceHasAnyTerm("", ["biodiversity"]), false);
+  assert.equal(evidenceHasAnyTerm("text", [null as any, "", "text"]), true);
+  assert.equal(evidenceHasAnyTerm("text", []), false);
+});
+
+test("decideTopicTermGate: flag off never downgrades", () => {
+  const r = decideTopicTermGate({ flagOn: false, verdict: "Yes", evidenceText: "anything", topicTerms: ["biodiversity"] });
+  assert.equal(r.downgrade, false);
+  assert.equal(r.reason, "flag-off");
+});
+
+test("decideTopicTermGate: non-Yes verdict never downgrades", () => {
+  const r = decideTopicTermGate({ flagOn: true, verdict: "No", evidenceText: "x", topicTerms: ["biodiversity"] });
+  assert.equal(r.downgrade, false);
+  assert.equal(r.reason, "verdict-not-yes");
+});
+
+test("decideTopicTermGate: no derived vocabulary fails OPEN (never downgrades)", () => {
+  const r = decideTopicTermGate({ flagOn: true, verdict: "Yes", evidenceText: "x", topicTerms: [] });
+  assert.equal(r.downgrade, false);
+  assert.equal(r.reason, "no-topic-vocabulary");
+});
+
+test("decideTopicTermGate: Yes with a framework topic term in evidence passes", () => {
+  const r = decideTopicTermGate({
+    flagOn: true,
+    verdict: "Yes",
+    evidenceText: "The company reports on biodiversity impacts across its sites.",
+    topicTerms: ["biodiversity", "nature loss"],
+  });
+  assert.equal(r.downgrade, false);
+  assert.equal(r.reason, "topic-term-present");
+});
+
+test("decideTopicTermGate: Yes whose evidence lacks any topic term is downgraded", () => {
+  const r = decideTopicTermGate({
+    flagOn: true,
+    verdict: "Yes",
+    evidenceText: "We discuss general sustainability matters, with no specifics.",
+    topicTerms: ["biodiversity", "nature loss"],
+  });
+  assert.equal(r.downgrade, true);
+  assert.equal(r.reason, "topic-term-missing");
 });
 
 // ── CHANGE 6 — vote persisted in decision_trace jsonb ────────────────────────
