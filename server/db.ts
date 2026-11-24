@@ -193,6 +193,13 @@ export async function initializeDatabase(): Promise<void> {
     // FRAMEWORK_LINEAGE_FREEZE flag is ON.
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS framework_lineage_id INTEGER`);
 
+    // Generic per-framework scoring-capability map (Record<string, boolean>). Lets a
+    // framework opt into individual scoring capabilities as DATA (e.g.
+    // { physicalHazardTermRequired: true }) instead of a global env on/off. Read at
+    // scoring time by scoring-fix-flags.ts. Nullable/additive — existing rows read
+    // NULL and every capability falls back to its global env override (unchanged).
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS scoring_flags JSONB`);
+
     // ─── Framework Measures ─────────────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS framework_measures (

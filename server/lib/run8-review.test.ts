@@ -7,6 +7,9 @@ import {
   withSelfConsistencyVoteInTrace,
   readSelfConsistencyVoteFromTrace,
   quoteTokenOverlap,
+  scoringPhysicalHazardTermRequiredEnabled,
+  frameworkScoringCapabilityEnabled,
+  PHYSICAL_HAZARD_TERM_REQUIRED_CAPABILITY,
 } from "./scoring-fix-flags.js";
 import { QuoteLedger } from "./retrieval-funnel.js";
 import { classifiedCoverageComprehensive } from "../../shared/research-state.js";
@@ -45,6 +48,61 @@ test("matchesPhysicalHazardTrack / evidenceHasPhysicalHazardTerm basics", () => 
   assert.equal(matchesPhysicalHazardTrack(["governance", undefined]), false);
   assert.equal(evidenceHasPhysicalHazardTerm("exposure to drought and wildfire"), true);
   assert.equal(evidenceHasPhysicalHazardTerm("climate-related only"), false);
+});
+
+// ── Framework-scoped physical-hazard capability (env OR per-framework data) ──
+// The capability must resolve ON when EITHER the global env flag is set OR the
+// framework's stored scoringFlags map opts in — otherwise OFF. No framework id or
+// name is referenced; the per-framework switch is pure data.
+
+test("frameworkScoringCapabilityEnabled: reads boolean from scoringFlags map", () => {
+  const key = PHYSICAL_HAZARD_TERM_REQUIRED_CAPABILITY;
+  assert.equal(frameworkScoringCapabilityEnabled({ scoringFlags: { [key]: true } }, key), true);
+  assert.equal(frameworkScoringCapabilityEnabled({ scoringFlags: { [key]: false } }, key), false);
+  assert.equal(frameworkScoringCapabilityEnabled({ scoringFlags: {} }, key), false);
+  assert.equal(frameworkScoringCapabilityEnabled({}, key), false);
+  assert.equal(frameworkScoringCapabilityEnabled(null, key), false);
+  assert.equal(frameworkScoringCapabilityEnabled({ scoringFlags: { [key]: 1 as any } }, key), false);
+});
+
+test("scoringPhysicalHazardTermRequiredEnabled: (a) global env ON enables it for ANY framework", () => {
+  const prev = process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED;
+  process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED = "true";
+  try {
+    // enabled regardless of (and even without) a per-framework map
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled(), true);
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled({}), true);
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled({ scoringFlags: {} }), true);
+  } finally {
+    if (prev === undefined) delete process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED;
+    else process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED = prev;
+  }
+});
+
+test("scoringPhysicalHazardTermRequiredEnabled: (b) env OFF + framework opts in => ON for that framework only", () => {
+  const prev = process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED;
+  delete process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED;
+  try {
+    const optedIn = { scoringFlags: { [PHYSICAL_HAZARD_TERM_REQUIRED_CAPABILITY]: true } };
+    const other = { scoringFlags: { [PHYSICAL_HAZARD_TERM_REQUIRED_CAPABILITY]: false } };
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled(optedIn), true);
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled(other), false);
+  } finally {
+    if (prev !== undefined) process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED = prev;
+  }
+});
+
+test("scoringPhysicalHazardTermRequiredEnabled: (c) env OFF + framework without the field => OFF", () => {
+  const prev = process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED;
+  delete process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED;
+  try {
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled(), false);
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled({}), false);
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled({ scoringFlags: {} }), false);
+    assert.equal(scoringPhysicalHazardTermRequiredEnabled({ name: "whatever" }), false);
+  } finally {
+    if (prev !== undefined) process.env.SCORING_PHYSICAL_HAZARD_TERM_REQUIRED = prev;
+  }
 });
 
 // ── CHANGE 6 — vote persisted in decision_trace jsonb ────────────────────────

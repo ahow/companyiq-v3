@@ -193,6 +193,14 @@ export const frameworks = pgTable("frameworks", {
   testDriveWarnings: jsonb("test_drive_warnings").$type<any[]>(),
   productionReady: boolean("production_ready").notNull().default(false),
   rulesActive: jsonb("rules_active").$type<Record<string, boolean>>(),
+  // Generic per-framework scoring-capability map. A framework opts into individual
+  // scoring behaviours (e.g. { physicalHazardTermRequired: true }) as DATA, so a
+  // capability can run for ONE framework without being a global env on/off. Read at
+  // scoring time by scoring-fix-flags.ts (frameworkScoringCapabilityEnabled). Each
+  // capability still honours its global env override as a fallback. Nullable/additive:
+  // existing rows read NULL → every capability resolves to env-only (unchanged).
+  // Reusable by any future capability; no company/framework/measure name is encoded.
+  scoringFlags: jsonb("scoring_flags").$type<Record<string, boolean>>(),
   intakeArtefact: jsonb("intake_artefact").$type<any>(),
   // Completeness validator report (Part B). Nullable/additive. Written at
   // finalisation (framework-builder /save) and by the retroactive audit

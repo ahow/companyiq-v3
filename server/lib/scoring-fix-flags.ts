@@ -903,13 +903,57 @@ export function corpusLowValuePageFilterExtendedEnabled(): boolean {
   return envOnDefaultFalse("CORPUS_LOW_VALUE_PAGE_FILTER_EXTENDED");
 }
 
+// ── Generic per-framework scoring capabilities ──────────────────────────────
+//
+// A framework may opt into individual scoring capabilities via a stored boolean
+// map (DB column `scoring_flags`, Drizzle-mapped to `framework.scoringFlags`),
+// WITHOUT any global env flag being set. This is a reusable mechanism: any future
+// scoring capability can key into the same map by its own capability name, so a
+// single framework can carry a set of scoring behaviours as DATA rather than the
+// capability being a global on/off. The map is completely generic — no company,
+// framework, or measure name is referenced anywhere.
+//
+//   framework.scoringFlags = { physicalHazardTermRequired: true, ... }
+//
+// A capability is ON for a given framework when EITHER the global env override is
+// set (applies to every framework) OR that framework's stored map marks it true.
+
+/** Pure: read a boolean scoring capability from a framework's stored
+ *  `scoringFlags` map. Returns false when the framework, the map, or the key is
+ *  absent/malformed. Never throws; does not mutate its argument. */
+export function frameworkScoringCapabilityEnabled(
+  framework: unknown,
+  capability: string,
+): boolean {
+  if (!framework || typeof framework !== "object") return false;
+  const map = (framework as any).scoringFlags;
+  if (!map || typeof map !== "object") return false;
+  return map[capability] === true;
+}
+
+/** Generic capability key for the physical-hazard-term requirement. */
+export const PHYSICAL_HAZARD_TERM_REQUIRED_CAPABILITY = "physicalHazardTermRequired";
+
 // ── CHANGE 5 — SCORING_PHYSICAL_HAZARD_TERM_REQUIRED ─────────────────────────
-/** Default OFF. When ON, a "Yes" on a physical-climate-track measure is
+/** Default OFF globally. When ON, a "Yes" on a physical-climate-track measure is
  *  downgraded to "No" unless its supporting/lead evidence contains a concrete
  *  physical-hazard term (a generic "climate-related" mention alone does NOT
- *  satisfy the gate). When OFF, verdicts are untouched. */
-export function scoringPhysicalHazardTermRequiredEnabled(): boolean {
-  return envOnDefaultFalse("SCORING_PHYSICAL_HAZARD_TERM_REQUIRED");
+ *  satisfy the gate). When OFF, verdicts are untouched.
+ *
+ *  Resolution (framework-scoped with a global override/fallback):
+ *    • the global env flag SCORING_PHYSICAL_HAZARD_TERM_REQUIRED, when set,
+ *      enables the capability for EVERY framework (unchanged legacy behaviour); OR
+ *    • the given framework's stored `scoringFlags.physicalHazardTermRequired`
+ *      being true enables it for THAT framework only.
+ *
+ *  `framework` is optional so legacy callers (and tests) that pass nothing keep
+ *  the pure env-only behaviour. */
+export function scoringPhysicalHazardTermRequiredEnabled(framework?: unknown): boolean {
+  if (envOnDefaultFalse("SCORING_PHYSICAL_HAZARD_TERM_REQUIRED")) return true;
+  return frameworkScoringCapabilityEnabled(
+    framework,
+    PHYSICAL_HAZARD_TERM_REQUIRED_CAPABILITY,
+  );
 }
 
 const DEFAULT_PHYSICAL_HAZARD_TERMS = [

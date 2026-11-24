@@ -4006,7 +4006,7 @@ export async function analyzeCompanyMeasures(opts: {
           ...((result.quotes || []).map((q) => (q as any)?.text ?? "")),
         ].join(" ");
         const gate = decidePhysicalHazardGate({
-          flagOn: scoringPhysicalHazardTermRequiredEnabled(),
+          flagOn: scoringPhysicalHazardTermRequiredEnabled(framework),
           isPhysicalTrack,
           verdict: result.verdict,
           evidenceText,
