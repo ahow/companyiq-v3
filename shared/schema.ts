@@ -41,6 +41,11 @@ export const companies = pgTable("companies", {
   country: text("country"),
   ticker: text("ticker"),
   pinnedDocuments: jsonb("pinned_documents").$type<string[]>(),
+  // FW25 Track A FIX 2: per-framework auto-pin store, Record<frameworkId, string[]>.
+  // Auto-pins discovered during a run are kept here scoped to the framework that found
+  // them (deduped + capped), so one framework's corpus never bleeds into another's.
+  // pinnedDocuments stays MANUAL-only. Nullable/additive; absent ⇒ {} (no auto-pins).
+  autoPinnedByFramework: jsonb("auto_pinned_by_framework").$type<Record<string, string[]>>(),
   // 40-G: OpenFIGI resolution cache + domain family
   figiName: text("figi_name"),
   figiTicker: text("figi_ticker"),
@@ -237,6 +242,25 @@ export const frameworks = pgTable("frameworks", {
   // W3 readiness gate (a framework's variance should be known + acceptable before
   // activation). Gated by VARIANCE_HARNESS. Existing rows read NULL.
   varianceReport: jsonb("variance_report").$type<any>(),
+  // ── FW25 Track A — scoring-correctness config (all nullable/additive; absent ⇒
+  // fail-open, i.e. the corresponding gate never fires). No company/measure name is
+  // encoded in logic — these columns carry the DATA each generic gate reads. ──
+  // FIX 1: tracks (lowercased tokens, e.g. ["physical_climate"]) for which the
+  // physical-hazard + topic-term gates apply. A measure declares its own track via a
+  // leading `TRACK <token>` in substantiveDefinition; the gate fires only when the
+  // measure's track is in this list. NULL / [] ⇒ no measure is track-gated.
+  requiredForTracks: jsonb("required_for_tracks").$type<string[]>(),
+  // FIX 2: max documents per company in a run's corpus for this framework. NULL ⇒ no cap.
+  perCompanyDocCap: integer("per_company_doc_cap"),
+  // FIX 3: recency window in years for the final date gate. A positive verdict whose
+  // cited sources are ALL dated outside the window is downgraded. NULL ⇒ no date gate.
+  recencyWindowYears: integer("recency_window_years"),
+  // FIX 4: domains that DO count as the target (subsidiaries). Either a flat string[]
+  // (applies to every company) or a Record<companyName,string[]>. NULL ⇒ none.
+  subsidiaryDomains: jsonb("subsidiary_domains").$type<string[] | Record<string, string[]>>(),
+  // FIX 4: separately-listed entities NEVER attributed to the target (hard-reject even
+  // on a name-mention). Flat string[] or Record<companyName,string[]>. NULL ⇒ off.
+  relatedListedCompanies: jsonb("related_listed_companies").$type<string[] | Record<string, string[]>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

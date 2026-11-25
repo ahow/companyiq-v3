@@ -1879,3 +1879,349 @@ export function snapshotNonDefaultScoringFixFlags(): string {
   }
   return on.sort().join(",");
 }
+
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 2026-11-25 "FW25 Track A — scoring correctness" remediation (FIX 1–4).
+//
+// Every helper below is PURE and side-effect-free so it is directly unit-tested
+// in run8-review.test.ts. Nothing hardcodes a company, framework or measure name:
+// each new filter is resolved from framework-level DATA (new nullable schema
+// columns, mirroring the scoring_flags pattern) with a global env fallback, and
+// FAILS OPEN when the framework does not declare the config. FW25's specific
+// values are written as data (a framework config write), never baked into logic.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** Local positive-verdict test (keeps these helpers standalone / dependency-free
+ *  so they are trivially unit-testable without importing the analyzer). */
+function isPositiveVerdictStr(v: unknown): boolean {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "yes" || s === "partial";
+}
+
+/** Case-insensitive, boundary-aware containment test for a (possibly multi-word)
+ *  entity name inside a lowercased haystack. Flexible whitespace between tokens;
+ *  falls back to plain substring if the derived regex is somehow invalid. */
+function hayContainsName(hayLower: string, nameLower: string): boolean {
+  if (!nameLower) return false;
+  const esc = nameLower
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "\\s+");
+  try {
+    return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i").test(hayLower);
+  } catch {
+    return hayLower.includes(nameLower);
+  }
+}
+
+// ── FIX 1 — Measure-level track gate (the regression) ────────────────────────
+// The physical-hazard gate and the generic topic-term gate previously computed
+// applicability from FRAMEWORK-level signals (framework.name / .track /
+// result.category), so a framework merely NAMED "Physical Climate…" forced every
+// measure to require climate wording — removing ~88 business-continuity Yes
+// verdicts and zeroing crisis-management Yes. Applicability is a per-MEASURE
+// property: each measure declares its track as a leading `TRACK <token>` in its
+// substantiveDefinition, and the framework declares which tracks are gated.
+
+/** Parse the leading `TRACK <token>` from a measure's substantiveDefinition
+ *  (case-insensitive). Returns the lowercased token, or null when the measure
+ *  declares no track (→ never gated, fail-open). Accepts both camelCase and
+ *  snake_case field spellings so it works on DB rows and intake objects alike. */
+export function parseMeasureTrack(measure: any): string | null {
+  const sd =
+    (typeof measure?.substantiveDefinition === "string" && measure.substantiveDefinition) ||
+    (typeof measure?.substantive_definition === "string" && measure.substantive_definition) ||
+    "";
+  if (!sd) return null;
+  const m = sd.match(/^\s*TRACK\s+([A-Za-z][A-Za-z0-9_-]*)/i);
+  return m ? m[1].trim().toLowerCase() : null;
+}
+
+/** Read the framework's declared `requiredForTracks` (string[]) with a global env
+ *  fallback (SCORING_REQUIRED_FOR_TRACKS, comma-separated). A framework that
+ *  DECLARES the column (even as []) wins outright; only when it is undeclared do
+ *  we consult the env. Returns a normalized, lowercased, de-blanked list.
+ *  Empty result ⇒ the gate never fires for any measure (fail-open). */
+export function frameworkRequiredForTracks(framework: any): string[] {
+  const fw: any = framework || {};
+  const raw = fw.requiredForTracks ?? fw.required_for_tracks;
+  let list: unknown[] = [];
+  if (Array.isArray(raw)) {
+    list = raw; // declared (possibly []) — declaration wins over env
+  } else {
+    const env = process.env.SCORING_REQUIRED_FOR_TRACKS;
+    if (env && env.trim()) list = env.split(",");
+  }
+  return list
+    .map((t) => String(t).trim().toLowerCase())
+    .filter((t) => t.length > 0);
+}
+
+/** TRUE only when the measure declares a track AND that track is in the
+ *  framework's requiredForTracks list. A null track (measure declares none) or an
+ *  empty/undeclared requiredForTracks ⇒ FALSE ⇒ gate does not fire (fail-open). */
+export function measureTrackGated(track: string | null, requiredForTracks: string[]): boolean {
+  if (!track) return false;
+  if (!Array.isArray(requiredForTracks) || requiredForTracks.length === 0) return false;
+  return requiredForTracks.includes(track.toLowerCase());
+}
+
+/** Convenience: resolve the measure-level gate decision directly from a measure
+ *  + framework pair. Used at both analyzer gate sites so the precondition is
+ *  identical. */
+export function measureIsTrackGated(measure: any, framework: any): boolean {
+  return measureTrackGated(parseMeasureTrack(measure), frameworkRequiredForTracks(framework));
+}
+
+// ── FIX 2 — Per-framework corpus scope + cap + dedup ─────────────────────────
+// Auto-pins were written to the flat, framework-shared company.pinnedDocuments
+// with no cap and no dedup, so the corpus doubled and other frameworks' / stale /
+// wrong-entity pins bled in. Auto-pins now live in company.autoPinnedByFramework
+// (Record<frameworkId, string[]>); pinnedDocuments holds MANUAL pins only.
+
+/** Framework's declared per-company document cap (number) with env fallback
+ *  SCORING_PER_COMPANY_DOC_CAP. Undeclared / non-positive ⇒ null ⇒ no cap
+ *  (fail-open). */
+export function frameworkPerCompanyDocCap(framework: any): number | null {
+  const fw: any = framework || {};
+  const raw = fw.perCompanyDocCap ?? fw.per_company_doc_cap;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  const env = process.env.SCORING_PER_COMPANY_DOC_CAP;
+  if (env && env.trim()) {
+    const n = Number(env);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return null;
+}
+
+/** Normalize + dedup a url list, order-preserving (first occurrence wins). */
+function dedupUrls(...lists: Array<unknown>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const u of list) {
+      if (typeof u !== "string") continue;
+      const v = u.trim();
+      if (!v || seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+/** Build the pinnedUrls passed INTO a run: manual pins first (always preserved —
+ *  e.g. Michelin's manual pin), then this framework's auto-pins, deduped and
+ *  capped. A null cap ⇒ no cap (fail-open). Manual pins lead so the cap never
+ *  silently drops a manual pin ahead of an auto one. */
+export function buildPinnedUrlsForRun(opts: {
+  manualPins?: string[] | null;
+  frameworkAutoPins?: string[] | null;
+  cap: number | null;
+}): string[] {
+  const merged = dedupUrls(opts.manualPins, opts.frameworkAutoPins);
+  if (opts.cap != null && opts.cap > 0 && merged.length > opts.cap) {
+    return merged.slice(0, opts.cap);
+  }
+  return merged;
+}
+
+/** Compute the new stored auto-pin list for a framework AFTER a run: existing
+ *  framework auto-pins + newly-found pins, deduped and capped to the NEWEST
+ *  `cap` (most recent evidence retained). Manual pins are never included here.
+ *  A null cap ⇒ no cap. */
+export function mergeAutoPins(opts: {
+  existingFrameworkAutoPins?: string[] | null;
+  newPins?: string[] | null;
+  cap: number | null;
+}): string[] {
+  const merged = dedupUrls(opts.existingFrameworkAutoPins, opts.newPins);
+  if (opts.cap != null && opts.cap > 0 && merged.length > opts.cap) {
+    return merged.slice(merged.length - opts.cap);
+  }
+  return merged;
+}
+
+/** Read a company's per-framework auto-pin list from the autoPinnedByFramework
+ *  map, keyed by framework id (stringified). Returns [] when absent/malformed. */
+export function getFrameworkAutoPins(autoPinnedByFramework: unknown, frameworkId: number): string[] {
+  if (!autoPinnedByFramework || typeof autoPinnedByFramework !== "object") return [];
+  const map = autoPinnedByFramework as Record<string, unknown>;
+  const v = map[String(frameworkId)];
+  return Array.isArray(v) ? v.filter((u): u is string => typeof u === "string" && u.trim().length > 0) : [];
+}
+
+// ── FIX 3 — Recency window + final date gate ─────────────────────────────────
+// The hygiene recency filter only prunes title-stem groups with >2 members, so a
+// lone stale doc survives and a Yes can rest solely on FY2021-or-earlier sources.
+// A FINAL date gate inspects each positive verdict's CITED source dates.
+
+/** Framework's declared recencyWindowYears (number) with env fallback
+ *  SCORING_RECENCY_WINDOW_YEARS. Undeclared / non-positive ⇒ null ⇒ fail-open. */
+export function frameworkRecencyWindowYears(framework: any): number | null {
+  const fw: any = framework || {};
+  const raw = fw.recencyWindowYears ?? fw.recency_window_years;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  const env = process.env.SCORING_RECENCY_WINDOW_YEARS;
+  if (env && env.trim()) {
+    const n = Number(env);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return null;
+}
+
+/** Extract a plausible 4-digit publication year (1990–2099) from a cited
+ *  source's title and/or URL, choosing the MOST RECENT match. Returns null when
+ *  no plausible year is present → that source is "undated" (fail-open). */
+export function extractCitedSourceYear(url?: string | null, title?: string | null): number | null {
+  const hay = `${title || ""} ${url || ""}`;
+  const matches = hay.match(/\b(?:19|20)\d{2}\b/g);
+  if (!matches) return null;
+  const years = matches.map((y) => parseInt(y, 10)).filter((y) => y >= 1990 && y <= 2099);
+  if (years.length === 0) return null;
+  return Math.max(...years);
+}
+
+/** FINAL date gate decision for one positive verdict. Downgrade ONLY when the
+ *  window is declared, the verdict is positive, there is at least one cited
+ *  source, at least one cited source has a KNOWN date, and ALL dated cited
+ *  sources fall outside the window. A cited source with NO known date never
+ *  triggers a downgrade on its own (fail-open on unknown date). */
+export function decideRecencyWindowGate(opts: {
+  windowYears: number | null;
+  currentYear: number;
+  verdict: unknown;
+  citedSourceYears: Array<number | null>;
+}): { downgrade: boolean; reason: string } {
+  if (opts.windowYears == null || opts.windowYears <= 0) {
+    return { downgrade: false, reason: "no recency window declared (fail-open)" };
+  }
+  if (!isPositiveVerdictStr(opts.verdict)) {
+    return { downgrade: false, reason: "not a positive verdict" };
+  }
+  const cited = Array.isArray(opts.citedSourceYears) ? opts.citedSourceYears : [];
+  if (cited.length === 0) {
+    return { downgrade: false, reason: "no cited sources (fail-open)" };
+  }
+  const known = cited.filter((y): y is number => typeof y === "number" && Number.isFinite(y));
+  if (known.length === 0) {
+    return { downgrade: false, reason: "no dated cited sources (fail-open on unknown date)" };
+  }
+  const minYear = opts.currentYear - opts.windowYears;
+  const anyInWindow = known.some((y) => y >= minYear);
+  if (anyInWindow) {
+    return { downgrade: false, reason: "at least one cited source within window" };
+  }
+  return {
+    downgrade: true,
+    reason: `all ${known.length} dated cited source(s) predate ${minYear} (recency window ${opts.windowYears}y from ${opts.currentYear})`,
+  };
+}
+
+// ── FIX 4 — Subsidiary + related-listed entity attribution ───────────────────
+// Attribution was too generous (brand-domain OR name-mention). Two new framework
+// DATA columns tighten it: subsidiaryDomains (domains that DO count as the
+// target) and relatedListedCompanies (separately-listed entities that are NEVER
+// attributed to the target — hard-reject even on a name-mention). Each may be a
+// flat list (applies to every company this framework scores) OR a per-company
+// map keyed by company name, so one framework can carry distinct relations per
+// company without any hardcoded names in code.
+
+/** Resolve a per-company list from a framework config value that is EITHER a flat
+ *  string[] (applies to every company) OR a Record<companyName, string[]> keyed
+ *  case-insensitively, optionally with a "*" / "__all__" wildcard entry applied
+ *  to every company. Fully generic: names live in DATA, never in logic. */
+export function resolvePerCompanyList(configValue: unknown, companyName: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    for (const e of list) {
+      if (typeof e !== "string") continue;
+      const v = e.trim();
+      if (!v) continue;
+      const k = v.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(v);
+    }
+  };
+  if (Array.isArray(configValue)) {
+    push(configValue);
+    return out;
+  }
+  if (configValue && typeof configValue === "object") {
+    const map = configValue as Record<string, unknown>;
+    push(map["*"]);
+    push(map["__all__"]);
+    const want = String(companyName || "").trim().toLowerCase();
+    if (want) {
+      for (const [k, v] of Object.entries(map)) {
+        if (k === "*" || k === "__all__") continue;
+        if (k.trim().toLowerCase() === want) push(v);
+      }
+    }
+    return out;
+  }
+  return out;
+}
+
+/** Effective subsidiary domains (normalized bare hosts) for the company being
+ *  scored under this framework. */
+export function frameworkSubsidiaryDomains(framework: any, companyName: string): string[] {
+  return resolvePerCompanyList((framework || {}).subsidiaryDomains ?? (framework || {}).subsidiary_domains, companyName)
+    .map((d) => normalizeDomain(d))
+    .filter((d) => d.length > 0);
+}
+
+/** Effective related-listed (peer) entity names for the company being scored. */
+export function frameworkRelatedListedCompanies(framework: any, companyName: string): string[] {
+  return resolvePerCompanyList(
+    (framework || {}).relatedListedCompanies ?? (framework || {}).related_listed_companies,
+    companyName,
+  );
+}
+
+/** Kill-switch: ENTITY_RELATED_LISTED_GATE=off disables the related-listed
+ *  hard-reject (restores advisory-only). Default ON — but still a no-op unless a
+ *  framework actually declares relatedListedCompanies (fail-open by data). */
+export function relatedListedGateEnabled(): boolean {
+  return (process.env.ENTITY_RELATED_LISTED_GATE || "").trim().toLowerCase() !== "off";
+}
+
+/** Hard-reject decision for a positive cell. Fires when the framework declares
+ *  related-listed entities for this company AND any supporting quote names one of
+ *  them (never the target itself). When the target is ALSO named in the same
+ *  evidence, the reject is suppressed UNLESS strict mode is requested — the
+ *  reported FW25 failure is a peer's report credited to the target, so the peer
+ *  being named with no target mention is the decisive signal. Undeclared list ⇒
+ *  no reject (fail-open). */
+export function decideRelatedListedExclusion(opts: {
+  relatedListed: string[];
+  quoteTexts: string[];
+  targetName: string;
+  /** When true, a peer mention rejects even if the target is also named. */
+  strict?: boolean;
+}): { reject: boolean; reason: string; matched?: string } {
+  const related = (opts.relatedListed || []).map((s) => String(s).trim()).filter(Boolean);
+  if (related.length === 0) return { reject: false, reason: "no related-listed entities declared (fail-open)" };
+  const target = String(opts.targetName || "").trim().toLowerCase();
+  const hay = (opts.quoteTexts || []).map((t) => String(t || "")).join(" \u2029 ").toLowerCase();
+  if (!hay.trim()) return { reject: false, reason: "no supporting quote text" };
+  const targetNamed = target.length > 0 && hayContainsName(hay, target);
+  for (const r of related) {
+    const rl = r.toLowerCase();
+    if (!rl || rl === target) continue; // never exclude the target itself
+    if (hayContainsName(hay, rl)) {
+      if (targetNamed && !opts.strict) {
+        // Target is also named: this is the target's own disclosure referencing a
+        // peer — keep it, but report the peer co-mention for observability.
+        return { reject: false, reason: `peer "${r}" co-mentioned but target also named`, matched: r };
+      }
+      return { reject: true, reason: `supporting quote attributes to related-listed entity "${r}" (never attributed to target)`, matched: r };
+    }
+  }
+  return { reject: false, reason: "no related-listed entity named in supporting quotes" };
+}

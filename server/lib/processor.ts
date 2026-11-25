@@ -6,6 +6,7 @@ import * as cheerio from "cheerio";
 import { normaliseTableHorizonMarkers } from "./table-horizon-normaliser";
 import { looksNonEnglish } from "./translation.js";
 import crypto from "crypto";
+import zlib from "node:zlib";
 import puppeteer from "puppeteer-core";
 import { spawn } from "child_process";
 import { promises as fsp, readdirSync, readFileSync } from "fs";
@@ -381,6 +382,53 @@ async function fetchWithRetry(
   }
 
   throw lastError || new Error(`Failed to fetch ${url}`);
+}
+
+// ─── FIX5: Robust pinned-URL PDF byte fetch ───────────────────────────────────
+// Pinned documents are user-curated and high-priority, but can live on
+// extension-less URLs (e.g. Azure blob paths) and be served gzip-encoded. This
+// fetches the bytes with a generous budget, transparently gunzips if the payload
+// STILL carries gzip magic bytes (defends against double-compression or a missing
+// Content-Encoding so Node's auto-decompress is skipped), and recognises a PDF by
+// its %PDF- magic bytes OR an application/pdf content-type — so a PDF is detected
+// WITHOUT needing a .pdf extension. Returns the decompressed PDF Buffer, or null
+// if the payload is not a PDF. Fully generic: no hardcoded hosts.
+// Pure (network-free, unit-testable) core of the pinned-PDF sniff: transparently
+// gunzip a payload that still carries gzip magic bytes (0x1f 0x8b), then recognise
+// a PDF by its %PDF- magic bytes OR an application/pdf content-type — regardless of
+// URL extension. Returns the (decompressed) buffer + how it was recognised, or null
+// when the payload is not a PDF.
+export function recognizePdfPayload(
+  rawBuf: Buffer,
+  contentType: string,
+): { buf: Buffer; via: "magic-bytes" | "content-type" } | null {
+  let buf = rawBuf;
+  if (buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+    try {
+      buf = zlib.gunzipSync(buf);
+    } catch {
+      /* gzip magic present but inflate failed — keep raw bytes and sniff those */
+    }
+  }
+  const magic = buf.slice(0, 5).toString("latin1") === "%PDF-";
+  const ctPdf = (contentType || "").toLowerCase().includes("application/pdf");
+  if (magic || ctPdf) return { buf, via: magic ? "magic-bytes" : "content-type" };
+  return null;
+}
+
+export async function fetchPinnedPdfBytes(
+  url: string,
+): Promise<{ buf: Buffer; contentType: string; via: "magic-bytes" | "content-type" } | null> {
+  // Larger/priority budget for large pinned PDFs: allow a second attempt
+  // (fetchWithRetry defaults arraybuffer to a single attempt).
+  const { data, contentType } = await fetchWithRetry(url, { responseType: "arraybuffer", maxAttempts: 2 });
+  const raw = Buffer.from(data);
+  const recognised = recognizePdfPayload(raw, contentType);
+  if (!recognised) return null;
+  if (recognised.buf.length !== raw.length) {
+    console.log(`[Processor] Pinned fetch: gunzipped gzip payload for ${url.slice(0, 80)} (${raw.length}B -> ${recognised.buf.length}B)`);
+  }
+  return { buf: recognised.buf, contentType, via: recognised.via };
 }
 
 // ─── Bot-Protection Cookie Warm-up (Incapsula / Cloudflare-style) ─────────────
@@ -3059,6 +3107,35 @@ async function processDocumentUncached(
     try {
       console.log(`[Processor] Force-headless fetch for pinned/known URL: ${url.slice(0, 80)}`);
       const isPdfUrl = url.toLowerCase().includes(".pdf");
+      // FIX5: pinned/known URLs are often large PDFs — either extension-less (e.g.
+      // Azure blob paths) OR .pdf URLs that answer a plain GET with 200 but defeat
+      // the browser-PDF path (Michelin's 15MB gzip-encoded registration document:
+      // the browser-PDF fetch stalls/empties, so it scored 0%). BEFORE any browser
+      // path, try a direct byte fetch: transparently gunzip, then recognise a PDF
+      // by %PDF- magic bytes OR application/pdf content-type (regardless of
+      // extension) and extract it directly. This is cheaper and more reliable than
+      // the browser for a blob that returns the bytes on a direct GET.
+      try {
+        const sniff = await fetchPinnedPdfBytes(url);
+        if (sniff) {
+          console.log(`[Processor] Pinned URL detected as PDF via ${sniff.via} (${sniff.buf.length}B, ct=${sniff.contentType}) for ${url.slice(0, 80)} — extracting directly`);
+          const fid = await extractPdfWithFidelity(sniff.buf, scope);
+          recordExtractionCompletenessForUrl(url, fid.completeness);
+          let pdfText = fid.text;
+          if (pdfText && pdfText.trim().length > 50) {
+            pdfText = capDocumentText(pdfText, url, "Processor");
+            setCachedContent(url, pdfText);
+            console.log(`[Processor] Pinned PDF extracted ${pdfText.length} chars for ${url.slice(0, 80)}`);
+            return pdfText;
+          }
+          console.warn(`[Processor] Pinned PDF for ${url.slice(0, 80)} extracted but yielded no usable text (${pdfText?.trim().length ?? 0} chars) — falling through to browser path`);
+        } else {
+          console.log(`[Processor] Pinned URL ${url.slice(0, 80)} not a PDF by bytes/content-type — using browser path`);
+        }
+      } catch (sniffErr: any) {
+        if (isOperationAbortedError(sniffErr)) throw sniffErr;
+        console.warn(`[Processor] Pinned direct-bytes PDF fetch failed for ${url.slice(0, 80)}: ${sniffErr?.message} — falling back to browser path`);
+      }
       let content = isPdfUrl ? await fetchPdfViaBrowser(url, scope) : await fetchWithBrowser(url, scope);
       if (content && content.trim().length > 50) {
         content = capDocumentText(content, url, "Processor");
@@ -3166,7 +3243,13 @@ async function processDocumentUncached(
         // Check if response is actually a PDF
         if (contentType.includes("application/pdf")) {
           const { data: pdfData } = await fetchWithRetry(url, { responseType: "arraybuffer" });
-          content = await extractPdfForUrl(Buffer.from(pdfData));
+          let pdfBuf = Buffer.from(pdfData);
+          // FIX5: transparently gunzip if the payload still carries gzip magic bytes
+          // (some CDNs/blob stores serve gzip without triggering auto-decompress).
+          if (pdfBuf.length > 2 && pdfBuf[0] === 0x1f && pdfBuf[1] === 0x8b) {
+            try { pdfBuf = zlib.gunzipSync(pdfBuf); } catch { /* keep raw bytes */ }
+          }
+          content = await extractPdfForUrl(pdfBuf);
         } else if (looksLikeChallenge(String(data))) {
           // Bot-protection challenge interstitial returned for an HTML page.
           // Warm cookies and retry before falling back to the browser.

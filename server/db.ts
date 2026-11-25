@@ -199,6 +199,12 @@ export async function initializeDatabase(): Promise<void> {
     // scoring time by scoring-fix-flags.ts. Nullable/additive — existing rows read
     // NULL and every capability falls back to its global env override (unchanged).
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS scoring_flags JSONB`);
+    // FW25 Track A — scoring-correctness config (all nullable/additive; absent ⇒ fail-open).
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS required_for_tracks JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS per_company_doc_cap INTEGER`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS recency_window_years INTEGER`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS subsidiary_domains JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS related_listed_companies JSONB`);
 
     // ─── Framework Measures ─────────────────────────────────────────────────
     await db.execute(sql`
@@ -1026,6 +1032,7 @@ export async function initializeDatabase(): Promise<void> {
     // 42-A: Pipeline version tags for cache invalidation
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS figi_pipeline_version TEXT`);
     // 40-D: Evidence-gated related domains
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS auto_pinned_by_framework JSONB`); // FW25 Track A FIX 2
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains JSONB`);
     // 40-E: Manual override for cross-brand domain siblings
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS related_domains_manual JSONB`);

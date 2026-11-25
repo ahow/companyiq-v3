@@ -69,6 +69,15 @@ import {
   scoringProviderPinnedEnabled,
   crossMeasureConsistencyEnabled,
   detectCrossMeasureInconsistencies,
+  // FW25 Track A helpers
+  measureIsTrackGated,
+  frameworkRecencyWindowYears,
+  extractCitedSourceYear,
+  decideRecencyWindowGate,
+  frameworkSubsidiaryDomains,
+  frameworkRelatedListedCompanies,
+  relatedListedGateEnabled,
+  decideRelatedListedExclusion,
 } from "./scoring-fix-flags.js";
 import { evaluateApplicability, evaluateCoverage, type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { requiredSourceTypesBlocking } from "./retrieval-funnel.js";
@@ -2592,6 +2601,22 @@ export async function analyzeCompanyMeasures(opts: {
   // Opt2 hygiene may reassign these three, so bind them mutably (positionally aligned).
   let { documentTexts, documentUrls, documentTitles } = opts;
 
+  // FW25 FIX 1: runProvenanceGate is a SIBLING closure over this scope (not nested in
+  // scoreMeasure), so the per-measure object is not directly in its scope. Build a
+  // measureId→measure lookup here so the track gate can resolve the measure (and its
+  // declared `TRACK <token>`) from the MeasureResult's measureId inside the gate.
+  const measuresByIdForGate = new Map<string, FrameworkMeasure>();
+  for (const __m of (measures || [])) {
+    const __mid = (__m as any)?.measureId ?? (__m as any)?.id;
+    if (__mid != null) measuresByIdForGate.set(String(__mid), __m);
+  }
+  // FW25 FIX 3: resolve the framework's recency window ONCE and print it in the run
+  // header so the window actually used is visible in logs (fail-open when undeclared).
+  const recencyWindowYearsForRun = frameworkRecencyWindowYears(framework);
+  console.log(
+    `[${companyName}] Recency window: ${recencyWindowYearsForRun == null ? "none (date gate OFF — fail-open)" : `${recencyWindowYearsForRun}y`} · framework="${(framework as any)?.name ?? framework?.id}"`,
+  );
+
   // 1.3 (ATTRIBUTION_TRUSTED_SOURCE_RESOLVE): resolve the framework's registered
   // trusted-source domains from config, once per analysis. frameworks.trustedSourceIds
   // (number[]) selects rows in trustedSources; an active row with a non-empty domain
@@ -2639,9 +2664,10 @@ export async function analyzeCompanyMeasures(opts: {
     const fw: any = framework;
     const entityType = fw?.entityType ?? null;
     const universe = fw?.universe ?? null;
-    const subsidiaryDomains: string[] = Array.isArray(fw?.subsidiaryDomains)
-      ? fw.subsidiaryDomains.filter((d: any) => typeof d === "string" && d.trim()).map((d: string) => d.trim())
-      : [];
+    // FW25 FIX 4: subsidiaryDomains is now a real framework column that may be a flat
+    // string[] OR a Record<companyName, string[]> (per-company). frameworkSubsidiaryDomains
+    // resolves + normalizes it for THIS company (fail-open: [] when undeclared).
+    const subsidiaryDomains: string[] = frameworkSubsidiaryDomains(framework, companyName);
     if (!entityType && subsidiaryDomains.length === 0) return null;
     return {
       entityType,
@@ -3997,13 +4023,15 @@ export async function analyzeCompanyMeasures(opts: {
       // count) is downgraded Yes → No (score 0). Pure decision helper; no-op when the
       // flag is off, when the track does not match, or when a hazard term is present.
       try {
-        const isPhysicalTrack = matchesPhysicalHazardTrack([
-          (framework as any).track,
-          (framework as any).metadata?.scopeConfig?.track,
-          framework.name,
-          (framework as any).topicDescription,
-          result.category,
-        ]);
+        // FW25 FIX 1 (the regression): applicability is a per-MEASURE property, not a
+        // framework-level one. Previously isPhysicalTrack was derived from framework
+        // name/track/category, so a framework merely NAMED "Physical Climate…" forced
+        // EVERY measure (business-continuity, performance) to require climate wording.
+        // Now the gate fires only when this measure's own declared track (leading
+        // `TRACK <token>` in substantiveDefinition) is in the framework's
+        // requiredForTracks DATA. Undeclared ⇒ false ⇒ fail-open (gate never fires).
+        const gateMeasure = measuresByIdForGate.get(String(result.measureId));
+        const isPhysicalTrack = measureIsTrackGated(gateMeasure, framework);
         const evidenceText = [
           result.evidenceSummary,
           ...((result.quotes || []).map((q) => (q as any)?.text ?? "")),
@@ -4046,8 +4074,13 @@ export async function analyzeCompanyMeasures(opts: {
           result.evidenceSummary,
           ...((result.quotes || []).map((q) => (q as any)?.text ?? "")),
         ].join(" ");
+        // FW25 FIX 1: the topic-term gate previously fired on EVERY Yes with no track
+        // precondition. It is now gated the same way as the physical-hazard gate —
+        // only on measures whose own declared track is in requiredForTracks. A
+        // framework with no requiredForTracks declared ⇒ measureIsTrackGated false ⇒
+        // flagOn false ⇒ the gate never fires (fail-open).
         const gate = decideTopicTermGate({
-          flagOn: scoringTopicTermRequiredEnabled(framework),
+          flagOn: scoringTopicTermRequiredEnabled(framework) && measureIsTrackGated(measuresByIdForGate.get(String(result.measureId)), framework),
           verdict: result.verdict,
           evidenceText,
           topicTerms,
@@ -4067,6 +4100,78 @@ export async function analyzeCompanyMeasures(opts: {
         }
       } catch (err) {
         console.warn(`[${companyName}] topic-term gate ${result.measureId}: skipped (${(err as Error)?.message ?? "error"}) — not blocking`);
+      }
+
+      // FW25 FIX 3 — FINAL recency date gate. The corpus-hygiene recency filter only
+      // prunes title-stem groups with >2 members, so a lone stale document can survive
+      // and a Yes/Partial can rest solely on sources dated before the framework's
+      // recency window. For each positive verdict, inspect the publication year of its
+      // (non-disqualified) cited sources (from title/URL): if EVERY dated cited source
+      // predates the window, downgrade to No. A cited source with NO detectable date is
+      // fail-open (never downgrades on its own); an undeclared window is a no-op.
+      try {
+        const windowYears = recencyWindowYearsForRun;
+        if (windowYears != null) {
+          const citedSourceYears = (result.quotes || [])
+            .filter((q) => !(q as any)?.disqualified)
+            .map((q) => extractCitedSourceYear((q as any)?.sourceUrl, (q as any)?.source));
+          const gate = decideRecencyWindowGate({
+            windowYears,
+            currentYear: new Date().getFullYear(),
+            verdict: result.verdict,
+            citedSourceYears,
+          });
+          if (gate.downgrade) {
+            const prevVerdict = result.verdict;
+            const prevScore = result.score;
+            result.verdict = "No";
+            result.score = 0;
+            const gateNote = `[Recency gate: downgraded ${prevVerdict}→No — ${gate.reason}]`;
+            result.evidenceSummary = (result.evidenceSummary ? `${result.evidenceSummary} ` : "") + gateNote;
+            result.verdictNuance = (result.verdictNuance ? `${result.verdictNuance} ` : "") + gateNote;
+            recordVerdictOverride(result, `Recency gate: ${gate.reason}`);
+            (result as any).recencyGateFired = true;
+            (result as any).recencyGateReason = gate.reason;
+            console.log(`[${companyName}] RECENCY DOWNGRADE ${result.measureId}: ${prevVerdict} (score ${prevScore}) → No (0) — ${gate.reason}`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[${companyName}] recency gate ${result.measureId}: skipped (${(err as Error)?.message ?? "error"}) — not blocking`);
+      }
+
+      // FW25 FIX 4 — related-listed HARD-REJECT entity gate. When the framework
+      // declares relatedListedCompanies for this company (separately-listed peers that
+      // must NEVER be attributed to the target), a positive verdict whose supporting
+      // quotes name a peer entity is downgraded to No. Guarded by a global kill-switch
+      // (ENTITY_RELATED_LISTED_GATE=off) and fully fail-open: with no declared peers it
+      // is a no-op. When the target is ALSO named in the same evidence, the reject is
+      // suppressed (the target's own disclosure referencing a peer is kept).
+      try {
+        if (relatedListedGateEnabled()) {
+          const relatedListed = frameworkRelatedListedCompanies(framework, companyName);
+          if (relatedListed.length > 0 && (result.verdict === "Yes" || result.verdict === "Partial")) {
+            const quoteTexts = (result.quotes || [])
+              .filter((q) => !(q as any)?.disqualified)
+              .map((q) => `${(q as any)?.text ?? ""} ${(q as any)?.source ?? ""}`);
+            const decision = decideRelatedListedExclusion({ relatedListed, quoteTexts, targetName: companyName });
+            if (decision.reject) {
+              const prevVerdict = result.verdict;
+              const prevScore = result.score;
+              result.verdict = "No";
+              result.score = 0;
+              const gateNote = `[Related-listed gate: downgraded ${prevVerdict}→No — ${decision.reason}]`;
+              result.evidenceSummary = (result.evidenceSummary ? `${result.evidenceSummary} ` : "") + gateNote;
+              result.verdictNuance = (result.verdictNuance ? `${result.verdictNuance} ` : "") + gateNote;
+              recordVerdictOverride(result, `Related-listed gate: ${decision.reason}`);
+              (result as any).relatedListedGateFired = true;
+              (result as any).relatedListedGateReason = decision.reason;
+              (result as any).relatedListedGateMatched = decision.matched;
+              console.log(`[${companyName}] RELATED-LISTED DOWNGRADE ${result.measureId}: ${prevVerdict} (score ${prevScore}) → No (0) — ${decision.reason}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[${companyName}] related-listed gate ${result.measureId}: skipped (${(err as Error)?.message ?? "error"}) — not blocking`);
       }
 
       // A3 / WP04: compose the single immutable eligibility decision for this

@@ -43,7 +43,8 @@ import { analyzeCompanyMeasures, getPromptHash, getPipelineVersion, computeSourc
 import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2CompetitorDominanceAdmissionEnabled, p2CompetitorDominanceMinRatio, p1FrameworkScopedCorpusEnabled, rc6CorpusReadinessRetryConcurrency, rc6CorpusReadinessRetryEnabled, eDeepSecondPassEnabled, eDeepSecondPassConcurrency, gMandatoryCompletenessResearchEnabled, gMandatoryCompletenessResearchConcurrency, frozenCorpusContentHashReuse, retrievalFunnelInstrumentation, scoreOnlyReplayEnabled, scoreOnlyReplayColdStartDiscoversEnabled, decideScoreOnlyReplay, frameworkLineageFreezeEnabled, freezeFrameworkKey, withSelfConsistencyVoteInTrace, scoringVoteExportEnabled,
  corpusOverlapInstrumentEnabled, canonicalDocKey,
  corpusCoverageBarFreezeEnabled, corpusCoverageBarMaxRetries, corpusCoverageRequiredCategories, decideCoverageBarFreeze,
- fetchFloorRequiredRetryEnabled, fetchFloorMaxRetries, decideFetchFloorRetry } from "./scoring-fix-flags.js";
+ fetchFloorRequiredRetryEnabled, fetchFloorMaxRetries, decideFetchFloorRetry,
+ frameworkPerCompanyDocCap, mergeAutoPins, getFrameworkAutoPins, buildPinnedUrlsForRun } from "./scoring-fix-flags.js";
 import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
@@ -557,7 +558,18 @@ async function runFetchPhase(opts: {
     ticker: company.ticker,
     sector: company.sector,
     country: company.country,
-    pinnedUrls: (company.pinnedDocuments as string[]) || undefined,
+    // FW25 FIX 2: manual pins (company.pinnedDocuments) are ALWAYS preserved and lead;
+    // this framework's own auto-pins are appended, deduped, and the combined list is
+    // capped to perCompanyDocCap so another framework's / stale pins never bloat THIS
+    // run's corpus. undefined when empty, preserving the prior "no pins" behaviour.
+    pinnedUrls: (() => {
+      const combined = buildPinnedUrlsForRun({
+        manualPins: (company.pinnedDocuments as string[]) || [],
+        frameworkAutoPins: getFrameworkAutoPins((company as any).autoPinnedByFramework, (framework as any).id),
+        cap: frameworkPerCompanyDocCap(framework as any),
+      });
+      return combined.length > 0 ? combined : undefined;
+    })(),
     framework,
     trustedSources,
     searchDepth,
@@ -3974,18 +3986,24 @@ async function runAnalyzePhase(opts: {
   // ─── Auto-Pin Sources ──────────────────────────────────────────────────────
   // When analysis finds evidence, auto-pin those source URLs so they're always
   // re-checked in future runs (ensures consistency across iterations).
+  //
+  // FW25 FIX 2: auto-pins are now scoped PER FRAMEWORK in company.autoPinnedByFramework
+  // (Record<frameworkId, string[]>), deduped and capped to the framework's
+  // perCompanyDocCap. Previously every Yes/Partial source was appended to the flat,
+  // framework-shared company.pinnedDocuments with NO cap and NO cross-run dedup, so the
+  // corpus doubled run-over-run and other frameworks' / stale / wrong-entity pins bled
+  // in. pinnedDocuments is now left untouched (MANUAL pins only — e.g. Michelin's pin).
   try {
     const autoPinSettings = await storage.getSettings(workspaceId);
     if (autoPinSettings.auto_pin_sources === "true") {
-      const existingPins = new Set<string>((company.pinnedDocuments as string[]) || []);
       const newPins: string[] = [];
-
+      const seenNew = new Set<string>();
       for (const cat of analysis.categories) {
         for (const m of cat.measures) {
           if (m.verdict === "Yes" || m.verdict === "Partial") {
             for (const quote of m.quotes) {
-              if (quote.source && quote.source.startsWith("http") && !existingPins.has(quote.source)) {
-                existingPins.add(quote.source);
+              if (quote.source && quote.source.startsWith("http") && !seenNew.has(quote.source)) {
+                seenNew.add(quote.source);
                 newPins.push(quote.source);
               }
             }
@@ -3994,9 +4012,17 @@ async function runAnalyzePhase(opts: {
       }
 
       if (newPins.length > 0) {
-        const allPins = [...((company.pinnedDocuments as string[]) || []), ...newPins];
-        await storage.updateCompany(companyId, workspaceId, { pinnedDocuments: allPins });
-        console.log(`[${companyName}] Auto-pinned ${newPins.length} evidence sources (total: ${allPins.length})`);
+        const cap = frameworkPerCompanyDocCap(framework as any);
+        const existingByFw: Record<string, string[]> =
+          ((company as any).autoPinnedByFramework as Record<string, string[]>) || {};
+        const existingForFw = getFrameworkAutoPins(existingByFw, (framework as any).id);
+        const mergedForFw = mergeAutoPins({ existingFrameworkAutoPins: existingForFw, newPins, cap });
+        const nextByFw = { ...existingByFw, [String((framework as any).id)]: mergedForFw };
+        await storage.updateCompany(companyId, workspaceId, { autoPinnedByFramework: nextByFw });
+        console.log(
+          `[${companyName}] Auto-pinned ${newPins.length} evidence source(s) for framework ${(framework as any).id} ` +
+          `(fw total: ${mergedForFw.length}${cap != null ? `, cap ${cap}` : ", no cap"}); manual pinnedDocuments untouched`,
+        );
       }
     }
   } catch (pinError: any) {

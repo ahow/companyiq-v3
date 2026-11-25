@@ -15,9 +15,27 @@ import {
   scoringTopicTermRequiredEnabled,
   evidenceHasAnyTerm,
   TOPIC_TERM_REQUIRED_CAPABILITY,
+  // FW25 Track A — FIX 1–4 helpers
+  parseMeasureTrack,
+  frameworkRequiredForTracks,
+  measureTrackGated,
+  measureIsTrackGated,
+  frameworkPerCompanyDocCap,
+  buildPinnedUrlsForRun,
+  mergeAutoPins,
+  getFrameworkAutoPins,
+  frameworkRecencyWindowYears,
+  extractCitedSourceYear,
+  decideRecencyWindowGate,
+  resolvePerCompanyList,
+  frameworkRelatedListedCompanies,
+  frameworkSubsidiaryDomains,
+  relatedListedGateEnabled,
+  decideRelatedListedExclusion,
 } from "./scoring-fix-flags.js";
 import { QuoteLedger } from "./retrieval-funnel.js";
 import { classifiedCoverageComprehensive } from "../../shared/research-state.js";
+import { recognizePdfPayload } from "./processor.js";
 
 // ── CHANGE 5 — SCORING_PHYSICAL_HAZARD_TERM_REQUIRED ─────────────────────────
 test("decidePhysicalHazardGate: flag off never downgrades", () => {
@@ -351,4 +369,196 @@ test("classifiedCoverageComprehensive: only annual → not comprehensive", () =>
   assert.equal(r.annualReportPresent, true);
   assert.equal(r.sustainabilityOrClimatePresent, false);
   assert.equal(r.comprehensive, false);
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FW25 Track A — scoring-correctness fixes (FIX 1–5). Pure-helper unit tests.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── FIX 1 — measure-level track gate: fail-open vs fire ──────────────────────
+test("FIX1 parseMeasureTrack: reads leading TRACK token (both field spellings)", () => {
+  assert.equal(parseMeasureTrack({ substantiveDefinition: "TRACK physical_climate — flood risk…" }), "physical_climate");
+  assert.equal(parseMeasureTrack({ substantive_definition: "  track Operational_Resilience bla" }), "operational_resilience");
+  assert.equal(parseMeasureTrack({ substantiveDefinition: "No track token here" }), null);
+  assert.equal(parseMeasureTrack({}), null);
+});
+
+test("FIX1 frameworkRequiredForTracks: declared [] wins over env (fail-open)", () => {
+  const prev = process.env.SCORING_REQUIRED_FOR_TRACKS;
+  process.env.SCORING_REQUIRED_FOR_TRACKS = "physical_climate";
+  try {
+    // declared empty array → declaration wins → no tracks gated
+    assert.deepEqual(frameworkRequiredForTracks({ requiredForTracks: [] }), []);
+    // declared value normalised + lowercased
+    assert.deepEqual(frameworkRequiredForTracks({ required_for_tracks: ["Physical_Climate", " "] }), ["physical_climate"]);
+    // undeclared → env fallback
+    assert.deepEqual(frameworkRequiredForTracks({}), ["physical_climate"]);
+  } finally {
+    if (prev === undefined) delete process.env.SCORING_REQUIRED_FOR_TRACKS;
+    else process.env.SCORING_REQUIRED_FOR_TRACKS = prev;
+  }
+});
+
+test("FIX1 measureTrackGated / measureIsTrackGated: fires only for gated track, fail-open otherwise", () => {
+  // undeclared requiredForTracks → never gate (the regression: business-continuity Yes preserved)
+  assert.equal(measureTrackGated("operational_resilience", []), false);
+  assert.equal(measureTrackGated(null, ["physical_climate"]), false);
+  // fires only when the measure's OWN track is in the list
+  assert.equal(measureTrackGated("physical_climate", ["physical_climate"]), true);
+  assert.equal(measureTrackGated("operational_resilience", ["physical_climate"]), false);
+
+  const fw = { requiredForTracks: ["physical_climate"] };
+  assert.equal(measureIsTrackGated({ substantiveDefinition: "TRACK physical_climate x" }, fw), true);
+  assert.equal(measureIsTrackGated({ substantiveDefinition: "TRACK operational_resilience x" }, fw), false);
+  assert.equal(measureIsTrackGated({ substantiveDefinition: "TRACK performance x" }, fw), false);
+  // framework declares nothing → fail-open even for a physical_climate measure
+  assert.equal(measureIsTrackGated({ substantiveDefinition: "TRACK physical_climate x" }, { requiredForTracks: [] }), false);
+});
+
+// ── FIX 2 — per-company doc cap + cross-run dedup ────────────────────────────
+test("FIX2 frameworkPerCompanyDocCap: declared/env/fail-open", () => {
+  const prev = process.env.SCORING_PER_COMPANY_DOC_CAP;
+  delete process.env.SCORING_PER_COMPANY_DOC_CAP;
+  try {
+    assert.equal(frameworkPerCompanyDocCap({ perCompanyDocCap: 50 }), 50);
+    assert.equal(frameworkPerCompanyDocCap({ per_company_doc_cap: 12 }), 12);
+    assert.equal(frameworkPerCompanyDocCap({}), null); // undeclared → no cap (fail-open)
+    process.env.SCORING_PER_COMPANY_DOC_CAP = "7";
+    assert.equal(frameworkPerCompanyDocCap({}), 7);
+    assert.equal(frameworkPerCompanyDocCap({ perCompanyDocCap: 0 }), 7); // non-positive declared → env
+  } finally {
+    if (prev === undefined) delete process.env.SCORING_PER_COMPANY_DOC_CAP;
+    else process.env.SCORING_PER_COMPANY_DOC_CAP = prev;
+  }
+});
+
+test("FIX2 buildPinnedUrlsForRun: manual pins lead, dedup, cap", () => {
+  const out = buildPinnedUrlsForRun({
+    manualPins: ["https://m/doc.pdf", "https://shared/x.pdf", "  "],
+    frameworkAutoPins: ["https://shared/x.pdf", "https://a/1.pdf", "https://a/2.pdf"],
+    cap: 3,
+  });
+  // dedup (shared/x.pdf once), manual first, capped to 3
+  assert.deepEqual(out, ["https://m/doc.pdf", "https://shared/x.pdf", "https://a/1.pdf"]);
+  // null cap → no cap, manual pin never dropped
+  const uncapped = buildPinnedUrlsForRun({ manualPins: ["https://m.pdf"], frameworkAutoPins: ["https://a.pdf", "https://b.pdf"], cap: null });
+  assert.deepEqual(uncapped, ["https://m.pdf", "https://a.pdf", "https://b.pdf"]);
+});
+
+test("FIX2 mergeAutoPins keeps newest under cap; getFrameworkAutoPins reads per-framework", () => {
+  // cap keeps the NEWEST (tail) — most recent evidence retained
+  const merged = mergeAutoPins({ existingFrameworkAutoPins: ["old1", "old2"], newPins: ["new1", "new2"], cap: 3 });
+  assert.deepEqual(merged, ["old2", "new1", "new2"]);
+  // framework-scoped read: other frameworks' pins never bleed in
+  const map = { "25": ["https://fw25/a.pdf"], "5": ["https://fw5/b.pdf"] };
+  assert.deepEqual(getFrameworkAutoPins(map, 25), ["https://fw25/a.pdf"]);
+  assert.deepEqual(getFrameworkAutoPins(map, 99), []);
+  assert.deepEqual(getFrameworkAutoPins(null, 25), []);
+});
+
+// ── FIX 3 — recency window downgrade with fail-open on unknown date ──────────
+test("FIX3 extractCitedSourceYear: most-recent plausible year or null", () => {
+  assert.equal(extractCitedSourceYear("https://x/annual-2023.pdf", "Annual Report 2024"), 2024);
+  assert.equal(extractCitedSourceYear("https://x/doc.pdf", "Sustainability Report"), null);
+  assert.equal(extractCitedSourceYear("https://x/18880000.pdf", "junk 3000"), null); // out of 1990–2099
+});
+
+test("FIX3 frameworkRecencyWindowYears: declared/env/fail-open", () => {
+  const prev = process.env.SCORING_RECENCY_WINDOW_YEARS;
+  delete process.env.SCORING_RECENCY_WINDOW_YEARS;
+  try {
+    assert.equal(frameworkRecencyWindowYears({ recencyWindowYears: 4 }), 4);
+    assert.equal(frameworkRecencyWindowYears({}), null);
+    process.env.SCORING_RECENCY_WINDOW_YEARS = "3";
+    assert.equal(frameworkRecencyWindowYears({}), 3);
+  } finally {
+    if (prev === undefined) delete process.env.SCORING_RECENCY_WINDOW_YEARS;
+    else process.env.SCORING_RECENCY_WINDOW_YEARS = prev;
+  }
+});
+
+test("FIX3 decideRecencyWindowGate: downgrade only when ALL dated sources stale; fail-open on unknown/none", () => {
+  const base = { windowYears: 4, currentYear: 2026 };
+  // all cited sources stale (<2022) → downgrade
+  assert.equal(decideRecencyWindowGate({ ...base, verdict: "Yes", citedSourceYears: [2019, 2020] }).downgrade, true);
+  // at least one in window → keep
+  assert.equal(decideRecencyWindowGate({ ...base, verdict: "Yes", citedSourceYears: [2019, 2025] }).downgrade, false);
+  // no dated sources → fail-open
+  assert.equal(decideRecencyWindowGate({ ...base, verdict: "Partial", citedSourceYears: [null, null] }).downgrade, false);
+  // no cited sources → fail-open
+  assert.equal(decideRecencyWindowGate({ ...base, verdict: "Yes", citedSourceYears: [] }).downgrade, false);
+  // window undeclared → fail-open
+  assert.equal(decideRecencyWindowGate({ windowYears: null, currentYear: 2026, verdict: "Yes", citedSourceYears: [2000] }).downgrade, false);
+  // not a positive verdict → never downgrade
+  assert.equal(decideRecencyWindowGate({ ...base, verdict: "No", citedSourceYears: [2000] }).downgrade, false);
+});
+
+// ── FIX 4 — related-listed hard exclusion + per-company map ──────────────────
+test("FIX4 resolvePerCompanyList: flat array vs per-company map (+ wildcard)", () => {
+  assert.deepEqual(resolvePerCompanyList(["A Corp", "B Ltd"], "anyone"), ["A Corp", "B Ltd"]);
+  const map = { "Hyundai Glovis": ["Hyundai Motor Company"], "*": ["Shared Peer"] };
+  assert.deepEqual(resolvePerCompanyList(map, "hyundai glovis"), ["Shared Peer", "Hyundai Motor Company"]);
+  assert.deepEqual(resolvePerCompanyList(map, "Unrelated Co"), ["Shared Peer"]);
+  assert.deepEqual(resolvePerCompanyList(undefined, "x"), []);
+});
+
+test("FIX4 frameworkRelatedListedCompanies / frameworkSubsidiaryDomains read the columns", () => {
+  const fw = {
+    relatedListedCompanies: { "Hyundai Glovis": ["Hyundai Motor Company"] },
+    subsidiaryDomains: { "Hyundai Glovis": ["www.Glovis.net/", "glovis.com"] },
+  };
+  assert.deepEqual(frameworkRelatedListedCompanies(fw, "Hyundai Glovis"), ["Hyundai Motor Company"]);
+  assert.deepEqual(frameworkRelatedListedCompanies(fw, "Someone Else"), []);
+  // subsidiary domains normalised to bare hosts
+  assert.deepEqual(frameworkSubsidiaryDomains(fw, "Hyundai Glovis"), ["glovis.net", "glovis.com"]);
+});
+
+test("FIX4 decideRelatedListedExclusion: hard-reject peer mention; fail-open when undeclared", () => {
+  assert.equal(relatedListedGateEnabled(), true); // default on (no env override)
+  // peer named, target not → HARD REJECT
+  const r1 = decideRelatedListedExclusion({
+    relatedListed: ["Hyundai Motor Company"],
+    quoteTexts: ["Hyundai Motor Company published a TCFD report covering physical climate risk."],
+    targetName: "Hyundai Glovis",
+  });
+  assert.equal(r1.reject, true);
+  assert.equal(r1.matched, "Hyundai Motor Company");
+  // target also named, non-strict → keep (own disclosure referencing a peer)
+  const r2 = decideRelatedListedExclusion({
+    relatedListed: ["Hyundai Motor Company"],
+    quoteTexts: ["Hyundai Glovis, part of the group alongside Hyundai Motor Company, assessed flood risk."],
+    targetName: "Hyundai Glovis",
+  });
+  assert.equal(r2.reject, false);
+  // strict → reject even with target named
+  const r3 = decideRelatedListedExclusion({
+    relatedListed: ["Hyundai Motor Company"],
+    quoteTexts: ["Hyundai Glovis and Hyundai Motor Company."],
+    targetName: "Hyundai Glovis",
+    strict: true,
+  });
+  assert.equal(r3.reject, true);
+  // undeclared list → fail-open
+  assert.equal(decideRelatedListedExclusion({ relatedListed: [], quoteTexts: ["anything"], targetName: "X" }).reject, false);
+});
+
+// ── FIX 5 — pinned gzip / content-type ingest (pure sniff core) ──────────────
+test("FIX5 recognizePdfPayload: magic bytes, content-type, gzip-decompress, reject non-PDF", async () => {
+  const zlibMod = await import("node:zlib");
+  // (a) plain PDF by magic bytes, no .pdf-ish content-type
+  const pdf = Buffer.from("%PDF-1.7\n...body...", "latin1");
+  const a = recognizePdfPayload(pdf, "application/octet-stream");
+  assert.ok(a && a.via === "magic-bytes");
+  // (b) recognised by content-type even without magic bytes
+  const b = recognizePdfPayload(Buffer.from("not-a-magic-header"), "application/pdf; charset=binary");
+  assert.ok(b && b.via === "content-type");
+  // (c) gzip-compressed PDF (CDN gzip not auto-decompressed) → transparently inflated
+  const gz = zlibMod.gzipSync(pdf);
+  assert.equal(gz[0], 0x1f);
+  const c = recognizePdfPayload(gz, "application/octet-stream");
+  assert.ok(c && c.via === "magic-bytes");
+  assert.equal(c!.buf.slice(0, 5).toString("latin1"), "%PDF-");
+  // (d) genuinely not a PDF → null
+  assert.equal(recognizePdfPayload(Buffer.from("<html>hi</html>"), "text/html"), null);
 });

@@ -1071,7 +1071,9 @@ apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
     const framework = await storage.getFrameworkById(frameworkId, workspaceId);
     if (!framework) return res.status(404).json({ error: "Framework not found" });
 
-    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared", "requiredDocTypes", "dataPatterns", "legacyQueryTemplates", "multiDocumentQueryTemplates", "authoritativeRegistries", "authoritativeFilingTypes", "scoringExamples", "antiInferenceRules", "documentPriorityUrlPatterns", "scoringFlags"];
+    const allowedFields = ["name", "topicDescription", "searchTemplates", "negativeKeywords", "negativeDomains", "knownDisclosureUrls", "trustedSourceIds", "isShared", "requiredDocTypes", "dataPatterns", "legacyQueryTemplates", "multiDocumentQueryTemplates", "authoritativeRegistries", "authoritativeFilingTypes", "scoringExamples", "antiInferenceRules", "documentPriorityUrlPatterns", "scoringFlags",
+      // FW25 Track A — scoring-correctness config (framework-level DATA; absent ⇒ fail-open)
+      "requiredForTracks", "perCompanyDocCap", "recencyWindowYears", "subsidiaryDomains", "relatedListedCompanies"];
     const updates: Record<string, any> = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
@@ -1083,6 +1085,30 @@ apiRouter.patch("/frameworks/:id", async (req: Request, res: Response) => {
     // name — so the builder can toggle any named scoring capability as data.
     if (updates.scoringFlags !== undefined) {
       updates.scoringFlags = sanitizeScoringFlags(updates.scoringFlags);
+    }
+    // FW25 Track A config normalization — coerce into the shapes the gates expect
+    // (lists stay lists; caps stay positive ints or null). Empty/invalid ⇒ null so
+    // the gate fails open rather than persisting a malformed value.
+    if (updates.requiredForTracks !== undefined) {
+      updates.requiredForTracks = Array.isArray(updates.requiredForTracks)
+        ? updates.requiredForTracks.map((t: any) => String(t).trim().toLowerCase()).filter((t: string) => t.length > 0)
+        : [];
+    }
+    if (updates.perCompanyDocCap !== undefined) {
+      const n = Number(updates.perCompanyDocCap);
+      updates.perCompanyDocCap = Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+    }
+    if (updates.recencyWindowYears !== undefined) {
+      const n = Number(updates.recencyWindowYears);
+      updates.recencyWindowYears = Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+    }
+    // subsidiaryDomains / relatedListedCompanies accept EITHER a flat string[] or a
+    // Record<companyName,string[]> — persist as-is when object/array, else null.
+    for (const f of ["subsidiaryDomains", "relatedListedCompanies"]) {
+      if (updates[f] !== undefined) {
+        const v = updates[f];
+        updates[f] = (Array.isArray(v) || (v && typeof v === "object")) ? v : null;
+      }
     }
 
     if (Object.keys(updates).length > 0) {

@@ -45,6 +45,16 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
   const [knownDisclosureUrlsText, setKnownDisclosureUrlsText] = useState("");
   const [discoverySaving, setDiscoverySaving] = useState(false);
 
+  // FW25 Track A — scoring-correctness config local state. Each field is framework
+  // DATA that the generic gates read; absent ⇒ fail-open (gate never fires).
+  const [showScoringConfig, setShowScoringConfig] = useState(false);
+  const [requiredForTracksText, setRequiredForTracksText] = useState("");
+  const [perCompanyDocCapText, setPerCompanyDocCapText] = useState("");
+  const [recencyWindowYearsText, setRecencyWindowYearsText] = useState("");
+  const [subsidiaryDomainsText, setSubsidiaryDomainsText] = useState("");
+  const [relatedListedCompaniesText, setRelatedListedCompaniesText] = useState("");
+  const [scoringConfigSaving, setScoringConfigSaving] = useState(false);
+
   const { data: frameworks } = useQuery({
     queryKey: ["frameworks"],
     queryFn: api.getFrameworks,
@@ -81,6 +91,22 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
       setKnownDisclosureUrlsText((framework.knownDisclosureUrls || []).join("\n"));
     }
   }, [framework?.id, framework?.searchTemplates, framework?.negativeKeywords, framework?.negativeDomains, framework?.knownDisclosureUrls]);
+
+  // Sync FW25 Track A scoring-correctness config when framework changes. JSON-typed
+  // columns (subsidiaryDomains / relatedListedCompanies) accept a flat list OR a
+  // per-company map, so the textarea shows the raw JSON for the map case and a simple
+  // one-per-line list for the flat case.
+  useEffect(() => {
+    if (!framework) return;
+    const anyFw = framework as any;
+    setRequiredForTracksText(((anyFw.requiredForTracks as string[]) || []).join("\n"));
+    setPerCompanyDocCapText(anyFw.perCompanyDocCap != null ? String(anyFw.perCompanyDocCap) : "");
+    setRecencyWindowYearsText(anyFw.recencyWindowYears != null ? String(anyFw.recencyWindowYears) : "");
+    const fmtListOrMap = (v: any) =>
+      v == null ? "" : Array.isArray(v) ? v.join("\n") : JSON.stringify(v, null, 2);
+    setSubsidiaryDomainsText(fmtListOrMap(anyFw.subsidiaryDomains));
+    setRelatedListedCompaniesText(fmtListOrMap(anyFw.relatedListedCompanies));
+  }, [framework?.id, (framework as any)?.requiredForTracks, (framework as any)?.perCompanyDocCap, (framework as any)?.recencyWindowYears, (framework as any)?.subsidiaryDomains, (framework as any)?.relatedListedCompanies]);
 
   // Group measures by category
   const categories: Record<string, any[]> = {};
@@ -244,6 +270,42 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
       alert(err.message);
     } finally {
       setDiscoverySaving(false);
+    }
+  };
+
+  // Save FW25 Track A scoring-correctness config. Lists are parsed one-per-line; the
+  // two JSON-typed fields accept EITHER a one-per-line flat list OR a pasted JSON
+  // object (per-company map). Blank ⇒ null/[] (fail-open). The PATCH route re-coerces
+  // and persists these, so the round-trip is authoritative server-side.
+  const handleSaveScoringConfig = async () => {
+    if (!activeFrameworkId) return;
+    setScoringConfigSaving(true);
+    try {
+      const parseLines = (text: string) => text.split("\n").map(l => l.trim()).filter(Boolean);
+      // A field that is a JSON object (per-company map) is sent as that object; otherwise
+      // a newline list becomes a flat string[]. Invalid JSON falls back to the line list.
+      const parseListOrMap = (text: string): any => {
+        const t = text.trim();
+        if (!t) return [];
+        if (t.startsWith("{")) {
+          try { return JSON.parse(t); } catch { /* fall through to line list */ }
+        }
+        return parseLines(text);
+      };
+      const capNum = perCompanyDocCapText.trim() ? Number(perCompanyDocCapText.trim()) : null;
+      const recNum = recencyWindowYearsText.trim() ? Number(recencyWindowYearsText.trim()) : null;
+      await api.updateFramework(activeFrameworkId, {
+        requiredForTracks: parseLines(requiredForTracksText).map(s => s.toLowerCase()),
+        perCompanyDocCap: capNum != null && Number.isFinite(capNum) && capNum > 0 ? Math.floor(capNum) : null,
+        recencyWindowYears: recNum != null && Number.isFinite(recNum) && recNum > 0 ? Math.floor(recNum) : null,
+        subsidiaryDomains: parseListOrMap(subsidiaryDomainsText),
+        relatedListedCompanies: parseListOrMap(relatedListedCompaniesText),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["framework", activeFrameworkId] });
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setScoringConfigSaving(false);
     }
   };
 
@@ -551,6 +613,17 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
                 <Settings className="w-4 h-4" /> Discovery Settings
               </button>
               <button
+                onClick={() => setShowScoringConfig(!showScoringConfig)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                  showScoringConfig
+                    ? "bg-rose-100 text-rose-800 hover:bg-rose-200"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+                title="Per-framework scoring-correctness config (track gating, corpus cap, recency window, entity attribution). All fields are optional — leaving one blank disables that gate for this framework."
+              >
+                <Settings className="w-4 h-4" /> Scoring Correctness
+              </button>
+              <button
                 onClick={handleExportFull}
                 disabled={exportingFull}
                 className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors disabled:opacity-50"
@@ -720,6 +793,100 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
                     No trusted sources configured. Add them in Settings &gt; Trusted Sources.
                   </p>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Scoring Correctness Panel (FW25 Track A) */}
+          {showScoringConfig && framework && (
+            <div className="p-4 border-b bg-rose-50/50 space-y-5">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+                  <Settings className="w-4 h-4" /> Scoring Correctness Configuration
+                </h3>
+                <button
+                  onClick={handleSaveScoringConfig}
+                  disabled={scoringConfigSaving}
+                  className="px-4 py-1.5 bg-rose-600 text-white rounded-lg text-sm hover:bg-rose-700 disabled:opacity-50"
+                >
+                  {scoringConfigSaving ? "Saving..." : "Save Settings"}
+                </button>
+              </div>
+              <p className="text-xs text-gray-600">
+                Per-framework correctness gates. All fields are optional and <strong>fail open</strong> — leaving a field blank disables that gate for this framework. Nothing here hardcodes a company or measure; these are the DATA the generic gates read.
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* requiredForTracks */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Required-for Tracks</label>
+                  <p className="text-[11px] text-gray-500 mb-1">
+                    Measure tracks (one per line, e.g. <code className="bg-gray-100 px-1 rounded">physical_climate</code>) for which the physical-hazard / topic-term gates apply. A measure declares its track as a leading <code className="bg-gray-100 px-1 rounded">TRACK &lt;token&gt;</code>. Blank ⇒ no measure is track-gated.
+                  </p>
+                  <textarea
+                    value={requiredForTracksText}
+                    onChange={(e) => setRequiredForTracksText(e.target.value)}
+                    rows={3}
+                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono resize-y"
+                    placeholder={`physical_climate`}
+                  />
+                </div>
+
+                {/* perCompanyDocCap + recencyWindowYears */}
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Per-company Document Cap</label>
+                    <p className="text-[11px] text-gray-500 mb-1">Max documents per company in a run's corpus. Blank ⇒ no cap.</p>
+                    <input
+                      type="number" min={1}
+                      value={perCompanyDocCapText}
+                      onChange={(e) => setPerCompanyDocCapText(e.target.value)}
+                      className="w-full px-3 py-2 border rounded-lg text-sm"
+                      placeholder="50"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Recency Window (years)</label>
+                    <p className="text-[11px] text-gray-500 mb-1">A positive verdict whose cited sources are ALL dated outside this window is downgraded (unknown dates fail open). Blank ⇒ no date gate.</p>
+                    <input
+                      type="number" min={1}
+                      value={recencyWindowYearsText}
+                      onChange={(e) => setRecencyWindowYearsText(e.target.value)}
+                      className="w-full px-3 py-2 border rounded-lg text-sm"
+                      placeholder="4"
+                    />
+                  </div>
+                </div>
+
+                {/* subsidiaryDomains */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Subsidiary Domains</label>
+                  <p className="text-[11px] text-gray-500 mb-1">
+                    Domains that DO count as the target (one per line). Or paste a JSON object <code className="bg-gray-100 px-1 rounded">{'{"Company":["x.com"]}'}</code> to scope per company. Blank ⇒ none.
+                  </p>
+                  <textarea
+                    value={subsidiaryDomainsText}
+                    onChange={(e) => setSubsidiaryDomainsText(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono resize-y"
+                    placeholder={`subsidiary.example.com`}
+                  />
+                </div>
+
+                {/* relatedListedCompanies */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Related-listed Companies</label>
+                  <p className="text-[11px] text-gray-500 mb-1">
+                    Separately-listed entities NEVER attributed to the target — hard-rejected even on a name-mention (one per line). Or paste a JSON object <code className="bg-gray-100 px-1 rounded">{'{"Hyundai Glovis":["Hyundai Motor Company"]}'}</code> for per-company relations. Blank ⇒ off.
+                  </p>
+                  <textarea
+                    value={relatedListedCompaniesText}
+                    onChange={(e) => setRelatedListedCompaniesText(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono resize-y"
+                    placeholder={`{"Hyundai Glovis": ["Hyundai Motor Company"]}`}
+                  />
+                </div>
               </div>
             </div>
           )}
