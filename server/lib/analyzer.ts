@@ -79,13 +79,12 @@ import {
   relatedListedGateEnabled,
   decideRelatedListedExclusion,
   verdictStabilityEnabled,
-  verdictStabilityK,
 } from "./scoring-fix-flags.js";
 import { evaluateApplicability, evaluateCoverage, type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { requiredSourceTypesBlocking } from "./retrieval-funnel.js";
 import { recordVerdictOverride } from "./verdict-override.js";
 import { readjudicateMeasure, type ReadjudicationTrace } from "./readjudication.js";
-import { stabiliseVerdict, isStabilityEligible, type VerdictStabilityTrace } from "./verdict-stability.js";
+import { stabiliseVerdict, isStabilityEligible, effectiveVerdictStabilityK, type VerdictStabilityTrace } from "./verdict-stability.js";
 // A3 / WP04: end-to-end entity/provenance/temporal eligibility composition guardrail.
 // Attached per measure in SHADOW mode by default (observability only); verdict-
 // mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
@@ -3738,7 +3737,7 @@ export async function analyzeCompanyMeasures(opts: {
       if (verdictStabilityEnabled()) {
         try {
           if (isStabilityEligible(measure, measureResult)) {
-            const k = verdictStabilityK();
+            const k = effectiveVerdictStabilityK(measure);
             const sampledVerdicts: string[] = [];
             for (let i = 0; i < k; i++) {
               const sample =

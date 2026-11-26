@@ -2557,6 +2557,78 @@ export function verdictStabilityBorderlineConfidence(): number {
   return envFloat("VERDICT_STABILITY_BORDERLINE_CONFIDENCE", 0.7);
 }
 
+/** GENERALISED per-measure verdict-stability k (WS4).
+ *  Reads the calibrated majority-vote sample count stored on THIS measure
+ *  (written by test-drive calibration from its empirical flip-proneness).
+ *  Accepts either the camelCase drizzle field or the snake_case DB column.
+ *  Returns Math.floor(n) when finite and >= 1, else null. Thus:
+ *    - NULL / 0 / invalid → null = "uncalibrated" (runtime uses the global
+ *      default / track gate);
+ *    - a stored 1 → "calibrated, locked" (this measure opted OUT of stabilisation);
+ *    - a stored k>1 → "calibrated, stabilise with this k".
+ *  Topic-agnostic: no framework/track/measure names involved. */
+export function perMeasureVerdictStabilityK(measure: any): number | null {
+  const raw = measure?.verdictStabilityK ?? measure?.verdict_stability_k;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+  return null;
+}
+
+/** Calibration bands mapping an empirical run-to-run flip rate → a majority-vote
+ *  k. Default: flip rate ≥ 0.08 → k=5, ≥ 0.04 → k=3 (below the lowest band the
+ *  calibrator assigns k=1, a no-op). Returned sorted DESC by minFlipRate so the
+ *  first matching band is the highest applicable threshold.
+ *
+ *  Thresholds are calibrated from frozen-corpus replays (same-evidence per-measure
+ *  flip rates) and are applied GENERICALLY to any framework's test-drive flip
+ *  rate — there is nothing framework/topic-specific here. Over-assigning k is
+ *  safe: majority-vote with tie-keeps-first can never destabilise a cell (worst
+ *  case it reproduces the single-pass verdict), so a generous band only costs
+ *  extra samples, never correctness.
+ *
+ *  Override via VERDICT_STABILITY_K_BANDS as a CSV of `rate:k` pairs
+ *  (e.g. "0.08:5,0.04:3"); malformed pairs are ignored, and if the env yields no
+ *  valid band the compiled default is used. */
+export function verdictStabilityKBands(): Array<{ minFlipRate: number; k: number }> {
+  const def: Array<{ minFlipRate: number; k: number }> = [
+    { minFlipRate: 0.08, k: 5 },
+    { minFlipRate: 0.04, k: 3 },
+  ];
+  const env = process.env.VERDICT_STABILITY_K_BANDS;
+  let bands = def;
+  if (env && env.trim()) {
+    const parsed: Array<{ minFlipRate: number; k: number }> = [];
+    for (const pair of env.split(",")) {
+      const [rateStr, kStr] = pair.split(":");
+      const rateTok = (rateStr ?? "").trim();
+      const kTok = (kStr ?? "").trim();
+      // Empty tokens are malformed (guard the Number("")===0 coercion quirk).
+      if (rateTok === "" || kTok === "") continue;
+      const rate = Number(rateTok);
+      const k = Number(kTok);
+      if (!Number.isFinite(rate) || rate < 0) continue;
+      if (!Number.isFinite(k) || k < 1) continue;
+      parsed.push({ minFlipRate: rate, k: Math.floor(k) });
+    }
+    if (parsed.length > 0) bands = parsed;
+  }
+  return [...bands].sort((a, b) => b.minFlipRate - a.minFlipRate);
+}
+
+/** Pure: map a measured flip rate to a calibrated k. Returns the `k` of the first
+ *  band whose minFlipRate <= flipRate (bands are DESC), else 1 (no-op). A
+ *  non-finite or negative flipRate also yields 1. Topic-agnostic. */
+export function calibrateKFromFlipRate(
+  flipRate: number,
+  bands: Array<{ minFlipRate: number; k: number }> = verdictStabilityKBands(),
+): number {
+  if (!Number.isFinite(flipRate) || flipRate < 0) return 1;
+  for (const band of bands) {
+    if (band.minFlipRate <= flipRate) return band.k;
+  }
+  return 1;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // WS5 — FRAMEWORK_ONBOARDING_GATE: framework onboarding readiness gate (OFF).
 //

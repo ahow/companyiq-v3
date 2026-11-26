@@ -13,6 +13,7 @@ import {
   isFlipProneTrack,
   isBorderlineCell,
   isStabilityEligible,
+  effectiveVerdictStabilityK,
   resolveByMajority,
   stabiliseVerdict,
   type StabilisableResult,
@@ -297,5 +298,64 @@ test("verdictStabilityEnabled is default OFF (no-op unless explicitly enabled)",
   } finally {
     if (prev === undefined) delete process.env.VERDICT_STABILITY;
     else process.env.VERDICT_STABILITY = prev;
+  }
+});
+
+
+// ── GENERALISED per-measure k — isStabilityEligible ──────────────────────────
+// A borderline cell with NO track declared (so the track gate would lock it).
+function borderlineNoTrackCell(verdict: "Yes" | "No" = "Yes"): StabilisableResult {
+  return { verdict, score: verdict === "Yes" ? 1 : 0, confidence: "Low" };
+}
+
+test("isStabilityEligible: calibrated k>1 makes a borderline NON-flip-prone-track cell eligible (generalisation)", () => {
+  // measureId-less measure with an arbitrary (non-flip-prone) track AND a
+  // calibrated k of 5 — the per-measure k is authoritative, track is ignored.
+  const measure = { ...measureWithTrack("some_other_topic"), verdictStabilityK: 5 };
+  assert.equal(isFlipProneTrack(measure), false); // track gate alone would lock it
+  assert.equal(isStabilityEligible(measure, borderlineNoTrackCell()), true);
+});
+
+test("isStabilityEligible: calibrated k===1 locks a borderline cell regardless of track", () => {
+  // Even on the flip-prone track, a stored k=1 means "opted out" → not eligible.
+  const measure = { ...measureWithTrack("operational_resilience"), verdictStabilityK: 1 };
+  assert.equal(isFlipProneTrack(measure), true); // track gate alone would accept it
+  assert.equal(isStabilityEligible(measure, borderlineOpResCell()), false);
+});
+
+test("isStabilityEligible: uncalibrated (null k) still uses the track gate (back-compat)", () => {
+  // No verdict_stability_k → fall back to the legacy flip-prone track gate.
+  const onTrack = measureWithTrack("operational_resilience"); // no k field
+  assert.equal(isStabilityEligible(onTrack, borderlineOpResCell()), true);
+  const offTrack = measureWithTrack("some_other_topic"); // no k field
+  assert.equal(isStabilityEligible(offTrack, borderlineNoTrackCell()), false);
+});
+
+test("isStabilityEligible: a high-confidence cell is never eligible regardless of k", () => {
+  const measure = { ...measureWithTrack("operational_resilience"), verdictStabilityK: 5 };
+  const highConf: StabilisableResult = { verdict: "Yes", score: 1, confidence: "High" };
+  assert.equal(isStabilityEligible(measure, highConf), false);
+});
+
+test("isStabilityEligible: reads snake_case verdict_stability_k too", () => {
+  const measure = { ...measureWithTrack("some_other_topic"), verdict_stability_k: 3 };
+  assert.equal(isStabilityEligible(measure, borderlineNoTrackCell()), true);
+});
+
+// ── GENERALISED per-measure k — effectiveVerdictStabilityK ───────────────────
+test("effectiveVerdictStabilityK: returns the per-measure k when set", () => {
+  assert.equal(effectiveVerdictStabilityK({ verdictStabilityK: 5 }), 5);
+  assert.equal(effectiveVerdictStabilityK({ verdict_stability_k: 3 }), 3);
+});
+
+test("effectiveVerdictStabilityK: falls back to the global default (3) when uncalibrated", () => {
+  const prev = process.env.VERDICT_STABILITY_K;
+  try {
+    delete process.env.VERDICT_STABILITY_K; // default 3
+    assert.equal(effectiveVerdictStabilityK({}), 3);
+    assert.equal(effectiveVerdictStabilityK({ verdictStabilityK: null }), 3);
+  } finally {
+    if (prev === undefined) delete process.env.VERDICT_STABILITY_K;
+    else process.env.VERDICT_STABILITY_K = prev;
   }
 });

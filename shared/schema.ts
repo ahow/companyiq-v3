@@ -326,6 +326,12 @@ export const frameworkMeasures = pgTable("framework_measures", {
   // redefine/retire review. Non-destructive — the measure is never deleted or
   // disabled; this flag only marks it for attention. Default false.
   flaggedNonDiscriminating: boolean("flagged_non_discriminating").notNull().default(false),
+  // Calibrated majority-vote sample count (k) for THIS measure, written by the
+  // test-drive calibration from the measure's empirically-measured run-to-run
+  // flip-proneness. NULL = not calibrated (runtime falls back to the global
+  // default / track-gate). Generalised per framework/topic — no hardcoded
+  // framework/track/measure names.
+  verdictStabilityK: integer("verdict_stability_k"),
 }, (table) => ({
   frameworkIdx: index("measures_framework_idx").on(table.frameworkId),
 }));

@@ -249,6 +249,9 @@ export async function initializeDatabase(): Promise<void> {
     // proposal to surface the measure for redefine/retire review. Additive and
     // non-destructive — the measure is never deleted or disabled. Default false.
     await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS flagged_non_discriminating BOOLEAN NOT NULL DEFAULT false`);
+    // Calibrated per-measure majority-vote sample count (k), written by test-drive
+    // calibration from empirical flip-proneness. NULL = uncalibrated. Generalised.
+    await db.execute(sql`ALTER TABLE framework_measures ADD COLUMN IF NOT EXISTS verdict_stability_k INTEGER`);
 
     // Framework Builder v2 edit-audit (observability). `updated_at` is nullable
     // and set on every measure write going forward; pre-audit rows deliberately

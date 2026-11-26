@@ -34,6 +34,7 @@ import { recordMeasureEdit } from "../lib/framework-v2/measure-audit.js";
 import { resolveProposalByIdentity } from "../lib/framework-v2/proposal-identity.js";
 import { pickEffectiveBatch } from "../lib/framework-v2/effective-batch.js";
 import { deriveProposalBundle } from "../lib/framework-v2/derive-proposal-bundle.js";
+import { persistPerMeasureK } from "../lib/framework-v2/calibrate-verdict-stability-k.js";
 import { buildDiagnosticReport, type DiagnosticMeasure, type StoredCell, type DiagnosticReport } from "../lib/measure-design-diagnostic.js";
 import { composeBuilderReview, type BuilderReviewResult } from "../lib/framework-v2/builder-review.js";
 import * as storage from "../storage.js";
@@ -3127,6 +3128,15 @@ router.get("/v2/test-drive/results", requireWorkspace, async (req: Request, res:
       // multi-run flip comparison.
       const bundle = await deriveProposalBundle(db, frameworkId, listId, ctx.workspaceId);
       flipStats = bundle.flipStats;
+      // GENERALISED per-measure verdict-stability k: calibrate each measure's
+      // majority-vote k from its empirical flip rate. Non-fatal / fail-open — a
+      // calibration failure must never break the test-drive results response.
+      try {
+        const cal = await persistPerMeasureK(db, frameworkId, flipStats);
+        if (cal.updated > 0) console.log(`[framework-builder v2 /test-drive/results] calibrated per-measure verdict_stability_k for ${cal.updated} measures`);
+      } catch (e: any) {
+        console.warn("[framework-builder v2 /test-drive/results] per-measure k calibration failed (non-fatal):", e?.message);
+      }
       report = bundle.report;
       robustness = bundle.robustness;
       edits = bundle.edits;

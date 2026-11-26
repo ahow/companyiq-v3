@@ -10,12 +10,20 @@
 //
 // Design (all decision logic is PURE and unit-testable WITHOUT the LLM — the
 // analyzer wiring supplies the k sampled verdicts by calling the model k times):
-//   • Eligibility (data-driven, hysteresis): a cell is eligible iff
-//       (a) its measure's TRACK (parseMeasureTrack) is in the flip-prone track
-//           set (default ["operational_resilience"], env-overridable), AND
-//       (b) its first pass is "borderline" — confidence Low/Medium (maps below
-//           the borderline threshold) OR needsReadjudication === true.
-//     Cells failing (a) OR (b) are LOCKED: verdict/score untouched (hysteresis).
+//   • Eligibility (GENERALISED, per-measure-k driven, hysteresis): a cell is
+//     eligible iff it is "borderline" (confidence Low/Medium below the threshold
+//     OR needsReadjudication === true) AND stabilisation is switched on for its
+//     measure. "Switched on" is decided per-measure: when the measure carries a
+//     CALIBRATED k (verdict_stability_k, written by test-drive calibration from
+//     its empirical flip-proneness) that value is AUTHORITATIVE — eligible iff
+//     k > 1 (a stored k=1 opts the measure OUT). Only when the measure is
+//     UNCALIBRATED (null k) do we fall back to the legacy flip-prone TRACK set
+//     (default ["operational_resilience"], env-overridable). So eligibility now
+//     generalises to ANY framework/topic once calibrated, with the track set
+//     retained solely as the uncalibrated back-compat fallback. Non-borderline
+//     or opted-out cells are LOCKED: verdict/score untouched (hysteresis).
+//   • k (GENERALISED): effectiveVerdictStabilityK(measure) uses the calibrated
+//     per-measure k when present, else the global default verdictStabilityK().
 //   • Resolution for eligible cells: take the strict majority of the k samples.
 //     Threshold = floor(n/2) + 1 over the n VALID (Yes/No) samples. A tie (no
 //     side reaches the threshold) KEEPS the first-pass verdict — never flip on a
@@ -32,6 +40,8 @@ import {
   flipProneTracks,
   verdictStabilityBorderlineConfidence,
   confidenceToNumber,
+  perMeasureVerdictStabilityK,
+  verdictStabilityK,
 } from "./scoring-fix-flags.js";
 
 /** Canonical binary verdicts. */
@@ -105,17 +115,38 @@ export function isBorderlineCell(
   return confidenceToNumber(result?.confidence) < borderlineConfidence;
 }
 
-/** PURE: a cell is eligible for stabilisation iff its track is flip-prone AND it
- *  is borderline. Everything else is LOCKED (hysteresis). */
+/** PURE: a cell is eligible for stabilisation. GENERALISED (per-measure-k driven):
+ *   1. A cell must first be BORDERLINE — otherwise it is LOCKED (hysteresis),
+ *      regardless of any calibrated k.
+ *   2. If the measure carries a CALIBRATED per-measure k (not null), that value
+ *      is AUTHORITATIVE: eligible iff k > 1 (a stored k=1 means the measure was
+ *      empirically stable and opted OUT of stabilisation). No track involved.
+ *   3. Otherwise (UNCALIBRATED / null k) fall back to the legacy track gate
+ *      (flip-prone track set) for backward compatibility.
+ *  This makes eligibility work for ANY framework/topic once calibrated, while
+ *  preserving today's behaviour for measures that have not yet been calibrated. */
 export function isStabilityEligible(
   measure: any,
   result: StabilisableResult,
   opts?: { tracks?: string[]; borderlineConfidence?: number },
 ): boolean {
-  return (
-    isFlipProneTrack(measure, opts?.tracks) &&
-    isBorderlineCell(result, opts?.borderlineConfidence)
-  );
+  if (!isBorderlineCell(result, opts?.borderlineConfidence)) return false;
+  const pmK = perMeasureVerdictStabilityK(measure);
+  if (typeof pmK === "number") {
+    // Calibrated: the per-measure k is authoritative. k=1 → locked.
+    return pmK > 1;
+  }
+  // Uncalibrated: back-compat track gate.
+  return isFlipProneTrack(measure, opts?.tracks);
+}
+
+/** GENERALISED: resolve the effective majority-vote k for a measure. When the
+ *  measure carries a calibrated per-measure k it is authoritative (floored at 1);
+ *  otherwise fall back to the global default verdictStabilityK(). Topic-agnostic. */
+export function effectiveVerdictStabilityK(measure: any): number {
+  const pmK = perMeasureVerdictStabilityK(measure);
+  if (typeof pmK === "number") return pmK >= 1 ? pmK : 1;
+  return verdictStabilityK();
 }
 
 /** Outcome of the pure majority resolution. */
