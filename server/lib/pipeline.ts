@@ -44,7 +44,10 @@ import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2
  corpusOverlapInstrumentEnabled, canonicalDocKey,
  corpusCoverageBarFreezeEnabled, corpusCoverageBarMaxRetries, corpusCoverageRequiredCategories, decideCoverageBarFreeze,
  fetchFloorRequiredRetryEnabled, fetchFloorMaxRetries, decideFetchFloorRetry,
- frameworkPerCompanyDocCap, mergeAutoPins, getFrameworkAutoPins, buildPinnedUrlsForRun } from "./scoring-fix-flags.js";
+ frameworkPerCompanyDocCap, mergeAutoPins, getFrameworkAutoPins, buildPinnedUrlsForRun,
+ frameworkRelatedEntities, frameworkOwnEntities, corpusDedupEnabled, nearDuplicateKey,
+ recencyCorpusPolicyEnabled, recencySoftDowngradeWeight, corpusPerCompanyCapEnabled,
+ decideRecencyCorpusCutoff, frameworkRecencyWindowYears, extractCitedSourceYear } from "./scoring-fix-flags.js";
 import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
@@ -52,7 +55,7 @@ import { extractGuidanceObject } from "./framework-guidance-audit.js"; // B4: pa
 import { buildDecisionTrace, computeFrameworkContentHash } from "./framework-v2/reliability/decision-trace.js"; // WS-B: per-decision traceability
 import { runTemporalValidation, type TemporalContext } from "./temporal-validation.js";
 import { shouldVerifyDocument, verifyDocumentCompany } from "./company-verification.js";
-import { classifyProvenance, provenanceToSourceType, isProvenanceRobustnessEnabled, type IrTenantBinding } from "./provenance.js";
+import { classifyProvenance, classifyEntityAttribution, isEntityAttributionExclusionEnabled, provenanceToSourceType, isProvenanceRobustnessEnabled, type IrTenantBinding } from "./provenance.js";
 import { deriveFmpAnchors } from "./fmp-resolver.js";
 import { traceKeep, traceDrop, traceInfo, traceMatches, TRACE_ENABLED } from "./discovery-tracer.js";
 import { deriveAliases } from "./issuer-resolver.js";
@@ -3138,6 +3141,38 @@ async function runAnalyzePhase(opts: {
         .filter((n: string) => n && n.length >= 4);
     } catch { /* peers optional */ }
   }
+  // ─── Phase A corpus acceptance gate (WS1 + WS2) — single auditable chokepoint ──
+  // Order (per the robustness plan): (a) entity-attribution exclusion, (b) near-
+  // duplicate collapse — both applied per-doc INSIDE the loop below; (c) recency
+  // policy and (d) per-company cap applied to the assembled arrays AFTER the loop.
+  // Every excluded doc is quarantined (logged with a machine-readable reason_code),
+  // never silently dropped. All stages fail-open when their config is undeclared.
+  const corpusTargetName = (company as any)?.name || companyName;
+  // (a) FOREIGN relationship set (peers + parents) — drives entity exclusion.
+  const relatedEntitiesForCorpus = frameworkRelatedEntities(framework as any, corpusTargetName);
+  // Fold the target's OWN declared subsidiaries into its identity so THEIR
+  // disclosures are recognised as first-party (names→aliases, domains→relatedDomains).
+  const ownEntitiesForCorpus = frameworkOwnEntities(framework as any, corpusTargetName);
+  for (const oe of ownEntitiesForCorpus) {
+    for (const d of oe.domains || []) {
+      const norm = (d || "").replace(/^www\./, "").toLowerCase().trim();
+      if (norm && !relatedDomainsForCorpus.includes(norm)) relatedDomainsForCorpus.push(norm);
+    }
+    if (oe.name && !companyAliasesForCorpus.includes(oe.name)) companyAliasesForCorpus.push(oe.name);
+    for (const a of oe.aliases || []) {
+      if (a && !companyAliasesForCorpus.includes(a)) companyAliasesForCorpus.push(a);
+    }
+  }
+  const entityExclusionEnabled = isEntityAttributionExclusionEnabled() && relatedEntitiesForCorpus.length > 0;
+  const nearDupEnabled = corpusDedupEnabled();
+  const foreignEntityDocIds = new Set<number>();
+  const seenContentKeys = new Set<string>();
+  let quarantinedForeign = 0;
+  let quarantinedNearDup = 0;
+  // Machine-readable quarantine record: a single grep-able line per excluded doc.
+  const quarantineDoc = (docId: number, url: string, reasonCode: string, detail: string) => {
+    console.log(`[${companyName}] QUARANTINE doc=${docId} url=${url} reason_code=${reasonCode} detail=${detail}`);
+  };
   for (const doc of fetchedDocs) {
     if (!doc.content) continue;
     // FMP transcript lane (§3.5): earnings_transcript documents carry executive-only
@@ -3163,6 +3198,46 @@ async function runAnalyzePhase(opts: {
       }
       if (ab.decision === "deprioritize") aboutnessWeights.set(doc.url, ABOUTNESS_DEPRIORITIZE_WEIGHT);
     }
+    // WS1 (a): entity-attribution exclusion. A document that resolves to a
+    // declared related listed company / parent / peer — but NOT the target —
+    // is quarantined here, BEFORE provenance classification, so a shared/parent
+    // brand domain can never promote it to the target's own evidence (the Glovis
+    // ↛ HMC leak). Gated + fail-open (no relatedEntities ⇒ this block is skipped).
+    if (entityExclusionEnabled) {
+      const ea = classifyEntityAttribution({
+        url: doc.url,
+        title: doc.title,
+        content: doc.content,
+        companyDomain: classifyCompanyDomainForCorpus,
+        relatedDomains: relatedDomainsForCorpus,
+        companyName: corpusTargetName,
+        companyTicker: classifyCompanyTickerForCorpus,
+        companyAliases: companyAliasesForCorpus,
+        relatedEntities: relatedEntitiesForCorpus,
+      });
+      if (ea.foreign) {
+        foreignEntityDocIds.add(doc.id);
+        quarantinedForeign++;
+        quarantineDoc(doc.id, doc.url, "foreign_entity", `${ea.reason}${ea.matchedEntity ? ` entity="${ea.matchedEntity}"` : ""}`);
+        if (TRACE_ENABLED && traceMatches(doc.url)) traceDrop(companyName, "S14.entityAttribution", doc.url, ea.reason);
+        continue;
+      }
+    }
+    // WS2 (b): near-duplicate collapse. Two URLs serving the same document
+    // fingerprint to the same content hash; the first is accepted, the rest are
+    // quarantined so the per-company cap budget is not spent on duplicates.
+    if (nearDupEnabled) {
+      const dupKey = nearDuplicateKey(doc.content);
+      if (dupKey) {
+        if (seenContentKeys.has(dupKey)) {
+          quarantinedNearDup++;
+          quarantineDoc(doc.id, doc.url, "near_duplicate", `content hash ${dupKey.slice(0, 12)} already accepted`);
+          if (TRACE_ENABLED && traceMatches(doc.url)) traceDrop(companyName, "S14.nearDup", doc.url, "near-duplicate content");
+          continue;
+        }
+        seenContentKeys.add(dupKey);
+      }
+    }
     // Re-classify with full content; a document tagged third_party at
     // discovery time (title-only) may reveal an identity match once fetched.
     const prov = classifyProvenance({
@@ -3178,6 +3253,10 @@ async function runAnalyzePhase(opts: {
       companySecCik: companySecCikForCorpus,
       knownIrTenants: irTenantCacheContent,
       domainPolicies: domainPolicyMapContent,
+      // Defence-in-depth: the classifier applies the SAME entity-attribution
+      // exclusion internally (overriding its brand-token rescue), so non-pipeline
+      // callers are protected too. Harmless here — foreign docs already skipped.
+      relatedEntities: relatedEntitiesForCorpus,
     });
     const priorSourceType = (doc as any).source_type || (doc as any).sourceType || null;
     if (prov.provenance === "issuer" && priorSourceType === "third_party") {
@@ -3282,8 +3361,21 @@ async function runAnalyzePhase(opts: {
     documentUrls.length = 0;
     documentTitles.length = 0;
     documentIds.length = 0;
+    // The refill is a provenance safety net ONLY — it must still honour the WS1
+    // entity-attribution exclusion (never re-admit a foreign parent/peer doc) and
+    // WS2 near-duplicate collapse, otherwise a mis-classified-domain refill would
+    // silently re-introduce the cross-entity leak the gate just removed.
+    const refillSeenKeys = new Set<string>();
     for (const doc of fetchedDocs) {
       if (!doc.content || doc.content.length <= 50) continue;
+      if (foreignEntityDocIds.has(doc.id)) continue;
+      if (nearDupEnabled) {
+        const k = nearDuplicateKey(doc.content);
+        if (k) {
+          if (refillSeenKeys.has(k)) continue;
+          refillSeenKeys.add(k);
+        }
+      }
       documentTexts.push(doc.content);
       documentUrls.push(doc.url);
       documentTitles.push(doc.title || doc.url);
@@ -3356,6 +3448,89 @@ async function runAnalyzePhase(opts: {
         console.warn(`[${companyName}] FIX3/PROVENANCE_REFILL_TELEMETRY: failed to persist refill telemetry (non-fatal): ${telErr?.message}`);
       }
     }
+  }
+
+  // ─── Phase A corpus acceptance gate (WS3 + WS2) — stages (c) recency, (d) cap ──
+  // Applied to the ASSEMBLED aligned arrays after (a) entity exclusion and (b) near-
+  // dup collapse ran per-doc in the loop above (and after any refill). Order matters:
+  // recency prunes aging/superseded evidence first, THEN the per-company cap budget is
+  // spent only on clean, in-scope, recent docs. Both stages fail-open and quarantine.
+  //
+  // (c) RECENCY POLICY (WS3) — data-driven hard cutoff + soft downgrade, fail-open.
+  if (recencyCorpusPolicyEnabled() && documentTexts.length > 0) {
+    const recencyWindowYears = frameworkRecencyWindowYears(framework as any);
+    if (recencyWindowYears != null && recencyWindowYears > 0) {
+      const docYears = documentUrls.map((u, i) => extractCitedSourceYear(u, documentTitles[i]));
+      const rec = decideRecencyCorpusCutoff({
+        docYears,
+        windowYears: recencyWindowYears,
+        currentYear: new Date().getFullYear(),
+      });
+      // Hard cutoff: quarantine + remove docs older than the window (only when the
+      // cutoff left a non-empty in-window/undated set — fail-open returns zero drops).
+      if (rec.droppedIndices.length > 0) {
+        for (const i of rec.droppedIndices) {
+          quarantineDoc(documentIds[i], documentUrls[i], "recency_cutoff", `cited year ${docYears[i] ?? "unknown"} older than ${recencyWindowYears}y window`);
+        }
+        const keep = new Set(rec.keepIndices);
+        const nextTexts: string[] = [];
+        const nextUrls: string[] = [];
+        const nextTitles: string[] = [];
+        const nextIds: number[] = [];
+        for (let i = 0; i < documentTexts.length; i++) {
+          if (!keep.has(i)) continue;
+          nextTexts.push(documentTexts[i]);
+          nextUrls.push(documentUrls[i]);
+          nextTitles.push(documentTitles[i]);
+          nextIds.push(documentIds[i]);
+        }
+        documentTexts.length = 0; documentTexts.push(...nextTexts);
+        documentUrls.length = 0; documentUrls.push(...nextUrls);
+        documentTitles.length = 0; documentTitles.push(...nextTitles);
+        documentIds.length = 0; documentIds.push(...nextIds);
+        console.log(`[${companyName}] RECENCY cutoff: ${rec.reason}`);
+      }
+      // Soft downgrade (fail-open branch): nothing in-window — keep everything but
+      // register a ranking multiplier on the aging docs so the measure is never
+      // starved to zero purely on recency. Merge into the aboutness weight map and
+      // re-publish it so the passage retriever consumes the combined weighting.
+      if (rec.failOpen && rec.agingIndices.length > 0) {
+        const softWeight = recencySoftDowngradeWeight();
+        for (const i of rec.agingIndices) {
+          const url = documentUrls[i];
+          const prev = aboutnessWeights.get(url);
+          aboutnessWeights.set(url, Math.min(prev ?? 1, softWeight));
+        }
+        setAboutnessDocWeights(companyId, aboutnessWeights);
+        console.warn(`[${companyName}] RECENCY fail-open: ${rec.reason}; soft-downgraded ${rec.agingIndices.length} aging doc(s) to weight ${softWeight}`);
+      }
+    }
+  }
+
+  // (d) PER-COMPANY CAP (WS2) — applied LAST so the budget covers only clean, in-
+  // scope, recent docs. Cap VALUE is framework DATA (null ⇒ no cap, fail-open).
+  if (corpusPerCompanyCapEnabled()) {
+    const perCompanyCap = frameworkPerCompanyDocCap(framework as any);
+    if (perCompanyCap != null && perCompanyCap > 0 && documentTexts.length > perCompanyCap) {
+      for (let i = perCompanyCap; i < documentTexts.length; i++) {
+        quarantineDoc(documentIds[i], documentUrls[i], "per_company_cap", `exceeds per-company cap ${perCompanyCap} (position ${i + 1})`);
+      }
+      console.log(`[${companyName}] PER-COMPANY CAP: truncating corpus from ${documentTexts.length} to ${perCompanyCap} doc(s)`);
+      documentTexts.length = perCompanyCap;
+      documentUrls.length = perCompanyCap;
+      documentTitles.length = perCompanyCap;
+      documentIds.length = perCompanyCap;
+    }
+  }
+
+  // Single auditable ACCEPTANCE GATE summary line (grep-able) covering the whole
+  // chokepoint: what was quarantined by each stage and the final accepted count.
+  if (quarantinedForeign > 0 || quarantinedNearDup > 0) {
+    console.log(
+      `[${companyName}] ACCEPTANCE GATE: quarantined foreign_entity=${quarantinedForeign}, ` +
+      `near_duplicate=${quarantinedNearDup}; entityExclusion=${entityExclusionEnabled ? "on" : "off"}, ` +
+      `nearDup=${nearDupEnabled ? "on" : "off"}; accepted=${documentTexts.length}`
+    );
   }
 
   // ─── Temporal Validation Step ──────────────────────────────────────────────

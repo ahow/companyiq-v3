@@ -2225,3 +2225,237 @@ export function decideRelatedListedExclusion(opts: {
   }
   return { reject: false, reason: "no related-listed entity named in supporting quotes" };
 }
+
+
+// ── Phase A (WS1/WS2/WS3) — corpus acceptance gate helpers ───────────────────
+// A single auditable chokepoint in pipeline.ts applies, in order:
+//   (a) WS1 entity-attribution exclusion  — classifyEntityAttribution (provenance.ts)
+//   (b) WS2 near-duplicate collapse        — nearDuplicateKey / dedupByContentKey
+//   (c) WS3 recency policy                 — decideRecencyCorpusCutoff
+//   (d) WS2 per-company cap                — frameworkPerCompanyDocCap (above)
+// Every helper is PURE and framework-agnostic; FW25 specifics live only in the
+// migration DATA. Each stage is gated by an env flag defaulting ON and is a
+// no-op / fail-open when its backing config is undeclared.
+
+/** A related listed company / parent / peer / subsidiary descriptor as declared
+ *  in framework config. Entries may be supplied as a plain name string OR this
+ *  richer shape carrying aliases and known domains (so a NAME→DOMAIN relationship
+ *  can be bridged by the entity-attribution matcher). */
+export interface RelatedEntityDescriptor {
+  name?: string | null;
+  aliases?: string[] | null;
+  domains?: string[] | null;
+}
+
+/** Resolve a per-company list of entity DESCRIPTORS from a framework config value
+ *  that is EITHER a flat list (applies to every company) OR a Record<companyName,
+ *  list> keyed case-insensitively (with "*" / "__all__" wildcard). List entries
+ *  may be plain name strings or { name, aliases, domains } objects. Fully generic:
+ *  names live in DATA, never in logic. Deduped by (name, aliases, domains). */
+export function resolvePerCompanyEntities(configValue: unknown, companyName: string): RelatedEntityDescriptor[] {
+  const out: RelatedEntityDescriptor[] = [];
+  const seen = new Set<string>();
+  const asDescriptor = (e: unknown): RelatedEntityDescriptor | null => {
+    if (typeof e === "string") {
+      const v = e.trim();
+      return v ? { name: v, aliases: [], domains: [] } : null;
+    }
+    if (e && typeof e === "object") {
+      const o = e as Record<string, unknown>;
+      const name = typeof o.name === "string" ? o.name.trim() : "";
+      const aliases = Array.isArray(o.aliases)
+        ? o.aliases.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim())
+        : [];
+      const domains = Array.isArray(o.domains)
+        ? o.domains.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => normalizeDomain(x)).filter((x) => x.length > 0)
+        : [];
+      if (name || aliases.length || domains.length) return { name: name || null, aliases, domains };
+    }
+    return null;
+  };
+  const push = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    for (const e of list) {
+      const d = asDescriptor(e);
+      if (!d) continue;
+      const key = JSON.stringify([
+        (d.name || "").toLowerCase(),
+        (d.aliases || []).map((a) => a.toLowerCase()).sort(),
+        (d.domains || []).map((x) => x.toLowerCase()).sort(),
+      ]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(d);
+    }
+  };
+  if (Array.isArray(configValue)) {
+    push(configValue);
+    return out;
+  }
+  if (configValue && typeof configValue === "object") {
+    const map = configValue as Record<string, unknown>;
+    push(map["*"]);
+    push(map["__all__"]);
+    const want = String(companyName || "").trim().toLowerCase();
+    if (want) {
+      for (const [k, v] of Object.entries(map)) {
+        if (k === "*" || k === "__all__") continue;
+        if (k.trim().toLowerCase() === want) push(v);
+      }
+    }
+    return out;
+  }
+  return out;
+}
+
+/** Merge + dedup two descriptor lists, preserving first-seen order. */
+function mergeEntityDescriptors(a: RelatedEntityDescriptor[], b: RelatedEntityDescriptor[]): RelatedEntityDescriptor[] {
+  const out: RelatedEntityDescriptor[] = [];
+  const seen = new Set<string>();
+  for (const d of [...a, ...b]) {
+    const key = JSON.stringify([
+      (d.name || "").toLowerCase(),
+      (d.aliases || []).map((x) => x.toLowerCase()).sort(),
+      (d.domains || []).map((x) => x.toLowerCase()).sort(),
+    ]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  return out;
+}
+
+/** FOREIGN relationship set for the company being scored: separately-listed peers
+ *  (related_listed_companies) + parent/holding entities (parent_entities). A
+ *  document resolving to any of these — but not the target — is foreign evidence.
+ *  Undeclared ⇒ [] ⇒ entity-attribution exclusion is inert (fail-open). */
+export function frameworkRelatedEntities(framework: any, companyName: string): RelatedEntityDescriptor[] {
+  const fw: any = framework || {};
+  const peers = resolvePerCompanyEntities(fw.relatedListedCompanies ?? fw.related_listed_companies, companyName);
+  const parents = resolvePerCompanyEntities(fw.parentEntities ?? fw.parent_entities, companyName);
+  return mergeEntityDescriptors(peers, parents);
+}
+
+/** OWN relationship set for the company being scored: its declared subsidiaries
+ *  (subsidiary_entities). Their disclosures ARE the target's own evidence, so the
+ *  caller folds their names→aliases and domains→relatedDomains into the target
+ *  identity. Undeclared ⇒ [] (fail-open). */
+export function frameworkOwnEntities(framework: any, companyName: string): RelatedEntityDescriptor[] {
+  const fw: any = framework || {};
+  return resolvePerCompanyEntities(fw.subsidiaryEntities ?? fw.subsidiary_entities, companyName);
+}
+
+// ── WS2 — near-duplicate collapse (content-hash) ─────────────────────────────
+
+/** Kill-switch for WS2 near-duplicate collapse. Default ON; set
+ *  CORPUS_NEAR_DUP_COLLAPSE="false" to disable. */
+export function corpusDedupEnabled(): boolean {
+  return envOnDefaultTrue("CORPUS_NEAR_DUP_COLLAPSE");
+}
+
+/** Content-fingerprint for near-duplicate collapse: a sha1 of the normalised
+ *  (lowercased, whitespace-collapsed) leading `prefixChars` of the content. Two
+ *  URLs serving the same document collapse to the same key. Returns null when the
+ *  content is too short to fingerprint reliably (⇒ never deduped — fail-open). */
+export function nearDuplicateKey(content: string | null | undefined, prefixChars = 2000): string | null {
+  if (typeof content !== "string") return null;
+  const norm = content.toLowerCase().replace(/\s+/g, " ").trim();
+  if (norm.length < 200) return null;
+  return createHash("sha1").update(norm.slice(0, prefixChars)).digest("hex");
+}
+
+/** Pure, order-preserving de-duplication over a list of content keys. A null key
+ *  (un-fingerprintable content) is always kept. The FIRST occurrence of each key
+ *  is kept; later occurrences are dropped. */
+export function dedupByContentKey(keys: Array<string | null>): { keepIndices: number[]; droppedIndices: number[] } {
+  const keepIndices: number[] = [];
+  const droppedIndices: number[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (k == null) {
+      keepIndices.push(i);
+      continue;
+    }
+    if (seen.has(k)) droppedIndices.push(i);
+    else {
+      seen.add(k);
+      keepIndices.push(i);
+    }
+  }
+  return { keepIndices, droppedIndices };
+}
+
+// ── WS3 — recency corpus policy (hard cutoff + soft downgrade, fail-open) ─────
+
+/** Kill-switch for the WS3 recency CORPUS policy (distinct from the scoring-time
+ *  final date gate decideRecencyWindowGate). Default ON; set
+ *  RECENCY_CORPUS_POLICY="false" to disable — enables an A/B on one corpus. */
+export function recencyCorpusPolicyEnabled(): boolean {
+  return envOnDefaultTrue("RECENCY_CORPUS_POLICY");
+}
+
+/** Ranking multiplier (0..1] applied to aging evidence kept under the recency
+ *  fail-open branch. Env RECENCY_SOFT_DOWNGRADE_WEIGHT (default 0.5). */
+export function recencySoftDowngradeWeight(): number {
+  const w = envFloat("RECENCY_SOFT_DOWNGRADE_WEIGHT", 0.5);
+  return w > 0 && w <= 1 ? w : 0.5;
+}
+
+/** Kill-switch for applying the per-company corpus cap at the acceptance gate
+ *  (WS2 step d). Default ON; set CORPUS_PER_COMPANY_CAP="false" to disable. The
+ *  cap VALUE still comes from frameworkPerCompanyDocCap (null ⇒ no cap). */
+export function corpusPerCompanyCapEnabled(): boolean {
+  return envOnDefaultTrue("CORPUS_PER_COMPANY_CAP");
+}
+
+/** Pure recency decision over a corpus of documents (parallel to the aligned
+ *  document arrays). `docYears[i]` is the extracted publication year of document i
+ *  (null = undated). Behaviour:
+ *   - No window declared ⇒ keep all (fail-open).
+ *   - Otherwise keep in-window + undated docs; drop docs OLDER than the window
+ *     (they are superseded by newer/undated evidence).
+ *   - FAIL-OPEN: if applying the cutoff would leave ZERO docs (nothing in-window
+ *     and nothing undated), keep ALL docs and mark the older ones as `agingIndices`
+ *     so the caller can soft-downgrade rather than starve the measure to zero.
+ *  Returns index partitions so the caller can rebuild its aligned arrays. */
+export function decideRecencyCorpusCutoff(opts: {
+  docYears: Array<number | null>;
+  windowYears: number | null;
+  currentYear: number;
+}): { keepIndices: number[]; droppedIndices: number[]; agingIndices: number[]; failOpen: boolean; reason: string } {
+  const n = opts.docYears.length;
+  const all = Array.from({ length: n }, (_, i) => i);
+  if (opts.windowYears == null || opts.windowYears <= 0) {
+    return { keepIndices: all, droppedIndices: [], agingIndices: [], failOpen: false, reason: "no recency window declared (fail-open)" };
+  }
+  const minYear = opts.currentYear - opts.windowYears;
+  const inWindow: number[] = [];
+  const older: number[] = [];
+  const undated: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const y = opts.docYears[i];
+    if (y == null) undated.push(i);
+    else if (y >= minYear) inWindow.push(i);
+    else older.push(i);
+  }
+  if (inWindow.length === 0 && undated.length === 0) {
+    // Nothing recent or undated — keeping only in-window would starve the measure
+    // to zero. Keep everything; the older docs become "aging" for soft downgrade.
+    return {
+      keepIndices: all,
+      droppedIndices: [],
+      agingIndices: older.slice(),
+      failOpen: true,
+      reason: `no in-window/undated docs; keeping all ${n} aging doc(s) (fail-open — never starve to zero)`,
+    };
+  }
+  const keepIndices = [...inWindow, ...undated].sort((a, b) => a - b);
+  return {
+    keepIndices,
+    droppedIndices: older.slice(),
+    agingIndices: [],
+    failOpen: false,
+    reason: `kept ${keepIndices.length} in-window/undated doc(s), dropped ${older.length} older than ${minYear} (window ${opts.windowYears}y from ${opts.currentYear})`,
+  };
+}

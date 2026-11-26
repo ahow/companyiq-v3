@@ -17,6 +17,13 @@ import {
   unionOwnDomains,
   decideTiebreakRetry,
   formatVoteString,
+  // Phase A — WS2 dedup + WS3 recency pure helpers
+  nearDuplicateKey,
+  dedupByContentKey,
+  decideRecencyCorpusCutoff,
+  resolvePerCompanyEntities,
+  frameworkRelatedEntities,
+  frameworkOwnEntities,
 } from "./scoring-fix-flags.js";
 
 // ── F1: freezeFrameworkKey — lineage vs id selection ─────────────────────────
@@ -121,4 +128,140 @@ test("F6 decideTiebreakRetry: three-way even split counts as a tie", () => {
 
 test("F6 decideTiebreakRetry: single substantive pass is not a tie", () => {
   assert.equal(decideTiebreakRetry({ flagOn: true, substantiveScores: [1], failedPassCount: 1 }), false);
+});
+
+
+// ─── WS2 — near-duplicate collapse (nearDuplicateKey + dedupByContentKey) ─────
+
+test("WS2 nearDuplicateKey: identical content ⇒ identical key, regardless of whitespace", () => {
+  const body = "Physical climate resilience disclosure. ".repeat(20); // > 200 chars
+  const a = nearDuplicateKey(body);
+  const b = nearDuplicateKey("  " + body.replace(/ /g, "\n") + "   ");
+  assert.ok(a, "key should be produced for long content");
+  assert.equal(a, b);
+});
+
+test("WS2 nearDuplicateKey: different content ⇒ different key", () => {
+  const a = nearDuplicateKey("Alpha resilience disclosure. ".repeat(20));
+  const b = nearDuplicateKey("Beta continuity statement. ".repeat(20));
+  assert.notEqual(a, b);
+});
+
+test("WS2 nearDuplicateKey: short content ⇒ null (fail-open, never deduped)", () => {
+  assert.equal(nearDuplicateKey("too short"), null);
+  assert.equal(nearDuplicateKey(""), null);
+  assert.equal(nearDuplicateKey(null), null);
+  assert.equal(nearDuplicateKey(undefined), null);
+});
+
+test("WS2 dedupByContentKey: collapses later duplicates, keeps first occurrence", () => {
+  const keys = ["h1", "h2", "h1", "h3", "h2"];
+  const { keepIndices, droppedIndices } = dedupByContentKey(keys);
+  assert.deepEqual(keepIndices, [0, 1, 3]);
+  assert.deepEqual(droppedIndices, [2, 4]);
+});
+
+test("WS2 dedupByContentKey: null keys are always kept (un-fingerprintable)", () => {
+  const keys = [null, "h1", null, "h1"];
+  const { keepIndices, droppedIndices } = dedupByContentKey(keys);
+  assert.deepEqual(keepIndices, [0, 1, 2]); // both nulls + first h1
+  assert.deepEqual(droppedIndices, [3]);    // second h1 only
+});
+
+// ─── WS3 — recency corpus policy (decideRecencyCorpusCutoff) ──────────────────
+
+test("WS3 recency: normal cutoff drops docs older than the window, keeps in-window", () => {
+  // window 4y from 2026 ⇒ minYear 2022. 2020 & 2019 are older.
+  const r = decideRecencyCorpusCutoff({
+    docYears: [2026, 2024, 2020, 2019, 2023],
+    windowYears: 4,
+    currentYear: 2026,
+  });
+  assert.deepEqual(r.keepIndices, [0, 1, 4]);
+  assert.deepEqual(r.droppedIndices, [2, 3]);
+  assert.deepEqual(r.agingIndices, []);
+  assert.equal(r.failOpen, false);
+});
+
+test("WS3 recency: undated docs are KEPT (never dropped on recency)", () => {
+  const r = decideRecencyCorpusCutoff({
+    docYears: [null, 2018, 2025],
+    windowYears: 4,
+    currentYear: 2026,
+  });
+  assert.ok(r.keepIndices.includes(0), "undated kept");
+  assert.ok(r.keepIndices.includes(2), "in-window kept");
+  assert.deepEqual(r.droppedIndices, [1]);
+  assert.equal(r.failOpen, false);
+});
+
+test("WS3 recency FAIL-OPEN: all docs older than window ⇒ keep ALL, mark aging", () => {
+  // Nothing in-window and nothing undated — must NOT starve to zero.
+  const r = decideRecencyCorpusCutoff({
+    docYears: [2015, 2016, 2017],
+    windowYears: 4,
+    currentYear: 2026,
+  });
+  assert.deepEqual(r.keepIndices, [0, 1, 2]);
+  assert.deepEqual(r.droppedIndices, []);
+  assert.deepEqual(r.agingIndices, [0, 1, 2]);
+  assert.equal(r.failOpen, true);
+  assert.match(r.reason, /fail-open/);
+});
+
+test("WS3 recency: no window declared ⇒ keep all (fail-open)", () => {
+  const r = decideRecencyCorpusCutoff({ docYears: [2010, 2026], windowYears: null, currentYear: 2026 });
+  assert.deepEqual(r.keepIndices, [0, 1]);
+  assert.deepEqual(r.droppedIndices, []);
+  assert.equal(r.failOpen, false);
+});
+
+// ─── WS1 — per-company entity descriptor resolution (data shapes) ─────────────
+
+test("WS1 resolvePerCompanyEntities: descriptor shape with domains for the named company", () => {
+  const cfg = {
+    "Hyundai Glovis": [
+      { name: "Hyundai Motor Company", aliases: ["Hyundai Motor", "HMC"], domains: ["hyundai.com"] },
+    ],
+  };
+  const out = resolvePerCompanyEntities(cfg, "Hyundai Glovis");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, "Hyundai Motor Company");
+  assert.deepEqual(out[0].domains, ["hyundai.com"]);
+  assert.deepEqual(out[0].aliases, ["Hyundai Motor", "HMC"]);
+});
+
+test("WS1 resolvePerCompanyEntities: case-insensitive key match + unrelated company ⇒ empty", () => {
+  const cfg = { "Hyundai Glovis": [{ name: "Hyundai Motor Company", domains: ["hyundai.com"] }] };
+  assert.equal(resolvePerCompanyEntities(cfg, "hyundai glovis").length, 1);
+  assert.equal(resolvePerCompanyEntities(cfg, "Michelin").length, 0);
+});
+
+test("WS1 resolvePerCompanyEntities: legacy names-only array shape still parses (backward compat)", () => {
+  const cfg = { "Hyundai Glovis": ["Hyundai Motor Company"] };
+  const out = resolvePerCompanyEntities(cfg, "Hyundai Glovis");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, "Hyundai Motor Company");
+  assert.deepEqual(out[0].domains, []);
+});
+
+test("WS1 resolvePerCompanyEntities: flat array applies to every company", () => {
+  const cfg = [{ name: "Parent Co", domains: ["parent.com"] }];
+  assert.equal(resolvePerCompanyEntities(cfg, "Anyone").length, 1);
+});
+
+test("WS1 frameworkRelatedEntities/frameworkOwnEntities: undeclared ⇒ [] (fail-open)", () => {
+  assert.deepEqual(frameworkRelatedEntities({}, "Hyundai Glovis"), []);
+  assert.deepEqual(frameworkOwnEntities({}, "Hyundai Glovis"), []);
+  assert.deepEqual(frameworkRelatedEntities(null, "X"), []);
+});
+
+test("WS1 frameworkRelatedEntities: merges related_listed_companies + parent_entities", () => {
+  const fw = {
+    related_listed_companies: { "Hyundai Glovis": [{ name: "Hyundai Motor Company", domains: ["hyundai.com"] }] },
+    parent_entities: { "Hyundai Glovis": [{ name: "Hyundai Holdings", domains: ["holdings.example"] }] },
+  };
+  const out = frameworkRelatedEntities(fw, "Hyundai Glovis");
+  const names = out.map((e) => e.name).sort();
+  assert.deepEqual(names, ["Hyundai Holdings", "Hyundai Motor Company"]);
 });
