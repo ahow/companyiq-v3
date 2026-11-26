@@ -47,7 +47,9 @@ import { rc2CoverageSuspectMinSourcedRatio, r2SuspectExpectedSourcingEnabled, p2
  frameworkPerCompanyDocCap, mergeAutoPins, getFrameworkAutoPins, buildPinnedUrlsForRun,
  frameworkRelatedEntities, frameworkOwnEntities, corpusDedupEnabled, nearDuplicateKey,
  recencyCorpusPolicyEnabled, recencySoftDowngradeWeight, corpusPerCompanyCapEnabled,
- decideRecencyCorpusCutoff, frameworkRecencyWindowYears, extractCitedSourceYear } from "./scoring-fix-flags.js";
+ decideRecencyCorpusCutoff, frameworkRecencyWindowYears, extractCitedSourceYear,
+ autoSnapshotFreshRunsEnabled } from "./scoring-fix-flags.js";
+import { shouldAutoSnapshot, persistAutoSnapshot } from "./auto-snapshot.js";
 import { resolveFrozenCorpus, RetrievalFunnel } from "./retrieval-funnel.js";
 import { runBoundedPool } from "./bounded-pool.js";
 import { computeMissingRequiredDocTypes, planCompletenessResearch, buildDocTypeResearchQuery } from "./completeness-research.js";
@@ -3002,6 +3004,66 @@ async function runAnalyzePhase(opts: {
   } else {
     // No batch context — use the full document pool
     fetchedDocs = await storage.getAllFetchedDocumentsForCompany(companyId);
+  }
+
+  // ─── WS6: AUTO-SNAPSHOT on fetch-skipped (fresh) runs ─────────────────────
+  // `fetchedDocs` is now the exact evidence set that will be scored for this
+  // (batch, company). When the fetch phase was skipped (e.g. SCORE_ONLY_REPLAY
+  // loading the corpus from a per-(company, framework) frozen_corpus_snapshot),
+  // the batch_corpus INSERT at the end of runFetchPhase never fired, so without
+  // this the batch ends up with snapshot_saved=TRUE but ZERO batch_corpus rows.
+  // Persist a snapshot of exactly these document IDs so every completed batch is
+  // self-auditable for determinism.
+  //
+  // Behind the AUTO_SNAPSHOT_FRESH_RUNS flag (default OFF). Skipped for replays
+  // (sourceBatchId present) — those already pin their corpus via the REPLAY
+  // CORPUS PIN path above. Fully fail-safe: purely additive, idempotent
+  // (existence guard + ON CONFLICT DO NOTHING), and can never throw into scoring
+  // or change which documents are scored.
+  {
+    const autoSnapDocIds = fetchedDocs.map((d: any) => d.id as number);
+    if (
+      shouldAutoSnapshot({
+        flagEnabled: autoSnapshotFreshRunsEnabled(),
+        batchId: batchId ?? null,
+        sourceBatchId: replayBatchId,
+        documentIds: autoSnapDocIds,
+      })
+    ) {
+      await persistAutoSnapshot({
+        batchId: batchId as number,
+        companyId,
+        documentIds: autoSnapDocIds,
+        logLabel: `[${companyName}]`,
+        execute: async ({ batchId: bId, companyId: cId, documentIds }) => {
+          const { db: dbImport } = await import("../db.js");
+          const { sql: sqlImport } = await import("drizzle-orm");
+          // Existence guard mirrors the runFetchPhase snapshot block: never
+          // augment an already-frozen snapshot (snapshot immutability).
+          const existing = await dbImport.execute(sqlImport`
+            SELECT 1 FROM batch_corpus
+            WHERE batch_id = ${bId} AND company_id = ${cId}
+            LIMIT 1
+          `);
+          if (existing.rows.length > 0) {
+            console.log(`[${companyName}] AUTO SNAPSHOT: already frozen for batch ${bId} — skipping INSERT (snapshot immutability)`);
+            return;
+          }
+          // Insert exactly the scored document IDs. ON CONFLICT DO NOTHING keeps
+          // it idempotent against concurrent writers.
+          const values = sqlImport.join(
+            documentIds.map((docId) => sqlImport`(${bId}, ${cId}, ${docId})`),
+            sqlImport`, `,
+          );
+          await dbImport.execute(sqlImport`
+            INSERT INTO batch_corpus (batch_id, company_id, document_id)
+            VALUES ${values}
+            ON CONFLICT DO NOTHING
+          `);
+          console.log(`[${companyName}] AUTO SNAPSHOT: frozen ${documentIds.length} docs for fetch-skipped batch ${bId}`);
+        },
+      });
+    }
   }
 
   if (fetchedDocs.length === 0) {

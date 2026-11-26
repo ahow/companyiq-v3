@@ -604,6 +604,23 @@ export function scoreOnlyReplayEnabled(): boolean {
   return envOnDefaultFalse("SCORE_ONLY_REPLAY");
 }
 
+/** WS6 — auto-snapshot on fresh runs. Default OFF.
+ *  When ON, a run whose fetch phase was skipped (e.g. SCORE_ONLY_REPLAY loading
+ *  the corpus from a per-(company,framework) frozen_corpus_snapshot) still
+ *  persists a `batch_corpus` snapshot for the current batch, containing exactly
+ *  the document IDs actually used for scoring. This closes the gap where such
+ *  "fresh" runs ended up with snapshot_saved=TRUE but ZERO batch_corpus rows,
+ *  because the only existing batch_corpus INSERT lives at the end of the fetch
+ *  phase (which these runs skip). It is purely additive — it only ADDS rows to
+ *  batch_corpus (idempotent, ON CONFLICT DO NOTHING), never changes which docs
+ *  are scored or any score, and is fully fail-safe (errors are swallowed).
+ *  Replays with an active sourceBatchId are NOT double-handled here — they
+ *  already pin their corpus via the REPLAY CORPUS PIN path. With it OFF
+ *  (compiled default) behaviour is byte-for-byte as before. */
+export function autoSnapshotFreshRunsEnabled(): boolean {
+  return envOnDefaultFalse("AUTO_SNAPSHOT_FRESH_RUNS");
+}
+
 /** Default OFF. Cold-start fallback for SCORE_ONLY_REPLAY. When ON, a
  *  (company, framework) pair that has NO pinned frozen_corpus_snapshot is NOT
  *  skipped — it falls through to a normal discovery + score run, which then
