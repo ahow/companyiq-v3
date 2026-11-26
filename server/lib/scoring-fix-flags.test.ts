@@ -250,6 +250,79 @@ test("WS1 resolvePerCompanyEntities: flat array applies to every company", () =>
   assert.equal(resolvePerCompanyEntities(cfg, "Anyone").length, 1);
 });
 
+// ─── Distinctive-core FALLBACK: short-name config key → full legal DB name ───
+
+test("WS1 fallback: short-name key resolves against full legal DB name (the real bug)", () => {
+  const cfg = {
+    "Hyundai Glovis": [{ name: "Hyundai Motor Company", aliases: ["HMC"], domains: ["hyundai.com"] }],
+  };
+  // DB company name is the full legal name — exact match fails, fallback must engage.
+  const out = resolvePerCompanyEntities(cfg, "HYUNDAI GLOVIS Co., LTD.");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, "Hyundai Motor Company");
+  assert.deepEqual(out[0].domains, ["hyundai.com"]);
+});
+
+test("WS1 fallback: does NOT over-match a distinct peer sharing a brand token", () => {
+  const cfg = {
+    "Hyundai Glovis": [{ name: "Hyundai Motor Company", aliases: ["HMC"], domains: ["hyundai.com"] }],
+  };
+  // {hyundai} ⊂ {hyundai,motor}? key core is {hyundai,glovis}; glovis ∉ company ⇒ no match.
+  assert.equal(resolvePerCompanyEntities(cfg, "Hyundai Motor Company").length, 0);
+});
+
+test("WS1 fallback: Santos short-name key resolves to SANTOS LIMITED", () => {
+  const cfg = { "Santos": [{ name: "Santos Peer", domains: ["peer.example"] }] };
+  const out = resolvePerCompanyEntities(cfg, "SANTOS LIMITED");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, "Santos Peer");
+});
+
+test("WS1 fallback: Michelin key (subset) resolves to full legal name", () => {
+  const cfg = { "Michelin": [{ name: "Michelin Peer", domains: ["peer.example"] }] };
+  // key core {michelin} ⊂ company core {generale,des,etablissements,michelin,sca,compagnie}
+  const out = resolvePerCompanyEntities(cfg, "COMPAGNIE GENERALE DES ETABLISSEMENTS MICHELIN SCA");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, "Michelin Peer");
+});
+
+test("WS1 fallback: exact match always wins and is never treated as ambiguous", () => {
+  const cfg = {
+    "Hyundai Glovis": [{ name: "Exact Peer", domains: ["exact.example"] }],
+    "Hyundai": [{ name: "Loose Peer", domains: ["loose.example"] }],
+  };
+  // Exact (case-insensitive) key match short-circuits the fallback entirely.
+  const out = resolvePerCompanyEntities(cfg, "Hyundai Glovis");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, "Exact Peer");
+});
+
+test("WS1 fallback: ambiguity guard — two keys subset of same company ⇒ match NONE", () => {
+  const cfg = {
+    "Hyundai": [{ name: "Peer A", domains: ["a.example"] }],
+    "Glovis": [{ name: "Peer B", domains: ["b.example"] }],
+  };
+  // Both {hyundai} and {glovis} are subsets of {hyundai,glovis} ⇒ ambiguous ⇒ [].
+  assert.equal(resolvePerCompanyEntities(cfg, "HYUNDAI GLOVIS Co., LTD.").length, 0);
+});
+
+test("WS1 fallback: wildcard match suppresses fallback (no exact/wildcard ⇒ fallback only)", () => {
+  const cfg = {
+    "*": [{ name: "All Peer", domains: ["all.example"] }],
+    "Hyundai Glovis": [{ name: "Loose Peer", domains: ["loose.example"] }],
+  };
+  // Wildcard produced an entry ⇒ fallback does not run; only the wildcard entry returns.
+  const out = resolvePerCompanyEntities(cfg, "HYUNDAI GLOVIS Co., LTD.");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, "All Peer");
+});
+
+test("WS1 fallback: generic-only key never matches (empty distinctive core)", () => {
+  const cfg = { "The Group Company Ltd": [{ name: "X", domains: ["x.example"] }] };
+  // key core is empty after dropping generic words ⇒ no fallback match.
+  assert.equal(resolvePerCompanyEntities(cfg, "SANTOS LIMITED").length, 0);
+});
+
 test("WS1 frameworkRelatedEntities/frameworkOwnEntities: undeclared ⇒ [] (fail-open)", () => {
   assert.deepEqual(frameworkRelatedEntities({}, "Hyundai Glovis"), []);
   assert.deepEqual(frameworkOwnEntities({}, "Hyundai Glovis"), []);

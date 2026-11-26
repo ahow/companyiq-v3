@@ -8,6 +8,7 @@
 //   default-OFF flag → (process.env.X || "").toLowerCase() is one of 1/true/on/yes
 
 import { createHash } from "node:crypto";
+import { distinctiveWordSet } from "./name-normalizer.js";
 
 function envOnDefaultTrue(name: string): boolean {
   return (process.env[name] || "true").toLowerCase() !== "false";
@@ -2301,6 +2302,38 @@ export function resolvePerCompanyEntities(configValue: unknown, companyName: str
       for (const [k, v] of Object.entries(map)) {
         if (k === "*" || k === "__all__") continue;
         if (k.trim().toLowerCase() === want) push(v);
+      }
+    }
+    // Distinctive-core FALLBACK — runs ONLY when neither a wildcard nor an exact
+    // key produced any entry. Framework authors naturally key related-entity
+    // config by a company's common/short name ("Hyundai Glovis") while the DB
+    // stores the full legal name ("HYUNDAI GLOVIS Co., LTD."); exact-match keying
+    // alone silently defeats the feature. We match a key to the company by
+    // comparing their normalized distinctive-word SETS (generic/corporate-form
+    // words removed via the canonical GENERIC_WORDS set). SAFE against
+    // over-matching: a key matches only when its distinctive set is a NON-EMPTY
+    // SUBSET of the company's distinctive set — so {hyundai,glovis} matches
+    // "HYUNDAI GLOVIS Co., LTD." but NOT "Hyundai Motor Company" ({hyundai,motor}).
+    // If more than one distinct key matches, the attribution is AMBIGUOUS and we
+    // match NONE (deterministic — avoids wrong attribution). Fully data-driven.
+    if (want && out.length === 0) {
+      const companyCore = distinctiveWordSet(companyName);
+      if (companyCore.size > 0) {
+        const fallbackMatches: unknown[] = [];
+        for (const [k, v] of Object.entries(map)) {
+          if (k === "*" || k === "__all__") continue;
+          const keyCore = distinctiveWordSet(k);
+          // keyCore is non-empty only if the key has ≥1 distinctive (non-generic)
+          // token, satisfying the "at least one non-generic token" requirement.
+          if (keyCore.size === 0) continue;
+          let isSubset = true;
+          for (const t of keyCore) {
+            if (!companyCore.has(t)) { isSubset = false; break; }
+          }
+          if (isSubset) fallbackMatches.push(v);
+        }
+        // Ambiguity guard: exactly one distinct key may match via the fallback.
+        if (fallbackMatches.length === 1) push(fallbackMatches[0]);
       }
     }
     return out;

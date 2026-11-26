@@ -10,6 +10,11 @@
  * 42-B: Stale-domain detection runs on every call (cache hit or miss).
  */
 import axios from "axios";
+// Canonical generic-word set + distinctive-core normalizer live in the DB-free
+// leaf module name-normalizer.ts. Imported for local use (deriveAliases) and
+// re-exported for backward compatibility with existing importers.
+import { GENERIC_WORDS, distinctiveWordSet } from "./name-normalizer.js";
+export { GENERIC_WORDS, distinctiveWordSet };
 import { db } from "../db.js";
 import { sql } from "drizzle-orm";
 import { PIPELINE_VERSION } from "./pipeline-version.js";
@@ -275,19 +280,6 @@ export function deriveAliases(
   canonicalName: string,
   ticker: string | null
 ): string[] {
-  const GENERIC_WORDS = new Set([
-    "the", "and", "for", "of", "group", "holding", "holdings", "company", "companies",
-    "corp", "corporation", "incorporated", "inc", "ltd", "limited", "llc", "plc",
-    "co", "sa", "se", "ag", "nv", "spa", "oyj", "asa", "ab", "as", "bv", "kg",
-    "international", "global", "worldwide", "industries", "industrial", "enterprise",
-    "enterprises", "technologies", "technology", "systems", "solutions", "services",
-    "products", "bank", "banking", "capital", "partners", "resources", "materials",
-    "energy", "power", "motors", "financial", "pharmaceutical", "pharmaceuticals",
-    "chemical", "chemicals", "insurance", "asset", "management", "trust",
-    "australia", "america", "american", "national", "japan", "china", "korea",
-    "hong", "kong", "india", "indian", "canada", "canadian", "uk", "british",
-  ]);
-
   const words = canonicalName
     .toLowerCase()
     .replace(/[/\\,.'()&]+/g, " ")
