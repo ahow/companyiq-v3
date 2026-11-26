@@ -2910,7 +2910,14 @@ async function runAnalyzePhase(opts: {
     // per-(company, framework) snapshot instead of a batch.
     const { db: dbImport } = await import("../db.js");
     const { sql: sqlImport } = await import("drizzle-orm");
-    const expected = await storage.getFrozenCorpus(companyId, freezeFrameworkKey({ flagOn: frameworkLineageFreezeEnabled(), frameworkId: framework.id, frameworkLineageId: (framework as any).frameworkLineageId }));
+    // FREEZE KEY: lookup AND the doc-load query must use the SAME key the corpus
+    // was written under (writeFrozenCorpus / the decision probe both use
+    // freezeFrameworkKey). With FRAMEWORK_LINEAGE_FREEZE on, a re-imported
+    // framework writes its snapshot under the stable lineage id, not the
+    // per-import framework id — so reading by framework.id here returned 0 rows
+    // and scored an empty corpus ("orphaned"). Use the freeze key for both.
+    const freezeKey = freezeFrameworkKey({ flagOn: frameworkLineageFreezeEnabled(), frameworkId: framework.id, frameworkLineageId: (framework as any).frameworkLineageId });
+    const expected = await storage.getFrozenCorpus(companyId, freezeKey);
     const snapshotRows = await dbImport.execute(sqlImport`
       SELECT d.id, d.company_id, d.url, d.title, d.type, d.gate_verdict,
              d.gate_reason, d.fetch_status, d.fetch_failures, d.fetched_at, d.created_at,
@@ -2918,7 +2925,7 @@ async function runAnalyzePhase(opts: {
       FROM frozen_corpus_snapshot fcs
       JOIN documents d ON d.id = fcs.document_id
       LEFT JOIN document_content dc ON dc.id = d.content_id
-      WHERE fcs.company_id = ${companyId} AND fcs.framework_id = ${framework.id}
+      WHERE fcs.company_id = ${companyId} AND fcs.framework_id = ${freezeKey}
       ORDER BY d.id
     `);
     fetchedDocs = snapshotRows.rows as any;
