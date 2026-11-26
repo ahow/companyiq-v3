@@ -94,6 +94,24 @@ export interface ProvenanceInput {
   // there is NO unconditional promotion. A 'third_party' decision silences the
   // domain permanently. An absent key / empty / undefined map changes nothing.
   domainPolicies?: Map<string, { decision: "primary" | "third_party"; scope: string }>;
+  // WS1 entity attribution (2026-11). Related listed companies / parents / peers
+  // of the target, each carrying BOTH identifying names/aliases AND known domains.
+  // Supplied by the caller from framework config (fail-open: absent/empty ⇒ the
+  // entity-attribution exclusion never fires). Used by classifyEntityAttribution
+  // to recognise a foreign (parent/peer) document by NAME even on a shared domain
+  // — closing the domain-only gap where e.g. a parent's report on a shared brand
+  // domain was promoted to the subsidiary's own evidence. Generic: no company,
+  // framework or measure name is encoded here, only the DATA the matcher reads.
+  relatedEntities?: RelatedEntity[] | null;
+}
+
+// A related listed company / parent / peer of the target, as supplied from
+// framework config. All fields optional; an entry is usable if it carries at
+// least a name, an alias, or a domain.
+export interface RelatedEntity {
+  name?: string | null;
+  aliases?: string[] | null;
+  domains?: string[] | null;
 }
 
 export interface IrTenantBinding {
@@ -730,6 +748,29 @@ export function classifyProvenance(input: ProvenanceInput): ProvenanceResult {
     }
   }
 
+  // WS1 entity-attribution exclusion (2026-11). Runs AFTER the own-domain
+  // Rules 1/1a (so the target's own exact/registrable-domain documents are never
+  // excluded) but BEFORE the Rule 1b brand-token-in-hostname rescue — which is
+  // exactly the rule that previously promoted a parent/peer's report on a shared
+  // brand domain to the target's own evidence. When the document resolves to a
+  // declared related listed company / parent / peer (by domain, distinctive name
+  // token, or full-name phrase) and NOT to the target, it is third_party
+  // regardless of domain. Fail-open: no relatedEntities ⇒ classifyEntityAttribution
+  // returns foreign:false and this is a no-op, so existing frameworks are
+  // unaffected.
+  if (isEntityAttributionExclusionEnabled()) {
+    const ea = classifyEntityAttribution(input, host);
+    if (ea.foreign) {
+      return {
+        provenance: "third_party",
+        reason: `entity-attribution: ${ea.reason}`,
+        regulatorHost: null,
+        irPlatformHost: null,
+        identitySignal: "none",
+      };
+    }
+  }
+
   // Rule 1b (R2): brand-token-in-hostname fallback. Catches subsidiary and
   // regional-brand sites that weren't captured in related_domains but carry
   // the parent's distinctive brand token in the host label (e.g.
@@ -1169,4 +1210,161 @@ export function provenanceToSourceType(p: ProvenanceClass): "first_party" | "thi
 // exactly. Mirrors the `!== "false"` default-on idiom used elsewhere.
 export function isProvenanceRobustnessEnabled(): boolean {
   return process.env.PROVENANCE_ROBUSTNESS !== "false";
+}
+
+// ─── WS1: entity-attribution exclusion (2026-11) ─────────────────────────────
+//
+// Master flag for the entity-NAME-based exclusion. Default-ON; set
+// ENTITY_ATTRIBUTION_EXCLUSION="false" to disable (restores pure domain-based
+// provenance). Even when ON, the exclusion is a no-op unless the caller supplies
+// a non-empty `relatedEntities` list (fail-open by DATA, exactly like the other
+// Track-A gates).
+export function isEntityAttributionExclusionEnabled(): boolean {
+  return process.env.ENTITY_ATTRIBUTION_EXCLUSION !== "false";
+}
+
+// True when `host` is the same registrable site as `domain` (exact, sub-domain,
+// or eTLD+1 equality). Reuses the Rule-1/1a host-matching semantics.
+function hostBelongsToDomain(host: string, domain: string | null | undefined): boolean {
+  const d = (domain || "").replace(/^www\./i, "").toLowerCase().trim();
+  if (!host || !d) return false;
+  if (host === d || host.endsWith("." + d)) return true;
+  const hr = registrableDomainOf(host);
+  const dr = registrableDomainOf(d);
+  return !!hr && !!dr && hr === dr;
+}
+
+// Word-bounded, case-insensitive containment of a (possibly multi-word) token or
+// phrase in an already-normalised haystack. Never a substring match, so "motor"
+// does not fire inside "motorway" and a brand token only matches as a whole word.
+function wordBoundedContains(hayLower: string, needleLower: string): boolean {
+  if (!needleLower) return false;
+  const esc = needleLower
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "[^a-z0-9]+");
+  try {
+    return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i").test(hayLower);
+  } catch {
+    return hayLower.includes(needleLower);
+  }
+}
+
+/**
+ * Decide whether a document is FOREIGN to the target company — i.e. it is the
+ * disclosure of a RELATED listed company / parent / peer rather than the target
+ * itself. This is the structural fix for the domain-only exclusion gap: a
+ * parent/peer's report hosted on a shared brand domain (e.g. a subsidiary and
+ * its listed parent sharing `brand.com`) used to be promoted to the subsidiary's
+ * own evidence because the exclusion compared DOMAINS only. Here we additionally
+ * compare ENTITY IDENTITY (name/alias/domain), reusing the same distinctive-token
+ * and full-name-phrase machinery the issuer-inclusion checks use.
+ *
+ * Algorithm (fully generic — the only company-specific input is the DATA in
+ * `relatedEntities`, supplied from framework config):
+ *   0. No related entities declared ⇒ never foreign (fail-open).
+ *   1. Document on the target's OWN domain ⇒ never foreign (own site wins).
+ *   2. If the document carries the target's OWN distinguishing identity
+ *      (a distinctive name token the target does NOT share with any related
+ *      entity, its ticker, or its full-name phrase) ⇒ keep — it is the target's
+ *      own document even on a shared/foreign domain.
+ *   3. Otherwise, for each related entity, the document is FOREIGN when its host
+ *      belongs to that entity's domain, OR it carries that entity's distinguishing
+ *      token (not shared with the target), OR its full-name phrase — with no
+ *      target identity present.
+ *
+ * Short tokens cannot over-match: distinctiveNameTokens already drops generic and
+ * < 4-char tokens, and matching is word-bounded.
+ */
+export function classifyEntityAttribution(
+  input: ProvenanceInput,
+  hostArg?: string,
+): { foreign: boolean; reason: string; matchedEntity?: string } {
+  const related = (input.relatedEntities || []).filter(
+    (e) => e && ((e.name && e.name.trim()) || (e.aliases && e.aliases.length) || (e.domains && e.domains.length)),
+  );
+  if (related.length === 0) {
+    return { foreign: false, reason: "no related entities declared (fail-open)" };
+  }
+
+  const host = (hostArg != null ? hostArg : hostOf(input.url)) || "";
+
+  // (1) Target's own domain always wins — never exclude a doc on the target site.
+  const ownDomains = [input.companyDomain || "", ...(input.relatedDomains || [])]
+    .map((d) => (d || "").replace(/^www\./i, "").toLowerCase())
+    .filter(Boolean);
+  for (const d of ownDomains) {
+    if (hostBelongsToDomain(host, d)) {
+      return { foreign: false, reason: `document on target's own domain (${d})` };
+    }
+  }
+
+  // Build distinctive-token sets for the target and each related entity.
+  const targetTokens = new Set<string>(distinctiveNameTokens(input.companyName));
+  for (const a of input.companyAliases || []) {
+    for (const t of distinctiveNameTokens(a)) targetTokens.add(t);
+  }
+  const relatedTokenSets = related.map((e) => {
+    const s = new Set<string>(distinctiveNameTokens(e.name));
+    for (const a of e.aliases || []) for (const t of distinctiveNameTokens(a)) s.add(t);
+    return s;
+  });
+  // Tokens shared between the target and ANY related entity are not
+  // distinguishing for either side (e.g. a shared brand word).
+  const sharedTokens = new Set<string>();
+  for (const s of relatedTokenSets) {
+    for (const t of s) if (targetTokens.has(t)) sharedTokens.add(t);
+  }
+
+  // Haystack = title + URL path + content head (NOT the host — domain identity is
+  // handled separately so the shared brand word in the host never leaks in).
+  const hay = normalise(`${input.title || ""} ${pathOf(input.url)} ${(input.content || "").slice(0, 4000)}`);
+
+  // (2) Target's own distinguishing identity present ⇒ keep.
+  const ticker = normalise(input.companyTicker).replace(/[^a-z0-9]/g, "");
+  const targetDistinguishing = [...targetTokens].filter((t) => !sharedTokens.has(t) && t.length >= 4);
+  for (const t of targetDistinguishing) {
+    if (wordBoundedContains(hay, t)) {
+      return { foreign: false, reason: `target distinguishing identity "${t}" present` };
+    }
+  }
+  if (ticker.length >= 2 && wordBoundedContains(hay, ticker)) {
+    return { foreign: false, reason: `target ticker "${input.companyTicker}" present` };
+  }
+  if (fullNamePhraseMatch(input.companyName, hay, 1).matched) {
+    return { foreign: false, reason: `target full-name phrase present` };
+  }
+
+  // (3) Any related entity's identity present (and no target identity) ⇒ foreign.
+  for (let i = 0; i < related.length; i++) {
+    const e = related[i];
+    const label = (e.name || "").trim() || (e.domains && e.domains[0]) || "related-entity";
+    for (const d of e.domains || []) {
+      if (hostBelongsToDomain(host, d)) {
+        return {
+          foreign: true,
+          reason: `document host "${host}" belongs to related entity "${label}" (${d})`,
+          matchedEntity: label,
+        };
+      }
+    }
+    const entDistinguishing = [...relatedTokenSets[i]].filter((t) => !sharedTokens.has(t) && t.length >= 4);
+    for (const t of entDistinguishing) {
+      if (wordBoundedContains(hay, t)) {
+        return {
+          foreign: true,
+          reason: `related-entity distinguishing identity "${t}" ("${label}") present without target identity`,
+          matchedEntity: label,
+        };
+      }
+    }
+    if (e.name && fullNamePhraseMatch(e.name, hay, 1).matched) {
+      return {
+        foreign: true,
+        reason: `related-entity full-name phrase "${e.name}" present without target identity`,
+        matchedEntity: label,
+      };
+    }
+  }
+
+  return { foreign: false, reason: "no related-entity attribution signal" };
 }

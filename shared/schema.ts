@@ -260,7 +260,16 @@ export const frameworks = pgTable("frameworks", {
   subsidiaryDomains: jsonb("subsidiary_domains").$type<string[] | Record<string, string[]>>(),
   // FIX 4: separately-listed entities NEVER attributed to the target (hard-reject even
   // on a name-mention). Flat string[] or Record<companyName,string[]>. NULL ⇒ off.
-  relatedListedCompanies: jsonb("related_listed_companies").$type<string[] | Record<string, string[]>>(),
+  // Entries may be plain names (legacy) OR rich descriptors { name, aliases, domains }
+  // so a NAME→DOMAIN relationship can be declared (consumed by WS1 entity attribution).
+  relatedListedCompanies: jsonb("related_listed_companies").$type<string[] | Record<string, string[]> | Array<{ name?: string; aliases?: string[]; domains?: string[] }> | Record<string, Array<{ name?: string; aliases?: string[]; domains?: string[] }>>>(),
+  // WS1 (2026-11): bidirectional entity-relationship model. Parent/holding entities of
+  // the target (FOREIGN — their disclosures are never the target's own evidence) and
+  // the target's own subsidiaries (OWN — their disclosures ARE the target's). Both are
+  // flat lists OR per-company maps, of plain names or { name, aliases, domains }
+  // descriptors. NULL ⇒ undeclared ⇒ fail-open (gate inert), additive/backward-compatible.
+  parentEntities: jsonb("parent_entities").$type<string[] | Record<string, string[]> | Array<{ name?: string; aliases?: string[]; domains?: string[] }> | Record<string, Array<{ name?: string; aliases?: string[]; domains?: string[] }>>>(),
+  subsidiaryEntities: jsonb("subsidiary_entities").$type<string[] | Record<string, string[]> | Array<{ name?: string; aliases?: string[]; domains?: string[] }> | Record<string, Array<{ name?: string; aliases?: string[]; domains?: string[] }>>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

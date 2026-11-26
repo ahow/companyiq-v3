@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyProvenance, unwrapRedirectUrl } from "./provenance.js";
+import { classifyProvenance, unwrapRedirectUrl, classifyEntityAttribution, isEntityAttributionExclusionEnabled } from "./provenance.js";
 
 const NEWMONT = {
   companyName: "Newmont Corporation",
@@ -963,4 +963,124 @@ test("domain-policy does NOT override an earlier issuer rule (own domain)", () =
   });
   assert.equal(r.provenance, "issuer");
   assert.match(r.reason, /hostname matches company domain/);
+});
+
+
+// ─── WS1 — entity-attribution exclusion (classifyEntityAttribution) ──────────
+// The target (Hyundai Glovis, glovis.com) must never be attributed evidence that
+// is actually Hyundai Motor Company's (a separately-listed related entity whose
+// reports are served on the shared brand domain hyundai.com). The matcher is
+// generic — the only company-specific input is the DATA in relatedEntities.
+
+const GLOVIS = {
+  companyName: "Hyundai Glovis",
+  companyDomain: "glovis.com",
+  relatedDomains: [] as string[],
+  companyTicker: "086280",
+  companyAliases: ["hyundai glovis", "glovis"],
+  relatedEntities: [
+    { name: "Hyundai Motor Company", aliases: ["Hyundai Motor", "HMC"], domains: ["hyundai.com"] },
+  ],
+};
+
+test("WS1 flag default-on when ENTITY_ATTRIBUTION_EXCLUSION unset", () => {
+  const prev = process.env.ENTITY_ATTRIBUTION_EXCLUSION;
+  delete process.env.ENTITY_ATTRIBUTION_EXCLUSION;
+  assert.equal(isEntityAttributionExclusionEnabled(), true);
+  if (prev !== undefined) process.env.ENTITY_ATTRIBUTION_EXCLUSION = prev;
+});
+
+test("WS1 positive — HMC report on shared hyundai.com is FOREIGN to Glovis", () => {
+  const r = classifyEntityAttribution({
+    url: "https://www.hyundai.com/content/dam/hyundai/csr/hmc-2026-sustainability-report-en.pdf",
+    title: "Hyundai Motor Company 2026 Sustainability Report",
+    content: "Hyundai Motor Company is committed to carbon neutrality across its global manufacturing operations.",
+    ...GLOVIS,
+  });
+  assert.equal(r.foreign, true);
+  // Host belongs to the related entity's declared domain (the primary leak path).
+  assert.match(r.reason, /belongs to related entity/);
+  assert.equal(r.matchedEntity, "Hyundai Motor Company");
+});
+
+test("WS1 positive — HMC doc on a NEUTRAL domain is FOREIGN by distinguishing name token", () => {
+  // No domain signal (news host); exclusion must still fire on HMC's distinguishing
+  // token ("motor") with no Glovis identity present.
+  const r = classifyEntityAttribution({
+    url: "https://www.esgnews.example/reports/hmc-net-zero.html",
+    title: "Hyundai Motor Company accelerates net-zero plan",
+    content: "The automaker Hyundai Motor Company announced new EV targets.",
+    ...GLOVIS,
+  });
+  assert.equal(r.foreign, true);
+  assert.match(r.reason, /motor|full-name phrase/);
+  assert.equal(r.matchedEntity, "Hyundai Motor Company");
+});
+
+test("WS1 negative — Glovis OWN doc on shared hyundai.com is KEPT", () => {
+  // Glovis's own report happens to be hosted on the shared brand domain. Its own
+  // distinguishing token ("glovis") is present ⇒ must NOT be excluded.
+  const r = classifyEntityAttribution({
+    url: "https://www.hyundai.com/glovis/2026-glovis-sustainability-report.pdf",
+    title: "Hyundai Glovis 2026 Sustainability Report",
+    content: "Hyundai Glovis, the logistics company, reports on its supply-chain resilience.",
+    ...GLOVIS,
+  });
+  assert.equal(r.foreign, false);
+  assert.match(r.reason, /target distinguishing identity|own domain/);
+});
+
+test("WS1 negative — doc with only the SHARED brand token is KEPT (no over-match)", () => {
+  // Only "hyundai" (shared between Glovis and HMC) appears, on an unrelated domain,
+  // with neither "glovis" nor "motor". The shared token alone must NOT exclude.
+  const r = classifyEntityAttribution({
+    url: "https://www.autonews.example/korea/hyundai-group-overview.html",
+    title: "Hyundai group companies overview",
+    content: "The Hyundai brand spans many affiliated companies in Korea.",
+    ...GLOVIS,
+  });
+  assert.equal(r.foreign, false);
+  assert.match(r.reason, /no related-entity attribution signal/);
+});
+
+test("WS1 fail-open — no related entities declared ⇒ never foreign", () => {
+  const r = classifyEntityAttribution({
+    url: "https://www.hyundai.com/content/dam/hyundai/csr/hmc-2026-sustainability-report-en.pdf",
+    title: "Hyundai Motor Company 2026 Sustainability Report",
+    content: "Hyundai Motor Company sustainability.",
+    companyName: "Hyundai Glovis",
+    companyDomain: "glovis.com",
+    relatedDomains: [],
+    companyTicker: "086280",
+    companyAliases: ["glovis"],
+    // relatedEntities omitted
+  });
+  assert.equal(r.foreign, false);
+  assert.match(r.reason, /no related entities declared/);
+});
+
+test("WS1 integration — classifyProvenance excludes HMC doc as third_party (entity-attribution)", () => {
+  // End-to-end: the HMC report on hyundai.com would otherwise be promoted to issuer
+  // by the brand-token-in-hostname rescue (Rule 1b). The entity-attribution guard
+  // runs first and classifies it third_party with a machine-readable reason.
+  const r = classifyProvenance({
+    url: "https://www.hyundai.com/content/dam/hyundai/csr/hmc-2026-sustainability-report-en.pdf",
+    title: "Hyundai Motor Company 2026 Sustainability Report",
+    content: "Hyundai Motor Company is committed to carbon neutrality.",
+    ...GLOVIS,
+  });
+  assert.equal(r.provenance, "third_party");
+  assert.match(r.reason, /entity-attribution/);
+});
+
+test("WS1 integration — Glovis OWN doc on hyundai.com is NOT excluded by entity-attribution", () => {
+  // The negative half end-to-end: Glovis's own doc on the shared domain must not be
+  // thrown out by the entity-attribution guard (reason must not mention it).
+  const r = classifyProvenance({
+    url: "https://www.hyundai.com/glovis/2026-glovis-sustainability-report.pdf",
+    title: "Hyundai Glovis 2026 Sustainability Report",
+    content: "Hyundai Glovis logistics supply-chain resilience disclosure.",
+    ...GLOVIS,
+  });
+  assert.doesNotMatch(r.reason, /entity-attribution/);
 });

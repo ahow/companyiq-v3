@@ -205,6 +205,10 @@ export async function initializeDatabase(): Promise<void> {
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS recency_window_years INTEGER`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS subsidiary_domains JSONB`);
     await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS related_listed_companies JSONB`);
+    // WS1 (2026-11): bidirectional entity-relationship columns (parent/subsidiary),
+    // additive + nullable ⇒ undeclared frameworks fail open (gate inert).
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS parent_entities JSONB`);
+    await db.execute(sql`ALTER TABLE frameworks ADD COLUMN IF NOT EXISTS subsidiary_entities JSONB`);
 
     // ─── Framework Measures ─────────────────────────────────────────────────
     await db.execute(sql`
