@@ -2492,3 +2492,50 @@ export function decideRecencyCorpusCutoff(opts: {
     reason: `kept ${keepIndices.length} in-window/undated doc(s), dropped ${older.length} older than ${minYear} (window ${opts.windowYears}y from ${opts.currentYear})`,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WS4 — VERDICT_STABILITY: verdict boundary stability.
+//
+// Across replays on an IDENTICAL frozen corpus the LLM first-pass verdict for
+// borderline-evidence cells is non-deterministic (Yes in one replay, No in
+// another). This "flip" is concentrated in the operational_resilience track.
+// When ON, a deterministic majority-of-k re-adjudication stabilises ELIGIBLE
+// (flip-prone track + borderline) cells; non-eligible cells are locked
+// (hysteresis) and left byte-for-byte unchanged. Default OFF and fail-open.
+// See verdict-stability.ts for the pure decision logic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Master gate for the WS4 verdict-stability post-processor. Default OFF. */
+export function verdictStabilityEnabled(): boolean {
+  return envOnDefaultFalse("VERDICT_STABILITY");
+}
+
+/** Number of re-adjudication samples (k) used for the majority vote. Default 3.
+ *  Clamped to a minimum of 1; a single sample makes the pass a no-op flip-guard. */
+export function verdictStabilityK(): number {
+  const k = Math.floor(envInt("VERDICT_STABILITY_K", 3));
+  return k >= 1 ? k : 3;
+}
+
+/** The set of flip-prone tracks eligible for stabilisation. Data-driven: no
+ *  measure/company names are hardcoded. Default ["operational_resilience"];
+ *  override via SCORING_FLIP_PRONE_TRACKS (comma-separated). Returns a
+ *  normalized, lowercased, de-blanked list. */
+export function flipProneTracks(): string[] {
+  const env = process.env.SCORING_FLIP_PRONE_TRACKS;
+  if (env && env.trim()) {
+    const list = env
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0);
+    if (list.length > 0) return list;
+  }
+  return ["operational_resilience"];
+}
+
+/** A first-pass cell is "borderline" when its confidence maps strictly below this
+ *  value (so Low=0.3 and Medium=0.6 qualify, High=1.0 and unknown=1.0 do not).
+ *  Override via VERDICT_STABILITY_BORDERLINE_CONFIDENCE. Default 0.7. */
+export function verdictStabilityBorderlineConfidence(): number {
+  return envFloat("VERDICT_STABILITY_BORDERLINE_CONFIDENCE", 0.7);
+}

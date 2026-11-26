@@ -78,11 +78,14 @@ import {
   frameworkRelatedListedCompanies,
   relatedListedGateEnabled,
   decideRelatedListedExclusion,
+  verdictStabilityEnabled,
+  verdictStabilityK,
 } from "./scoring-fix-flags.js";
 import { evaluateApplicability, evaluateCoverage, type ReportingPeriod, type EntityScopeContext } from "./framework-rules.js";
 import { requiredSourceTypesBlocking } from "./retrieval-funnel.js";
 import { recordVerdictOverride } from "./verdict-override.js";
 import { readjudicateMeasure, type ReadjudicationTrace } from "./readjudication.js";
+import { stabiliseVerdict, isStabilityEligible, type VerdictStabilityTrace } from "./verdict-stability.js";
 // A3 / WP04: end-to-end entity/provenance/temporal eligibility composition guardrail.
 // Attached per measure in SHADOW mode by default (observability only); verdict-
 // mutating enforcement is gated behind ELIGIBILITY_ENFORCE (see runProvenanceGate).
@@ -272,6 +275,11 @@ export interface MeasureResult {
   // (original verdict/score, reason for the re-look, passages searched, passage
   // found, new verdict). Set only when READJUDICATION_PASS acted on this row.
   readjudicationTrace?: ReadjudicationTrace | null;
+  // WS4 (VERDICT_STABILITY): auditable trace of the majority-of-k verdict
+  // boundary-stability pass (original verdict/score, track, sampled verdicts,
+  // vote counts, resolution). Set only when VERDICT_STABILITY acted on an
+  // ELIGIBLE (flip-prone track + borderline) row.
+  verdictStabilityTrace?: VerdictStabilityTrace | null;
 }
 
 // ─── RC3 — one quote → one measure reconciliation ────────────────────────────
@@ -3713,6 +3721,69 @@ export async function analyzeCompanyMeasures(opts: {
         }
       } catch (err) {
         console.warn(`[${companyName}] quote-verbatim gate ${measure.measureId}: skipped (${(err as Error)?.message ?? "error"}) — not blocking`);
+      }
+
+      // WS4 — VERDICT_STABILITY (default OFF, fail-open). Runs LAST in the gated
+      // chain, so the deterministic corrections above (readjudication, coverage,
+      // quote-verbatim) settle first and this pass only resolves the residual
+      // borderline jitter — the replay-to-replay verdict FLIP on an identical
+      // frozen corpus, concentrated in the flip-prone (operational_resilience)
+      // track. For an ELIGIBLE cell (flip-prone track AND borderline confidence/
+      // needsReadjudication) we re-run the SAME scorer k times over the SAME
+      // frozen evidence (scoringEvidence) and set the verdict to the strict
+      // majority; a tie keeps the first-pass verdict (never flip on a tie). Any
+      // non-eligible cell is LOCKED (hysteresis) and left byte-for-byte unchanged,
+      // as is the whole pass when the flag is off. Fully fail-open: any error in
+      // the k-pass keeps the first-pass verdict and logs a warning, never throws.
+      if (verdictStabilityEnabled()) {
+        try {
+          if (isStabilityEligible(measure, measureResult)) {
+            const k = verdictStabilityK();
+            const sampledVerdicts: string[] = [];
+            for (let i = 0; i < k; i++) {
+              const sample =
+                settings.ensembleScoring || settings.scoringCascade
+                  ? await scoreWithEnsemble({
+                      companyName,
+                      companyId,
+                      measure,
+                      evidenceText: scoringEvidence,
+                      terminology,
+                      topicDescription: framework.topicDescription || framework.name,
+                      settings,
+                      temporalWarning: tw,
+                      framework,
+                    })
+                  : await scoreSingleMeasure({
+                      companyName,
+                      companyId,
+                      measure,
+                      evidenceText: scoringEvidence,
+                      terminology,
+                      topicDescription: framework.topicDescription || framework.name,
+                      provider: scoringProvider,
+                      temporalWarning: tw,
+                      scoringMode: settings.scoringMode,
+                      framework,
+                    });
+              sampledVerdicts.push(String(sample.verdict ?? ""));
+            }
+            const prevVerdict = measureResult.verdict;
+            const prevScore = measureResult.score;
+            measureResult = stabiliseVerdict({
+              measure,
+              result: measureResult,
+              sampledVerdicts,
+              k,
+            });
+            if (measureResult.verdict !== prevVerdict) {
+              console.log(`[${companyName}] VERDICT-STABILITY ${measure.measureId}: ${prevVerdict} (score ${prevScore}) → ${measureResult.verdict} (${measureResult.score}) — majority of ${k} on ${measureResult.verdictStabilityTrace?.track ?? "flip-prone"} track [${sampledVerdicts.join(",")}]`);
+            }
+          }
+        } catch (err) {
+          if (isLifecycleCancelledError(err)) throw err;
+          console.warn(`[${companyName}] verdict-stability ${measure.measureId}: skipped (${(err as Error)?.message ?? "error"}) — keeping first-pass`);
+        }
       }
 
       // Layer D — Honest coverage signal. Previously hardcoded to null, which let
