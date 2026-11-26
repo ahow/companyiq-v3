@@ -40,7 +40,8 @@ import { isThirdPartyHost } from "../lib/eligibility-flags.js";
 import { detectSourceTypes } from "../lib/discovery.js";
 import { buildEvidenceFunnel } from "../lib/evidence-funnel.js";
 import { runCompletenessValidator } from "../lib/framework-completeness.js";
-import { frameworkReadiness } from "../lib/framework-readiness.js";
+import { frameworkReadiness, computeOnboardingReadiness } from "../lib/framework-readiness.js";
+import { frameworkOnboardingGateEnabled } from "../lib/scoring-fix-flags.js";
 import { computeVarianceReport } from "../lib/variance-harness.js";
 import { FRAMEWORK_READINESS_GATE, STALLED_BATCH_REQUEUE, VARIANCE_HARNESS, FROZEN_CORPUS_DEV } from "../lib/robustness-flags.js";
 export const apiRouter = Router();
@@ -771,6 +772,35 @@ apiRouter.post("/frameworks/:id/activate", async (req: Request, res: Response) =
           });
         }
       }
+    }
+    // WS5: framework onboarding gate. Checks that the SCORING-ROBUSTNESS config
+    // consumed by WS1–WS4 (entity relationships, recency window, per-company cap,
+    // required tracks) is populated before activation. Fully fail-open: ANY error
+    // in the gate logic is swallowed and activation proceeds. When the flag is OFF
+    // the checklist is computed but only logged; when ON a cleanly NOT-ready
+    // framework is blocked with the structured, actionable readiness result.
+    try {
+      const override = req.body?.override === true || req.query?.override === "true";
+      const framework = await storage.getFrameworkById(frameworkId, workspaceId);
+      if (framework) {
+        const onboarding = computeOnboardingReadiness(framework);
+        if (!onboarding.ready) {
+          if (frameworkOnboardingGateEnabled() && !override) {
+            return res.status(422).json({
+              error: "Framework onboarding gate: required scoring-robustness config is missing.",
+              code: "FRAMEWORK_ONBOARDING_NOT_READY",
+              onboarding,
+            });
+          }
+          // Flag OFF (or overridden): warn but proceed — never block.
+          console.warn(
+            `[ws5-onboarding-gate] framework ${frameworkId} activated with incomplete config (flag ${frameworkOnboardingGateEnabled() ? "ON, override" : "OFF"}): ${onboarding.blockingReasons.join(" | ")}`,
+          );
+        }
+      }
+    } catch (gateErr: any) {
+      // Fail-open: a bug in the onboarding gate must never block activation.
+      console.warn(`[ws5-onboarding-gate] gate error for framework ${frameworkId} — proceeding (fail-open):`, gateErr?.message ?? gateErr);
     }
     await storage.setActiveFramework(frameworkId, workspaceId);
     res.json({ success: true });

@@ -2539,3 +2539,21 @@ export function flipProneTracks(): string[] {
 export function verdictStabilityBorderlineConfidence(): number {
   return envFloat("VERDICT_STABILITY_BORDERLINE_CONFIDENCE", 0.7);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WS5 — FRAMEWORK_ONBOARDING_GATE: framework onboarding readiness gate (OFF).
+//
+// A new framework's downstream robustness (WS1–WS4) depends on config DATA being
+// populated before activation: entity relationships, a recency window, a
+// per-company doc cap, and the required-for-tracks gate list. When ON, the
+// activation endpoint computes the onboarding readiness checklist (see
+// framework-readiness.ts) and blocks activation when a required config item is
+// missing and not waived, surfacing exactly which config is absent. When OFF the
+// checklist is still computed but only logged as a warning (never blocks).
+// Default OFF and fail-open (any error in the gate → log + proceed).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Master gate for the WS5 framework onboarding readiness gate. Default OFF. */
+export function frameworkOnboardingGateEnabled(): boolean {
+  return envOnDefaultFalse("FRAMEWORK_ONBOARDING_GATE");
+}
