@@ -180,7 +180,8 @@ export const api = {
   getRecentErrors: () => request("/diagnostics/recent-errors"),
 
   // Score Anomalies
-  getScoreAnomalies: (status: string = "pending") => request(`/score-anomalies?status=${status}`),
+  getScoreAnomalies: (status: string = "pending", frameworkId?: number | null) =>
+    request(`/score-anomalies?status=${status}${frameworkId ? `&frameworkId=${frameworkId}` : ""}`),
   getAnomalyCount: () => request("/score-anomalies/count"),
   dismissAnomaly: (id: number) => request(`/score-anomalies/${id}/dismiss`, { method: "POST" }),
   reexamineAnomaly: (id: number) => request(`/score-anomalies/${id}/reexamine`, { method: "POST" }),

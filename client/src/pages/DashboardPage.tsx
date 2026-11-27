@@ -186,12 +186,6 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     refetchInterval: 3000,
   });
 
-  const { data: anomalies = [] } = useQuery({
-    queryKey: ["scoreAnomalies"],
-    queryFn: () => api.getScoreAnomalies("pending"),
-    refetchInterval: 30000,
-  });
-
   const dismissAnomalyMutation = useMutation({
     mutationFn: (id: number) => api.dismissAnomaly(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scoreAnomalies"] }),
@@ -468,6 +462,16 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
   const effectiveFrameworkName = selectedFramework
     ? frameworks.find((f: any) => f.id === selectedFramework)?.name
     : activeFramework?.name;
+
+  // Score anomalies ("Review Suggested" banner), scoped to the framework the
+  // dashboard is viewing. Anomalies are raised per framework and are never
+  // deleted by a reset, so without this scope another framework's old pending
+  // anomalies stay on this framework's dashboard with no way to clear them.
+  const { data: anomalies = [] } = useQuery({
+    queryKey: ["scoreAnomalies", effectiveFrameworkId ?? null],
+    queryFn: () => api.getScoreAnomalies("pending", effectiveFrameworkId),
+    refetchInterval: 30000,
+  });
 
   // ── Document-discovery coverage (low + critical tiers) ────────────────────
   const { data: lowDiscovery } = useQuery({

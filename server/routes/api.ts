@@ -3417,7 +3417,14 @@ apiRouter.get("/score-anomalies", async (req: Request, res: Response) => {
   try {
     const { workspaceId } = getSessionContext(req);
     const status = (req.query.status as string) || "pending";
-    const anomalies = await storage.getScoreAnomalies(workspaceId, status);
+    // Framework-scope the "Review Suggested" banner: when the dashboard passes
+    // the framework it is viewing, only that framework's anomalies are returned.
+    // Anomalies from other frameworks must never pollute the current framework's
+    // dashboard — and since no reset deletes anomaly rows, an unscoped query
+    // leaves old frameworks' pending anomalies visible across every reset.
+    const fwRaw = parseInt(String(req.query.frameworkId ?? ""), 10);
+    const frameworkId = Number.isInteger(fwRaw) && fwRaw > 0 ? fwRaw : undefined;
+    const anomalies = await storage.getScoreAnomalies(workspaceId, status, frameworkId);
     res.json(anomalies);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -3589,7 +3596,38 @@ apiRouter.get("/diagnostics/low-discovery", async (req: Request, res: Response) 
       framework = await storage.getActiveFramework(workspaceId);
     }
 
-    const companies = await storage.getCompanies(workspaceId);
+    let companies = await storage.getCompanies(workspaceId);
+    // Scope to the active framework's universe — the list last analysed for it,
+    // the same resolution /diagnostics/universe-completeness uses. A low-discovery
+    // flag for a company OUTSIDE the current framework's universe is noise on this
+    // dashboard, and (critically) a universe-scoped reset never touches such a
+    // company, so it would otherwise linger as an unclearable warning. Only scope
+    // when a universe list can be resolved; otherwise leave the workspace-wide
+    // behaviour untouched so nothing is hidden when there is no universe context.
+    if (framework?.id) {
+      const { db } = await import("../db.js");
+      const { sql } = await import("drizzle-orm");
+      let listId = parseInt(String(req.query.listId ?? ""), 10);
+      if (!Number.isInteger(listId) || listId <= 0) {
+        const latest = (await db
+          .execute(sql`
+            SELECT list_id FROM batch_runs
+            WHERE workspace_id = ${workspaceId}
+              AND framework_id = ${framework.id}
+              AND list_id IS NOT NULL
+            ORDER BY id DESC LIMIT 1
+          `)
+          .then((x: any) => x.rows)) as any[];
+        listId = Number(latest?.[0]?.list_id ?? 0);
+      }
+      if (listId > 0) {
+        const memberRows = (await db
+          .execute(sql`SELECT company_id FROM company_list_members WHERE list_id = ${listId}`)
+          .then((x: any) => x.rows)) as any[];
+        const memberIds = new Set(memberRows.map((r: any) => Number(r.company_id)));
+        companies = companies.filter((c: any) => memberIds.has(c.id));
+      }
+    }
     // Two DISTINCT signals, one company in exactly one list:
     //   • discoveryTooLow — too few documents were FOUND in search. A thin corpus
     //     cannot be fixed by retrying fetches, so this check wins outright.
@@ -3819,6 +3857,16 @@ apiRouter.get("/diagnostics/universe-completeness", async (req: Request, res: Re
         // Job frozen in a transient state — looks "in progress" forever.
         classification = "In progress / stuck";
         errorSnippet = lastError ? lastError.slice(0, 160) : null;
+      } else if (status === "idle") {
+        // Durable reset state. A reset sets analysis_status='idle' and deletes
+        // measure_scores/documents, but does NOT delete the company's older
+        // analysis_jobs rows — so an orphaned 'failed' (or 'completed') job can
+        // remain. The durable 'idle' status is authoritative here: the company
+        // has been cleared and simply awaits re-analysis, so classify it as "Not
+        // analysed" and ignore the stale job. Without this, a freshly reset
+        // universe shows a phantom "Processing failure" sub-count.
+        classification = "Not analysed";
+        errorSnippet = null;
       } else if (status === "completed" || CORPUS_RE.test(summary) || CORPUS_RE.test(lastError)) {
         // Pipeline finished but refused to score an incomplete corpus — reads as
         // "completed, score 0" with no measure rows at all.

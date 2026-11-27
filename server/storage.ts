@@ -4214,16 +4214,26 @@ export async function createTrustedSource(data: { domain: string; description?: 
 
 // ─── Score Anomalies Storage ──────────────────────────────────────────────
 
-export async function getScoreAnomalies(workspaceId: number, status: string = "pending") {
+export async function getScoreAnomalies(
+  workspaceId: number,
+  status: string = "pending",
+  frameworkId?: number
+) {
+  const conditions = [
+    eq(schema.scoreAnomalies.workspaceId, workspaceId),
+    eq(schema.scoreAnomalies.status, status),
+  ];
+  // Optional framework scope: anomalies carry the framework they were raised
+  // under. When the dashboard passes the framework it is viewing, only that
+  // framework's anomalies are returned so another framework's pending rows never
+  // show up (no reset deletes anomalies, so unscoped they linger forever).
+  if (typeof frameworkId === "number" && frameworkId > 0) {
+    conditions.push(eq(schema.scoreAnomalies.frameworkId, frameworkId));
+  }
   return db
     .select()
     .from(schema.scoreAnomalies)
-    .where(
-      and(
-        eq(schema.scoreAnomalies.workspaceId, workspaceId),
-        eq(schema.scoreAnomalies.status, status)
-      )
-    )
+    .where(and(...conditions))
     .orderBy(sql`abs(${schema.scoreAnomalies.residual}) DESC`);
 }
 
