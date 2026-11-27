@@ -77,6 +77,22 @@ export default function FrameworkPage({ onNavigateToV2Builder, onContinueV2Frame
   const activateMutation = useMutation({
     mutationFn: (id: number) => api.activateFramework(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["frameworks"] }),
+    onError: (err: any) => {
+      // Surface activation failures instead of silently swallowing them.
+      // The activate endpoint returns structured bodies:
+      //   409 FRAMEWORK_NOT_READY         -> { readiness: {...} }
+      //   422 FRAMEWORK_ONBOARDING_NOT_READY -> { onboarding: { blockingReasons: [...] } }
+      const body = err?.body ?? {};
+      const reasons: string[] =
+        body?.onboarding?.blockingReasons ??
+        body?.readiness?.blockingReasons ??
+        [];
+      const base = body?.error || err?.message || "Failed to activate framework.";
+      const detail = reasons.length
+        ? `\n\nBlocking issues:\n- ${reasons.join("\n- ")}`
+        : "";
+      alert(`${base}${detail}`);
+    },
   });
 
   const framework = frameworkDetail?.framework;
