@@ -185,6 +185,19 @@ export interface PipelineOptions {
   recheck?: boolean; // Re-examine / re-run job: use the longer fetch-phase budget
   batchFetchState?: BatchFetchState; // 42-F: batch-scoped circuit-breaker
   attemptId?: string; // DIAGNOSTIC-ONLY: worker-minted per-claim UUID (log correlation / score provenance)
+  // Job-lifecycle F1: failed-company re-run boost. Threaded from the job flag
+  // rerunBoost down to analyzeCompanyMeasures, where it swaps the scoring
+  // max-output-token budget to the boosted value for this company only. The
+  // paired longer job watchdog is applied separately in the worker.
+  boostScoringTokens?: boolean;
+  // Job-lifecycle F3 (abort-flush): synchronous, non-blocking per-job operator
+  // abort check. Threaded from the worker (Redis-backed isJobAbortedCached).
+  // DISTINCT from cancelCheck: a batch cancel discards the in-flight company's
+  // partial work, whereas a job abort flushes whatever partial scores exist and
+  // marks the company analysis 'partial'. Passed into analyzeCompanyMeasures so
+  // scoring stops at the next checkpoint; on `analysis.aborted` the pipeline
+  // persists the partial scores instead of discarding. Inert when absent.
+  abortCheck?: () => boolean;
 }
 
 export interface PipelineResult {
@@ -196,6 +209,9 @@ export interface PipelineResult {
   documentsCached: number;
   // I45: Structured failure classification for Gate Report diagnostics
   failureType?: "timeout" | "scoring_error" | "no_documents" | "cancelled" | "error";
+  // Job-abort flush (option a): set when analysis was aborted mid-scoring and
+  // partial scores were flushed + company marked analysisStatus='partial'.
+  aborted?: boolean;
 }
 
 // ─── Timeout Helper ─────────────────────────────────────────────────────────
@@ -2870,8 +2886,13 @@ async function runAnalyzePhase(opts: {
   // extracted content), holding evidence constant across runs. Set only by
   // runAnalysisPipeline after decideScoreOnlyReplay returns "replay".
   scoreOnlyReplay?: boolean;
+  // Job-lifecycle F1: failed-company re-run boost, threaded to analyzeCompanyMeasures.
+  boostScoringTokens?: boolean;
+  // Job-lifecycle F3 (abort-flush): per-job operator abort check, threaded to
+  // analyzeCompanyMeasures so the scoring loop can stop and flush partial scores.
+  abortCheck?: () => boolean;
 }): Promise<AnalysisResult | null> {
-  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck, issuerProfile, reviewQueue, skipFetch, scoreOnlyReplay } = opts;
+  const { company, framework, measures, workspaceId, batchId, sourceBatchId, cancelCheck, issuerProfile, reviewQueue, skipFetch, scoreOnlyReplay, boostScoringTokens, abortCheck } = opts;
   const companyId = company.id;
   const companyName = company.name;
   console.log(`[${companyName}] === PHASE 2: ANALYZE ===`);
@@ -3696,6 +3717,12 @@ async function runAnalyzePhase(opts: {
     // EX04: completeness labels so the analyzer can fire ONE bounded doc-level
     // targeted re-retrieval on a confirmed failed-read. Undefined on replay.
     documentCompleteness,
+    // Job-lifecycle F1: failed-company re-run token boost (swaps scoringMaxTokens
+    // → scoringMaxTokensBoost for this company only). Inert when absent.
+    boostScoringTokens,
+    // Job-lifecycle F3 (abort-flush): consulted at the scoring-loop checkpoints so
+    // an operator job-abort stops scoring and returns a partial result to flush.
+    abortCheck,
   });
 
   // ─── I49: PRESERVE PRE-ADJUSTMENT CONFIDENCE ────────────────────────────────
@@ -3838,7 +3865,7 @@ async function runAnalyzePhase(opts: {
       c.measures.every(m => m.score === 0 && (m as any)._scoringFailure)
     );
 
-    if (analysis.totalScore === 0 && allMeasuresPostLow && allMeasuresPreLow && !hasAnyEvidence && !allScoringFailures) {
+    if (!analysis.aborted && analysis.totalScore === 0 && allMeasuresPostLow && allMeasuresPreLow && !hasAnyEvidence && !allScoringFailures) {
       // Genuinely empty: LLM never produced a confident verdict and no evidence was found
       console.warn(`[${companyName}] 0%-guard triggered: genuinely empty analysis (all measures Low pre- and post-adjustment, no evidence)`);
       await storage.updateCompany(companyId, workspaceId, { analysisStatus: "failed" });
@@ -4031,6 +4058,29 @@ async function runAnalyzePhase(opts: {
     }
   } else {
     await storage.createMeasureScores(scoreRows);
+  }
+
+  // ─── Job-lifecycle F3 (abort-flush): partial finalisation ───────────────────
+  // The scoring loop was stopped by an operator job-abort, so analysis.categories
+  // holds ONLY the measures scored before the abort checkpoint, and they have just
+  // been persisted above. Mark the company 'partial' (NOT 'completed'), record the
+  // met/answered counts actually computed, and return early — the remaining
+  // diagnostics below (coverage-from-sourcing, passage-retrieval summary, auto
+  // re-examine, zero-corpus rerun) are best-effort enrichments that would add
+  // latency and further LLM/network work to a run the operator explicitly aborted.
+  if (analysis.aborted) {
+    const abortMeasuresMet = scoreRows.length > 0
+      ? analysis.categories.flatMap((c) => c.measures).filter((m) => m.verdict === "Yes").length
+      : 0;
+    await storage.updateCompany(companyId, workspaceId, {
+      totalScore: analysis.scorePercentage,
+      measuresMetCount: abortMeasuresMet,
+      measuresTotalCount: (analysis as any).answeredCount ?? 0,
+      summary: analysis.summary,
+      analysisStatus: "partial",
+    });
+    console.warn(`[${companyName}] [F3] abort-flush persisted: ${scoreRows.length} partial score row(s), analysisStatus='partial'`);
+    return analysis;
   }
 
   // Update company with results.
@@ -4561,7 +4611,7 @@ async function maybeZeroCorpusRerun(opts: {
 // ─── Combined Pipeline (both phases in sequence) ────────────────────────────
 
 export async function runAnalysisPipeline(opts: PipelineOptions): Promise<PipelineResult> {
-  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch, skipDiscovery, sourceBatchId, recheck } = opts;
+  const { company, framework, measures, workspaceId, batchId, cancelCheck, skipFetch, skipDiscovery, sourceBatchId, recheck, boostScoringTokens, abortCheck } = opts;
   const companyName = company.name;
   const companyId = company.id;
   const pipelineStart = Date.now();
@@ -4751,6 +4801,11 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
         // Score-Only Replay: load EXACTLY the pinned frozen_corpus_snapshot docs
         // as the evidence corpus (see runAnalyzePhase doc-loading branch).
         scoreOnlyReplay,
+        // Job-lifecycle F1: failed-company re-run token boost, threaded through.
+        boostScoringTokens,
+        // Job-lifecycle F3 (abort-flush): per-job operator abort check, threaded
+        // SEPARATELY from cancelCheck (a batch cancel discards; a job abort flushes).
+        abortCheck,
       });
 
       if (!analysis) {
@@ -4808,13 +4863,19 @@ export async function runAnalysisPipeline(opts: PipelineOptions): Promise<Pipeli
       // fetched were ancillary while the primary filings died. If the corpus is
       // thin AND fetch coverage was flagged degraded, re-examine (bounded). A
       // large, genuinely-zero corpus is left untouched.
-      if ((analysis.scorePercentage ?? 0) <= 0) {
+      // F3: an operator-aborted partial must NOT trigger an auto-reexamination —
+      // the operator stopped this run deliberately; re-enqueuing it would defeat
+      // the abort and spend further budget.
+      if (!analysis.aborted && (analysis.scorePercentage ?? 0) <= 0) {
         await maybeAutoReexamine({ company, framework, workspaceId, totalScore: 0 });
       }
 
       return {
         success: true,
         analysis,
+        // F3: surface the abort-flush outcome so the worker records this job as a
+        // terminal (non-retriable) completion that counts toward batch progress.
+        aborted: analysis.aborted === true,
         documentsProcessed: fetchResult.fetchedCount,
         documentsFresh: fetchResult.totalAccepted,
         documentsCached: effectiveSkipFetch ? fetchResult.fetchedCount : 0,

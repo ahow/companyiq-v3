@@ -2626,7 +2626,9 @@ export async function enqueueReexamination(opts: {
     // recheck:true → the re-examine/re-run runs with the longer FETCH_PHASE_BUDGET_RECHECK_MS
     // (every recovery path — dashboard re-examine, low-discovery rerun, reconciler,
     // worker self-heal — funnels through enqueueReexamination, so all get the extra budget).
-    { jobId: job.id, companyId, frameworkId, batchId: batch.id, workspaceId, skipFetch: false, recheck: true },
+    // rerunBoost:true (F1) → every recovery path is a re-run, so boost the scoring
+    // token budget and pair a longer watchdog budget for this attempt.
+    { jobId: job.id, companyId, frameworkId, batchId: batch.id, workspaceId, skipFetch: false, recheck: true, rerunBoost: true },
     { priority: 1, jobId: `reexam-company-${companyId}-batch-${batch.id}` }
   );
 
@@ -2792,6 +2794,118 @@ export async function failJob(jobId: number, error: string, ownership?: AttemptO
     }
   }
   return { transitioned, finalFailed, batchTerminal: transitioned && batchTerminal };
+}
+
+/**
+ * F2 — operator "Mark stalled". Force-fail ONE specific job that is wedged in a
+ * non-terminal state (pending/claimed) with no live worker making progress —
+ * e.g. an orphaned pending job left behind when a watchdog-timeout attempt was
+ * released but never retried, which otherwise keeps its batch stuck in
+ * `running` forever. Generic and identity-agnostic: operates purely on jobId +
+ * workspace, never on any company/framework/topic identity.
+ *
+ * Unlike failJob (the retry-aware worker path) this is an UNCONDITIONAL terminal
+ * transition: it ignores the retry counter and always sets `failed` — the
+ * operator has explicitly decided to abandon this job. It NEVER touches a job
+ * that is already terminal (`completed`/`failed`): a completed job stays
+ * completed (no result is lost, no miscount), and re-marking an already-failed
+ * job is a no-op. Writes ONLY analysis_jobs (+ a best-effort company transient
+ * reset); the caller owns the batch failed_jobs increment and completion check,
+ * exactly mirroring the worker's own failure path.
+ *
+ * Returns `found:false` when the job does not exist in this workspace.
+ * `transitioned:false` with a `previousStatus` means the job was already
+ * terminal (caller must NOT increment failed_jobs).
+ */
+export async function markJobStalled(
+  jobId: number,
+  workspaceId: number,
+): Promise<{
+  found: boolean;
+  transitioned: boolean;
+  previousStatus?: string;
+  batchId?: number;
+  companyId?: number;
+  frameworkId?: number;
+}> {
+  const now = new Date();
+  const [existing] = await db
+    .select({
+      status: schema.analysisJobs.status,
+      batchId: schema.analysisJobs.batchId,
+      companyId: schema.analysisJobs.companyId,
+      frameworkId: schema.analysisJobs.frameworkId,
+    })
+    .from(schema.analysisJobs)
+    .where(and(eq(schema.analysisJobs.id, jobId), eq(schema.analysisJobs.workspaceId, workspaceId)))
+    .limit(1);
+  if (!existing) return { found: false, transitioned: false };
+
+  const detail = JSON.stringify({ markedStalledBy: "operator", at: now.toISOString() });
+  const result = await db.execute(sql`
+    UPDATE analysis_jobs SET
+      status = 'failed',
+      last_error = 'Manually marked stalled by operator',
+      worker_id = NULL,
+      claimed_at = NULL,
+      last_progress_at = ${now},
+      progress_detail = ${detail}::jsonb
+    WHERE id = ${jobId} AND status NOT IN ('completed', 'failed')
+    RETURNING batch_id, company_id, framework_id
+  `);
+  const row = result.rows[0] as any;
+  const transitioned = !!row;
+  console.warn(
+    `[DIAG][job-transition] job=${jobId} -> markJobStalled transitioned=${transitioned} previousStatus=${existing.status}`,
+  );
+  if (!transitioned) {
+    // Already terminal — nothing changed; caller must not count it again.
+    return {
+      found: true,
+      transitioned: false,
+      previousStatus: existing.status,
+      batchId: existing.batchId,
+      companyId: existing.companyId,
+      frameworkId: existing.frameworkId,
+    };
+  }
+  const batchId = Number(row.batch_id);
+  const companyId = Number(row.company_id);
+  const frameworkId = Number(row.framework_id);
+  await touchBatchHeartbeat(batchId, { lastProgressAt: now, detail: { jobId, status: "failed", error: "marked stalled" } });
+  // Roll the company out of any frozen transient status so it shows as 'failed'
+  // rather than looking "in progress" forever (same best-effort reset as failJob).
+  try {
+    await db.execute(sql`
+      UPDATE companies
+      SET analysis_status = 'failed'
+      WHERE id = ${companyId}
+        AND analysis_status IN ('fetching','fetched','analyzing','queued','processing')
+    `);
+  } catch (e) {
+    console.warn(`[DIAG][markJobStalled] best-effort company transient-status reset failed company=${companyId} job=${jobId}: ${String((e as any)?.message ?? e)}`);
+  }
+  return { found: true, transitioned: true, previousStatus: existing.status, batchId, companyId, frameworkId };
+}
+
+// F3 (abort-flush): read-only, workspace-scoped lookup of a job's identity and
+// current status. Used by the abort endpoint to verify ownership and whether the
+// job is still in-flight before raising the abort signal. No mutation.
+export async function getJobForWorkspace(
+  jobId: number,
+  workspaceId: number,
+): Promise<{ status: string; batchId: number | null; companyId: number | null; frameworkId: number | null } | null> {
+  const [row] = await db
+    .select({
+      status: schema.analysisJobs.status,
+      batchId: schema.analysisJobs.batchId,
+      companyId: schema.analysisJobs.companyId,
+      frameworkId: schema.analysisJobs.frameworkId,
+    })
+    .from(schema.analysisJobs)
+    .where(and(eq(schema.analysisJobs.id, jobId), eq(schema.analysisJobs.workspaceId, workspaceId)))
+    .limit(1);
+  return row ?? null;
 }
 
 // DIAGNOSTIC-ONLY (batch-1255 §6.2): additively stamp the current attempt_id

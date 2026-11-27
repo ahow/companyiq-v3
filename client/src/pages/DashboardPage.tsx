@@ -325,6 +325,27 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["batchStatus"] }),
   });
 
+  // F2 — force-fail ONE wedged job so a batch can leave `running`.
+  const markStalledMutation = useMutation({
+    mutationFn: (jobId: number) => api.markJobStalled(jobId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+    },
+    onError: (error: any) => alert(`Mark stalled failed: ${error.message}`),
+  });
+
+  // F3 — abort ONE in-flight job (abort-flush): keeps whatever partial scores
+  // exist and marks the company 'partial'.
+  const abortJobMutation = useMutation({
+    mutationFn: (jobId: number) => api.abortJob(jobId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["batchStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+    },
+    onError: (error: any) => alert(`Abort failed: ${error.message}`),
+  });
+
   const resumeMutation = useMutation({
     // Clear the alert that is actually showing (LLM credit vs. residential-proxy
     // credit) so the single Resume button works for either kind.
@@ -1412,6 +1433,41 @@ export default function DashboardPage({ onViewCompany }: DashboardPageProps) {
           </div>
           {batchStatus.currentCompany && (
             <p className="text-xs text-blue-600 mt-1">Currently: {batchStatus.currentCompany}</p>
+          )}
+          {/* F2/F3 — per-job controls for the outstanding (non-terminal) jobs. */}
+          {Array.isArray(batchStatus.outstandingJobs) && batchStatus.outstandingJobs.length > 0 && (
+            <div className="mt-2 border-t border-blue-200 pt-2">
+              <p className="text-xs font-medium text-blue-800 mb-1">
+                Outstanding jobs ({batchStatus.outstandingJobs.length})
+              </p>
+              <div className="space-y-1">
+                {batchStatus.outstandingJobs.map((j: any) => (
+                  <div key={j.jobId} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate text-blue-700">
+                      {j.companyName} <span className="text-blue-400">· {j.status}</span>
+                    </span>
+                    <span className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => { if (confirm(`Abort "${j.companyName}"? Partial scores are kept and the company is marked 'partial'.`)) abortJobMutation.mutate(j.jobId); }}
+                        disabled={abortJobMutation.isPending}
+                        className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded hover:bg-amber-200 disabled:opacity-50"
+                        title="Abort this job but keep whatever partial scores exist (company marked 'partial')"
+                      >
+                        Abort
+                      </button>
+                      <button
+                        onClick={() => { if (confirm(`Mark "${j.companyName}" stalled? It will be counted as failed so the batch can finish.`)) markStalledMutation.mutate(j.jobId); }}
+                        disabled={markStalledMutation.isPending}
+                        className="px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-50"
+                        title="Force-fail this wedged job so the batch can leave 'running'"
+                      >
+                        Mark stalled
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
         );

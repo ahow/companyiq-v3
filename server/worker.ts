@@ -14,7 +14,7 @@ import { getRedisConnection } from "./redis.js";
 import { runAnalysisPipeline, type PipelineResult, type BatchFetchState, newBatchFetchState } from "./lib/pipeline.js";
 import * as storage from "./storage.js";
 import crypto from "crypto";
-import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation } from "./cancellation.js";
+import { isBatchCancelled, isBatchCancelledCached, markBatchCancelled, forgetBatchCancellation, isJobAbortedCached, forgetJobAbort } from "./cancellation.js";
 import { detectScoreAnomalies } from "./lib/anomaly-detection.js";
 import { routeFailedBatch } from "./lib/batch-completion-route.js";
 import { startReconciler } from "./reconciler.js";
@@ -95,6 +95,12 @@ const EFFECTIVE_CONCURRENCY = RESOURCE_POOLS.separated
   ? RESOURCE_POOLS.pools.analysis
   : RESOURCE_POOLS.sharedSlots;
 const JOB_TIMEOUT = parseInt(process.env.JOB_TIMEOUT_MS || "600000", 10); // 10 min default
+// Job-lifecycle F1: paired longer watchdog budget for a failed-company re-run
+// (rerunBoost). A re-run uses the boosted scoring token budget, so a company's
+// analysis can legitimately take longer — the watchdog must not guillotine it at
+// the first-pass cap. Defaults to 2× JOB_TIMEOUT so it scales with prod's env
+// value (e.g. JOB_TIMEOUT_MS=3300000 → 6600000ms); override via JOB_TIMEOUT_BOOST_MS.
+const JOB_TIMEOUT_BOOST = parseInt(process.env.JOB_TIMEOUT_BOOST_MS || String(JOB_TIMEOUT * 2), 10) || (JOB_TIMEOUT * 2);
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 30000; // 30 seconds between retries
 
@@ -132,6 +138,11 @@ export interface AnalysisJobData {
   sourceBatchId?: number; // Corpus replay: read corpus from this source batch
   recheck?: boolean; // Re-examine / re-run job: use the longer fetch-phase budget
   forceRefresh?: boolean; // RC7: explicitly force fresh discovery, bypassing corpus-reuse
+  // Job-lifecycle F1: failed-company re-run boost. Set by the re-run/re-examine
+  // enqueue paths. Drives BOTH the scoring max-output-token boost (threaded into
+  // the pipeline as boostScoringTokens) AND a paired longer job watchdog budget
+  // (effectiveJobTimeout below). Framework/company-agnostic; inert when absent.
+  rerunBoost?: boolean;
 }
 
 export interface ReliabilityFinalizerData {
@@ -276,7 +287,14 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   if (job.data.kind === "reliability_finalizer") {
     return finalizeReliabilityCycle(job.data);
   }
-  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, skipDiscovery, sourceBatchId, recheck, forceRefresh } = job.data;
+  const { jobId, companyId, frameworkId, batchId, workspaceId, skipFetch, skipDiscovery, sourceBatchId, recheck, forceRefresh, rerunBoost } = job.data;
+  // Job-lifecycle F1: on a failed-company re-run, pair the boosted scoring token
+  // budget with a longer watchdog so the (legitimately slower) re-run is not
+  // guillotined at the first-pass cap. All downstream watchdog deadlines use this.
+  const effectiveJobTimeout = rerunBoost ? JOB_TIMEOUT_BOOST : JOB_TIMEOUT;
+  if (rerunBoost) {
+    console.log(`[Worker][F1] job ${jobId} (company=${companyId}) re-run boost: watchdog ${JOB_TIMEOUT}ms → ${effectiveJobTimeout}ms + boosted scoring token budget`);
+  }
 
   console.log("[Worker] Processing job " + jobId + ": company=" + companyId + ", framework=" + frameworkId + ", batch=" + batchId + ", workspace=" + workspaceId);
 
@@ -393,7 +411,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   // original code (left at its original indentation to keep the diff minimal);
   // control flow, awaits and return values are identical.
   const attemptId = crypto.randomUUID();
-  const lifecycle = createAttemptLifecycle({ jobId: jobId as number, batchId, attemptNumber: currentAttempt, deadlineAt: new Date(claimTimeMs + JOB_TIMEOUT), attemptToken: (claimed as any).attempt_token ?? null });
+  const lifecycle = createAttemptLifecycle({ jobId: jobId as number, batchId, attemptNumber: currentAttempt, deadlineAt: new Date(claimTimeMs + effectiveJobTimeout), attemptToken: (claimed as any).attempt_token ?? null });
   const diagCtx = { batchId, jobId: jobId as number, attemptId, attemptNumber: currentAttempt, companyId, frameworkId, stage: "claimed", lifecycle };
   // Durable ownership token for every terminal/score write of THIS attempt.
   const ownership = ownershipFromContext(diagCtx)!;
@@ -445,6 +463,11 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
   // batch 1248). Composed into cancelCheck below.
   let jobWatchdogFired = false;
   const cancelCheck = () => cancelledBatches.has(batchId) || isBatchCancelledCached(batchId) || jobWatchdogFired || lifecycle.revoked;
+  // Job-abort (option a, abort-flush): DISTINCT from cancelCheck. A per-job abort
+  // flushes whatever partial scores exist and marks the company analysisStatus
+  // 'partial' (handled inside the pipeline), rather than discarding like a batch
+  // cancel. Threaded SEPARATELY and must NEVER be OR-ed into cancelCheck.
+  const abortCheck = () => isJobAbortedCached(jobId);
 
   // Phase 3 / Issue 3 — stage instrumentation lever. DEFAULT (STAGE_INSTRUMENTATION_POLICY
   // unset → "off") leaves stageLedger null so the heartbeat below runs byte-identically
@@ -643,10 +666,14 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
             workspaceId,
             batchId,
             cancelCheck,
+            abortCheck, // Job-abort (option a): flush partial scores + mark 'partial'
             skipFetch,
             skipDiscovery: effectiveSkipDiscovery, // RC7: reuse frozen corpus on re-runs
             sourceBatchId,
             recheck,
+            // Job-lifecycle F1: failed-company re-run token boost (paired with the
+            // longer effectiveJobTimeout watchdog below). Inert when absent.
+            boostScoringTokens: rerunBoost,
             attemptId, // DIAGNOSTIC-ONLY: log correlation / score provenance
             // 42-F: Share circuit-breaker state across all companies in the batch
             batchFetchState: (() => {
@@ -654,7 +681,7 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
               return batchFetchStates.get(batchId)!;
             })(),
           }),
-          JOB_TIMEOUT,
+          effectiveJobTimeout,
           // Watchdog timer is cleared in raceWithWatchdog's finally once the
           // race settles (lifecycle-fence.ts), so it cannot fire after the job.
           () => {
@@ -669,8 +696,8 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
             // own at its own deadline; none waits for this watchdog. All
             // three revoke before failJob/requeue below can run.
             revokeAttempt(lifecycle, "job_watchdog_timeout");
-            console.warn(`[DIAG][job-transition] job=${jobId} watchdog-fired after ${JOB_TIMEOUT}ms ${diagTags()}`);
-            return new Error("Job watchdog timeout after " + JOB_TIMEOUT + "ms");
+            console.warn(`[DIAG][job-transition] job=${jobId} watchdog-fired after ${effectiveJobTimeout}ms ${diagTags()}`);
+            return new Error("Job watchdog timeout after " + effectiveJobTimeout + "ms");
           },
         )
       );
@@ -687,12 +714,19 @@ async function processAnalysisJob(job: Job<QueueJobData>): Promise<PipelineResul
     // (non-retriable final failure) so the job is released, not left claimed.
     if (!result.success && result.error === "Cancelled") {
       const why = dispatchRevokedReason(diagCtx) || lifecycle.revokedReason || "permission_revoked";
-      result = fenceCancelledResult(result, cancelledBatches.has(batchId) || isBatchCancelledCached(batchId), why, JOB_TIMEOUT);
+      result = fenceCancelledResult(result, cancelledBatches.has(batchId) || isBatchCancelledCached(batchId), why, effectiveJobTimeout);
     }
     let jobCompletionTransitioned = false;
     if (result.success) {
       const _jt = await storage.completeJob(jobId, ownership);
       jobCompletionTransitioned = _jt.transitioned;
+      // Job-abort (option a): an aborted result is a terminal success (partial
+      // scores already flushed + company marked 'partial' in the pipeline). Clear
+      // the abort signal so a reused jobId cannot inherit it. Never fatal.
+      if ((result as any).aborted) {
+        try { await forgetJobAbort(jobId); } catch { /* best-effort */ }
+        console.log("[Worker] Job " + jobId + " completed as ABORTED (partial scores flushed)");
+      }
       console.log("[Worker] Job " + jobId + " completed successfully (attempt " + currentAttempt + ")");
 
       // P1.1/P1.2 — freeze the framework-scoped corpus snapshot after a successful

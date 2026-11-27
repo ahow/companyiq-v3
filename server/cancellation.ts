@@ -88,6 +88,70 @@ export function forgetBatchCancellation(batchId: number): void {
   cache.delete(batchId);
 }
 
+// ─── Per-job abort (F3: abort-flush) ─────────────────────────────────────────
+//
+// Distinct from batch cancellation: an operator can abort ONE in-flight job
+// (e.g. a company whose analysis is not progressing or is not vital). Unlike a
+// batch cancel — which discards the in-flight company's partial work — a job
+// abort triggers an "abort-flush": the pipeline stops scoring, persists whatever
+// partial scores already exist, and marks the company analysis 'partial'. The
+// signal is Redis-backed so the (separate) worker replicas observe it, with the
+// same synchronous cached view the pipeline cancelCheck contract needs.
+
+const JOB_KEY_PREFIX = "aborted:job:";
+
+function jobKey(jobId: number): string {
+  return `${JOB_KEY_PREFIX}${jobId}`;
+}
+
+const jobCache = new Map<number, { aborted: boolean; ts: number }>();
+
+/** Persist the abort signal so every worker replica can observe it. */
+export async function markJobAborted(jobId: number): Promise<void> {
+  try {
+    await redis.set(jobKey(jobId), "1", "EX", REDIS_TTL_SECONDS);
+    jobCache.set(jobId, { aborted: true, ts: Date.now() });
+  } catch (err: any) {
+    console.error(`[Cancellation] Failed to mark job ${jobId} aborted: ${err.message}`);
+  }
+}
+
+/** Authoritative async check against Redis. */
+export async function isJobAborted(jobId: number): Promise<boolean> {
+  try {
+    const v = await redis.get(jobKey(jobId));
+    const aborted = v === "1";
+    jobCache.set(jobId, { aborted, ts: Date.now() });
+    return aborted;
+  } catch (err: any) {
+    console.error(`[Cancellation] Failed to read abort flag for job ${jobId}: ${err.message}`);
+    // Fail open (treat as not aborted) so a transient Redis blip doesn't kill a healthy run.
+    return jobCache.get(jobId)?.aborted ?? false;
+  }
+}
+
+/**
+ * Synchronous, non-blocking abort check for use inside the pipeline.
+ * Returns the last known value and triggers a background refresh when stale.
+ */
+export function isJobAbortedCached(jobId: number): boolean {
+  const entry = jobCache.get(jobId);
+  const now = Date.now();
+  if (!entry || now - entry.ts > CACHE_TTL_MS) {
+    void isJobAborted(jobId).catch(() => {});
+    if (!entry) {
+      jobCache.set(jobId, { aborted: false, ts: now });
+      return false;
+    }
+  }
+  return entry?.aborted ?? false;
+}
+
+/** Drop local cache entry (e.g. after a job finishes). */
+export function forgetJobAbort(jobId: number): void {
+  jobCache.delete(jobId);
+}
+
 // Expose the cached (non-authoritative) cancel notification to discovery's
 // dispatch gate without discovery importing Redis (see lib/lifecycle-fence.ts).
 registerBatchCancelSource(isBatchCancelledCached);

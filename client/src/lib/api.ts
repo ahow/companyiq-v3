@@ -115,6 +115,8 @@ export const api = {
     request("/analyze", { method: "POST", body: JSON.stringify(data) }),
   getBatchStatus: () => request("/batch/status"),
   cancelBatch: () => request("/batch/cancel", { method: "POST" }),
+  markJobStalled: (jobId: number) => request(`/jobs/${jobId}/mark-stalled`, { method: "POST" }),
+  abortJob: (jobId: number) => request(`/jobs/${jobId}/abort`, { method: "POST" }),
   getSystemAlerts: () => request("/system/alerts"),
   resumeSystem: (kind: string = "credit_exhaustion") =>
     request("/system/alerts/resume", { method: "POST", body: JSON.stringify({ kind }) }),

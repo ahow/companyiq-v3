@@ -4,6 +4,7 @@ import * as storage from "../storage.js";
 import { requireWorkspace, getSessionContext } from "../middleware/auth.js";
 import { addBatchJobs, removeBatchJobs, getQueueStats } from "../queue.js";
 import { cancelBatch, enqueueReliabilityFinalizer, finalizeBatchAndSave, saveBatchSnapshot } from "../worker.js";
+import { markJobAborted } from "../cancellation.js";
 // A9 / WP15 (truthful publication). The canonical reader view: when the policy is
 // not `passthrough` the stored per-cell publication records are rendered through
 // the single toPublicationView accessor so API/UI can never diverge from the
@@ -1523,6 +1524,17 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       if (a) alert = { kind: a.kind, provider: a.provider, message: a.message, since: a.created_at };
     } catch { /* non-fatal */ }
 
+    // F2/F3 — surface the non-terminal (outstanding) jobs so the dashboard can
+    // offer per-job "Mark stalled" / "Abort" controls. Generic: jobId + company
+    // identity only. Terminal jobs (completed/failed) are excluded.
+    let outstandingJobs: Array<{ jobId: number; companyId: number; companyName: string; status: string }> = [];
+    try {
+      const jobs = await storage.getJobsForBatch(batch.id);
+      outstandingJobs = jobs
+        .filter((j: any) => j.status !== "completed" && j.status !== "failed")
+        .map((j: any) => ({ jobId: j.id, companyId: j.companyId, companyName: j.companyName, status: j.status }));
+    } catch { /* non-fatal */ }
+
     res.json({
       // Only report running when there is genuinely in-flight work, not merely
       // a stale `running` batch row.
@@ -1531,6 +1543,7 @@ apiRouter.get("/batch/status", async (req: Request, res: Response) => {
       completed: batch.completedJobs,
       failed: batch.failedJobs,
       total: batch.totalJobs,
+      outstandingJobs,
       paused: !!alert,
       alert,
       review,
@@ -1921,6 +1934,9 @@ apiRouter.post("/batch/review/reexamine", async (req: Request, res: Response) =>
       // budget so slow own-host primaries that were cut off on the first pass
       // (budget_exceeded) get fetched this time.
       recheck: true,
+      // F1: this is a re-run of failed jobs — boost the scoring token budget and
+      // pair a longer watchdog budget so truncated scoring gets room to complete.
+      rerunBoost: true,
     }));
     await addBatchJobs(queueJobs, workspaceId, batch.id);
 
@@ -2084,6 +2100,113 @@ apiRouter.post("/batch/cancel", async (req: Request, res: Response) => {
       cancelTrace("a", { batch: batch.id, pg_cancel: "returned", ms_since_request: Date.now() - diagT0 });
     }
     res.json({ success: true, snapshotSaved });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// F2 — "Mark stalled": force-fail ONE wedged job (orphaned pending/claimed with
+// no live worker) so its batch can leave `running`. Counts it as a failure and,
+// if it was the last outstanding job, finalises the batch (saving the completed
+// companies to Results) via the same path as the review "discard & finalise".
+// Generic: operates on jobId + workspace only; no company/framework identity.
+apiRouter.post("/jobs/:jobId/mark-stalled", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const jobId = parseInt(String(req.params.jobId), 10);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({ error: "Invalid jobId." });
+    }
+    const marked = await storage.markJobStalled(jobId, workspaceId);
+    if (!marked.found) {
+      return res.status(404).json({ error: "Job not found in this workspace." });
+    }
+    if (!marked.transitioned) {
+      // Already terminal (completed/failed) — nothing to do, don't double-count.
+      return res.json({
+        success: true,
+        stalled: false,
+        alreadyTerminal: true,
+        previousStatus: marked.previousStatus,
+        batchId: marked.batchId,
+      });
+    }
+    // Count the failure and check whether this was the last outstanding job.
+    const batchRow = (await storage.incrementBatchFailed(marked.batchId!)) as any;
+    const completed = Number(batchRow?.completed_jobs ?? 0);
+    const failed = Number(batchRow?.failed_jobs ?? 0);
+    const total = Number(batchRow?.total_jobs ?? 0);
+    let finalised = false;
+    if (total > 0 && completed + failed >= total) {
+      // Last outstanding job — finalise and save completed companies to Results
+      // (same path as the review "discard & finalise"). finalizeBatchAndSave is
+      // lifecycle-fenced: it refuses a cancelled/failed/completed batch.
+      const batch = await storage.getBatchRunById(marked.batchId!, workspaceId);
+      if (batch) {
+        await finalizeBatchAndSave(batch.id, batch.frameworkId, workspaceId, batch.listId ?? undefined);
+        finalised = true;
+      }
+    }
+    res.json({
+      success: true,
+      stalled: true,
+      jobId,
+      batchId: marked.batchId,
+      companyId: marked.companyId,
+      completed,
+      failed,
+      total,
+      finalised,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// F3 — "Abort" (abort-flush, option a): raise a per-job abort signal for ONE
+// in-flight job. The worker's pipeline observes it at its next scoring checkpoint,
+// persists whatever partial scores already exist, and marks the company
+// analysisStatus='partial' (rather than discarding like a batch cancel). Used for
+// a run that is not progressing or not vital — losing the remaining measures of
+// that one company is acceptable. Generic: operates on jobId + workspace only;
+// no company/framework identity. The abort key is Redis-backed (1h TTL) so the
+// separate worker replica observes it; the worker clears it on completion.
+apiRouter.post("/jobs/:jobId/abort", async (req: Request, res: Response) => {
+  try {
+    const { workspaceId } = getSessionContext(req);
+    const jobId = parseInt(String(req.params.jobId), 10);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({ error: "Invalid jobId." });
+    }
+    const job = await storage.getJobForWorkspace(jobId, workspaceId);
+    if (!job) {
+      return res.status(404).json({ error: "Job not found in this workspace." });
+    }
+    if (job.status === "completed" || job.status === "failed") {
+      // Already terminal — nothing in flight to abort.
+      return res.json({
+        success: true,
+        aborted: false,
+        alreadyTerminal: true,
+        status: job.status,
+        batchId: job.batchId,
+        companyId: job.companyId,
+      });
+    }
+    await markJobAborted(jobId);
+    // If the job is still queued (not yet claimed), proactively remove it from the
+    // queue so it never starts; an in-flight job is left to flush its partial.
+    if (job.status === "pending" || job.status === "queued") {
+      try { if (job.batchId != null) await removeBatchJobs(job.batchId); } catch { /* non-fatal */ }
+    }
+    res.json({
+      success: true,
+      aborted: true,
+      jobId,
+      status: job.status,
+      batchId: job.batchId,
+      companyId: job.companyId,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

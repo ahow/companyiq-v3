@@ -605,6 +605,13 @@ export interface AnalysisResult {
   // `publishedScoresMutated` is always false (no published score is changed).
   // Absent only if the governance pass could not be computed.
   governance?: GovernanceResult;
+  // Job-lifecycle F3 (abort-flush): set true when an operator job-abort tripped
+  // mid-scoring. The result then carries only the measures scored before the
+  // abort checkpoint (in `categories`), heavy post-processing (summary narrative,
+  // force-include invariant, governance) is skipped, and the caller persists the
+  // partial scores with analysisStatus='partial' rather than 'completed'. Absent
+  // on a normal (non-aborted) run. Framework/company-agnostic.
+  aborted?: boolean;
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -670,6 +677,17 @@ interface AnalysisSettings {
   // CASCADE_V2=0 (or workspace cascade_v2="false") reverts to claude-arbiter and
   // re-enables the auto-downgrade. Inert when scoringCascade=false.
   cascadeV2: boolean;
+  // Job-lifecycle F1: scoring max-output-token budget. The binary/partial scoring
+  // JSON (verdict + rationale + attributed quotes) is capped at scoringMaxTokens
+  // per LLM call; on evidence-dense companies an undersized cap returns
+  // finish_reason=length, truncating the JSON so every cascade stage "fails" and
+  // the measure burns the full fallback chain. Default 6000 (SCORING_MAX_TOKENS,
+  // workspace scoring_max_tokens). On a failed-company re-run the enqueue path sets
+  // boostScoringTokens, which swaps scoringMaxTokens → scoringMaxTokensBoost
+  // (default 12000, SCORING_MAX_TOKENS_BOOST, workspace scoring_max_tokens_boost)
+  // for that one job so the largest rationales fit. Framework/company-agnostic.
+  scoringMaxTokens: number;
+  scoringMaxTokensBoost: number;
 }
 
 async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSettings> {
@@ -782,6 +800,14 @@ async function loadAnalysisSettings(workspaceId?: number): Promise<AnalysisSetti
     // Content-stable fingerprints gate reuse, so cross-company verdict reuse is
     // prevented while re-runs reuse identical-evidence verdicts for reproducibility.
     verdictCacheEnabled: verdictCacheEnabledOn,
+    // Job-lifecycle F1: scoring token budget + re-run boost. Default/boost are
+    // env-reversible (SCORING_MAX_TOKENS / SCORING_MAX_TOKENS_BOOST) and
+    // workspace-overridable (scoring_max_tokens / scoring_max_tokens_boost). The
+    // boost is applied per-job in analyzeCompanyMeasures only when the enqueue path
+    // sets boostScoringTokens (failed-company re-run). Floors at 1; bad values fall
+    // back to the 6000/12000 defaults.
+    scoringMaxTokens: Math.max(1, parseInt(settings.scoring_max_tokens || process.env.SCORING_MAX_TOKENS || "6000", 10) || 6000),
+    scoringMaxTokensBoost: Math.max(1, parseInt(settings.scoring_max_tokens_boost || process.env.SCORING_MAX_TOKENS_BOOST || "12000", 10) || 12000),
   };
 }
 
@@ -2603,8 +2629,22 @@ export async function analyzeCompanyMeasures(opts: {
   // failed-read matters). Absent on replay/skip-fetch; re-retrieval is suppressed
   // there regardless. Framework-level — never keyed on company/topic/measure.
   documentCompleteness?: ExtractionCompleteness[];
+  // Job-lifecycle F1: failed-company re-run boost. When true, the scoring
+  // max-output-token budget is swapped from scoringMaxTokens → scoringMaxTokensBoost
+  // for this company's analysis only (the paired longer job watchdog is applied
+  // independently in the worker). Threaded from the job flag rerunBoost via the
+  // pipeline. Framework/company-agnostic; inert when absent.
+  boostScoringTokens?: boolean;
+  // Job-lifecycle F3 (abort-flush): synchronous, non-blocking check for a
+  // per-job operator abort. Consulted at the scoring-loop checkpoints (top of
+  // the category loop and top of each concurrency batch). When it trips mid-run
+  // the scorer STOPS, skips heavy post-processing, and returns an AnalysisResult
+  // carrying only the measures scored so far with `aborted:true`. Distinct from a
+  // batch cancel (which discards): on abort the pipeline flushes the partial
+  // scores. Inert when absent. Framework/company-agnostic.
+  abortCheck?: () => boolean;
 }): Promise<AnalysisResult> {
-  const { workspaceId, companyName, companyId, documentIds, framework, measures, temporalContext, freshScoring, issuerProfile, reviewQueue, company, trustedSources, skipFetch, documentCompleteness } = opts;
+  const { workspaceId, companyName, companyId, documentIds, framework, measures, temporalContext, freshScoring, issuerProfile, reviewQueue, company, trustedSources, skipFetch, documentCompleteness, boostScoringTokens, abortCheck } = opts;
   // Opt2 hygiene may reassign these three, so bind them mutably (positionally aligned).
   let { documentTexts, documentUrls, documentTitles } = opts;
 
@@ -2712,6 +2752,17 @@ export async function analyzeCompanyMeasures(opts: {
 
   // Load settings fresh for every analysis call
   const settings = await loadAnalysisSettings(workspaceId);
+
+  // Job-lifecycle F1: failed-company re-run token boost. settings is loaded fresh
+  // per analyzeCompanyMeasures call (not shared across the concurrent worker's
+  // other jobs), and is passed BY REFERENCE into scoreWithEnsemble/scoreWithCascade,
+  // so mutating scoringMaxTokens here boosts every scoring LLM call for THIS company
+  // only. Concurrency-safe precisely because the object is call-local.
+  if (boostScoringTokens && settings.scoringMaxTokensBoost > settings.scoringMaxTokens) {
+    const base = settings.scoringMaxTokens;
+    settings.scoringMaxTokens = settings.scoringMaxTokensBoost;
+    console.log(`[${companyName}] re-run token boost: scoring maxTokens ${base} → ${settings.scoringMaxTokens}`);
+  }
 
   console.log(`[${companyName}] Starting analysis: ${measures.length} measures, ${documentTexts.length} documents`);
 
@@ -3016,6 +3067,11 @@ export async function analyzeCompanyMeasures(opts: {
   // Stage: Score each category
   const allResults: MeasureResult[] = [];
   const scoringProvider = settings.scoringProvider;
+  // Job-lifecycle F3 (abort-flush): set true when the operator job-abort trips at
+  // a scoring checkpoint. Scoring then stops at the next category/batch boundary,
+  // heavy post-processing is skipped, and a partial AnalysisResult is returned so
+  // the pipeline can flush whatever measures were scored in `allResults`.
+  let abortedMidRun = false;
 
   // R4 (2026-09): run-level empty-corpus accounting. Every category's packs
   // are inspected; the run is flagged emptyCorpus.isEmpty only when EVERY pack
@@ -3027,6 +3083,14 @@ export async function analyzeCompanyMeasures(opts: {
   let r4EmptyCorpusReason = "";
 
   for (const [category, categoryMeasures] of categoryMap) {
+    // Job-lifecycle F3 (abort-flush) checkpoint: an operator job-abort stops
+    // scoring at the start of the next category. Everything scored so far is in
+    // allResults and will be flushed by the pipeline.
+    if (abortCheck?.()) {
+      abortedMidRun = true;
+      console.warn(`[${companyName}] [F3] job-abort observed at category boundary — stopping scoring; ${allResults.length} measure(s) scored so far will be flushed as partial`);
+      break;
+    }
     console.log(`[${companyName}] Scoring category: ${category} (${categoryMeasures.length} measures)`);
 
     // Build evidence packs via BM25
@@ -3470,6 +3534,7 @@ export async function analyzeCompanyMeasures(opts: {
             temporalWarning: tw,
             scoringMode: settings.scoringMode,
             framework,
+            scoringMaxTokens: settings.scoringMaxTokens,
           });
         },
       });
@@ -3764,6 +3829,7 @@ export async function analyzeCompanyMeasures(opts: {
                       temporalWarning: tw,
                       scoringMode: settings.scoringMode,
                       framework,
+                      scoringMaxTokens: settings.scoringMaxTokens,
                     });
               sampledVerdicts.push(String(sample.verdict ?? ""));
             }
@@ -3867,6 +3933,7 @@ export async function analyzeCompanyMeasures(opts: {
                   temporalWarning: tw,
                   scoringMode: settings.scoringMode,
                   framework,
+                  scoringMaxTokens: settings.scoringMaxTokens,
                 });
               }
               // Verify provenance of any quotes against the deep evidence.
@@ -4410,6 +4477,14 @@ export async function analyzeCompanyMeasures(opts: {
 
     // Process measures in concurrent batches
     for (let i = 0; i < categoryMeasures.length; i += MEASURE_CONCURRENCY) {
+      // Job-lifecycle F3 (abort-flush) checkpoint: an operator job-abort stops
+      // scoring at the next concurrency-batch boundary within a category, so a
+      // large category does not have to finish before the abort is honoured.
+      if (abortCheck?.()) {
+        abortedMidRun = true;
+        console.warn(`[${companyName}] [F3] job-abort observed at measure-batch boundary (category="${category}") — stopping scoring; ${allResults.length} measure(s) scored so far will be flushed as partial`);
+        break;
+      }
       const batch = categoryMeasures.slice(i, i + MEASURE_CONCURRENCY);
       // Refuse to start another sibling batch once the attempt is revoked.
       // Inert (no-op) when no attempt lifecycle is in context.
@@ -4432,6 +4507,46 @@ export async function analyzeCompanyMeasures(opts: {
       );
       allResults.push(...normalizedBatch);
     }
+    // F3: propagate an abort tripped inside the inner batch loop out of the
+    // outer category loop too.
+    if (abortedMidRun) break;
+  }
+
+  // ─── Job-lifecycle F3 (abort-flush): minimal partial return ─────────────────
+  // When an operator job-abort tripped mid-scoring, return IMMEDIATELY with just
+  // the measures scored so far. All heavy post-processing below (one-quote
+  // reconciliation, summary-narrative LLM call, force-include invariant,
+  // governance pass, re-retrieval) is deliberately SKIPPED — those can each make
+  // further LLM/network calls and would defeat the point of aborting a stuck run.
+  // The caller (pipeline) persists `categories[].measures` with
+  // analysisStatus='partial'. Framework/company-agnostic.
+  if (abortedMidRun) {
+    const partialAnswered = allResults.filter((r) => !r.abstained);
+    const partialAbstained = allResults.filter((r) => r.abstained);
+    const partialMet = partialAnswered.filter((r) => r.verdict === "Yes").length;
+    const partialTotalScore = partialAnswered.reduce((sum, r) => sum + (r.score || 0), 0);
+    const partialScorePercentage = partialAnswered.length > 0
+      ? Math.round((partialTotalScore / partialAnswered.length) * 100)
+      : 0;
+    const partialCategories = Array.from(categoryMap.entries())
+      .map(([category, categoryMeasures]) => ({
+        category,
+        categoryNumber: (categoryMeasures[0] as any)?.categoryNumber ?? 0,
+        measures: allResults.filter((r) => r.category === category),
+      }))
+      .filter((c) => c.measures.length > 0)
+      .sort((a, b) => a.categoryNumber - b.categoryNumber);
+    console.warn(`[${companyName}] [F3] abort-flush: returning partial analysis with ${allResults.length} scored measure(s) (met=${partialMet}, answered=${partialAnswered.length}, abstained=${partialAbstained.length}) of ${measures.length} total`);
+    return {
+      totalScore: partialMet,
+      scorePercentage: partialScorePercentage,
+      summary: `Analysis aborted by operator before completion — partial result with ${allResults.length} of ${measures.length} measures scored.`,
+      answeredCount: partialAnswered.length,
+      abstainedCount: partialAbstained.length,
+      measuresTotal: measures.length,
+      categories: partialCategories,
+      aborted: true,
+    };
   }
 
   // ─── RC3: one quote → one measure reconciliation ────────────────────────────
@@ -4760,6 +4875,10 @@ async function scoreSingleMeasure(opts: {
   temporalWarning?: string | null;
   scoringMode?: string;
   framework?: Framework;
+  // Job-lifecycle F1: per-call scoring max-output-token budget (default resolved in
+  // loadAnalysisSettings; boosted on failed-company re-run). Flows unchanged through
+  // the {...opts} spreads into scoreSingleMeasurePass. Falls back to 6000 when absent.
+  scoringMaxTokens?: number;
 }): Promise<MeasureResult> {
   const { companyName, measure, scoringMode } = opts;
   const usePartial = scoringMode === "partial";
@@ -4958,6 +5077,9 @@ async function scoreSingleMeasurePass(opts: {
   // Bounded content-crash retry budget, threaded through recursive re-attempts.
   // Undefined on the first call → seeded from SCORING_CONTENT_RETRIES (default 2).
   _contentRetriesLeft?: number;
+  // Job-lifecycle F1: scoring max-output-token budget for the completeScoring call
+  // below (default 6000; boosted to scoringMaxTokensBoost on failed-company re-run).
+  scoringMaxTokens?: number;
 }): Promise<MeasureResult> {
   const { companyName, companyId, measure, evidenceText, terminology, topicDescription, provider, providerIndex, temporalWarning, scoringMode, framework } = opts;
 
@@ -5039,7 +5161,10 @@ async function scoreSingleMeasurePass(opts: {
       // provider in the cascade "fail", burning the full cascade+fallback chain per
       // measure and eventually hitting the 3000s pipeline timeout with 0 scores.
       // 6000 gives comfortable headroom for the largest observed rationales.
-      maxTokens: 6000,
+      // Job-lifecycle F1: now resolved from settings (SCORING_MAX_TOKENS, default
+      // 6000) and boosted to SCORING_MAX_TOKENS_BOOST (default 12000) on a
+      // failed-company re-run. 6000 remains the hard fallback when unthreaded.
+      maxTokens: opts.scoringMaxTokens ?? 6000,
       seed,
       logMeta: { measureId: measure.measureId },
     });
@@ -5311,6 +5436,7 @@ async function scoreWithEnsemble(opts: {
       temporalWarning,
       scoringMode: settings.scoringMode,
       framework,
+      scoringMaxTokens: settings.scoringMaxTokens,
     });
     results.push(result);
   }
@@ -5595,6 +5721,7 @@ async function scoreWithCascade(opts: {
         companyName, companyId, measure, evidenceText, terminology,
         topicDescription, provider, temporalWarning,
         scoringMode: settings.scoringMode, framework,
+        scoringMaxTokens: settings.scoringMaxTokens,
       });
       return gateOne(result);
     } finally {

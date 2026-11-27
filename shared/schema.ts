@@ -64,7 +64,7 @@ export const companies = pgTable("companies", {
   fmpSector: text("fmp_sector"),
   fmpResolvedAt: timestamp("fmp_resolved_at"),
   fmpPipelineVersion: text("fmp_pipeline_version"),
-  analysisStatus: text("analysis_status").notNull().default("idle"), // idle | fetching | fetched | analyzing | completed | failed
+  analysisStatus: text("analysis_status").notNull().default("idle"), // idle | fetching | fetched | analyzing | completed | failed | partial (F3 abort-flush: scoring stopped by operator job-abort, only the measures scored before the abort were persisted)
   totalScore: real("total_score"),
   measuresMetCount: integer("measures_met_count"),
   measuresTotalCount: integer("measures_total_count"),
