@@ -10,13 +10,19 @@
 // the child loads plain JS and reaches its first heartbeat quickly.
 //
 // This is transpile-only (bundle:false): each .ts file maps 1:1 to a .js file
-// at the same relative path, so every relative `./foo.js` import and every
-// `import.meta.url`-anchored asset path resolves exactly as it does today. Only
-// the language changes (TS -> JS); the module graph and laziness of dynamic
-// imports are unchanged. node_modules are never touched (not bundled).
+// at the same relative path, so every `import.meta.url`-anchored asset path
+// resolves exactly as it does today. Only the language changes (TS -> JS); the
+// module graph and laziness of dynamic imports are unchanged. node_modules are
+// never touched (not bundled).
+//
+// esbuild transpile-only does NOT rewrite import specifiers, and the source uses
+// extensionless relative imports (e.g. `from "./table-horizon-normaliser"`) that
+// tsx tolerates but Node's ESM loader rejects (ERR_MODULE_NOT_FOUND). So after
+// emit we rewrite every extensionless relative specifier to an explicit
+// `./foo.js` (or `./dir/index.js`), resolved against the emitted tree.
 
 import esbuild from "esbuild";
-import { promises as fs } from "fs";
+import { promises as fs, existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -45,6 +51,44 @@ async function walk(dir, acc = []) {
     }
   }
   return acc;
+}
+
+const HAS_EXT = /\.(js|mjs|cjs|json|node|wasm)$/;
+// Matches the specifier string of: `... from "x"`, side-effect `import "x"`,
+// and dynamic `import("x")`. Group 1 = prefix up to and including the opening
+// quote; group 2 = specifier; group 3 = closing quote.
+const SPEC_RE = /(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.\.?\/[^"']+)(["'])/g;
+
+async function collectJsFiles(dir, acc = []) {
+  for (const e of await fs.readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) await collectJsFiles(full, acc);
+    else if (e.name.endsWith(".js")) acc.push(full);
+  }
+  return acc;
+}
+
+async function rewriteRelativeSpecifiers(outDir) {
+  const files = await collectJsFiles(outDir);
+  let rewritten = 0, filesTouched = 0, unresolved = 0;
+  for (const file of files) {
+    const dir = path.dirname(file);
+    const code = await fs.readFile(file, "utf8");
+    let changed = false;
+    const out = code.replace(SPEC_RE, (m, pre, q1, spec, q2) => {
+      if (HAS_EXT.test(spec)) return m; // already explicit
+      const asFile = path.resolve(dir, spec + ".js");
+      const asIndex = path.resolve(dir, spec, "index.js");
+      let resolved = null;
+      if (existsSync(asFile)) resolved = spec + ".js";
+      else if (existsSync(asIndex)) resolved = spec.replace(/\/?$/, "/") + "index.js";
+      if (!resolved) { unresolved++; return m; }
+      changed = true; rewritten++;
+      return `${pre}${q1}${resolved}${q2}`;
+    });
+    if (changed) { await fs.writeFile(file, out); filesTouched++; }
+  }
+  console.log(`[build-server] rewrote ${rewritten} relative specifier(s) across ${filesTouched} file(s)` + (unresolved ? ` (${unresolved} left unchanged)` : ""));
 }
 
 async function main() {
@@ -83,6 +127,10 @@ async function main() {
     console.error(`[build-server] ${result.errors.length} errors`);
     process.exit(1);
   }
+
+  // Rewrite extensionless relative import/export specifiers in emitted JS to
+  // explicit paths Node's ESM loader can resolve.
+  await rewriteRelativeSpecifiers(OUT_DIR);
 
   // Copy non-TS runtime assets, preserving structure.
   let copied = 0;
