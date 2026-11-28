@@ -44,6 +44,14 @@ ARG CACHEBUST=1
 # Build client (run from client dir, vite.config.ts has outDir: ../dist/client)
 RUN cd client && ../node_modules/.bin/vite build
 
+# Precompile the server + shared TypeScript to plain ESM JS under dist/. The
+# worker service starts from the compiled output (node dist/server/worker-main.js)
+# so each isolated job child forks as plain `node job-child.js` with no per-child
+# runtime TypeScript compile — the fix for the batch-start fork storm. The web
+# (app) service is unchanged and may keep running under tsx; the extra dist/
+# output is harmless to it.
+RUN node scripts/build-server.mjs
+
 EXPOSE 3000
 
 # Run tini as PID 1 so orphaned/reparented child processes are reaped.

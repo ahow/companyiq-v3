@@ -40,7 +40,19 @@ export function isolationEnabled(): boolean {
   return process.env.WORKER_ISOLATION_ENABLED === "true";
 }
 
-const CHILD_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "job-child.ts");
+// The isolated child is resolved next to THIS module. When the worker runs from
+// precompiled JS (dist/), this module is job-isolation.js and the child is
+// job-child.js; when it runs under tsx (dev/tests), both are .ts. Keying the
+// child extension off our own extension means the compiled worker forks a plain
+// `node job-child.js` (no runtime TypeScript compile — the fix for the
+// batch-start fork storm that wedged children at the "spawn" stage), while the
+// dev/test path is byte-identical to before.
+const SELF_EXT = fileURLToPath(import.meta.url).endsWith(".ts") ? ".ts" : ".js";
+const CHILD_IS_COMPILED = SELF_EXT === ".js";
+const CHILD_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), `job-child${SELF_EXT}`);
+// Only load tsx into the child when the child itself is TypeScript. A compiled
+// child must NOT pay the tsx import/compile cost (that is the whole point).
+const CHILD_EXEC_ARGV = CHILD_IS_COMPILED ? [] : ["--import", "tsx"];
 
 /** Per-child DB budget: floor((PG_POOL_MAX − R) / WORKER_CONCURRENCY) (DESIGN §4). */
 export function childPgBudget(env: NodeJS.ProcessEnv = process.env): number {
@@ -258,7 +270,7 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
     const pipelineStart = Date.now();
     const tFork = performance.now();
     const child = fork(CHILD_PATH, [], {
-      execArgv: ["--import", "tsx"],
+      execArgv: CHILD_EXEC_ARGV,
       serialization: "advanced",
       detached: true,
       stdio: ["inherit", "inherit", "inherit", "ipc"],
