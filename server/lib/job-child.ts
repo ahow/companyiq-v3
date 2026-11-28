@@ -70,9 +70,11 @@ async function run(init: any): Promise<void> {
         const testModule = process.env.CIQ_CHILD_TEST_MODULE;
         if (testModule) {
           const mod = await import(testModule);
+          sendToParent({ t: "warm" }); // heavy module graph loaded → parent frees a startup-gate slot
           return mod.run(full, { lifecycle: lc, getDiagContext, isCancelled: cancelCheck });
         }
         const { runAnalysisPipeline } = await import("./pipeline.js");
+        sendToParent({ t: "warm" }); // pipeline module loaded → cold-start over; release the startup-gate slot
         return runAnalysisPipeline(full);
       }));
     sendToParent({ t: "stage", stage: ctx.stage });

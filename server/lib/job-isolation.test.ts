@@ -20,7 +20,7 @@ Object.assign(process.env, {
 delete process.env.REDIS_URL;
 delete process.env.MAX_CONCURRENT_SUBPROC; // baseline default (6) under test
 
-const { runPipelineIsolated, isolationEnabled, childPgBudget, classifyIsolatedOutcome, pipelineTimeoutMs, __testing } = await import("./job-isolation.js");
+const { runPipelineIsolated, isolationEnabled, childPgBudget, classifyIsolatedOutcome, pipelineTimeoutMs, __testing, __startupGateTesting } = await import("./job-isolation.js");
 const { isRetriableError, fenceCancelledResult } = await import("./retry-policy.js");
 const { PG_PARENT_RESERVE } = await import("../db.js");
 const { spawn } = await import("node:child_process");
@@ -607,5 +607,39 @@ test("M3. cancel BEFORE the report → stays a cancellation; late success discar
   assert.equal(late.length, 1);
   assert.equal(late[0].killReason, "cancel");
   assert.match(late[0].summary, /^success=true/);
+  await assertNoLeaks();
+});
+
+// ─── Startup admission gate + watchdog (thundering-herd cure) ─────────────────
+test("S1. startup watchdog: a child whose pipeline import never resolves is killed and the job fails retriably (startup_timeout)", async () => {
+  const hang = path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__", "isolation-hang-import.ts");
+  const err: any = await withEnv({ CIQ_CHILD_TEST_MODULE: hang, WORKER_ISOLATION_STARTUP_TIMEOUT_MS: "1200", PIPELINE_TIMEOUT_MS: "600000", WORKER_ISOLATION_KILL_GRACE_MS: "30000" }, async () => {
+    const t0 = Date.now();
+    const e = await inCtx(() => runPipelineIsolated(mkOpts())).then(() => null, (x) => x);
+    return Object.assign(e ?? new Error("resolved unexpectedly"), { elapsed: Date.now() - t0 });
+  });
+  console.log(`# S1 startup watchdog: error="${err.message}" elapsed=${err.elapsed}ms retriable=${isRetriableError(err.message)}`);
+  assert.match(err.message, /startup timed out/i);
+  assert.ok(err.elapsed >= 1000 && err.elapsed < 10000, `fired near the 1200ms deadline, got ${err.elapsed}ms`);
+  assert.equal(isRetriableError(err.message), true);        // retried once the herd has drained; NOT the non-retriable "Job watchdog timeout" class
+  await assertNoLeaks();
+});
+
+test("S2. startup admission gate bounds concurrent cold-starts to the configured limit", async () => {
+  const hang = path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__", "isolation-hang-import.ts");
+  await withEnv({ CIQ_CHILD_TEST_MODULE: hang, WORKER_ISOLATION_STARTUP_CONCURRENCY: "2", WORKER_ISOLATION_STARTUP_TIMEOUT_MS: "1500", PIPELINE_TIMEOUT_MS: "600000", WORKER_ISOLATION_KILL_GRACE_MS: "30000" }, async () => {
+    const ps = [0, 1, 2, 3, 4].map(() => inCtx(() => runPipelineIsolated(mkOpts())).then(() => null, () => null));
+    await sleep(500);                                        // well before the 1500ms watchdog; hang children never warm → slots stay held
+    const st = __startupGateTesting.state();
+    console.log(`# S2 gate mid-flight: ${JSON.stringify(st)} (5 launched, limit 2)`);
+    assert.equal(st.limit, 2);
+    assert.ok(st.active <= 2, `active ${st.active} must be ≤ limit 2`);
+    assert.ok(st.waiting >= 2, `waiting ${st.waiting}: 5 launched with ≤2 admitted`);
+    await Promise.all(ps);                                   // watchdog kills each wave; gate drains the queue
+    const after = __startupGateTesting.state();
+    console.log(`# S2 gate drained: ${JSON.stringify(after)}`);
+    assert.equal(after.active, 0);
+    assert.equal(after.waiting, 0);
+  });
   await assertNoLeaks();
 });

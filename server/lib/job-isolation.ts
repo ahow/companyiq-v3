@@ -62,6 +62,42 @@ export function childPgBudget(env: NodeJS.ProcessEnv = process.env): number {
   return Math.floor((total - reserve) / conc);
 }
 
+// ─── Startup admission gate (thundering-herd cure) ───────────────────────────
+// At batch start the worker forks up to WORKER_CONCURRENCY children at once and
+// each then cold-loads the large pipeline.js ESM graph (~280 modules). While the
+// worker ran children under tsx, each child's transpile latency incidentally
+// staggered these imports; precompiling to plain JS (commit 9e8e80d) removed
+// that stagger, so on a CPU/IO-constrained container all imports fire
+// simultaneously and can saturate the box so badly the module graph never
+// finishes loading — children sit wedged in `await import("./pipeline.js")` for
+// the whole job. This gate is the STRUCTURAL cure, independent of what provided
+// the stagger before: it bounds how many children may be in their cold-start
+// (fork → "warm") phase at any instant, turning the burst into a ramp. A slot is
+// released the moment a child reports "warm" (its pipeline module is loaded) or
+// when the child settles/exits — whichever comes first — so a slot can never
+// leak, and a true wedge self-heals once the startup watchdog kills the child.
+// WORKER_ISOLATION_STARTUP_CONCURRENCY=0 disables the gate (unbounded, legacy).
+function startupGateLimit(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.WORKER_ISOLATION_STARTUP_CONCURRENCY;
+  if (raw === undefined) return 4;
+  return Math.max(0, parseInt(raw, 10) || 0);
+}
+let startupActive = 0;
+const startupWaiters: Array<() => void> = [];
+function acquireStartupSlot(): Promise<void> {
+  const limit = startupGateLimit();
+  if (limit === 0 || startupActive < limit) { startupActive++; return Promise.resolve(); }
+  return new Promise<void>((res) => startupWaiters.push(res));
+}
+function releaseStartupSlot(): void {
+  const next = startupWaiters.shift();
+  if (next) next();                                   // hand the held slot straight to the next waiter
+  else startupActive = Math.max(0, startupActive - 1);
+}
+export const __startupGateTesting = {
+  state: () => ({ active: startupActive, waiting: startupWaiters.length, limit: startupGateLimit() }),
+};
+
 /**
  * Same env + default as pipeline.ts PIPELINE_TIMEOUT_MS. Phase 3 / Issue 3 routes
  * the parent's single hard deadline through the time-budget lever. At the DEFAULT
@@ -78,7 +114,7 @@ export function pipelineTimeoutMs(env: NodeJS.ProcessEnv = process.env): number 
 }
 
 /** Why the parent terminated the child (null = it was never asked to stop). */
-export type KillReason = "pipeline_deadline" | "job_deadline" | "cancel" | `revoke:${string}`;
+export type KillReason = "pipeline_deadline" | "job_deadline" | "startup_timeout" | "cancel" | `revoke:${string}`;
 
 export type IsolatedOutcome = { resolve: PipelineResult } | { reject: Error };
 
@@ -108,6 +144,12 @@ export function classifyIsolatedOutcome(o: {
       return { resolve: { success: false, error: `Pipeline timed out after ${Math.round(o.pipelineElapsedMs / 1000)}s`, ...base, failureType: "timeout" } as PipelineResult };
     case "job_deadline":
       return { reject: new Error(`Job watchdog timeout: isolated child killed at job deadline (${exit})`) };
+    case "startup_timeout":
+      // The child never finished loading its pipeline module (cold-import wedge
+      // under batch-start contention). Fail LOUD and RETRIABLE — a reject is the
+      // "died unexpectedly" class (retry-policy.ts), so the job is re-queued and,
+      // once the startup admission gate has drained the herd, succeeds.
+      return { reject: new Error(`Isolated job child startup timed out: pipeline module did not load before deadline (${exit})`) };
     case null:
       return { reject: new Error(`Isolated job child exited unexpectedly (${exit})`) };
     default: // "cancel" | "revoke:*"
@@ -243,12 +285,12 @@ function recordPipelineTimeout(opts: PipelineOptions, elapsedMs: number, limitMs
   })().catch((e) => console.warn(`[WORKER-ISOLATION] pipeline-timeout bookkeeping failed: ${e?.message || e}`));
 }
 
-export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResult> {
+export async function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResult> {
   const ctx = getDiagContext();
   const lc = ctx?.lifecycle;
   const budget = childPgBudget();
   if (budget < 1) {
-    return Promise.reject(new Error(`Worker isolation refused: per-child PG budget ${budget} < 1 (PG_POOL_MAX − WORKER_ISOLATION_PARENT_PG_RESERVE) / WORKER_CONCURRENCY`));
+    throw new Error(`Worker isolation refused: per-child PG budget ${budget} < 1 (PG_POOL_MAX − WORKER_ISOLATION_PARENT_PG_RESERVE) / WORKER_CONCURRENCY`);
   }
   if (!exitHookInstalled) {
     exitHookInstalled = true;
@@ -264,9 +306,18 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
   const reapWindowMs = parseInt(process.env.WORKER_ISOLATION_REAP_WINDOW_MS || "2000", 10);
   const nice = parseInt(process.env.WORKER_ISOLATION_CHILD_NICE || "10", 10);
   const pipelineMs = pipelineTimeoutMs();
+  const startupMs = parseInt(process.env.WORKER_ISOLATION_STARTUP_TIMEOUT_MS || "120000", 10);
   const testModule = process.env.CIQ_CHILD_TEST_MODULE;
 
-  return new Promise<PipelineResult>((resolve, reject) => {
+  // Admission gate: bound how many children are in their cold-start phase at once
+  // (see startupGateLimit). Acquired BEFORE the fork so the fork itself ramps;
+  // released on "warm" / settle / exit (idempotent). The per-child wait is tiny
+  // relative to the pipeline and job deadlines, which are measured from here/claim.
+  await acquireStartupSlot();
+
+  return await new Promise<PipelineResult>((resolve, reject) => {
+    let startupReleased = false;
+    const releaseStartup = () => { if (!startupReleased) { startupReleased = true; releaseStartupSlot(); } };
     const pipelineStart = Date.now();
     const tFork = performance.now();
     const child = fork(CHILD_PATH, [], {
@@ -285,6 +336,7 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
     const grants = new Map<number, Grant>();
     let settled = false;
     let exited = false;
+    let warm = false;
     let lastStage = "spawn";
     // batch-1277: outstanding browser/lease operations reported by the child, so
     // a deadline/kill can be explained after the fact (which op held / was
@@ -329,6 +381,19 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
     if (lc) { if (lc.abort.signal.aborted) onRevoke(); else lc.abort.signal.addEventListener("abort", onRevoke, { once: true }); }
     timers.push(setTimeout(() => onDeadline("pipeline_deadline"), pipelineMs));
     if (lc?.deadlineAt) timers.push(setTimeout(() => onDeadline("job_deadline"), Math.max(0, lc.deadlineAt.getTime() - Date.now())));
+    // Startup watchdog (SAFETY NET): the general invariant that no await in the
+    // job path may block unbounded without a deadline that turns a hang into a
+    // reported failure. The 75-min pipeline deadline is far too coarse to catch a
+    // cold-import wedge; this fires if the child has not reported "warm" (pipeline
+    // module loaded) within startupMs of fork, SIGKILLs it, and lets settle()
+    // classify it as a retriable startup_timeout — a loud, retried failure instead
+    // of an 18-min silent freeze. Disabled when startupMs ≤ 0.
+    if (startupMs > 0) timers.push(setTimeout(() => {
+      if (warm || exited || reported || killReason) return;
+      console.error(`[WORKER-ISOLATION] child pid=${child.pid} did not warm (load pipeline.js) within ${startupMs}ms (stage=${lastStage}) → SIGKILL + fail-loud (retriable startup_timeout)`);
+      killReason = "startup_timeout";
+      killNow();
+    }, startupMs));
     let cancelSent = false;
     const cancelPoll = setInterval(() => {
       if (!cancelSent && opts.cancelCheck?.()) { cancelSent = true; send({ t: "cancel" }); armKill("cancel"); }
@@ -421,7 +486,15 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
         case "paid": ingestPaidCallRowFromChild(m.row); break;
         case "stageprofile": ingestStageProfileRowFromChild(m.row); break;
         case "signal": ingestSignalFromChild(m.kind); break;
-        case "stage": if (typeof m.stage === "string") { lastStage = m.stage; setDiagStage(m.stage); } break;
+        case "warm": warm = true; releaseStartup(); break; // pipeline module loaded → cold-start over, free the gate slot
+        case "stage": if (typeof m.stage === "string") {
+          lastStage = m.stage; setDiagStage(m.stage);
+          // Fallback warm signal: any stage past the cold-import ("spawn"/"pipeline"
+          // are the pre-import markers; the stage heartbeat ticks "pipeline" every
+          // 2s DURING the import, so those must NOT release the gate). A real stage
+          // (fetch/analyze/score/…) proves the module graph loaded.
+          if (m.stage !== "spawn" && m.stage !== "pipeline") { warm = true; releaseStartup(); }
+        } break;
         case "lease": {
           // batch-1277: track the set of browser operations the child has queued
           // for / is holding, so a later deadline/kill can be explained. acquire
@@ -446,6 +519,7 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
     const settle = (code: number | null, signal: NodeJS.Signals | null, cleanupFailure: string | null = null) => {
       if (settled) return;
       settled = true;
+      releaseStartup(); // never leak a gate slot: a child that died before "warm" frees it here
       const pipelineElapsedMs = Date.now() - pipelineStart;
       let out = classifyIsolatedOutcome({ reported, killReason, code, signal, lastStage, pipelineElapsedMs });
       if (!reported && killReason === "pipeline_deadline") recordPipelineTimeout(opts, pipelineElapsedMs, pipelineMs);
@@ -488,7 +562,7 @@ export function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResu
     });
     child.on("error", (e) => {
       console.warn(`[WORKER-ISOLATION] child error: ${e?.message || e}`);
-      if (!child.pid) { live.delete(child); cleanup(); releaseAll(); if (!settled) { settled = true; reject(e); } }
+      if (!child.pid) { live.delete(child); cleanup(); releaseAll(); releaseStartup(); if (!settled) { settled = true; reject(e); } }
     });
   });
 }
