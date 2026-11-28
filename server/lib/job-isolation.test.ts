@@ -643,3 +643,89 @@ test("S2. startup admission gate bounds concurrent cold-starts to the configured
   });
   await assertNoLeaks();
 });
+
+
+
+// ─── Pre-warmed child pool (opt-in: WORKER_ISOLATION_POOL_SIZE > 0) ───────────
+// The pool path forks long-lived children ONCE; each imports pipeline.js a single
+// time, reports "warm", then processes many jobs over the IPC channel (the child
+// LOOPS, never exits after one job). Under tsx POOL_CHILD_PATH is the same .ts
+// child (CIQ_CHILD_POOL=1); the single-file BUNDLED child + its F1 forbidden-import
+// audit are enforced at build time in scripts/build-server.mjs. Pooled children
+// live across jobs, so each test tears the pool down before assertNoLeaks().
+
+test("P1. pool reuse: one warm child serves multiple jobs without re-forking (child loops, does not exit)", async () => {
+  await withEnv({ WORKER_ISOLATION_POOL_SIZE: "1" }, async () => {
+    process.env.FIXTURE_MODE = "pool-echo";
+    __testing.resetStats();
+    const r1: any = await inCtx(() => runPipelineIsolated(mkOpts()));
+    const r2: any = await inCtx(() => runPipelineIsolated(mkOpts()));
+    console.log(`# P1 pid1=${r1.pid} jobN1=${r1.jobN} pid2=${r2.pid} jobN2=${r2.jobN} forks=${__testing.stats().forks} pool=${JSON.stringify(__testing.poolState())}`);
+    assert.equal(r1.success, true);
+    assert.equal(r2.success, true);
+    assert.notEqual(r1.pid, process.pid);
+    assert.equal(r1.pid, r2.pid, "the same long-lived child served both jobs");
+    assert.equal(r1.jobN, 1);
+    assert.equal(r2.jobN, 2, "module-level counter survived → child reused, not re-forked");
+    assert.equal(__testing.stats().forks, 1, "exactly one child forked for two jobs");
+    assert.equal(__testing.liveChildren(), 1, "the pooled child stays alive between jobs");
+    await __testing.shutdownPool();
+  });
+  await assertNoLeaks();
+});
+
+test("P2. nice is applied AFTER warm, never at fork (the production cold-start wedge)", async () => {
+  // Part A: a child that warms gets niced exactly once, with the configured value.
+  await withEnv({ WORKER_ISOLATION_POOL_SIZE: "1", WORKER_ISOLATION_CHILD_NICE: "7" }, async () => {
+    process.env.FIXTURE_MODE = "pool-echo";
+    __testing.resetStats();
+    const r: any = await inCtx(() => runPipelineIsolated(mkOpts()));
+    const nices = __testing.niceApplications();
+    console.log(`# P2a niceApplications=${JSON.stringify(nices)} childPid=${r.pid}`);
+    assert.equal(r.success, true);
+    assert.equal(nices.length, 1, "nice applied exactly once");
+    assert.equal(nices[0].nice, 7);
+    assert.equal(nices[0].pid, r.pid, "niced the warmed child, by pid");
+    await __testing.shutdownPool();
+  });
+  await assertNoLeaks();
+  // Part B: a child still cold-importing (never warm) is niced ZERO times —
+  // niceing a child mid cold-import is exactly what starved it in production.
+  const hang = path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__", "isolation-hang-import.ts");
+  await withEnv({ WORKER_ISOLATION_POOL_SIZE: "1", CIQ_CHILD_TEST_MODULE: hang, WORKER_ISOLATION_STARTUP_TIMEOUT_MS: "2000", WORKER_ISOLATION_KILL_GRACE_MS: "30000" }, async () => {
+    __testing.resetStats();
+    const job = inCtx(() => runPipelineIsolated(mkOpts())).then(() => null, () => null);
+    await sleep(600);                                        // well before the 2000ms startup watchdog; child is still cold-importing
+    const nices = __testing.niceApplications();
+    console.log(`# P2b (never warmed) niceApplications=${JSON.stringify(nices)} pool=${JSON.stringify(__testing.poolState())}`);
+    assert.equal(nices.length, 0, "a child that has not reported warm must NOT be niced");
+    await __testing.shutdownPool();
+    await job;
+  });
+  await assertNoLeaks();
+});
+
+test("P3. respawn: a child that crashes mid-job is replaced and the next job runs on a fresh child", async () => {
+  await withEnv({ WORKER_ISOLATION_POOL_SIZE: "1" }, async () => {
+    // Job 1: the child exits (process.exit) mid-job with no report → retriable
+    // "exited unexpectedly" so worker.ts/BullMQ re-queues a fresh attempt.
+    process.env.FIXTURE_MODE = "pool-crash";
+    process.env.FIXTURE_CRASH_ON_JOB = "1";
+    __testing.resetStats();
+    const err: any = await inCtx(() => runPipelineIsolated(mkOpts())).then(() => null, (x) => x);
+    console.log(`# P3 crash error="${err?.message}" retriable=${err ? isRetriableError(err.message) : "n/a"}`);
+    assert.ok(err, "the crashing child rejects the in-flight attempt");
+    assert.match(err.message, /exited unexpectedly/i);
+    assert.equal(isRetriableError(err.message), true, "retriable → re-queued as a fresh attempt");
+    // Job 2: lands on the respawned replacement child.
+    delete process.env.FIXTURE_CRASH_ON_JOB;
+    process.env.FIXTURE_MODE = "pool-echo";
+    const r2: any = await inCtx(() => runPipelineIsolated(mkOpts()));
+    console.log(`# P3 after respawn pid2=${r2.pid} jobN2=${r2.jobN} forks=${__testing.stats().forks}`);
+    assert.equal(r2.success, true);
+    assert.equal(r2.jobN, 1, "fresh respawned child (counter reset); the job was re-dispatched to it");
+    assert.ok(__testing.stats().forks >= 2, "a replacement child was forked after the crash");
+    await __testing.shutdownPool();
+  });
+  await assertNoLeaks();
+});

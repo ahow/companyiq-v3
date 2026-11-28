@@ -15,6 +15,19 @@ let lc: ReturnType<typeof createAttemptLifecycle> | null = null;
 let started = false;
 registerBatchCancelSource(() => cancelFlag);
 
+// ─── Pre-warmed pool mode ────────────────────────────────────────────────────
+// When CIQ_CHILD_POOL=1 the parent (job-isolation.ts) keeps this child ALIVE and
+// feeds it many jobs over the IPC channel instead of forking a fresh child per
+// job. The expensive pipeline module graph is imported ONCE (on the parent's
+// `warmup` message), cached in `runFn`, and reused for every subsequent job; the
+// child never exits after a job — it resets its per-job state and waits for the
+// next `init`. This eliminates the per-job cold-import that starved niced
+// children under batch-start contention (the "child did not warm" wedge).
+type PoolRunFn = (full: any, h: { lifecycle: any; getDiagContext: typeof getDiagContext; isCancelled: () => boolean }) => Promise<any>;
+const POOL_MODE = process.env.CIQ_CHILD_POOL === "1";
+let runFn: PoolRunFn | null = null; // cached pipeline entry (pool mode)
+let busy = false;                   // a job is in flight in this (pooled) child
+
 // ─── Parent-death watchdog ───────────────────────────────────────────────────
 // process.on("exit") in the parent cannot run when the parent is SIGKILLed /
 // OOM-killed. This thread has its own event loop, so it keeps running even
@@ -46,7 +59,11 @@ process.on("message", (m: any) => {
   if (!m || typeof m !== "object") return;
   if (m.t === "revoke") revokeAttempt(lc, m.reason || "revoked");
   else if (m.t === "cancel") cancelFlag = true;
-  else if (m.t === "init" && !started) { started = true; void run(m); }
+  else if (m.t === "warmup") { if (POOL_MODE) void warmup(); }     // pool: import pipeline once, then wait for jobs
+  else if (m.t === "init") {
+    if (POOL_MODE) { if (!busy) { busy = true; void runJob(m); } } // pool: run many jobs over this one child
+    else if (!started) { started = true; void run(m); }           // legacy: exactly one job per child, then exit
+  }
 });
 
 function serializeError(e: any) {
@@ -86,6 +103,62 @@ async function run(init: any): Promise<void> {
   }
   // Let the IPC queue drain, then exit (pools/timers must not keep us alive).
   setTimeout(() => process.exit(0), 50);
+}
+
+// ─── Pool mode: warm once, then loop over jobs ───────────────────────────────
+/** Import the pipeline module graph ONCE and cache its entry point. Sends "warm"
+ * so the parent frees a startup-gate slot and applies the nice priority. On a
+ * load failure the child reports the error and exits so the parent respawns. */
+async function warmup(): Promise<void> {
+  if (runFn) { sendToParent({ t: "warm" }); return; } // idempotent
+  try {
+    const testModule = process.env.CIQ_CHILD_TEST_MODULE;
+    if (testModule) {
+      const mod = await import(testModule);
+      runFn = (full, h) => mod.run(full, h);
+    } else {
+      const { runAnalysisPipeline } = await import("./pipeline.js");
+      runFn = (full) => runAnalysisPipeline(full);
+    }
+    sendToParent({ t: "warm" }); // pipeline module loaded → cold-start over
+  } catch (e) {
+    sendToParent({ t: "error", error: serializeError(e) });
+    setTimeout(() => process.exit(1), 50); // load failed → let the parent respawn a replacement
+  }
+}
+
+/** Run ONE job using the already-imported pipeline, reset per-job state, then
+ * return to idle (NO exit). Mirrors run() but reuses the cached runFn and loops. */
+async function runJob(init: any): Promise<void> {
+  // Reset per-job state (the child outlives each job).
+  cancelFlag = false;
+  lc = null;
+  const o = init.opts;
+  if (init.cancelled) cancelFlag = true;
+  const L = init.lifecycle;
+  lc = L ? createAttemptLifecycle({ jobId: L.jobId, batchId: L.batchId, attemptNumber: L.attemptNumber, deadlineAt: L.deadlineAt ? new Date(L.deadlineAt) : null, attemptToken: L.attemptToken }) : null;
+  if (L?.revokedReason) revokeAttempt(lc, L.revokedReason);
+  const batchFetchState = o.batchFetchState ?? { hostSlowFetches: new Map(), hostCircuitBroken: new Set() };
+  const cancelCheck = () => cancelFlag || !!lc?.revoked;
+  const ctx: any = { batchId: o.batchId ?? null, jobId: L?.jobId ?? null, attemptId: init.attemptId, attemptNumber: L?.attemptNumber ?? null, companyId: init.companyId, frameworkId: init.frameworkId, stage: "pipeline", lifecycle: lc ?? undefined };
+  const stageTimer = setInterval(() => sendToParent({ t: "stage", stage: ctx.stage }), 2000);
+  try {
+    const result = await runWithLlmContext({ workspaceId: o.workspaceId, batchId: o.batchId, companyId: init.companyId, frameworkId: init.frameworkId, callType: "scoring" },
+      () => runWithDiagContext(ctx, async () => {
+        const full = { ...o, cancelCheck, batchFetchState };
+        return runFn!(full, { lifecycle: lc, getDiagContext, isCancelled: cancelCheck });
+      }));
+    sendToParent({ t: "stage", stage: ctx.stage });
+    sendToParent({ t: "result", result, revokedReason: lc?.revoked ? lc.revokedReason : null, batchFetchState });
+  } catch (e) {
+    sendToParent({ t: "error", error: serializeError(e) });
+  } finally {
+    clearInterval(stageTimer);
+    lc = null;
+    cancelFlag = false;
+    busy = false;
+    sendToParent({ t: "idle" }); // reported + reset → parent may recycle this child for the next job
+  }
 }
 
 sendToParent({ t: "ready" });

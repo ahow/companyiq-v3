@@ -6,6 +6,10 @@ import fs from "node:fs";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const ok = (extra: any = {}) => ({ success: true, documentsProcessed: 0, documentsFresh: 0, documentsCached: 0, ...extra });
 
+// Module-level across jobs in a POOLED (long-lived) child: proves the child is
+// reused (counter increments) rather than re-forked (counter would reset to 1).
+let poolJobCounter = 0;
+
 export async function run(opts: any, h: { isCancelled: () => boolean; lifecycle: any }): Promise<any> {
   const mode = process.env.FIXTURE_MODE;
   if (mode === "busy") {
@@ -152,6 +156,22 @@ export async function run(opts: any, h: { isCancelled: () => boolean; lifecycle:
     registerDescendantGroup(Number(process.env.FIXTURE_ZOMBIE_PGID));
     await sleep(100);
     return ok({ pid: process.pid });
+  }
+  // ── Pool: echo the pid + per-child job counter (reuse proof). Each job also
+  // bumps the module-level counter, which only survives if the child is reused.
+  if (mode === "pool-echo") {
+    poolJobCounter++;
+    await sleep(20);
+    return ok({ pid: process.pid, jobN: poolJobCounter });
+  }
+  // ── Pool: on the Nth job (default 1) crash the whole child process, so the
+  // parent must respawn a replacement and re-dispatch the attempt.
+  if (mode === "pool-crash") {
+    poolJobCounter++;
+    const crashOn = parseInt(process.env.FIXTURE_CRASH_ON_JOB || "1", 10);
+    if (poolJobCounter >= crashOn) { await sleep(20); process.exit(7); }
+    await sleep(20);
+    return ok({ pid: process.pid, jobN: poolJobCounter });
   }
   throw new Error("unknown FIXTURE_MODE " + mode);
 }

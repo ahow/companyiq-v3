@@ -54,6 +54,48 @@ const CHILD_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), `job-
 // child must NOT pay the tsx import/compile cost (that is the whole point).
 const CHILD_EXEC_ARGV = CHILD_IS_COMPILED ? [] : ["--import", "tsx"];
 
+// Pre-warmed pool children load the SINGLE-FILE bundled child in compiled mode
+// (scripts/build-server.mjs emits dist/server/lib/job-child.bundle.js): one file
+// cold-loaded once per child instead of the ~280-module graph, which is the
+// structural cure for the cold-import wedge. Under tsx (dev/tests) there is no
+// bundle, so the pool forks the plain .ts child exactly like the legacy path.
+const POOL_CHILD_PATH = CHILD_IS_COMPILED
+  ? path.join(path.dirname(fileURLToPath(import.meta.url)), "job-child.bundle.js")
+  : CHILD_PATH;
+// The bundle flattens the module tree to dist/server/lib/, so any module that
+// resolves an asset from its own location (framework-v2/defect-ledger.ts uses
+// __dirname/../../data) would drift to dist/data. Pin the default ledger path to
+// the real dist/server/data so the bundled child matches the 1:1 transpiled tree.
+// (import.meta.url-anchored assets in server/lib itself — processor.ts's
+// pdf-parse-worker.cjs — are already at this same dir, so they do NOT drift.)
+const COMPILED_SERVER_DATA_DIR = CHILD_IS_COMPILED
+  ? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "data")
+  : null;
+
+/**
+ * Pool size (DESIGN: pre-warmed long-lived child pool). Default 0 → the legacy
+ * per-job fork path is used unchanged (ship DORMANT; the whole pool path is
+ * inert until an operator sets this). Enable for a canary with e.g.
+ * WORKER_ISOLATION_POOL_SIZE = min(WORKER_CONCURRENCY, 4..8).
+ */
+export function isolationPoolSize(env: NodeJS.ProcessEnv = process.env): number {
+  return Math.max(0, parseInt(env.WORKER_ISOLATION_POOL_SIZE || "0", 10) || 0);
+}
+/** Recycle a pooled child after this many jobs (memory hygiene). 0 = unlimited. */
+export function poolMaxJobs(env: NodeJS.ProcessEnv = process.env): number {
+  return Math.max(0, parseInt(env.WORKER_ISOLATION_POOL_MAX_JOBS || "0", 10) || 0);
+}
+
+// Nice is applied AFTER a child reports "warm", never at fork: a child niced to
+// +10 during its cold import gets CPU-starved and never finishes loading (the
+// production "child did not warm" wedge). Recorded for tests.
+const niceApplications: Array<{ pid: number; nice: number }> = [];
+function applyChildNice(pid: number, nice: number): void {
+  niceApplications.push({ pid, nice });
+  if (niceApplications.length > 200) niceApplications.shift();
+  try { os.setPriority(pid, nice); } catch { /* not permitted */ }
+}
+
 /** Per-child DB budget: floor((PG_POOL_MAX − R) / WORKER_CONCURRENCY) (DESIGN §4). */
 export function childPgBudget(env: NodeJS.ProcessEnv = process.env): number {
   const total = parseInt(env.PG_POOL_MAX || "20", 10);
@@ -286,21 +328,17 @@ function recordPipelineTimeout(opts: PipelineOptions, elapsedMs: number, limitMs
 }
 
 export async function runPipelineIsolated(opts: PipelineOptions): Promise<PipelineResult> {
+  // Pre-warmed pool path (opt-in, default off). When enabled, dispatch the job to
+  // a long-lived warm child instead of forking a fresh one per job. The legacy
+  // per-job body below is byte-for-byte unchanged on the default (pool size 0).
+  if (isolationPoolSize() > 0) return runPipelineInPool(opts);
   const ctx = getDiagContext();
   const lc = ctx?.lifecycle;
   const budget = childPgBudget();
   if (budget < 1) {
     throw new Error(`Worker isolation refused: per-child PG budget ${budget} < 1 (PG_POOL_MAX − WORKER_ISOLATION_PARENT_PG_RESERVE) / WORKER_CONCURRENCY`);
   }
-  if (!exitHookInstalled) {
-    exitHookInstalled = true;
-    // Graceful parent exit only. Abrupt parent death (SIGKILL/OOM) is handled
-    // child-side by job-child.ts's parent-death watchdog thread.
-    process.on("exit", () => {
-      for (const groups of live.values()) signalGroups(groups, "SIGKILL");
-      for (const q of quarantine.values()) signalGroups(q.entry.groups, "SIGKILL");
-    });
-  }
+  installParentExitHook();
   const graceMs = parseInt(process.env.WORKER_ISOLATION_KILL_GRACE_MS || "10000", 10);
   const exitGraceMs = parseInt(process.env.WORKER_ISOLATION_EXIT_GRACE_MS || "2000", 10);
   const reapWindowMs = parseInt(process.env.WORKER_ISOLATION_REAP_WINDOW_MS || "2000", 10);
@@ -330,7 +368,11 @@ export async function runPipelineIsolated(opts: PipelineOptions): Promise<Pipeli
     stats.forks++; stats.maxForkMs = Math.max(stats.maxForkMs, performance.now() - tFork);
     // CPU contention: children run at lower priority (inherited by Chromium /
     // pdftotext) so the supervisor wins the CPU for lock renewal / heartbeats.
-    if (child.pid && nice > 0) { try { os.setPriority(child.pid, nice); } catch { /* not permitted */ } }
+    // Applied ONLY after the child reports "warm" (applyNice below), never at fork:
+    // a child niced during its cold import is CPU-starved and never finishes
+    // loading (the production "child did not warm" wedge).
+    let niceApplied = false;
+    const applyNice = () => { if (niceApplied) return; niceApplied = true; if (child.pid && nice > 0) applyChildNice(child.pid, nice); };
     const groups = new Set<number>(child.pid ? [child.pid] : []);
     live.set(child, groups);
     const grants = new Map<number, Grant>();
@@ -486,14 +528,14 @@ export async function runPipelineIsolated(opts: PipelineOptions): Promise<Pipeli
         case "paid": ingestPaidCallRowFromChild(m.row); break;
         case "stageprofile": ingestStageProfileRowFromChild(m.row); break;
         case "signal": ingestSignalFromChild(m.kind); break;
-        case "warm": warm = true; releaseStartup(); break; // pipeline module loaded → cold-start over, free the gate slot
+        case "warm": warm = true; applyNice(); releaseStartup(); break; // pipeline module loaded → cold-start over, free the gate slot + nice now
         case "stage": if (typeof m.stage === "string") {
           lastStage = m.stage; setDiagStage(m.stage);
           // Fallback warm signal: any stage past the cold-import ("spawn"/"pipeline"
           // are the pre-import markers; the stage heartbeat ticks "pipeline" every
           // 2s DURING the import, so those must NOT release the gate). A real stage
           // (fetch/analyze/score/…) proves the module graph loaded.
-          if (m.stage !== "spawn" && m.stage !== "pipeline") { warm = true; releaseStartup(); }
+          if (m.stage !== "spawn" && m.stage !== "pipeline") { warm = true; applyNice(); releaseStartup(); }
         } break;
         case "lease": {
           // batch-1277: track the set of browser operations the child has queued
@@ -567,12 +609,524 @@ export async function runPipelineIsolated(opts: PipelineOptions): Promise<Pipeli
   });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Pre-warmed child pool (opt-in via WORKER_ISOLATION_POOL_SIZE > 0)
+// ════════════════════════════════════════════════════════════════════════════
+// Instead of forking a fresh child per job (each paying the ~280-module pipeline
+// cold-import that starved niced children in production), fork a small pool of
+// long-lived children ONCE. Each imports pipeline.js a single time, reports
+// "warm", then processes many jobs over its IPC channel. The parent tracks
+// idle/busy, dispatches each isolated job to an idle child, and on a child's
+// death respawns a replacement; the in-flight attempt rejects as the retriable
+// "exited unexpectedly" class so worker.ts/BullMQ re-queues it as a fresh
+// attempt (attempt accounting preserved) that lands on a warm child.
+//
+// The clean path keeps the child ALIVE: on a `result`/`error` report the parent
+// waits for the child's `idle` message (sent after the child resets its per-job
+// state), reaps any descendant groups, releases the job's permits, delivers the
+// outcome and recycles the child to idle. The kill path (deadline / cancel /
+// revoke / crash / unconfirmed cleanup) SIGKILLs the child's groups; the exit
+// handler then settles via the same classify + reap + quarantine machinery as
+// the legacy per-job path and respawns a replacement.
+
+/** Install the graceful-exit SIGKILL hook once (covers both the legacy per-job
+ * children and pooled children — all are tracked in `live`). Abrupt parent death
+ * (SIGKILL/OOM) is handled child-side by job-child.ts's watchdog thread. */
+function installParentExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.on("exit", () => {
+    for (const groups of live.values()) signalGroups(groups, "SIGKILL");
+    for (const q of quarantine.values()) signalGroups(q.entry.groups, "SIGKILL");
+  });
+}
+
+function releaseGrantToBroker(g: Grant): void {
+  if (g.kind === "llm") llmSlotBroker.release(); else processorSlotBroker[g.kind].release();
+}
+
+interface PooledChild {
+  child: ChildProcess;
+  ownPid: number;                 // the child's own pid (its process-group leader)
+  groups: Set<number>;            // own pid + registered descendant groups (Chromium)
+  warm: boolean;                  // pipeline module imported, ready to serve
+  available: boolean;             // idle, not currently running a job
+  niceApplied: boolean;           // os.setPriority applied (once, after first warm)
+  nice: number;
+  jobsRun: number;                // completed jobs (for poolMaxJobs recycling)
+  epoch: number;                  // pool epoch at creation; a shutdown bump (poolEpoch) retires this child without respawn
+  startupTimer: ReturnType<typeof setTimeout> | null;
+  releaseStartup: () => void;     // idempotent startup-gate release for this cold-start
+  session: JobSession | null;     // the in-flight job, or null when idle
+}
+interface JobWaiter {
+  opts: PipelineOptions;
+  ctx: any;                       // diag context captured in the job's async scope
+  lc: any;                        // lifecycle (ctx?.lifecycle) captured likewise
+  resolve: (r: PipelineResult) => void;
+  reject: (e: Error) => void;
+}
+interface JobSession {
+  opts: PipelineOptions;
+  ctx: any;
+  lc: any;
+  resolve: (r: PipelineResult) => void;
+  reject: (e: Error) => void;
+  grants: Map<number, Grant>;
+  outstandingLeases: Map<string, any>;
+  killReason: KillReason | null;
+  reported: IsolatedOutcome | null;
+  settled: boolean;
+  lastStage: string;
+  pipelineStart: number;
+  timers: Array<ReturnType<typeof setTimeout>>;
+  cancelPoll: ReturnType<typeof setInterval> | null;
+  cancelSent: boolean;
+  onRevoke: (() => void) | null;
+  graceMs: number;
+  exitGraceMs: number;
+  reapWindowMs: number;
+  pipelineMs: number;
+}
+
+const POOL_COLDSTART_FAIL_CAP = 10;
+const pool: PooledChild[] = [];
+const jobWaiters: JobWaiter[] = [];
+let poolShuttingDown = false;
+let poolPending = 0;              // children forked but not yet in `pool`
+let poolDesiredSize = 0;
+let poolColdStartFailures = 0;    // consecutive never-warmed deaths (circuit breaker)
+let poolEpoch = 0;                // bumped by shutdownPool; deferred spawns from an older epoch abort
+
+function pcSend(pc: PooledChild, m: unknown): void {
+  try { if (pc.child.connected) pc.child.send(m as any); } catch { /* closing */ }
+}
+function removeFromPool(pc: PooledChild): void {
+  const i = pool.indexOf(pc);
+  if (i >= 0) pool.splice(i, 1);
+}
+
+async function runPipelineInPool(opts: PipelineOptions): Promise<PipelineResult> {
+  const budget = childPgBudget();
+  if (budget < 1) {
+    throw new Error(`Worker isolation refused: per-child PG budget ${budget} < 1 (PG_POOL_MAX − WORKER_ISOLATION_PARENT_PG_RESERVE) / WORKER_CONCURRENCY`);
+  }
+  installParentExitHook();
+  ensurePool();
+  // Capture the diag context HERE, in the job's async scope. dispatch may happen
+  // later (from a child's message handler) where the ALS context is wrong, so the
+  // waiter carries its own ctx/lc rather than re-reading getDiagContext() then.
+  const ctx = getDiagContext();
+  const lc = ctx?.lifecycle;
+  return await new Promise<PipelineResult>((resolve, reject) => {
+    const waiter: JobWaiter = { opts, ctx, lc, resolve, reject };
+    if (poolShuttingDown) { reject(new Error("Worker isolation pool shutting down")); return; }
+    const pc = acquireChild();
+    if (pc) { pc.available = false; dispatchJob(pc, waiter); }
+    else jobWaiters.push(waiter);
+  });
+}
+
+function ensurePool(): void {
+  if (poolShuttingDown) return;
+  poolDesiredSize = isolationPoolSize();
+  while (pool.length + poolPending < poolDesiredSize) createPooledChild();
+}
+
+function acquireChild(): PooledChild | null {
+  for (const pc of pool) if (pc.warm && pc.available && !pc.session) return pc;
+  return null;
+}
+
+function createPooledChild(): void {
+  if (poolShuttingDown) return;
+  const epoch = poolEpoch;
+  poolPending++;
+  const budget = childPgBudget();
+  const nice = parseInt(process.env.WORKER_ISOLATION_CHILD_NICE || "10", 10);
+  const startupMs = parseInt(process.env.WORKER_ISOLATION_STARTUP_TIMEOUT_MS || "120000", 10);
+  const testModule = process.env.CIQ_CHILD_TEST_MODULE;
+  void acquireStartupSlot().then(() => {
+    if (poolShuttingDown || poolEpoch !== epoch) { releaseStartupSlot(); poolPending--; return; }
+    const env: NodeJS.ProcessEnv = { ...process.env, CIQ_CHILD_POOL: "1", CIQ_ISOLATED_CHILD: "1", CIQ_PROCESS_ROLE: "job-child", PG_POOL_MAX: String(budget), ...(testModule ? { CIQ_CHILD_TEST_MODULE: testModule } : {}) };
+    // Bundled child safety net: pin the defect-ledger default to dist/server/data
+    // so the flattened bundle does not drift it to dist/data (see COMPILED_SERVER_DATA_DIR).
+    if (COMPILED_SERVER_DATA_DIR && !env.DEFECT_LEDGER_PATH) env.DEFECT_LEDGER_PATH = path.join(COMPILED_SERVER_DATA_DIR, "defect-ledger.jsonl");
+    const tFork = performance.now();
+    const child = fork(POOL_CHILD_PATH, [], {
+      execArgv: CHILD_EXEC_ARGV,
+      serialization: "advanced",
+      detached: true,
+      stdio: ["inherit", "inherit", "inherit", "ipc"],
+      env,
+    });
+    stats.forks++; stats.maxForkMs = Math.max(stats.maxForkMs, performance.now() - tFork);
+    poolPending--;
+    const ownPid = child.pid ?? -1;
+    let startupReleased = false;
+    const releaseStartup = () => { if (!startupReleased) { startupReleased = true; releaseStartupSlot(); } };
+    const pc: PooledChild = { child, ownPid, groups: new Set<number>(ownPid > 0 ? [ownPid] : []), warm: false, available: false, niceApplied: false, nice, jobsRun: 0, epoch, startupTimer: null, releaseStartup, session: null };
+    pool.push(pc);
+    live.set(child, pc.groups);
+    // Startup watchdog: a pooled child that never finishes its single cold-import
+    // is SIGKILLed and respawned (with backoff + circuit breaker). Same safety-net
+    // role as the legacy per-job startup watchdog, now gating pool cold-starts.
+    if (startupMs > 0) pc.startupTimer = setTimeout(() => {
+      if (pc.warm) return;
+      console.error(`[WORKER-ISOLATION] pooled child pid=${child.pid} did not warm (load pipeline.js) within ${startupMs}ms → SIGKILL + respawn`);
+      signalGroups(pc.groups, "SIGKILL");
+    }, startupMs);
+    child.on("message", (m: any) => { const t0 = performance.now(); stats.messages++; try { routeChildMessage(pc, m); } finally { stats.maxHandlerMs = Math.max(stats.maxHandlerMs, performance.now() - t0); } });
+    child.on("exit", (code, signal) => onPooledChildExit(pc, code, signal, releaseStartup));
+    child.on("error", (e) => {
+      console.warn(`[WORKER-ISOLATION] pooled child error: ${e?.message || e}`);
+      if (!child.pid) {                              // fork itself failed → never entered the OS
+        releaseStartup();
+        if (pc.startupTimer) { clearTimeout(pc.startupTimer); pc.startupTimer = null; }
+        removeFromPool(pc); live.delete(child);
+        scheduleRespawn(true);
+      }
+    });
+  }).catch((e) => { poolPending--; console.warn(`[WORKER-ISOLATION] pooled child spawn failed: ${(e as any)?.message || e}`); });
+}
+
+function routeChildMessage(pc: PooledChild, m: any): void {
+  if (!m || typeof m !== "object") return;
+  const session = pc.session;
+  switch (m.t) {
+    // ── child-level (no session) ───────────────────────────────────────────
+    case "ready":
+      pcSend(pc, { t: "warmup" });                   // pool: import pipeline once, then wait for jobs
+      break;
+    case "warm":
+      pc.warm = true;
+      pc.releaseStartup();                            // free the startup-gate slot (cold-start over)
+      poolColdStartFailures = 0;                      // a successful warm clears the circuit breaker
+      if (!pc.niceApplied && pc.ownPid > 0 && pc.nice > 0) { pc.niceApplied = true; applyChildNice(pc.ownPid, pc.nice); }
+      makeAvailable(pc);
+      break;
+    case "idle":                                      // child reported + reset → recycle to idle
+      if (session && session.reported) finalizeCleanAndRecycle(pc);
+      break;
+    case "pgroup": if (Number.isInteger(m.pid) && m.pid > 1) pc.groups.add(m.pid); break;
+    case "usage": ingestUsageRowFromChild(m.row); break;
+    case "paid": ingestPaidCallRowFromChild(m.row); break;
+    case "stageprofile": ingestStageProfileRowFromChild(m.row); break;
+    case "signal": ingestSignalFromChild(m.kind); break;
+    // ── session-level (require an in-flight job) ───────────────────────────
+    case "acquire": {
+      if (!session) break;
+      const kind = m.kind as PermitKind;
+      const g: Grant = { kind, granted: false, cancelled: false };
+      session.grants.set(m.id, g);
+      let p: Promise<void>;
+      if (kind === "llm") { g.ac = new AbortController(); p = llmSlotBroker.acquire(g.ac.signal); } else p = processorSlotBroker[kind].acquire();
+      p.then(() => {
+        if (g.cancelled || !session.grants.has(m.id) || session.settled) { releaseGrantToBroker(g); session.grants.delete(m.id); return; }
+        g.granted = true;
+        pcSend(pc, { t: "granted", id: m.id });
+      }, () => { session.grants.delete(m.id); });
+      break;
+    }
+    case "cancelAcquire": {
+      if (!session) break;
+      const g = session.grants.get(m.id);
+      if (g && !g.granted) { g.cancelled = true; g.ac?.abort(); session.grants.delete(m.id); }
+      break;
+    }
+    case "release": {
+      if (!session) break;
+      const g = session.grants.get(m.id);
+      if (g?.granted) { releaseGrantToBroker(g); session.grants.delete(m.id); }
+      break;
+    }
+    case "stage": if (session && typeof m.stage === "string") { session.lastStage = m.stage; setDiagStage(m.stage); } break;
+    case "lease": {
+      if (!session || typeof m.op !== "string") break;
+      if (m.ev === "acquire" || m.ev === "granted") session.outstandingLeases.set(m.op, m);
+      else session.outstandingLeases.delete(m.op);
+      break;
+    }
+    case "result":
+      if (!session) break;
+      mergeBatchFetchState(session.opts.batchFetchState, m.batchFetchState);
+      if (m.revokedReason && session.lc) revokeAttempt(session.lc, m.revokedReason);
+      onReportedPool(pc, session, { resolve: m.result as PipelineResult });
+      break;
+    case "error":
+      if (!session) {                                 // warmup load failure (no job) → child will exit → respawn
+        console.warn(`[WORKER-ISOLATION] pooled child pid=${pc.ownPid} failed to warm: ${m.error?.message || "unknown"}`);
+        break;
+      }
+      onReportedPool(pc, session, { reject: rebuildError(m.error) });
+      break;
+  }
+}
+
+function makeAvailable(pc: PooledChild): void {
+  if (poolShuttingDown) return;
+  pc.session = null;
+  const w = jobWaiters.shift();
+  if (w) { pc.available = false; dispatchJob(pc, w); }
+  else pc.available = true;
+}
+
+function dispatchJob(pc: PooledChild, w: JobWaiter): void {
+  const { opts, ctx, lc } = w;
+  const graceMs = parseInt(process.env.WORKER_ISOLATION_KILL_GRACE_MS || "10000", 10);
+  const exitGraceMs = parseInt(process.env.WORKER_ISOLATION_EXIT_GRACE_MS || "2000", 10);
+  const reapWindowMs = parseInt(process.env.WORKER_ISOLATION_REAP_WINDOW_MS || "2000", 10);
+  const pipelineMs = pipelineTimeoutMs();
+  const session: JobSession = {
+    opts, ctx, lc, resolve: w.resolve, reject: w.reject,
+    grants: new Map(), outstandingLeases: new Map(),
+    killReason: null, reported: null, settled: false, lastStage: "pipeline",
+    pipelineStart: Date.now(), timers: [], cancelPoll: null, cancelSent: false, onRevoke: null,
+    graceMs, exitGraceMs, reapWindowMs, pipelineMs,
+  };
+  pc.session = session;
+  pc.available = false;
+  session.timers.push(setTimeout(() => onDeadlinePool(pc, session, "pipeline_deadline"), pipelineMs));
+  if (lc?.deadlineAt) session.timers.push(setTimeout(() => onDeadlinePool(pc, session, "job_deadline"), Math.max(0, lc.deadlineAt.getTime() - Date.now())));
+  const onRevoke = () => { pcSend(pc, { t: "revoke", reason: lc?.revokedReason || "revoked" }); armKillPool(pc, session, `revoke:${lc?.revokedReason}`); };
+  session.onRevoke = onRevoke;
+  if (lc) { if (lc.abort.signal.aborted) onRevoke(); else lc.abort.signal.addEventListener("abort", onRevoke, { once: true }); }
+  session.cancelPoll = setInterval(() => {
+    if (!session.cancelSent && opts.cancelCheck?.()) { session.cancelSent = true; pcSend(pc, { t: "cancel" }); armKillPool(pc, session, "cancel"); }
+  }, 500);
+  pcSend(pc, { t: "init", opts: { ...opts, cancelCheck: undefined },
+    lifecycle: lc ? { jobId: lc.jobId, batchId: lc.batchId, attemptNumber: lc.attemptNumber, deadlineAt: lc.deadlineAt, attemptToken: lc.attemptToken ?? null, revokedReason: lc.revoked ? lc.revokedReason : null } : null,
+    attemptId: ctx?.attemptId ?? opts.attemptId ?? null,
+    companyId: ctx?.companyId ?? (opts.company as any)?.id ?? null,
+    frameworkId: ctx?.frameworkId ?? (opts.framework as any)?.id ?? null,
+    cancelled: session.cancelSent });
+}
+
+/** Hard deadline for a pooled job: revoke + SIGKILL the child's groups. The exit
+ * handler then settles the session (reported wins if one arrived in time). */
+function onDeadlinePool(pc: PooledChild, session: JobSession, which: "pipeline_deadline" | "job_deadline"): void {
+  if (session.settled) return;
+  if (session.reported) { signalGroups(pc.groups, "SIGKILL"); return; }
+  if (!session.killReason) session.killReason = which;
+  const leaseSummary = session.outstandingLeases.size === 0 ? "none" : Array.from(session.outstandingLeases.values())
+    .map((e: any) => `${e.op}[${e.ev} ${e.kind ?? "?"} ${e.origin ?? "-"} urls=${e.urls ?? 0} job=${e.job ?? "-"}/att=${e.attempt ?? "-"} at=${e.at}]`).join(", ");
+  console.warn(`[WORKER-ISOLATION] ${which} reached for pooled child pid=${pc.ownPid} (stage=${session.lastStage}, outstandingLeases=${leaseSummary}) → revoke + SIGKILL groups`);
+  if (session.lc) revokeAttempt(session.lc, which === "pipeline_deadline" ? "pipeline_timeout" : "job_watchdog_timeout");
+  if (!testHooks.suppressDeadlineKill) signalGroups(pc.groups, "SIGKILL");
+}
+
+/** Cooperative stop (cancel / revoke): graceMs for the child to return, then
+ * SIGTERM → +5s SIGKILL the child's groups (destroys this warm child; exit → respawn). */
+function armKillPool(pc: PooledChild, session: JobSession, why: KillReason): void {
+  if (session.killReason || session.reported) return;
+  session.killReason = why;
+  session.timers.push(setTimeout(() => {
+    console.warn(`[WORKER-ISOLATION] pooled child pid=${pc.ownPid} still alive ${session.graceMs}ms after ${why} → SIGTERM groups`);
+    signalGroups(pc.groups, "SIGTERM");
+    session.timers.push(setTimeout(() => signalGroups(pc.groups, "SIGKILL"), 5000));
+  }, session.graceMs));
+}
+
+/** A clean report arrived; if the child does not go `idle` within exitGraceMs it
+ * is hung after reporting — SIGKILL it (exit handler settles with the report). */
+function onReportedPool(pc: PooledChild, session: JobSession, o: IsolatedOutcome): void {
+  if (session.reported) return;
+  if (session.killReason) {
+    stats.lateReportsDiscarded++;
+    const summary = "resolve" in o ? `success=${o.resolve?.success} error=${o.resolve?.error ?? "-"}` : `error=${o.reject.message}`;
+    lateReports.push({ childPid: pc.ownPid, killReason: session.killReason, kind: "resolve" in o ? "result" : "error", summary, at: Date.now() });
+    if (lateReports.length > 50) lateReports.shift();
+    console.warn(`[WORKER-ISOLATION] pooled child pid=${pc.ownPid} reported AFTER terminal decision ${session.killReason} → discarded (diagnostic only: ${summary})`);
+    return;
+  }
+  session.reported = o;
+  session.timers.push(setTimeout(() => { console.warn(`[WORKER-ISOLATION] pooled child pid=${pc.ownPid} reported but did not idle in ${session.exitGraceMs}ms → SIGKILL groups`); signalGroups(pc.groups, "SIGKILL"); }, session.exitGraceMs));
+}
+
+function clearSessionTimers(session: JobSession): void {
+  if (session.cancelPoll) { clearInterval(session.cancelPoll); session.cancelPoll = null; }
+  for (const t of session.timers) clearTimeout(t);
+  session.timers.length = 0;
+  if (session.onRevoke && session.lc) session.lc.abort.signal.removeEventListener("abort", session.onRevoke);
+}
+
+function releaseSessionGrants(session: JobSession): void {
+  for (const [id, g] of session.grants) {
+    if (g.granted) releaseGrantToBroker(g); else { g.cancelled = true; g.ac?.abort(); }
+    session.grants.delete(id);
+  }
+}
+function withholdSessionGrants(session: JobSession): { withheld: Record<PermitKind, number>; release: () => void } {
+  const held: Grant[] = [];
+  const withheld: Record<PermitKind, number> = { llm: 0, browser: 0, proc: 0 };
+  for (const [id, g] of session.grants) {
+    if (g.granted) { held.push(g); withheld[g.kind]++; } else { g.cancelled = true; g.ac?.abort(); }
+    session.grants.delete(id);
+  }
+  let done = false;
+  return { withheld, release: () => { if (done) return; done = true; for (const g of held) releaseGrantToBroker(g); } };
+}
+
+function settleSession(session: JobSession, code: number | null, signal: NodeJS.Signals | null, cleanupFailure: string | null): void {
+  if (session.settled) return;
+  session.settled = true;
+  clearSessionTimers(session);
+  const pipelineElapsedMs = Date.now() - session.pipelineStart;
+  let out = classifyIsolatedOutcome({ reported: session.reported, killReason: session.killReason, code, signal, lastStage: session.lastStage, pipelineElapsedMs });
+  if (!session.reported && session.killReason === "pipeline_deadline") recordPipelineTimeout(session.opts, pipelineElapsedMs, session.pipelineMs);
+  if (cleanupFailure && "resolve" in out && out.resolve.success) out = { reject: new Error(cleanupFailure) };
+  if ("resolve" in out) session.resolve(out.resolve); else session.reject(out.reject);
+}
+
+/** Clean completion: child stays alive. Reap DESCENDANT groups only (never the
+ * child's own pid), release the job's permits, deliver the reported outcome, and
+ * recycle the child to idle. */
+function finalizeCleanAndRecycle(pc: PooledChild): void {
+  const session = pc.session;
+  if (!session || session.settled) return;
+  clearSessionTimers(session);
+  const descendants = [...pc.groups].filter((g) => g !== pc.ownPid);
+  const reapWindowMs = session.reapWindowMs;
+  void (async () => {
+    let r: GroupProbe = { live: [], zombies: [], reliable: true };
+    if (descendants.length > 0) {
+      signalGroups(descendants, "SIGKILL");
+      const until = Date.now() + reapWindowMs;
+      for (;;) {
+        try { r = await livenessProbe(descendants); } catch { r = { live: [-1], zombies: [], reliable: false }; }
+        if (r.live.length === 0 || Date.now() >= until) break;
+        signalGroups(descendants, "SIGKILL");
+        await new Promise((res) => setTimeout(res, 20));
+      }
+    }
+    // Drop reaped descendant groups; keep the child's own group.
+    pc.groups.clear(); if (pc.ownPid > 0) pc.groups.add(pc.ownPid);
+    if (r.live.length !== 0) {
+      // Descendants could not be confirmed gone even on a clean report → do not
+      // re-grant this child's capacity: retire it (kill + quarantine) and respawn.
+      const { withheld, release } = withholdSessionGrants(session);
+      const reason = `cleanup unconfirmed after ${reapWindowMs}ms (clean report): live=[${r.live.join(",")}] zombies=[${r.zombies.join(",")}] probeReliable=${r.reliable}`;
+      const pid = pc.ownPid;
+      quarantine.set(pid, { entry: { childPid: pid, jobId: session.lc?.jobId ?? null, batchId: session.lc?.batchId ?? null, groups: descendants, reason, since: Date.now(), livePids: r.live, zombiePids: r.zombies, probeReliable: r.reliable, withheld }, release });
+      stats.quarantined++;
+      ensureQuarantineMonitor();
+      console.error(`[WORKER-ISOLATION] QUARANTINE pooled child pid=${pid} ${reason}; permits withheld ${JSON.stringify(withheld)}`);
+      settleSession(session, null, null, `Isolated job child cleanup unconfirmed: pooled child pid=${pid} quarantined, ${reason}, permits withheld browser=${withheld.browser} proc=${withheld.proc} llm=${withheld.llm}`);
+      pc.session = null;
+      signalGroups(new Set([pc.ownPid]), "SIGKILL");   // kill the child itself → exit handler respawns
+      return;
+    }
+    releaseSessionGrants(session);
+    settleSession(session, null, null, null);            // reported outcome wins
+    pc.session = null;
+    recycleChild(pc);
+  })();
+}
+
+/** Return a clean child to the pool, or retire it (kill → respawn) once it has
+ * served poolMaxJobs jobs (memory hygiene; 0 = unlimited). */
+function recycleChild(pc: PooledChild): void {
+  if (poolShuttingDown) return;
+  pc.jobsRun++;
+  const max = poolMaxJobs();
+  if (max > 0 && pc.jobsRun >= max) {
+    console.warn(`[WORKER-ISOLATION] pooled child pid=${pc.ownPid} reached poolMaxJobs=${max} → retire + respawn`);
+    signalGroups(pc.groups, "SIGKILL");               // exit handler (no session) respawns a fresh warm child
+    return;
+  }
+  makeAvailable(pc);
+}
+
+function onPooledChildExit(pc: PooledChild, code: number | null, signal: NodeJS.Signals | null, releaseStartup: () => void): void {
+  if (pc.startupTimer) { clearTimeout(pc.startupTimer); pc.startupTimer = null; }
+  releaseStartup();
+  const epoch = pc.epoch; // this child's creation epoch; a shutdown bump between then and now suppresses respawn
+  const neverWarmed = !pc.warm;
+  const session = pc.session;
+  pc.session = null;
+  removeFromPool(pc);
+  signalGroups(pc.groups, "SIGKILL");
+  const reapWindowMs = session?.reapWindowMs ?? parseInt(process.env.WORKER_ISOLATION_REAP_WINDOW_MS || "2000", 10);
+  const until = Date.now() + reapWindowMs;
+  void (async () => {
+    let r: GroupProbe = { live: [], zombies: [], reliable: true };
+    for (;;) {
+      try { r = await livenessProbe([...pc.groups]); } catch { r = { live: [-1], zombies: [], reliable: false }; }
+      if (r.live.length === 0 || Date.now() >= until) break;
+      signalGroups(pc.groups, "SIGKILL");
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    live.delete(pc.child);
+    if (session && !session.settled) {
+      if (r.live.length === 0) { releaseSessionGrants(session); settleSession(session, code, signal, null); }
+      else {
+        const { withheld, release } = withholdSessionGrants(session);
+        const pid = pc.ownPid;
+        const reason = `cleanup unconfirmed after ${reapWindowMs}ms: live=[${r.live.join(",")}] zombies=[${r.zombies.join(",")}] probeReliable=${r.reliable}`;
+        quarantine.set(pid, { entry: { childPid: pid, jobId: session.lc?.jobId ?? null, batchId: session.lc?.batchId ?? null, groups: [...pc.groups], reason, since: Date.now(), livePids: r.live, zombiePids: r.zombies, probeReliable: r.reliable, withheld }, release });
+        stats.quarantined++;
+        ensureQuarantineMonitor();
+        console.error(`[WORKER-ISOLATION] QUARANTINE pooled child pid=${pid} job=${session.lc?.jobId ?? "-"} groups=[${[...pc.groups].join(",")}] ${reason}; permits withheld ${JSON.stringify(withheld)}`);
+        settleSession(session, code, signal, `Isolated job child cleanup unconfirmed: pooled child pid=${pid} quarantined, ${reason}, permits withheld browser=${withheld.browser} proc=${withheld.proc} llm=${withheld.llm}`);
+      }
+    }
+    if (!poolShuttingDown && poolEpoch === epoch) scheduleRespawn(neverWarmed);
+  })();
+}
+
+/** Respawn toward the desired pool size. A never-warmed death counts toward a
+ * circuit breaker so a persistent cold-start wedge cannot fork-storm forever. */
+function scheduleRespawn(neverWarmed: boolean): void {
+  if (poolShuttingDown) return;
+  if (neverWarmed) {
+    poolColdStartFailures++;
+    if (poolColdStartFailures > POOL_COLDSTART_FAIL_CAP) {
+      console.error(`[WORKER-ISOLATION] pool cold-start failed ${poolColdStartFailures}x (cap ${POOL_COLDSTART_FAIL_CAP}) → circuit open; rejecting ${jobWaiters.length} queued isolated jobs`);
+      const err = new Error(`Worker isolation pool failed to warm after ${poolColdStartFailures} attempts (cold-start wedge); isolated jobs refused`);
+      for (const w of jobWaiters.splice(0)) w.reject(err);
+      return;
+    }
+  }
+  if (pool.length + poolPending >= isolationPoolSize()) return;
+  const epoch = poolEpoch;
+  const backoff = neverWarmed ? Math.min(30000, 500 * Math.pow(2, Math.min(poolColdStartFailures, 6))) : 100;
+  const t = setTimeout(() => {
+    if (poolShuttingDown || poolEpoch !== epoch) return;
+    while (pool.length + poolPending < isolationPoolSize()) createPooledChild();
+  }, backoff);
+  t.unref?.();
+}
+
+/** Tear the pool down (tests / shutdown): reject queued jobs, SIGKILL every
+ * child, and wait (bounded) for them to exit. */
+async function shutdownPool(): Promise<void> {
+  poolShuttingDown = true;
+  poolEpoch++; // invalidate any deferred spawns from onPooledChildExit/scheduleRespawn fired by our own SIGKILLs
+  for (const w of jobWaiters.splice(0)) w.reject(new Error("Worker isolation pool shutting down"));
+  for (const pc of pool.slice()) {
+    if (pc.startupTimer) { clearTimeout(pc.startupTimer); pc.startupTimer = null; }
+    pc.releaseStartup();
+    if (pc.session) clearSessionTimers(pc.session);
+    signalGroups(pc.groups, "SIGKILL");
+  }
+  const deadline = Date.now() + 5000;
+  while (pool.length > 0 && Date.now() < deadline) await new Promise((res) => setTimeout(res, 20));
+  for (const pc of pool.splice(0)) live.delete(pc.child);
+  poolShuttingDown = false;
+  poolColdStartFailures = 0;
+  poolDesiredSize = 0;
+}
+
 export const __testing = {
   liveChildren: () => live.size,
   brokerState: () => ({ llm: llmSlotBroker.state(), browser: processorSlotBroker.browser.state(), proc: processorSlotBroker.proc.state() }),
   stats: () => ({ ...stats }),
-  resetStats: () => { Object.assign(stats, { forks: 0, maxForkMs: 0, messages: 0, maxHandlerMs: 0, lateReportsDiscarded: 0, quarantined: 0 }); lateReports.length = 0; },
+  resetStats: () => { Object.assign(stats, { forks: 0, maxForkMs: 0, messages: 0, maxHandlerMs: 0, lateReportsDiscarded: 0, quarantined: 0 }); lateReports.length = 0; niceApplications.length = 0; },
   lateReports: () => lateReports.map((r) => ({ ...r })),
   setLivenessProbe: (p: LivenessProbe | null) => { livenessProbe = p ?? probeGroups; },
   setSuppressDeadlineKill: (v: boolean) => { testHooks.suppressDeadlineKill = v; },
+  // Pre-warmed pool (opt-in) diagnostics / test control.
+  shutdownPool: () => shutdownPool(),
+  poolState: () => ({ size: pool.length, pending: poolPending, desired: poolDesiredSize, warm: pool.filter((p) => p.warm).length, available: pool.filter((p) => p.available).length, busy: pool.filter((p) => !!p.session).length, waiters: jobWaiters.length, pids: pool.map((p) => p.ownPid) }),
+  niceApplications: () => niceApplications.map((n) => ({ ...n })),
 };

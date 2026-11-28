@@ -91,6 +91,101 @@ async function rewriteRelativeSpecifiers(outDir) {
   console.log(`[build-server] rewrote ${rewritten} relative specifier(s) across ${filesTouched} file(s)` + (unresolved ? ` (${unresolved} left unchanged)` : ""));
 }
 
+// ─── Single-file bundled isolated child (pre-warmed pool) ────────────────────
+// The pre-warmed pool (job-isolation.ts, WORKER_ISOLATION_POOL_SIZE>0) forks
+// long-lived children that each cold-load this bundle ONCE. Bundling the whole
+// pipeline module graph into ONE file turns the ~280-separate-file cold import
+// (which starved niced children in production) into a single file load. Native /
+// node_modules deps stay external (packages:"external"); the variable test-only
+// `import(testModule)` stays a runtime dynamic import (harmless esbuild warning).
+// The legacy per-job child (job-child.js, 1:1 transpiled) is UNCHANGED and still
+// used when the pool is disabled — only the pool uses this bundle.
+const CHILD_ENTRY = path.join(repoRoot, "server", "lib", "job-child.ts");
+const CHILD_BUNDLE_OUT = path.join(OUT_DIR, "server", "lib", "job-child.bundle.js");
+// Parity with job-isolation.test.ts F1: the child must not pull in these server
+// modules, nor these packages, transitively through the pipeline import.
+const F1_FORBIDDEN_MODULES = ["server/redis.ts", "server/queue.ts", "server/startup-cleanup.ts", "server/reconciler.ts", "server/worker.ts", "server/worker-main.ts", "server/index.ts", "server/lib/reconcile-resurrect.ts"];
+const F1_FORBIDDEN_PKGS = ["ioredis", "bullmq", "bull"];
+
+async function bundleIsolatedChild() {
+  console.log("[build-server] bundling single-file isolated child -> dist/server/lib/job-child.bundle.js");
+  const result = await esbuild.build({
+    entryPoints: [CHILD_ENTRY],
+    outfile: CHILD_BUNDLE_OUT,
+    bundle: true,
+    packages: "external",   // keep all node_modules external (pg, native deps, …)
+    platform: "node",
+    format: "esm",
+    target: "node22",
+    sourcemap: true,
+    metafile: true,
+    logLevel: "warning",
+    tsconfigRaw: {
+      compilerOptions: { target: "es2022", useDefineForClassFields: false },
+    },
+  });
+  if (result.errors.length) {
+    console.error(`[build-server] child bundle: ${result.errors.length} errors`);
+    process.exit(1);
+  }
+  // F1 forbidden-import audit against the BUNDLED child (build-time enforcement).
+  //
+  // The audit mirrors the RUNTIME F1 invariant (job-isolation.test.ts F1): the
+  // child must not EXECUTE redis/queue/reconciler/worker (nor ioredis/bullmq/bull)
+  // at boot. It does NOT forbid those modules from being present in the bundle —
+  // esbuild bundles lazily `import()`-ed modules too, but keeps them behind lazy
+  // wrappers that only evaluate when the dynamic import actually runs (e.g.
+  // storage.ts does `await import("./queue.js")` on a code path the child never
+  // takes, exactly as in the 1:1-transpiled tree). So we audit the STATIC-import
+  // closure — the set that actually evaluates when the bundle loads — rooted at
+  // the entry AND at pipeline.ts (the one dynamic import the child always awaits
+  // and fully evaluates). A module reachable only through a dynamic `import()`
+  // edge is lazy and does not count, precisely as at runtime.
+  const meta = result.metafile;
+  const keyOf = (spec) => Object.keys(meta.inputs).find((k) => k === spec || k.endsWith("/" + spec));
+  const STATIC_KINDS = new Set(["import-statement", "require-call"]);
+  const staticClosure = (roots) => {
+    const seen = new Set();
+    const stack = roots.filter(Boolean);
+    while (stack.length) {
+      const k = stack.pop();
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      for (const imp of meta.inputs[k]?.imports || []) {
+        if (!STATIC_KINDS.has(imp.kind)) continue;          // dynamic import() is lazy → does not execute at load
+        const kk = keyOf(imp.path);
+        if (kk) stack.push(kk);
+      }
+    }
+    return seen;
+  };
+  const entryKey = keyOf("server/lib/job-child.ts");
+  const pipelineKey = keyOf("server/lib/pipeline.ts");
+  if (!pipelineKey) {
+    console.error("[build-server] CHILD BUNDLE audit FAILED: server/lib/pipeline.ts was not bundled into the child (import graph not followed)");
+    process.exit(1);
+  }
+  const executedAtLoad = staticClosure([entryKey, pipelineKey]);
+  const executedNorm = new Set([...executedAtLoad].map((k) => k.replace(/\\/g, "/")));
+  const violations = [];
+  for (const forb of F1_FORBIDDEN_MODULES) {
+    if ([...executedNorm].some((i) => i === forb || i.endsWith("/" + forb))) violations.push(`forbidden module executes at child load: ${forb}`);
+  }
+  for (const file of executedAtLoad) {                       // only edges FROM modules that evaluate at load matter
+    for (const imp of meta.inputs[file]?.imports || []) {
+      if (!STATIC_KINDS.has(imp.kind)) continue;
+      const bare = String(imp.path).replace(/^node:/, "").split("/")[0];
+      if (F1_FORBIDDEN_PKGS.includes(bare)) violations.push(`forbidden package executes at child load: ${imp.path} (from ${file})`);
+    }
+  }
+  if (violations.length) {
+    console.error(`[build-server] CHILD BUNDLE F1 AUDIT FAILED:\n  ${violations.join("\n  ")}`);
+    process.exit(1);
+  }
+  const totalBundled = Object.keys(meta.inputs).length;
+  console.log(`[build-server] child bundle OK: ${totalBundled} modules in one file (${executedAtLoad.size} execute at load, rest lazy); F1 audit passed (no redis/queue/reconciler/worker modules, no ioredis/bullmq/bull packages execute at child load)`);
+}
+
 async function main() {
   const allFiles = [];
   for (const d of SRC_DIRS) await walk(path.join(repoRoot, d), allFiles);
@@ -142,6 +237,11 @@ async function main() {
     copied++;
   }
   console.log(`[build-server] copied ${copied} non-TS asset(s) into dist/`);
+
+  // Bundle the single-file isolated child for the pre-warmed pool (after the 1:1
+  // transpile + asset copy, so assets like pdf-parse-worker.cjs sit beside it).
+  await bundleIsolatedChild();
+
   console.log(`[build-server] done.`);
 }
 
